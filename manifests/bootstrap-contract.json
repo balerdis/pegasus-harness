@@ -1,0 +1,23 @@
+{
+  "schema": "pegasus-harness-bootstrap/v1",
+  "entrypoint": "bin/pegasus",
+  "platform": "linux",
+  "target_execution": "sudo -u <target-user> -H",
+  "managed_target_assets": [
+    "~/.config/opencode/opencode.json",
+    "~/.config/opencode/agents",
+    "~/.config/opencode/prompts",
+    "~/.config/opencode/plugins/pegasus-skill-registry.ts",
+    "~/.config/opencode/pegasus.env",
+    "~/.config/opencode/pegasus-skill-registry.env",
+    "~/.local/share/pegasus-harness",
+    "~/.local/bin/pegasus"
+  ],
+  "ownership": "exact files and symlinks with digest/link checks and per-collision backups; never recursive shared-directory ownership",
+  "binary_installers": {
+    "opencode": "https://opencode.ai/install",
+    "codebase_memory_mcp": "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh --skip-config"
+  },
+  "external_pending": ["Engram", "Jira", "Figma", "Playwright", "model provider credentials"],
+  "prohibited_runtime": ["gentle-ai", "CodeGraph", "native review agents"]
+}

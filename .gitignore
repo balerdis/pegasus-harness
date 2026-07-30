@@ -1,0 +1,18 @@
+# Future bootstrap overlays and local secrets
+local/
+*.local.json
+.env
+.env.*
+secrets/
+
+# Runtime/generated state
+.gentle-ai/
+.atl/
+.cache/
+node_modules/
+*.db
+*.sqlite
+
+# Python generated artifacts
+__pycache__/
+*.py[cod]

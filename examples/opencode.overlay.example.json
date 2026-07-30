@@ -1,0 +1,10 @@
+{
+  "environment": {
+    "PEGASUS_ORCHESTRATOR_PROMPT": "/absolute/path/to/pegasus-orchestrator.md",
+    "PEGASUS_PLUGIN_ROOT": "/absolute/path/to/plugins",
+    "ENGRAM_BIN": "engram",
+    "CODEBASE_MEMORY_MCP_BIN": "codebase-memory-mcp",
+    "PLAYWRIGHT_MCP_CWD": "/absolute/path/to/playwright-mcp",
+    "XIAOMI_API_KEY": "set-this-in-your-secret-manager-not-here"
+  }
+}

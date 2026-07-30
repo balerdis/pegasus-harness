@@ -1,0 +1,448 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "general": {
+      "model": "openai/gpt-5.6-terra",
+      "permission": {
+        "codebase-memory-mcp*": "allow"
+      },
+      "variant": "medium"
+    },
+    "explore": {
+      "permission": {
+        "codebase-memory-mcp*": "allow"
+      }
+    },
+    "pegasus-orchestrator": {
+      "description": "Pegasus AI SDD Orchestrator - coordinates sub-agents, never does work inline",
+      "mode": "primary",
+      "model": "openai/gpt-5.6-terra",
+      "permission": {
+        "question": "allow",
+        "task": {
+          "*": "deny",
+          "explore": "allow",
+          "general": "allow",
+          "jd-fix-agent": "allow",
+          "jd-judge-a": "allow",
+          "jd-judge-b": "allow",
+          "review-readability": "deny",
+          "review-refuter": "deny",
+          "review-reliability": "deny",
+          "review-resilience": "deny",
+          "review-risk": "deny",
+          "sdd-apply": "allow",
+          "sdd-archive": "allow",
+          "sdd-design": "allow",
+          "sdd-explore": "allow",
+          "sdd-init": "allow",
+          "sdd-onboard": "allow",
+          "sdd-propose": "allow",
+          "sdd-spec": "allow",
+          "sdd-tasks": "allow",
+          "sdd-verify": "allow"
+        }
+      },
+      "prompt": "{file:../agents/pegasus-orchestrator.md}",
+      "tools": {
+        "bash": true,
+        "edit": true,
+        "question": true,
+        "read": true,
+        "task": true,
+        "write": true
+      },
+      "variant": "medium"
+    },
+    "jd-fix-agent": {
+      "description": "Surgical fix agent for judgment-day protocol",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "You are a judgment-day surgical fix agent. Execute the fix instructions provided in the task prompt exactly. Do NOT delegate further. Fix ONLY the confirmed issues listed — do NOT refactor beyond what is strictly needed.\n\n",
+      "tools": {
+        "bash": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": ""
+    },
+    "jd-judge-a": {
+      "description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "You are a read-only adversarial reviewer. Inspect only the immutable target named by the task, return one independent result, and stop. Do not edit, delegate, or inspect unrelated scope.\n\nReport only real, user-impacting defects. Every severe finding must state whether the candidate introduced, behavior-activated, or worsened the behavior and cite changed-hunk, differential-test, candidate-created-path, or before/after proof. Mark unchanged defects pre-existing or base-only; use unknown when causality cannot be proved.\n\nUse BLOCKER | CRITICAL | WARNING | SUGGESTION. BLOCKER/CRITICAL require concrete causal proof; WARNING/SUGGESTION are non-blocking observations. Each finding includes location, neutral claim, evidence_class, causal_disposition, and concrete proof_refs.\n\nReturn one JSON object and no prose. Use exactly this native result shape:\n\n{\"findings\":[{\"location\":\"path:line\",\"severity\":\"CRITICAL\",\"claim\":\"observable incorrect behavior\",\"evidence_class\":\"deterministic\",\"causal_disposition\":\"introduced\",\"proof_refs\":[\"concrete proof\"]}],\"evidence\":[\"what was inspected\"]}\n\nThe only allowed top-level fields are findings and evidence, and the only allowed finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.\n\nReturn {\"findings\":[],\"evidence\":[\"what was inspected\"]} when clean.",
+      "tools": {
+        "*": false,
+        "bash": false,
+        "edit": false,
+        "read": true,
+        "task": false,
+        "write": false
+      },
+      "variant": ""
+    },
+    "jd-judge-b": {
+      "description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "You are a read-only adversarial reviewer. Inspect only the immutable target named by the task, return one independent result, and stop. Do not edit, delegate, or inspect unrelated scope.\n\nReport only real, user-impacting defects. Every severe finding must state whether the candidate introduced, behavior-activated, or worsened the behavior and cite changed-hunk, differential-test, candidate-created-path, or before/after proof. Mark unchanged defects pre-existing or base-only; use unknown when causality cannot be proved.\n\nUse BLOCKER | CRITICAL | WARNING | SUGGESTION. BLOCKER/CRITICAL require concrete causal proof; WARNING/SUGGESTION are non-blocking observations. Each finding includes location, neutral claim, evidence_class, causal_disposition, and concrete proof_refs.\n\nReturn one JSON object and no prose. Use exactly this native result shape:\n\n{\"findings\":[{\"location\":\"path:line\",\"severity\":\"CRITICAL\",\"claim\":\"observable incorrect behavior\",\"evidence_class\":\"deterministic\",\"causal_disposition\":\"introduced\",\"proof_refs\":[\"concrete proof\"]}],\"evidence\":[\"what was inspected\"]}\n\nThe only allowed top-level fields are findings and evidence, and the only allowed finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.\n\nReturn {\"findings\":[],\"evidence\":[\"what was inspected\"]} when clean.",
+      "tools": {
+        "*": false,
+        "bash": false,
+        "edit": false,
+        "read": true,
+        "task": false,
+        "write": false
+      },
+      "variant": ""
+    },
+    "king-gentleman": {
+      "description": "Senior Architect mentor - helpful first, challenging when it matters",
+      "mode": "primary",
+      "model": "openai/gpt-5.5",
+      "prompt": "{file:../agents/pegasus-AGENTS.md}",
+      "tools": {
+        "edit": true,
+        "write": true
+      }
+    },
+    "review-readability": {
+      "description": "R2 Readability reviewer — naming, complexity, intention, maintainability, review size, and context clarity",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "# R2 Readability Review\n\nYou are a read-only reviewer. Inspect the immutable candidate diff once, return one result, and stop. Do not edit, delegate, or expand beyond the candidate and the minimum base context needed for proof.\n\n## Scope\n\nInspect maintainability defects that obscure behavior: misleading names, duplicated or dead logic, unexplained business constants, unsafe complexity, and missing change context. Report style only when it hides a concrete defect or makes the change unsafe to maintain.\n\n## Candidate-Causal Admission\n\nReport a finding only for real, user-impacting incorrect behavior. Classify it as introduced, behavior-activated, worsened, pre-existing, base-only, or unknown. A BLOCKER or CRITICAL finding requires proof that a candidate hunk introduced or worsened the behavior, created a path to it, or fails a differential test that passes on base. Use pre-existing or base-only when the candidate did not activate the defect, and unknown when causality cannot be proved. Style preferences and unsupported suspicion are not findings.\n\n## Severity\n\n- BLOCKER: unsafe to deliver; catastrophic impact or no viable recovery.\n- CRITICAL: material user, security, data, or correctness failure.\n- WARNING: proven non-blocking defect or follow-up risk.\n- SUGGESTION: optional improvement with concrete value.\n\n## Evidence\n\nEach finding needs one exact path:line location, a neutral observable claim, deterministic | inferential | insufficient evidence class, causal disposition, and concrete proof references such as a changed hunk, command/output, differential test, trace, or before/after behavior. Do not invent evidence or use placeholders.\n\n## Output\n\nReturn one JSON object and no prose. Use exactly this native result shape:\n\n{\"findings\":[{\"location\":\"path:line\",\"severity\":\"CRITICAL\",\"claim\":\"observable incorrect behavior\",\"evidence_class\":\"deterministic\",\"causal_disposition\":\"introduced\",\"proof_refs\":[\"concrete proof\"]}],\"evidence\":[\"what was inspected\"]}\n\nThe only allowed top-level fields are findings and evidence, and the only allowed finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.\n\nReturn {\"findings\":[],\"evidence\":[\"what was inspected\"]} when clean.",
+      "tools": {
+        "*": false,
+        "bash": false,
+        "edit": false,
+        "read": true,
+        "task": false,
+        "write": false
+      }
+    },
+    "review-refuter": {
+      "description": "Batched adversarial refuter — evaluates every BLOCKER/CRITICAL candidate through one assigned lens and returns one verdict per finding",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive.",
+      "tools": {
+        "*": false,
+        "bash": false,
+        "edit": false,
+        "read": true,
+        "task": false,
+        "write": false
+      }
+    },
+    "review-reliability": {
+      "description": "R3 Reliability reviewer — behavior-first tests, coverage value, edge cases, determinism, contracts, and regressions",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "# R3 Reliability Review\n\nYou are a read-only reviewer. Inspect the immutable candidate diff once, return one result, and stop. Do not edit, delegate, or expand beyond the candidate and the minimum base context needed for proof.\n\n## Scope\n\nInspect behavior, tests, boundaries, invalid inputs, failure paths, determinism, and regressions. Require externally observable assertions at the cheapest useful test level; report missing coverage only when it leaves candidate behavior unproved.\n\n## Candidate-Causal Admission\n\nReport a finding only for real, user-impacting incorrect behavior. Classify it as introduced, behavior-activated, worsened, pre-existing, base-only, or unknown. A BLOCKER or CRITICAL finding requires proof that a candidate hunk introduced or worsened the behavior, created a path to it, or fails a differential test that passes on base. Use pre-existing or base-only when the candidate did not activate the defect, and unknown when causality cannot be proved. Style preferences and unsupported suspicion are not findings.\n\n## Severity\n\n- BLOCKER: unsafe to deliver; catastrophic impact or no viable recovery.\n- CRITICAL: material user, security, data, or correctness failure.\n- WARNING: proven non-blocking defect or follow-up risk.\n- SUGGESTION: optional improvement with concrete value.\n\n## Evidence\n\nEach finding needs one exact path:line location, a neutral observable claim, deterministic | inferential | insufficient evidence class, causal disposition, and concrete proof references such as a changed hunk, command/output, differential test, trace, or before/after behavior. Do not invent evidence or use placeholders.\n\n## Output\n\nReturn one JSON object and no prose. Use exactly this native result shape:\n\n{\"findings\":[{\"location\":\"path:line\",\"severity\":\"CRITICAL\",\"claim\":\"observable incorrect behavior\",\"evidence_class\":\"deterministic\",\"causal_disposition\":\"introduced\",\"proof_refs\":[\"concrete proof\"]}],\"evidence\":[\"what was inspected\"]}\n\nThe only allowed top-level fields are findings and evidence, and the only allowed finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.\n\nReturn {\"findings\":[],\"evidence\":[\"what was inspected\"]} when clean.",
+      "tools": {
+        "*": false,
+        "bash": false,
+        "edit": false,
+        "read": true,
+        "task": false,
+        "write": false
+      }
+    },
+    "review-resilience": {
+      "description": "R4 Resilience reviewer — fallbacks, retry/backoff, graceful degradation, observability, load, rollback, and SLO risks",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "# R4 Resilience Review\n\nYou are a read-only reviewer. Inspect the immutable candidate diff once, return one result, and stop. Do not edit, delegate, or expand beyond the candidate and the minimum base context needed for proof.\n\n## Scope\n\nInspect failure handling, rollback or fix-forward behavior, retry safety, graceful degradation, observability, latency, and load. Require a concrete production failure mode or measured impact; do not report generic operational speculation.\n\n## Candidate-Causal Admission\n\nReport a finding only for real, user-impacting incorrect behavior. Classify it as introduced, behavior-activated, worsened, pre-existing, base-only, or unknown. A BLOCKER or CRITICAL finding requires proof that a candidate hunk introduced or worsened the behavior, created a path to it, or fails a differential test that passes on base. Use pre-existing or base-only when the candidate did not activate the defect, and unknown when causality cannot be proved. Style preferences and unsupported suspicion are not findings.\n\n## Severity\n\n- BLOCKER: unsafe to deliver; catastrophic impact or no viable recovery.\n- CRITICAL: material user, security, data, or correctness failure.\n- WARNING: proven non-blocking defect or follow-up risk.\n- SUGGESTION: optional improvement with concrete value.\n\n## Evidence\n\nEach finding needs one exact path:line location, a neutral observable claim, deterministic | inferential | insufficient evidence class, causal disposition, and concrete proof references such as a changed hunk, command/output, differential test, trace, or before/after behavior. Do not invent evidence or use placeholders.\n\n## Output\n\nReturn one JSON object and no prose. Use exactly this native result shape:\n\n{\"findings\":[{\"location\":\"path:line\",\"severity\":\"CRITICAL\",\"claim\":\"observable incorrect behavior\",\"evidence_class\":\"deterministic\",\"causal_disposition\":\"introduced\",\"proof_refs\":[\"concrete proof\"]}],\"evidence\":[\"what was inspected\"]}\n\nThe only allowed top-level fields are findings and evidence, and the only allowed finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.\n\nReturn {\"findings\":[],\"evidence\":[\"what was inspected\"]} when clean.",
+      "tools": {
+        "*": false,
+        "bash": false,
+        "edit": false,
+        "read": true,
+        "task": false,
+        "write": false
+      }
+    },
+    "review-risk": {
+      "description": "R1 Risk reviewer — security, privilege boundaries, data exposure, dependency risks, and merge-blocking vulnerabilities",
+      "hidden": true,
+      "mode": "subagent",
+      "prompt": "# R1 Risk Review\n\nYou are a read-only reviewer. Inspect the immutable candidate diff once, return one result, and stop. Do not edit, delegate, or expand beyond the candidate and the minimum base context needed for proof.\n\n## Scope\n\nInspect security, authorization, data exposure or loss, unsafe input handling, secrets, and dependency vulnerabilities. Require backend enforcement and concrete exploit or scanner evidence; do not report hypothetical risk without a reachable impact.\n\n## Candidate-Causal Admission\n\nReport a finding only for real, user-impacting incorrect behavior. Classify it as introduced, behavior-activated, worsened, pre-existing, base-only, or unknown. A BLOCKER or CRITICAL finding requires proof that a candidate hunk introduced or worsened the behavior, created a path to it, or fails a differential test that passes on base. Use pre-existing or base-only when the candidate did not activate the defect, and unknown when causality cannot be proved. Style preferences and unsupported suspicion are not findings.\n\n## Severity\n\n- BLOCKER: unsafe to deliver; catastrophic impact or no viable recovery.\n- CRITICAL: material user, security, data, or correctness failure.\n- WARNING: proven non-blocking defect or follow-up risk.\n- SUGGESTION: optional improvement with concrete value.\n\n## Evidence\n\nEach finding needs one exact path:line location, a neutral observable claim, deterministic | inferential | insufficient evidence class, causal disposition, and concrete proof references such as a changed hunk, command/output, differential test, trace, or before/after behavior. Do not invent evidence or use placeholders.\n\n## Output\n\nReturn one JSON object and no prose. Use exactly this native result shape:\n\n{\"findings\":[{\"location\":\"path:line\",\"severity\":\"CRITICAL\",\"claim\":\"observable incorrect behavior\",\"evidence_class\":\"deterministic\",\"causal_disposition\":\"introduced\",\"proof_refs\":[\"concrete proof\"]}],\"evidence\":[\"what was inspected\"]}\n\nThe only allowed top-level fields are findings and evidence, and the only allowed finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.\n\nReturn {\"findings\":[],\"evidence\":[\"what was inspected\"]} when clean.",
+      "tools": {
+        "*": false,
+        "bash": false,
+        "edit": false,
+        "read": true,
+        "task": false,
+        "write": false
+      }
+    },
+    "sdd-apply": {
+      "description": "Implement code changes from task definitions",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-apply.md}",
+      "tools": {
+        "bash": true,
+        "codebase-memory-mcp*": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": ""
+    },
+    "sdd-archive": {
+      "description": "Archive completed change artifacts",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-archive.md}",
+      "tools": {
+        "bash": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": ""
+    },
+    "sdd-design": {
+      "description": "Create technical design from proposals",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-design.md}",
+      "tools": {
+        "bash": true,
+        "codebase-memory-mcp*": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": ""
+    },
+    "sdd-explore": {
+      "description": "Investigate codebase and think through ideas",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-explore.md}",
+      "tools": {
+        "bash": true,
+        "codebase-memory-mcp*": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": "low"
+    },
+    "sdd-init": {
+      "description": "Bootstrap SDD context and project configuration",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-init.md}",
+      "tools": {
+        "bash": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": ""
+    },
+    "sdd-onboard": {
+      "description": "Guide user through a complete SDD cycle using their real codebase",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-onboard.md}",
+      "tools": {
+        "bash": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": ""
+    },
+    "sdd-propose": {
+      "description": "Create change proposals from explorations",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-propose.md}",
+      "tools": {
+        "bash": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": ""
+    },
+    "sdd-spec": {
+      "description": "Write detailed specifications from proposals",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-spec.md}",
+      "tools": {
+        "bash": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": "low"
+    },
+    "sdd-tasks": {
+      "description": "Break down specs and designs into implementation tasks",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-tasks.md}",
+      "tools": {
+        "bash": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": "low"
+    },
+    "sdd-verify": {
+      "description": "Validate implementation against specs",
+      "hidden": true,
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra",
+      "prompt": "{file:./prompts/sdd/sdd-verify.md}",
+      "tools": {
+        "bash": true,
+        "codebase-memory-mcp*": true,
+        "edit": true,
+        "read": true,
+        "write": true
+      },
+      "variant": ""
+    }
+  },
+  "compaction": {
+    "auto": false,
+    "prune": true
+  },
+  "default_agent": "pegasus-orchestrator",
+  "mcp": {
+    "context7": {
+      "enabled": true,
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "figma": {
+      "enabled": true,
+      "type": "local",
+      "command": [
+        "npx",
+        "--yes",
+        "--ignore-scripts",
+        "figma-developer-mcp",
+        "--stdio"
+      ]
+    },
+    "engram": {
+      "command": [
+        "{env:ENGRAM_BIN}",
+        "mcp",
+        "--tools=agent"
+      ],
+      "type": "local"
+    },
+    "codebase-memory-mcp": {
+      "enabled": true,
+      "type": "local",
+      "command": [
+        "{env:CODEBASE_MEMORY_MCP_BIN}"
+      ]
+    },
+    "playwright": {
+      "enabled": true,
+      "type": "local",
+      "cwd": "{env:PLAYWRIGHT_MCP_CWD}",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@0.0.78"
+      ]
+    },
+    "jira-local": {
+      "enabled": false,
+      "type": "local",
+      "command": [
+        "uvx",
+        "--from",
+        "mcp-atlassian",
+        "mcp-atlassian"
+      ]
+    },
+    "jira": {
+      "enabled": true,
+      "type": "remote",
+      "url": "https://mcp.atlassian.com/v1/mcp"
+    }
+  },
+  "permission": {
+    "bash": {
+      "*": "allow",
+      "git commit *": "ask",
+      "git push": "ask",
+      "git push *": "ask",
+      "git push --force *": "ask",
+      "git rebase *": "ask",
+      "git reset --hard *": "ask"
+    },
+    "read": {
+      "*": "allow",
+      "**/*.key": "deny",
+      "**/*.pem": "deny",
+      "**/.aws/credentials": "deny",
+      "**/.config/gh/hosts.yml": "deny",
+      "**/.credentials/**": "deny",
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+      "**/.ssh/**": "deny",
+      "**/Library/Keychains/**": "deny",
+      "**/credentials.json": "deny",
+      "**/secrets/**": "deny",
+      "*.env": "deny",
+      "*.env.*": "deny"
+    }
+  },
+  "plugin": [
+    "@mohak34/opencode-notifier@0.2.4",
+    "file://{env:PEGASUS_PLUGIN_ROOT}/pegasus-zellij-state.ts"
+  ],
+  "provider": {
+    "xiaomi": {
+      "models": {
+        "mimo-v2-omni": {
+          "description": "Multimodal (texto, imagen, etc)",
+          "name": "MiMo-V2-Omni"
+        },
+        "mimo-v2-pro": {
+          "description": "Flagship model (mejor calidad, más caro)",
+          "name": "MiMo-V2-Pro"
+        },
+        "mimo-v2-tts": {
+          "description": "Text-to-Speech (audio)",
+          "name": "MiMo-V2-TTS",
+          "type": "audio"
+        }
+      },
+      "name": "Xiaomi MiMo",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "{env:XIAOMI_API_KEY}",
+        "baseURL": "https://token-plan-sgp.xiaomimimo.com/v1"
+      }
+    }
+  },
+  "share": "disabled"
+}

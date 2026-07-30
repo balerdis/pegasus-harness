@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Build the portable Pegasus skill index with only Python's standard library."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+FIELD = re.compile(r"^(name|description)\s*:\s*(.*?)\s*$")
+SENSITIVE = re.compile(r"(?i)(?:api[_-]?key|authorization|bearer|password|secret|token)\s*[:=]\s*\S+")
+
+
+@dataclass(frozen=True)
+class Skill:
+    name: str
+    description: str
+    scope: str
+    path: Path
+    root_order: int
+
+
+def scalar(value: str) -> str | None:
+    if not value or value in {"|", ">"}:
+        return None
+    if value.startswith('"'):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, str) else None
+    if value.startswith("'"):
+        if not value.endswith("'") or len(value) == 1:
+            return None
+        return value[1:-1].replace("''", "'")
+    if " #" in value:
+        value = value.split(" #", 1)[0].rstrip()
+    return value
+
+
+def parse_frontmatter(path: Path) -> tuple[dict[str, str] | None, str | None]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as error:
+        return None, f"unreadable ({error.__class__.__name__})"
+    if not lines or lines[0] != "---":
+        return None, "missing frontmatter"
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        return None, "unterminated frontmatter"
+    fields: dict[str, str] = {}
+    index = 1
+    while index < end:
+        line = lines[index]
+        match = FIELD.match(line)
+        if not match:
+            index += 1
+            continue
+        raw_value = match.group(2)
+        if raw_value in {"|", ">"}:
+            continuation: list[str] = []
+            index += 1
+            while index < end and lines[index].startswith((" ", "\t")):
+                continuation.append(lines[index].strip())
+                index += 1
+            value = ("\n" if raw_value == "|" else " ").join(continuation).strip() or None
+        else:
+            value = scalar(raw_value)
+            index += 1
+        if value is None:
+            return None, f"invalid {match.group(1)} scalar"
+        fields[match.group(1)] = value.strip()
+    if not fields.get("name") or not fields.get("description"):
+        return None, "missing name or description"
+    if not NAME.fullmatch(fields["name"]):
+        return None, "invalid name"
+    if SENSITIVE.search(fields["name"]) or SENSITIVE.search(fields["description"]):
+        return None, "sensitive frontmatter"
+    return fields, None
+
+
+def markdown_cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ").strip()
+
+
+def collect_skills(project_root: Path, roots: list[Path]) -> tuple[list[Skill], list[str]]:
+    candidates: list[Skill] = []
+    warnings: list[str] = []
+    for root_order, root in enumerate(roots):
+        if not root.is_dir():
+            warnings.append(f"WARN {root}: missing skill root")
+            continue
+        for path in sorted(root.rglob("SKILL.md"), key=lambda item: item.as_posix()):
+            directory_name = path.parent.name
+            if directory_name == "_shared" or directory_name == "skill-registry" or directory_name.startswith("sdd-"):
+                continue
+            fields, error = parse_frontmatter(path)
+            relative = path.relative_to(root).as_posix()
+            if error:
+                warnings.append(f"WARN {root}/{relative}: {error}")
+                continue
+            assert fields is not None
+            scope = "project" if path.is_relative_to(project_root) else "user"
+            candidates.append(Skill(fields["name"], fields["description"], scope, path, root_order))
+    selected: dict[str, Skill] = {}
+    for candidate in candidates:
+        scope_order = 0 if candidate.scope == "project" else 1
+        candidate_order = (scope_order, candidate.root_order, candidate.path.as_posix())
+        current = selected.get(candidate.name)
+        if current is None:
+            selected[candidate.name] = candidate
+            continue
+        current_scope_order = 0 if current.scope == "project" else 1
+        current_order = (current_scope_order, current.root_order, current.path.as_posix())
+        if candidate_order < current_order:
+            selected[candidate.name] = candidate
+    for candidate in candidates:
+        winner = selected[candidate.name]
+        if candidate.path != winner.path:
+            warnings.append(f"WARN {candidate.path}: duplicate name {candidate.name}; selected {winner.path}")
+    return sorted(selected.values(), key=lambda item: item.name), sorted(warnings)
+
+
+def render(project_root: Path, roots: list[Path], skills: list[Skill]) -> str:
+    lines = [
+        f"# Skill Registry — {project_root.name}",
+        "",
+        "<!-- Generated by Pegasus skill registry. Regenerate with pegasus-skill-registry. -->",
+        "",
+        "## Sources scanned",
+        "",
+    ]
+    lines.extend(f"- {root.as_posix()}" for root in roots)
+    lines.extend([
+        "",
+        "## Contract",
+        "",
+        "**Delegator use only.** This registry is an index, not a summary. Any agent that launches subagents reads it to select relevant skills, then passes exact `SKILL.md` paths for the subagent to read before work.",
+        "",
+        "`SKILL.md` remains the source of truth. Do not inject generated summaries or compact rules by default; pass paths so subagents load the full runtime contract and preserve author intent.",
+        "",
+        "## Skills",
+        "",
+        "| Skill | Trigger / description | Scope | Path |",
+        "| --- | --- | --- | --- |",
+    ])
+    lines.extend(
+        f"| `{markdown_cell(skill.name)}` | {markdown_cell(skill.description)} | {skill.scope} | `{skill.path.as_posix()}` |"
+        for skill in skills
+    )
+    lines.extend([
+        "",
+        "## Loading protocol",
+        "",
+        "1. Match task context and target files against the `Trigger / description` column.",
+        "2. Pass only the matching `Path` values to the subagent under `## Skills to load before work`.",
+        "3. Instruct the subagent to read those exact `SKILL.md` files before reading, writing, reviewing, testing, or creating artifacts.",
+        "4. If no matching skill exists, proceed without project skill injection and report `skill_resolution: none`.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Generate a Pegasus skill registry")
+    parser.add_argument("--project-root", required=True, type=Path)
+    parser.add_argument("--skill-root", required=True, action="append", type=Path)
+    args = parser.parse_args(argv)
+    project_root = args.project_root.resolve()
+    roots = [root.resolve() for root in args.skill_root]
+    skills, warnings = collect_skills(project_root, roots)
+    output = project_root / ".atl" / "skill-registry.md"
+    atomic_write(output, render(project_root, roots, skills))
+    for warning in warnings:
+        print(warning, file=sys.stderr)
+    print(f"registry={output} skills={len(skills)} warnings={len(warnings)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
