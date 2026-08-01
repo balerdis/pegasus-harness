@@ -740,6 +740,48 @@
       "classification": "registry-test-fixture"
     }
   ],
+  "distribution_assets": [
+    {
+      "frozen_path": "source/adapters/claude-code/CLAUDE.md",
+      "frozen_sha256": "a6158d3b806fc36410586ce876927c2ab0b076b2b78d10a70b9bee524d083819",
+      "classification": "portable-client-adapter"
+    },
+    {
+      "frozen_path": "source/core/skills/laravel-security/SKILL.md",
+      "frozen_sha256": "27ab6dd8633b89b4fa479b729c6c49a102d7ba1b5e5c18737be28a107e2b6d20",
+      "classification": "canonical-portable-skill"
+    },
+    {
+      "frozen_path": "source/core/skills/laravel-security/references/laravel-security-checklist.md",
+      "frozen_sha256": "420c12e050bcfeea6bbdf4837b7618dd13ddb25ee14eb7c96a8c298655ae5b75",
+      "classification": "canonical-portable-skill-reference"
+    },
+    {
+      "frozen_path": "source/core/skills/skill-versiones-estandar-asi/SKILL.md",
+      "frozen_sha256": "b27d6ca62fb4e57c35c761914cabfaa22c28d1fac76555ff40d2a926ed0dec43",
+      "classification": "canonical-portable-skill"
+    },
+    {
+      "frozen_path": "source/core/skills/skill-versiones-estandar-asi/references/provenance.md",
+      "frozen_sha256": "9e818410eb5ed89ce31f9acd0c7b2d3e5b34851c270db77b226d06e9d466a5cb",
+      "classification": "canonical-portable-skill-reference"
+    },
+    {
+      "frozen_path": "source/core/skills/skill-versiones-estandar-asi/references/version-matrix.md",
+      "frozen_sha256": "d2809b86e8b8c4ace3ace0411b937eb2405d5c7cab6bdfc0b0e24e0dfde048d1",
+      "classification": "canonical-portable-skill-reference"
+    },
+    {
+      "frozen_path": "tools/build_release_manifest.py",
+      "frozen_sha256": "25a338de3a4f0748573c3fbe8c12499d69aff0b770cfd5bf0cec5f57e6bd944c",
+      "classification": "release-manifest-tool"
+    },
+    {
+      "frozen_path": "docs/release-distribution.md",
+      "frozen_sha256": "1254642bc0b503641b21f342dc76a1fe58cbcdb227b6ecbd2e307e4404e70ae8",
+      "classification": "release-distribution-documentation"
+    }
+  ],
   "intentionally_excluded": [
     {
       "source_path": "/home/serg/.config/opencode/plugins/skill-registry.ts",

@@ -9,7 +9,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((ROOT / "manifests/baseline-manifest.json").read_text())
-EXPECTED = ["README.md", "bin/pegasus", "source/opencode/opencode.json", "source/opencode/AGENTS.md", "source/agents/pegasus-orchestrator.md", "source/opencode/plugins/engram.ts", "source/opencode/plugins/pegasus-zellij-state.ts", "docs/migration-todos.md", "docs/bootstrap-contract.md", "manifests/bootstrap-contract.json", "examples/opencode.overlay.example.json"]
 FORBIDDEN = {"retired graph tool": re.compile(r"(?i)codegraph"), "upstream runtime command": re.compile(r"(?i)gentle-ai\s+(?:sync|sdd-|review|skill-registry)")}
 SECRET = re.compile(r"(?i)(?:api[_-]?key|authorization|bearer|password|cookie)\s*[:=]\s*(?![\"']?\{env:|[\"']?set-this-|[\"']?REDACTED)(?:[\"']?[A-Za-z0-9_./+=-]{12,})")
 MACHINE_BOUND_PATH = re.compile(r"(?:/home/serg/|~/.config/opencode/|\{file:/(?!/)|\{file:~/)")
@@ -18,9 +17,16 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 errors = []
-for relative in EXPECTED:
-    if not (ROOT / relative).is_file(): errors.append(f"missing expected file: {relative}")
-for item in MANIFEST["copied"] + MANIFEST.get("pegasus_owned", []):
+assets = MANIFEST["copied"] + MANIFEST.get("pegasus_owned", []) + MANIFEST.get("distribution_assets", [])
+paths_seen = set()
+for item in assets:
+    if not isinstance(item.get("frozen_path"), str) or not isinstance(item.get("frozen_sha256"), str):
+        errors.append(f"invalid manifest asset: {item}")
+        continue
+    if item["frozen_path"] in paths_seen:
+        errors.append(f"duplicate manifest asset: {item['frozen_path']}")
+        continue
+    paths_seen.add(item["frozen_path"])
     path = ROOT / item["frozen_path"]
     if not path.is_file(): errors.append(f"missing manifest asset: {item['frozen_path']}")
     elif digest(path) != item["frozen_sha256"]: errors.append(f"checksum mismatch: {item['frozen_path']}")
@@ -55,4 +61,4 @@ if errors:
     print("FAIL")
     print("\n".join(errors))
     sys.exit(1)
-print(f"PASS: {len(MANIFEST['copied']) + len(MANIFEST.get('pegasus_owned', []))} frozen assets verified; source policy scan clean.")
+print(f"PASS: {len(assets)} frozen and distribution assets verified; source policy scan clean.")
