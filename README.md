@@ -25,29 +25,39 @@ Run `python3 -m unittest tests/test_pegasus_skill_registry.py` to exercise the
 registry generator. Run `python3 -m unittest discover -s tests` for the
 bootstrap contract tests.
 
-## Releases and development builds
+## Releases e instalaciones manuales
 
-Use a published GitHub Release for a stable installation. The latest stable
-release and its checksums are available at:
+Para una instalacion estable, use un GitHub Release publicado. El ultimo
+release estable y sus checksums estan en:
 
 <https://github.com/balerdis/pegasus-harness/releases/latest>
 
-Each release is an immutable semantic tag (for example, `v1.1.0`). Download
-the archive and verify its published checksum before installation. Do not use a
-branch tip when you need a reproducible production installation.
+Cada release corresponde a un tag semantico inmutable, por ejemplo `v1.1.0`.
+Baje el archivo y verifique su checksum publicado antes de instalar. Si necesita
+una instalacion reproducible en produccion, no use la punta de una rama.
 
-`main` contains the current development version. It is intended for
-contributors and early validation, may include unreleased changes, and is not a
-replacement for a tagged release. Clone `main` only when you deliberately want
-to test the next version:
+`main` tiene la version que se esta desarrollando. Sirve para contribuidores y
+validacion temprana, puede traer cambios sin publicar y no reemplaza a un
+release con tag. Clone `main` solo si quiere probar a conciencia la proxima
+version:
 
 ```sh
 git clone --branch main https://github.com/balerdis/pegasus-harness.git
 ```
 
-Release lines are prepared on `stable/vX.Y.0` branches and published from their
-immutable `vX.Y.Z` tags. Users consume the tag/release; the stable branch is a
-maintainer workflow boundary, not an installation source.
+Las lineas de release se preparan en ramas `stable/vX.Y.0` y se publican desde
+sus tags inmutables `vX.Y.Z`. Los usuarios consumen el tag o release; la rama
+stable es parte del trabajo de mantenimiento, no una fuente de instalacion.
+
+## Instalacion manual
+
+La instalacion manual es para uso avanzado y deliberado. Para una fuente estable
+use siempre un archivo de release o un tag publicado. Estos manuales explican
+como sumar assets de forma selectiva, con respaldo, sin pisar configuracion que
+ya existe:
+
+- [OpenCode](docs/manual-instalacion-opencode.md)
+- [Claude Code](docs/manual-instalacion-claude-code.md)
 
 ## Controlled installation
 
