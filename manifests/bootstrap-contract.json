@@ -1,6 +1,15 @@
 {
-  "schema": "pegasus-harness-bootstrap/v3",
-  "entrypoint": "bin/pegasus",
+  "schema": "pegasus-harness-bootstrap/v4",
+  "entrypoint": "install.sh",
+  "release_installer": {
+    "path": "install.sh",
+    "execution": "root-only orchestration from a verified extracted release archive",
+    "target_user": "required non-root --target-user <linux-user>",
+    "client": "opencode|claude-code|all; default all",
+    "python": "Python 3.12+ required before Pegasus invocation; Python 3.9 unsupported",
+    "preflight": ["sudo available", "sudo -u <target-user> -H available"],
+    "forbids": ["Pegasus download", "curl-pipe-bash"]
+  },
   "platform": "linux",
   "target_execution": "sudo -u <target-user> -H",
   "managed_target_assets": [
@@ -31,7 +40,7 @@
   },
   "external_pending": ["Engram", "Jira", "Figma", "Playwright", "model provider credentials"],
   "clients": {"targets": ["opencode", "claude-code", "all"], "claude_code": "canonical skills and CLAUDE.md only; no plugins", "platforms": ["linux", "linux-wsl2"]},
-  "release_distribution": "semantic-version immutable annotated tags and GitHub Releases with archive, SHA-256 checksum, and release manifest; no remote updater is bundled",
+  "release_distribution": "semantic-version immutable annotated tags and GitHub Releases with archive, SHA-256 checksum, checksummed install.sh asset, and release manifest; no remote updater is bundled",
   "prohibited_runtime": ["gentle-ai", "CodeGraph", "native review agents except approved explicit JD agents"],
   "post_migration_integrity": "pegasus validate checks every exact owned asset plus retained integration evidence; active-runtime-baseline.json is frozen historical evidence only"
 }

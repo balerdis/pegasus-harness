@@ -2,11 +2,16 @@
 
 ## Scope and safety
 
-`bin/pegasus` is a Linux-only, explicit, idempotent bootstrap command. Its outer
-mode requires a named target user and invokes internal work through
-`sudo -u <user> -H`. It rejects a missing user/home, root internal execution,
-missing `curl`/`python3`, and an unmanaged pre-existing `opencode.json` rather
-than overwriting it.
+`install.sh` is the release entrypoint: it runs only as root from a verified,
+extracted archive, requires `--target-user <linux-user>`, defaults its documented
+`--client` selection to `all`, rejects root as the target, verifies `sudo` can
+enter that account, and selects Python 3.12+ before invoking `bin/pegasus`.
+Python 3.9 is unsupported. It never downloads Pegasus or uses curl-pipe-bash.
+
+`bin/pegasus` is the Linux-only, explicit, idempotent target-user bootstrap. Its
+outer mode invokes internal work through `sudo -u <user> -H`. It rejects a
+missing user/home, root internal execution, missing `curl`/`python3`, and an
+unmanaged pre-existing `opencode.json` rather than overwriting it.
 
 Before materialization, the target-user state file records an ownership manifest
 of each exact Pegasus-managed file or symlink, its content digest/link target,

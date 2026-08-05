@@ -1,10 +1,10 @@
 # Instalacion manual en Claude Code
 
 Este manual explica como integrar Pegasus a mano y sin plugins, para casos
-avanzados. Para instalar algo estable, trabaje primero con un archivo de GitHub
-Release o un checkout del tag semantico publicado, y verifique su checksum.
-Hacerlo a mano implica revisar, integrar y mantener cada archivo. No lo haga
-desde una rama mutable.
+avanzados. No reemplaza el instalador automatico del release. Para instalar algo
+estable, trabaje primero con un archivo de GitHub Release o un checkout del tag
+semantico publicado, y verifique su checksum. Hacerlo a mano implica revisar,
+integrar y mantener cada archivo. No lo haga desde una rama mutable.
 
 ## Preparacion segura
 

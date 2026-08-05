@@ -773,13 +773,18 @@
     },
     {
       "frozen_path": "tools/build_release_manifest.py",
-      "frozen_sha256": "25a338de3a4f0748573c3fbe8c12499d69aff0b770cfd5bf0cec5f57e6bd944c",
+      "frozen_sha256": "abe8ecaa30ad47379c10908e32d3b5201b93bafd7684d1b1db37a7e1a34f6c78",
       "classification": "release-manifest-tool"
     },
     {
       "frozen_path": "docs/release-distribution.md",
-      "frozen_sha256": "1254642bc0b503641b21f342dc76a1fe58cbcdb227b6ecbd2e307e4404e70ae8",
+      "frozen_sha256": "6e6ddbd582df715ac9a738fc7d065542960cbafa8678d0bd369c7ab40a386a6b",
       "classification": "release-distribution-documentation"
+    },
+    {
+      "frozen_path": "install.sh",
+      "frozen_sha256": "9f2723a049a76ea4ffe5137963b59d45c6520d11277874c52da60e1ba6cc1ba4",
+      "classification": "root-only-release-installer"
     }
   ],
   "intentionally_excluded": [

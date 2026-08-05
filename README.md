@@ -13,7 +13,8 @@ not import legacy runtime assets or credentials.
 - `manifests/` — inventory, checksums, exclusions, and integrity evidence.
 - `docs/` — baseline behavior and migration constraints.
 - `tools/` — snapshot validation, the Pegasus registry generator, and historical evidence reporters.
-- `bin/pegasus` — explicit `install`, `validate`, `uninstall`, and `run` entrypoint.
+- `install.sh` — root-only automatic installer for a verified extracted release archive.
+- `bin/pegasus` — target-user bootstrap and lifecycle entrypoint used by `install.sh`.
 - `examples/` — safe overlay examples; actual local overlays are ignored.
 
 Run `python3 tools/validate_snapshot.py` from this repository to verify frozen
@@ -25,7 +26,7 @@ Run `python3 -m unittest tests/test_pegasus_skill_registry.py` to exercise the
 registry generator. Run `python3 -m unittest discover -s tests` for the
 bootstrap contract tests.
 
-## Releases e instalaciones manuales
+## Instalacion automatica desde un release
 
 Para una instalacion estable, use un GitHub Release publicado. El ultimo
 release estable y sus checksums estan en:
@@ -33,8 +34,13 @@ release estable y sus checksums estan en:
 <https://github.com/balerdis/pegasus-harness/releases/latest>
 
 Cada release corresponde a un tag semantico inmutable, por ejemplo `v1.1.0`.
-Baje el archivo y verifique su checksum publicado antes de instalar. Si necesita
-una instalacion reproducible en produccion, no use la punta de una rama.
+Baje el archivo y verifique su checksum publicado antes de instalar. El checksum
+prueba integridad respecto de ese checksum, no autenticidad independiente del
+publicador: si el archivo y el checksum llegan juntos desde una fuente no
+confiable, ambos pueden haber sido reemplazados. Pegasus no publica todavia una
+politica de firmas; obtenga el checksum por un canal autenticado e independiente.
+Si necesita una instalacion reproducible en produccion, no use la punta de una
+rama.
 
 `main` tiene la version que se esta desarrollando. Sirve para contribuidores y
 validacion temprana, puede traer cambios sin publicar y no reemplaza a un
@@ -49,19 +55,52 @@ Las lineas de release se preparan en ramas `stable/vX.Y.0` y se publican desde
 sus tags inmutables `vX.Y.Z`. Los usuarios consumen el tag o release; la rama
 stable es parte del trabajo de mantenimiento, no una fuente de instalacion.
 
+No descargue ni ejecute un instalador de Pegasus desde la red. Baje el archivo
+del release y su checksum, verifiquelo, extraigalo y ejecute el `install.sh`
+incluido desde esa copia verificada:
+
+```sh
+sha256sum -c pegasus-harness-vX.Y.Z.tar.gz.sha256
+tar -xzf pegasus-harness-vX.Y.Z.tar.gz
+cd pegasus-harness-vX.Y.Z
+sudo ./install.sh --target-user <linux-user> --client all
+```
+
+`--target-user <linux-user>` es obligatorio y debe ser una cuenta Linux no
+root. El wrapper solo orquesta como root y luego Pegasus entra con
+`sudo -u <linux-user> -H`: OpenCode, CBM y los assets de Pegasus se crean en el
+home de esa persona, no en `/root`. `--client` acepta `opencode`,
+`claude-code` o `all`; si se omite usa `all`.
+
+Antes de invocar Pegasus, `install.sh` exige Python 3.12 o superior y una ruta
+funcional de `sudo` hacia el usuario destino. Python 3.9 no esta soportado. El
+camino automatico funciona en Linux y WSL2; no esta soportado en macOS ni
+Windows nativo. Despues de instalar, el wrapper ejecuta `validate` con ese mismo
+interprete y muestra el resultado:
+
+```sh
+sudo ./install.sh --target-user <linux-user> --client all
+```
+
+El release no incluye credenciales ni configura servicios externos. Engram,
+Jira, Figma, Playwright y proveedores de modelo pueden seguir pendientes y se
+configuran por el mecanismo seguro de la cuenta destino, nunca dentro del
+archivo extraido ni sus comandos.
+
 ## Instalacion manual
 
-La instalacion manual es para uso avanzado y deliberado. Para una fuente estable
-use siempre un archivo de release o un tag publicado. Estos manuales explican
-como sumar assets de forma selectiva, con respaldo, sin pisar configuracion que
-ya existe:
+La instalacion manual es avanzada y deliberada; no reemplaza el instalador
+automatico anterior. Para una fuente estable use siempre un archivo de release
+o un tag publicado. Estos manuales explican como sumar assets de forma
+selectiva, con respaldo, sin pisar configuracion que ya existe:
 
 - [OpenCode](docs/manual-instalacion-opencode.md)
 - [Claude Code](docs/manual-instalacion-claude-code.md)
 
 ## Controlled installation
 
-From this checkout, a privileged operator installs only the named target user:
+For development or recovery from a checkout, a privileged operator installs
+only the named target user. Releases should use `install.sh` above:
 
 ```sh
 python3 bin/pegasus --target-user <linux-user> --client opencode install

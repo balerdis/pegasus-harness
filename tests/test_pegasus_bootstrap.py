@@ -4,6 +4,10 @@ import ast
 import importlib.machinery
 import importlib.util
 import json
+import hashlib
+import subprocess
+import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +15,7 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin" / "pegasus"
+RELEASE_INSTALLER = ROOT / "install.sh"
 
 
 def load_bootstrap():
@@ -32,6 +37,19 @@ class PegasusBootstrapTests(unittest.TestCase):
         self.assertIn("--skip-config", source)
         self.assertIn("sudo", source)
         self.assertIn("-u", source)
+
+    def test_release_installer_requires_root_python_target_user_and_client(self) -> None:
+        source = RELEASE_INSTALLER.read_text(encoding="utf-8")
+        self.assertIn('[[ $(id -u) -eq 0 ]]', source)
+        self.assertIn('--target-user <linux-user> is required', source)
+        self.assertIn("client='all'", source)
+        self.assertIn('opencode|claude-code|all', source)
+        self.assertIn('sudo -n -u "$target_user" -H true', source)
+        self.assertIn('sys.version_info < (3, 12)', source)
+        self.assertIn('"$python" "$script_dir/bin/pegasus" --target-user "$target_user" --client "$client" install', source)
+        self.assertIn('exec "$python" "$script_dir/bin/pegasus" --target-user "$target_user" --client "$client" validate', source)
+        self.assertNotIn("curl", source.lower())
+        self.assertNotIn("wget", source.lower())
 
     def test_template_has_portable_prompt_references(self) -> None:
         config = json.loads((ROOT / "source" / "opencode" / "opencode.json").read_text())
@@ -253,6 +271,7 @@ class PegasusBootstrapTests(unittest.TestCase):
             "source/core/skills/skill-versiones-estandar-asi/references/version-matrix.md",
             "tools/build_release_manifest.py",
             "docs/release-distribution.md",
+            "install.sh",
         }
         assets = {item["frozen_path"]: item["frozen_sha256"] for item in manifest["distribution_assets"]}
         self.assertEqual(set(assets), expected)
@@ -263,7 +282,65 @@ class PegasusBootstrapTests(unittest.TestCase):
         tool = (ROOT / "tools/build_release_manifest.py").read_text()
         self.assertIn('git("cat-file", "-t", args.tag) != "tag"', tool)
         self.assertIn("SEMVER", tool)
+        self.assertIn('"archive"', tool)
+        self.assertIn("tagged install.sh does not match its distribution manifest checksum", tool)
         self.assertIn(".sha256", tool)
+
+    def test_release_manifest_builds_a_tag_bound_executable_installer_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary)
+            (fixture / "tools").mkdir()
+            (fixture / "manifests").mkdir()
+            installer = fixture / "install.sh"
+            installer.write_text("#!/usr/bin/env bash\necho fixture\n", encoding="utf-8")
+            installer.chmod(0o755)
+            installer_digest = hashlib.sha256(installer.read_bytes()).hexdigest()
+            (fixture / "manifests" / "baseline-manifest.json").write_text(json.dumps({
+                "distribution_assets": [{"frozen_path": "install.sh", "frozen_sha256": installer_digest}],
+            }), encoding="utf-8")
+            tool = fixture / "tools" / "build_release_manifest.py"
+            tool.write_bytes((ROOT / "tools" / "build_release_manifest.py").read_bytes())
+            subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
+            subprocess.run(["git", "config", "user.email", "tests@example.invalid"], cwd=fixture, check=True)
+            subprocess.run(["git", "config", "user.name", "Pegasus tests"], cwd=fixture, check=True)
+            subprocess.run(["git", "add", "."], cwd=fixture, check=True)
+            subprocess.run(["git", "commit", "-qm", "fixture"], cwd=fixture, check=True)
+            subprocess.run(["git", "tag", "-am", "fixture release", "v9.8.7"], cwd=fixture, check=True)
+
+            archive = fixture / "dist" / "pegasus-harness-v9.8.7.tar.gz"
+            manifest_path = fixture / "dist" / "release-manifest.json"
+            subprocess.run(
+                [sys.executable, str(tool), "--tag", "v9.8.7", "--archive", str(archive), "--output", str(manifest_path)],
+                cwd=fixture,
+                check=True,
+            )
+
+            with tarfile.open(archive, "r:gz") as contents:
+                member = contents.getmember("pegasus-harness-v9.8.7/install.sh")
+                self.assertEqual(member.mode & 0o777, 0o755)
+                self.assertEqual(contents.extractfile(member).read(), installer.read_bytes())
+            release_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(release_manifest["schema"], "pegasus-harness-release/v2")
+            self.assertEqual(release_manifest["tag"], "v9.8.7")
+            self.assertEqual(release_manifest["tag_object"], subprocess.run(
+                ["git", "rev-parse", "v9.8.7^{tag}"], cwd=fixture, text=True, capture_output=True, check=True
+            ).stdout.strip())
+            self.assertEqual(release_manifest["commit"], subprocess.run(
+                ["git", "rev-list", "-n", "1", "v9.8.7"], cwd=fixture, text=True, capture_output=True, check=True
+            ).stdout.strip())
+            self.assertEqual(release_manifest["distribution_assets"], [{
+                "path": "install.sh", "sha256": installer_digest, "mode": "0755",
+            }])
+            self.assertEqual(
+                (archive.with_name(archive.name + ".sha256")).read_text(encoding="utf-8"),
+                f"{release_manifest['assets'][0]['sha256']}  {archive.name}\n",
+            )
+
+    def test_release_installer_is_a_checksumming_distribution_asset(self) -> None:
+        manifest = json.loads((ROOT / "manifests" / "baseline-manifest.json").read_text())
+        installer = next(item for item in manifest["distribution_assets"] if item["frozen_path"] == "install.sh")
+        self.assertEqual(installer["classification"], "root-only-release-installer")
+        self.assertEqual(installer["frozen_sha256"], load_bootstrap().digest(RELEASE_INSTALLER))
 
     def test_uninstall_preserves_modified_managed_file_and_keeps_manifest(self) -> None:
         module = load_bootstrap()
