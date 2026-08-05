@@ -58,9 +58,9 @@ def build_archive(tag: str, archive: Path) -> None:
 
 
 def release_installer(tag: str, archive: Path) -> dict[str, str | int]:
-    manifest = json.loads(tagged_file(tag, "manifests/baseline-manifest.json"))
+    manifest = json.loads(tagged_file(tag, "manifests/release-contract.json"))
     installer = next(
-        (asset for asset in manifest["distribution_assets"] if asset["frozen_path"] == "install.sh"),
+        (asset for asset in manifest["distribution_assets"] if asset["path"] == "install.sh"),
         None,
     )
     if installer is None:
@@ -68,7 +68,7 @@ def release_installer(tag: str, archive: Path) -> dict[str, str | int]:
 
     if git("ls-tree", tag, "--", "install.sh").split(maxsplit=1)[0] != "100755":
         raise ValueError("tagged install.sh must be tracked with Git mode 100755")
-    expected_digest = installer["frozen_sha256"]
+    expected_digest = installer["sha256"]
     expected_content = tagged_file(tag, "install.sh")
     prefix = f"pegasus-harness-{tag}/install.sh"
     with tarfile.open(archive, "r:gz") as contents:

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Install and validate the portable, user-local Pegasus OpenCode harness."""
+"""Install and validate the clean Pegasus Harness v2 runtime."""
 from __future__ import annotations
 
 import argparse
-import copy
 import datetime as dt
+import hashlib
 import json
 import os
 import pwd
@@ -16,16 +16,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "source"
-INSTALLER_URL = "https://opencode.ai/install"
-CBM_INSTALLER_URL = "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh"
 MARKER = ".pegasus-harness-state.json"
-JD_AGENT_NAMES = ("jd-fix-agent", "jd-judge-a", "jd-judge-b")
-LEGACY_AGENT_NAMES = ("king-gentleman",)
-CLIENT_TARGETS = ("opencode", "claude-code")
+CLIENTS = ("opencode", "claude-code")
+OPENCODE_INSTALLER = "https://opencode.ai/install"
+CBM_INSTALLER = "https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh"
 
 
 def fail(message: str) -> None:
     raise RuntimeError(message)
+
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def target_home(user: str) -> Path:
@@ -40,831 +42,151 @@ def target_home(user: str) -> Path:
 
 
 def run_as_target(user: str, args: list[str]) -> int:
-    # The source checkout can be private to the operator. Stage only the
-    # sanitized bootstrap inputs in a world-readable, owner-private temporary
-    # directory so the actual installer process still runs as the target user.
-    staging = Path(tempfile.mkdtemp(prefix="pegasus-harness-bootstrap-", dir="/tmp"))
+    staging = Path(tempfile.mkdtemp(prefix="pegasus-harness-", dir="/tmp"))
     staging.chmod(0o755)
     try:
         (staging / "bin").mkdir()
         shutil.copy2(Path(__file__).resolve(), staging / "bin" / "pegasus")
         (staging / "bin" / "pegasus").chmod(0o755)
         shutil.copytree(SOURCE, staging / "source")
-        (staging / "tools").mkdir()
-        for filename in ("pegasus_skill_registry.py", "pegasus-skill-registry"):
-            shutil.copy2(ROOT / "tools" / filename, staging / "tools" / filename)
-        command = ["sudo", "-u", user, "-H", "env", f"HOME={target_home(user)}", "PATH=/usr/local/bin:/usr/bin:/bin", sys.executable, str(staging / "bin" / "pegasus"), "--as-target", *args]
-        return subprocess.run(command, check=False).returncode
+        return subprocess.run([
+            "sudo", "-u", user, "-H", "env", f"HOME={target_home(user)}",
+            "PATH=/usr/local/bin:/usr/bin:/bin", sys.executable,
+            str(staging / "bin" / "pegasus"), "--as-target", *args,
+        ], check=False).returncode
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def home() -> Path:
-    value = Path.home()
-    if not value.is_dir():
-        fail(f"current HOME is not a directory: {value}")
-    return value
-
-
 def paths() -> dict[str, Path]:
-    user_home = home()
-    config = user_home / ".config" / "opencode"
-    data = user_home / ".local" / "share" / "pegasus-harness"
-    return {
-        "home": user_home,
-        "config": config,
-        "data": data,
-        "state": data / MARKER,
-        "backup_root": user_home / ".local" / "share" / "pegasus-harness-backups",
-        "bin": user_home / ".local" / "bin",
-        "claude": user_home / ".claude",
-    }
+    home = Path.home()
+    config = home / ".config" / "opencode"
+    data = home / ".local" / "share" / "pegasus-harness"
+    return {"home": home, "config": config, "data": data, "state": data / MARKER,
+            "bin": home / ".local" / "bin", "claude": home / ".claude"}
 
 
 def selected_clients(client: str) -> tuple[str, ...]:
-    if client == "all":
-        return CLIENT_TARGETS
-    if client in CLIENT_TARGETS:
-        return (client,)
-    fail(f"unsupported client target: {client}")
+    return CLIENTS if client == "all" else (client,)
 
 
-def platform_label() -> str:
-    release = Path("/proc/sys/kernel/osrelease")
-    try:
-        kernel = release.read_text(encoding="utf-8").lower()
-    except OSError:
-        kernel = ""
-    return "linux-wsl2" if "microsoft" in kernel or "wsl" in kernel else "linux"
+def assets() -> list[tuple[Path, Path]]:
+    result: list[tuple[Path, Path]] = []
+    for root, destination in ((SOURCE / "agents", Path("agents")), (SOURCE / "opencode" / "prompts", Path("prompts"))):
+        result.extend((path, destination / path.relative_to(root)) for path in root.rglob("*") if path.is_file())
+    skill_root = SOURCE / "core" / "skills"
+    result.extend((path, Path("skills") / path.relative_to(skill_root)) for path in skill_root.rglob("*") if path.is_file())
+    return sorted(result, key=lambda item: item[1].as_posix())
 
 
-def executable_path(candidate: Path) -> Path | None:
-    """Return a resolved executable path, rejecting broken links and directories."""
-    try:
-        resolved = candidate.resolve(strict=True)
-    except OSError:
-        return None
-    return resolved if resolved.is_file() and os.access(resolved, os.X_OK) else None
-
-
-def login_shell_opencode() -> Path | None:
-    """Ask the target account's login shell for OpenCode without inheriting secrets."""
-    account = pwd.getpwuid(os.geteuid())
-    shell = account.pw_shell if account.pw_shell.startswith("/") else "/bin/sh"
-    environment = {
-        "HOME": str(home()), "USER": account.pw_name, "LOGNAME": account.pw_name,
-        "SHELL": shell, "PATH": "/usr/local/bin:/usr/bin:/bin",
-    }
-    result = subprocess.run(
-        [shell, "-lc", "command -v -- opencode"], env=environment,
-        text=True, capture_output=True, check=False,
-    )
-    if result.returncode:
-        return None
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    return Path(lines[-1]) if lines else None
-
-
-def resolve_opencode(environment: dict[str, str]) -> tuple[Path, str, Path]:
-    """Resolve an installed OpenCode, including the target login-shell PATH."""
-    discovered = shutil.which("opencode", path=environment.get("PATH"))
-    candidates = [
-        home() / ".opencode" / "bin" / "opencode",
-        home() / ".local" / "bin" / "opencode",
-        Path(discovered) if discovered else None,
-        login_shell_opencode(),
-    ]
-    sources = ("documented ~/.opencode/bin", "documented ~/.local/bin", "current target environment PATH", "target login-shell PATH")
-    for source, candidate in zip(sources, candidates):
-        if candidate is None:
-            continue
-        resolved = executable_path(candidate)
-        if resolved is not None:
-            return resolved, source, candidate
-    fail("OpenCode executable not found in ~/.opencode/bin, ~/.local/bin, the target environment PATH, or the target login-shell PATH. Install it with `pegasus install` only if no existing binary resolves.")
-
-
-def ensure_prerequisites() -> None:
-    if sys.platform != "linux":
-        fail("Pegasus bootstrap currently supports Linux only")
-    for executable in ("curl", "python3"):
-        if not shutil.which(executable):
-            fail(f"missing prerequisite: {executable}")
-    if os.geteuid() == 0:
-        fail("internal target mode must run as an unprivileged target user")
-
-
-def skill_asset_files() -> list[tuple[Path, Path]]:
-    """Return the portable, client-agnostic skills bundled by the harness."""
-    root = SOURCE / "core" / "skills"
-    return sorted(
-        ((source, source.relative_to(root)) for source in root.rglob("*") if source.is_file()),
-        key=lambda item: item[1].as_posix(),
-    )
-
-
-def legacy_skill_files() -> list[Path]:
-    """Return the frozen, exact legacy skill inventory eligible for retirement."""
-    root = SOURCE / "opencode" / "skills"
-    return sorted(
-        (source.relative_to(root) for source in root.rglob("*") if source.is_file()),
-        key=Path.as_posix,
-    )
-
-
-def digest(path: Path) -> str:
-    import hashlib
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def snapshot(target: dict[str, Path]) -> Path:
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    backup = target["backup_root"] / stamp
-    suffix = 1
-    while backup.exists():
-        backup = target["backup_root"] / f"{stamp}-{suffix}"
-        suffix += 1
-    backup.mkdir(parents=True, mode=0o700)
-    backup.chmod(0o700)
-    return backup
-
-
-def save_existing(path: Path, backup: Path, index: int) -> dict[str, str] | None:
-    """Back up exactly one collision. Directories are never owned or replaced."""
-    if not path.exists() and not path.is_symlink():
-        return None
-    if path.is_dir():
-        fail(f"cannot safely replace directory collision: {path}")
-    if path.is_symlink():
-        return {"kind": "symlink", "target": os.readlink(path)}
-    destination = backup / "owned" / str(index)
-    destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    destination.parent.chmod(0o700)
-    shutil.copy2(path, destination, follow_symlinks=False)
-    return {"kind": "file", "path": str(destination), "sha256": digest(path)}
-
-
-def is_expected(entry: dict[str, object]) -> bool:
-    path = Path(str(entry["path"]))
-    if entry["kind"] == "retired":
-        return not path.exists() and not path.is_symlink()
-    if entry["kind"] == "symlink":
-        return path.is_symlink() and os.readlink(path) == entry["target"]
-    return path.is_file() and not path.is_symlink() and digest(path) == entry["sha256"]
-
-
-def restore(entry: dict[str, object]) -> None:
-    backup = entry.get("backup")
-    if not backup:
-        return
-    path = Path(str(entry["path"]))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if backup["kind"] == "symlink":
-        path.symlink_to(str(backup["target"]))
-    else:
-        shutil.copy2(str(backup["path"]), path, follow_symlinks=False)
-
-
-def retire_owned(path: Path, backup: Path, entries: list[dict[str, object]]) -> None:
-    """Retire one known legacy file while retaining an exact rollback copy."""
-    prior = save_existing(path, backup, len(entries))
-    if prior is None:
-        return
-    if path.is_dir():
-        fail(f"cannot safely retire directory: {path}")
-    path.unlink()
-    entries.append({"path": str(path), "kind": "retired", "backup": prior})
-
-
-def write_owned(path: Path, content: bytes, backup: Path, entries: list[dict[str, object]]) -> None:
-    prior = save_existing(path, backup, len(entries))
+def write_owned(path: Path, content: bytes, ownership: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
     path.chmod(0o600)
-    entries.append({"path": str(path), "kind": "file", "sha256": digest(path), "backup": prior})
-
-
-def link_owned(path: Path, destination: Path, backup: Path, entries: list[dict[str, object]]) -> None:
-    prior = save_existing(path, backup, len(entries))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() or path.is_symlink():
-        path.unlink()
-    path.symlink_to(destination)
-    entries.append({"path": str(path), "kind": "symlink", "target": str(destination), "backup": prior})
+    ownership.append({"path": str(path), "sha256": digest(path)})
 
 
 def clean_config(cbm: Path) -> dict[str, object]:
-    template = json.loads((SOURCE / "opencode" / "opencode.json").read_text(encoding="utf-8"))
-    template["agent"] = {
-        name: value for name, value in template.get("agent", {}).items()
-        if not name.startswith(("review-", "jd-")) and name not in LEGACY_AGENT_NAMES
-    }
-    for agent in template["agent"].values():
+    config = json.loads((SOURCE / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+    config["mcp"]["codebase-memory-mcp"]["command"] = [str(cbm)]
+    for agent in config["agent"].values():
         if isinstance(agent, dict) and isinstance(agent.get("prompt"), str):
             agent["prompt"] = agent["prompt"].replace("../agents/", "./agents/")
-    template["plugin"] = []
-    template["skills"] = {"paths": ["./skills"]}
-    template["mcp"] = {
-        "codebase-memory-mcp": {
-            "enabled": True,
-            "type": "local",
-            "command": [str(cbm)],
-        }
-    }
-    template.pop("provider", None)
-    return template
+    return config
 
 
-def migration_policy(cbm: Path) -> dict[str, object]:
-    """Return the existing-user policy, including explicit JD-only agents."""
-    policy = clean_config(cbm)
-    frozen = json.loads((SOURCE / "opencode" / "opencode.json").read_text(encoding="utf-8"))
-    frozen_agents = frozen.get("agent", {})
-    if not isinstance(frozen_agents, dict):
-        fail("frozen OpenCode template has a non-object agent section")
-    policy["agent"].update({name: copy.deepcopy(frozen_agents[name]) for name in JD_AGENT_NAMES})
-    return policy
-
-
-def migration_config(existing: dict[str, object], cbm: Path) -> dict[str, object]:
-    """Apply Pegasus policy without discarding user providers or MCPs."""
-    policy = migration_policy(cbm)
-    merged = copy.deepcopy(existing)
-    merged["$schema"] = policy["$schema"]
-    merged["default_agent"] = "pegasus-orchestrator"
-    merged["permission"] = policy["permission"]
-    merged["compaction"] = policy["compaction"]
-    merged["share"] = policy["share"]
-
-    agents = merged.get("agent", {})
-    if not isinstance(agents, dict):
-        fail("active OpenCode config has a non-object agent section")
-    merged["agent"] = {
-        name: value for name, value in agents.items()
-        if not name.startswith("review-") and name not in JD_AGENT_NAMES and name not in LEGACY_AGENT_NAMES
-    }
-    merged["agent"].update(copy.deepcopy(policy["agent"]))
-
-    mcps = merged.get("mcp", {})
-    if not isinstance(mcps, dict):
-        fail("active OpenCode config has a non-object mcp section")
-    merged["mcp"] = {
-        name: value for name, value in mcps.items()
-        if "codegraph" not in name.lower()
-    }
-    merged["mcp"]["codebase-memory-mcp"] = policy["mcp"]["codebase-memory-mcp"]
-
-    plugins = merged.get("plugin", [])
-    if not isinstance(plugins, list) or not all(isinstance(value, str) for value in plugins):
-        fail("active OpenCode config has a non-string plugin section")
-    policy_plugins = policy.get("plugin", [])
-    merged["plugin"] = list(dict.fromkeys(
-        value for value in [*plugins, *policy_plugins]
-        if "model-variants" not in value.lower() and "gentle-ai" not in value.lower()
-    ))
-    return merged
-
-
-def migration_integrations(config: dict[str, object]) -> dict[str, list[str]]:
-    """Record integration names only; values may contain secret references."""
-    providers = config.get("provider", {})
-    mcps = config.get("mcp", {})
-    if not isinstance(providers, dict) or not isinstance(mcps, dict):
-        fail("active OpenCode config has invalid provider or mcp sections")
-    return {
-        "providers": sorted(str(name) for name in providers),
-        "mcps": sorted(str(name) for name in mcps if "codegraph" not in str(name).lower() and name != "codebase-memory-mcp"),
-    }
-
-
-def migration_integrity_errors(target: dict[str, Path], state: dict[str, object], config: dict[str, object]) -> list[str]:
-    """Validate the post-migration manifest, policy, and retained integrations."""
-    errors: list[str] = []
-    ownership = state.get("ownership")
-    if not isinstance(ownership, list):
-        return ["migration ownership manifest is not a list"]
-    paths_seen: set[str] = set()
-    for entry in ownership:
-        if not isinstance(entry, dict) or "path" not in entry:
-            errors.append("migration ownership manifest has an invalid entry")
-            continue
-        path = str(entry["path"])
-        if path in paths_seen:
-            errors.append(f"migration ownership manifest has duplicate path: {path}")
-        paths_seen.add(path)
-        if not is_expected(entry):
-            errors.append(f"managed migration asset differs from ownership manifest: {path}")
-    if config.get("default_agent") != "pegasus-orchestrator":
-        errors.append("migration default agent is not pegasus-orchestrator")
-    agents = config.get("agent", {})
-    if not isinstance(agents, dict) or any(name not in agents for name in JD_AGENT_NAMES):
-        errors.append("migration is missing one or more approved explicit JD agents")
-    if state.get("managed_agents") != list(JD_AGENT_NAMES):
-        errors.append("migration state does not record the approved explicit JD agents")
-    expected_integrations = state.get("preserved_integrations")
-    if not isinstance(expected_integrations, dict):
-        errors.append("migration state lacks preserved integration evidence; rerun `pegasus migrate`")
-    else:
-        actual_integrations = migration_integrations(config)
-        for kind in ("providers", "mcps"):
-            expected = expected_integrations.get(kind)
-            if not isinstance(expected, list):
-                errors.append(f"migration state has invalid preserved {kind} evidence")
-            else:
-                missing = [str(name) for name in expected if name not in actual_integrations[kind]]
-                if missing:
-                    errors.append(f"migration no longer preserves required {kind}: {', '.join(missing)}")
-    return errors
-
-
-def repair_migration_config(target: dict[str, Path], state: dict[str, object]) -> bool:
-    """Backfill frozen JD definitions without overwriting a modified migration."""
-    config_path = target["config"] / "opencode.json"
-    entry = next((item for item in state["ownership"] if item["path"] == str(config_path)), None)
-    if entry is None or not is_expected(entry):
-        fail("refusing to repair a modified Pegasus OpenCode config")
-    try:
-        existing = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot repair without a valid active OpenCode config: {error}")
-    if not isinstance(existing, dict):
-        fail("active OpenCode config must be a JSON object")
-    rendered = json.dumps(migration_config(existing, target["bin"] / "codebase-memory-mcp"), indent=2) + "\n"
-    if config_path.read_text(encoding="utf-8") == rendered:
-        return False
-    config_path.write_text(rendered, encoding="utf-8")
-    config_path.chmod(0o600)
-    entry["sha256"] = digest(config_path)
-    return True
-
-
-def source_asset_files() -> list[tuple[Path, Path]]:
-    """Return exact source-to-target-relative mappings owned by Pegasus."""
-    mappings: list[tuple[Path, Path]] = []
-    for directory in ("commands", "prompts", "plugins"):
-        source_root = SOURCE / "opencode" / directory
-        for source in source_root.rglob("*"):
+def materialize(target: dict[str, Path], cbm: Path, clients: tuple[str, ...]) -> None:
+    ownership: list[dict[str, str]] = []
+    if "opencode" in clients:
+        config = target["config"]
+        write_owned(config / "opencode.json", (json.dumps(clean_config(cbm), indent=2) + "\n").encode(), ownership)
+        for source, relative in assets():
+            write_owned(config / relative, source.read_bytes(), ownership)
+        installed = target["data"] / "bin" / "pegasus"
+        write_owned(installed, Path(__file__).resolve().read_bytes(), ownership)
+        installed.chmod(0o755)
+        launcher = target["bin"] / "pegasus"
+        launcher.parent.mkdir(parents=True, exist_ok=True)
+        launcher.symlink_to(installed)
+        ownership.append({"path": str(launcher), "symlink": str(installed)})
+    if "claude-code" in clients:
+        write_owned(target["claude"] / "CLAUDE.md", (SOURCE / "adapters" / "claude-code" / "CLAUDE.md").read_bytes(), ownership)
+        skill_root = SOURCE / "core" / "skills"
+        for source in skill_root.rglob("*"):
             if source.is_file():
-                mappings.append((source, Path(directory) / source.relative_to(source_root)))
-    for source in (SOURCE / "agents").rglob("*"):
-        if source.is_file():
-            mappings.append((source, Path("agents") / source.relative_to(SOURCE / "agents")))
-    for source, relative in skill_asset_files():
-        mappings.append((source, Path("skills") / relative))
-    return sorted(mappings, key=lambda item: item[1].as_posix())
-
-
-def assert_retirement_safe(config: dict[str, object], plugin_path: Path) -> None:
-    """Fail closed if an active configuration still names the retired plugin."""
-    encoded = json.dumps(config).lower()
-    if "model-variants" in encoded or "model_variants" in encoded:
-        fail("active OpenCode config still references model-variants.ts")
-    replacement = SOURCE / "opencode" / "plugins" / "pegasus-skill-registry.ts"
-    if "gentle-ai" in replacement.read_text(encoding="utf-8").lower():
-        fail("Pegasus registry replacement contains a forbidden legacy runtime invocation")
-    if plugin_path.exists() and plugin_path.is_dir():
-        fail(f"cannot safely retire directory: {plugin_path}")
-
-
-def assert_safe_destinations(destinations: list[Path]) -> None:
-    """Reject every unsafe collision before a migration mutates any target file."""
-    for destination in destinations:
-        if destination.is_dir():
-            fail(f"cannot safely replace directory collision: {destination}")
-        parent = destination.parent
-        while parent != parent.parent:
-            if parent.exists() and not parent.is_dir():
-                fail(f"cannot safely create beneath file collision: {parent}")
-            parent = parent.parent
-
-
-def runtime_contract(target: dict[str, Path], data: Path, cbm: Path, existing: str = "") -> str:
-    """Replace Pegasus keys while retaining pre-existing secret-manager references."""
-    generated = {
-        "PEGASUS_SKILL_REGISTRY_BIN": str(data / "bin" / "pegasus-skill-registry"),
-        "PEGASUS_SKILL_ROOTS": str(target["config"] / "skills"),
-        "PEGASUS_PLUGIN_ROOT": str(target["config"] / "plugins"),
-        "CODEBASE_MEMORY_MCP_BIN": str(cbm),
-    }
-    retained: list[str] = []
-    for line in existing.splitlines():
-        if "=" not in line or line.lstrip().startswith("#"):
-            continue
-        key = line.split("=", 1)[0].strip()
-        if key and key not in generated:
-            retained.append(line)
-    lines = [
-        "# Non-secret Pegasus runtime contract. Existing provider and MCP settings stay in opencode.json.",
-        *(f"{key}={value}" for key, value in generated.items()),
-        "# Existing environment references retained without interpretation.",
-        *retained,
-        "",
-    ]
-    return "\n".join(lines)
-
-
-def materialize(target: dict[str, Path], backup: Path, cbm: Path, clients: tuple[str, ...] = ("opencode",)) -> None:
-    config = target["config"]
-    state = target["state"]
-    if "opencode" in clients and (config / "opencode.json").exists() and not state.exists():
-        fail(f"refusing to overwrite unmanaged OpenCode config: {config / 'opencode.json'}")
-    source_files = [
-        (source_root, source)
-        for source_root in (SOURCE / "opencode" / "prompts", SOURCE / "agents")
-        for source in source_root.rglob("*") if source.is_file()
-    ]
-    skill_files = skill_asset_files()
-    destinations = []
-    if "opencode" in clients:
-        destinations.extend([config / "opencode.json", config / "plugins" / "pegasus-skill-registry.ts", config / "pegasus.env", config / "pegasus-skill-registry.env", target["bin"] / "pegasus"])
-    for source_root, source in source_files:
-        destination_root = config / ("prompts" if source_root.name == "prompts" else "agents")
-        destinations.append(destination_root / source.relative_to(source_root))
-    for source, relative in skill_files:
-        destinations.append(target["config"] / "skills" / relative)
-    if "claude-code" in clients:
-        destinations.append(target["claude"] / "CLAUDE.md")
-        for source, relative in skill_files:
-            destinations.append(target["claude"] / "skills" / relative)
-    if "opencode" in clients:
-        destinations.extend(target["data"] / "bin" / name for name in ("pegasus_skill_registry.py", "pegasus-skill-registry", "pegasus"))
-    for destination in destinations:
-        if destination.is_dir():
-            fail(f"cannot safely replace directory collision: {destination}")
-    entries: list[dict[str, object]] = []
-    if "opencode" in clients:
-        write_owned(config / "opencode.json", (json.dumps(clean_config(cbm), indent=2) + "\n").encode(), backup, entries)
-        for source_root, source in sorted(source_files, key=lambda item: item[1].as_posix()):
-            destination_root = config / ("prompts" if source_root.name == "prompts" else "agents")
-            write_owned(destination_root / source.relative_to(source_root), source.read_bytes(), backup, entries)
-        for source, relative in skill_files:
-            write_owned(config / "skills" / relative, source.read_bytes(), backup, entries)
-        write_owned(config / "plugins" / "pegasus-skill-registry.ts", (SOURCE / "opencode" / "plugins" / "pegasus-skill-registry.ts").read_bytes(), backup, entries)
-    data = target["data"]
-    for source in (ROOT / "tools" / "pegasus_skill_registry.py", ROOT / "tools" / "pegasus-skill-registry", Path(__file__).resolve()) if "opencode" in clients else ():
-        destination = data / "bin" / ("pegasus" if source == Path(__file__).resolve() else source.name)
-        write_owned(destination, source.read_bytes(), backup, entries)
-        destination.chmod(0o755)
-    contract = "\n".join((
-        "# Non-secret Pegasus runtime contract. Source this file before starting OpenCode.",
-        f"PEGASUS_SKILL_REGISTRY_BIN={data / 'bin' / 'pegasus-skill-registry'}",
-        f"PEGASUS_SKILL_ROOTS={config / 'skills'}",
-        f"PEGASUS_PLUGIN_ROOT={config / 'plugins'}",
-        f"CODEBASE_MEMORY_MCP_BIN={cbm}",
-        "# ENGRAM_BIN=engram                 # Set only after installing/configuring Engram.",
-        "# PLAYWRIGHT_MCP_CWD=/path/to/project # Set only when Playwright MCP is desired.",
-        "# XIAOMI_API_KEY=                    # Set through a secret manager; never store a key here.",
-        "",
-    ))
-    if "opencode" in clients:
-        write_owned(config / "pegasus.env", contract.encode(), backup, entries)
-        write_owned(config / "pegasus-skill-registry.env", "\n".join((
-        f"PEGASUS_SKILL_REGISTRY_BIN={data / 'bin' / 'pegasus-skill-registry'}",
-        f"PEGASUS_SKILL_ROOTS={config / 'skills'}",
-        "",
-        )).encode(), backup, entries)
-        link_owned(target["bin"] / "pegasus", data / "bin" / "pegasus", backup, entries)
-    if "claude-code" in clients:
-        write_owned(target["claude"] / "CLAUDE.md", (SOURCE / "adapters" / "claude-code" / "CLAUDE.md").read_bytes(), backup, entries)
-        for source, relative in skill_files:
-            write_owned(target["claude"] / "skills" / relative, source.read_bytes(), backup, entries)
-    state_payload = {
-        "schema": "pegasus-harness-install/v2",
-        "installed_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "backup": str(backup),
-        "ownership": entries,
-        "clients": list(clients),
-    }
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text(json.dumps(state_payload, indent=2) + "\n", encoding="utf-8")
-    state.chmod(0o600)
-
-
-def migrate_internal() -> int:
-    """Migrate an existing OpenCode user without treating it as a clean install."""
-    ensure_prerequisites()
-    target = paths()
-    config_path = target["config"] / "opencode.json"
-    if target["state"].exists():
-        state = json.loads(target["state"].read_text(encoding="utf-8"))
-        if state.get("schema") == "pegasus-harness-migration/v1":
-            return refresh_migration_contract_internal()
-        fail("a Pegasus installation state already exists; use validate, refresh-launcher, or uninstall")
-    try:
-        existing = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"cannot migrate without a valid active OpenCode config: {error}")
-    if not isinstance(existing, dict):
-        fail("active OpenCode config must be a JSON object")
-    cbm = target["bin"] / "codebase-memory-mcp"
-    if not cbm.is_file() or not os.access(cbm, os.X_OK):
-        fail(f"CBM binary unavailable; refusing migration: {cbm}")
-    assert_retirement_safe(existing, target["config"] / "plugins" / "model-variants.ts")
-    merged = migration_config(existing, cbm)
-    # Serialize and parse before any mutation; this is the exact JSON handed to OpenCode.
-    rendered = json.dumps(merged, indent=2) + "\n"
-    json.loads(rendered)
-    source_files = source_asset_files()
-    legacy_skills = [target["config"] / "skills" / relative for relative in legacy_skill_files()]
-    data = target["data"]
-    destinations = [
-        config_path,
-        *(target["config"] / relative for _, relative in source_files),
-        data / "bin" / "pegasus_skill_registry.py",
-        data / "bin" / "pegasus-skill-registry",
-        data / "bin" / "pegasus",
-        target["config"] / "pegasus.env",
-        target["config"] / "pegasus-skill-registry.env",
-        target["bin"] / "pegasus",
-        *legacy_skills,
-    ]
-    assert_safe_destinations(destinations)
-    backup = snapshot(target)
-    entries: list[dict[str, object]] = []
-    write_owned(config_path, rendered.encode("utf-8"), backup, entries)
-    for source, relative in source_files:
-        write_owned(target["config"] / relative, source.read_bytes(), backup, entries)
-    for source in (ROOT / "tools" / "pegasus_skill_registry.py", ROOT / "tools" / "pegasus-skill-registry", Path(__file__).resolve()):
-        destination = data / "bin" / ("pegasus" if source == Path(__file__).resolve() else source.name)
-        write_owned(destination, source.read_bytes(), backup, entries)
-        destination.chmod(0o755)
-    existing_contract = (target["config"] / "pegasus.env").read_text(encoding="utf-8") if (target["config"] / "pegasus.env").is_file() else ""
-    write_owned(target["config"] / "pegasus.env", runtime_contract(target, data, cbm, existing_contract).encode(), backup, entries)
-    write_owned(target["config"] / "pegasus-skill-registry.env", "\n".join((
-        f"PEGASUS_SKILL_REGISTRY_BIN={data / 'bin' / 'pegasus-skill-registry'}",
-        f"PEGASUS_SKILL_ROOTS={target['config'] / 'skills'}",
-        "",
-    )).encode(), backup, entries)
-    link_owned(target["bin"] / "pegasus", data / "bin" / "pegasus", backup, entries)
-    retire_owned(target["config"] / "plugins" / "model-variants.ts", backup, entries)
-    for legacy_skill in legacy_skills:
-        retire_owned(legacy_skill, backup, entries)
-    state_payload = {
-        "schema": "pegasus-harness-migration/v1",
-        "migrated_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "backup": str(backup),
-        "ownership": entries,
-        "deferred_cleanup": [
-            str(target["config"] / ".gentle-ai-default-agent.json"),
-            str(target["home"] / ".gentle-ai"),
-        ],
-        "preserved_config_sections": ["provider", "mcp (except CodeGraph)", "unrelated plugins", "unknown agents"],
-        "managed_agents": list(JD_AGENT_NAMES),
-        "preserved_integrations": migration_integrations(merged),
-    }
+                write_owned(target["claude"] / "skills" / source.relative_to(skill_root), source.read_bytes(), ownership)
     target["state"].parent.mkdir(parents=True, exist_ok=True)
-    target["state"].write_text(json.dumps(state_payload, indent=2) + "\n", encoding="utf-8")
+    target["state"].write_text(json.dumps({"schema": "pegasus-harness/v2", "installed_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(), "clients": clients, "ownership": ownership}, indent=2) + "\n", encoding="utf-8")
     target["state"].chmod(0o600)
-    print(f"MIGRATED config={target['config']} backup={backup} owned={len(entries)}")
-    return 0
 
 
-def refresh_migration_contract_internal() -> int:
-    """Recover retained environment references from the private migration backup."""
-    target = paths()
-    state = json.loads(target["state"].read_text(encoding="utf-8"))
-    if state.get("schema") != "pegasus-harness-migration/v1":
-        fail("no existing-user migration state found")
-    path = target["config"] / "pegasus.env"
-    entry = next((item for item in state["ownership"] if item["path"] == str(path)), None)
-    if entry is None or not is_expected(entry):
-        fail("refusing to refresh a modified Pegasus environment contract")
-    prior = entry.get("backup")
-    existing = Path(str(prior["path"])).read_text(encoding="utf-8") if prior and prior.get("kind") == "file" else ""
-    cbm = target["bin"] / "codebase-memory-mcp"
-    repaired = repair_migration_config(target, state)
-    path.write_text(runtime_contract(target, target["data"], cbm, existing), encoding="utf-8")
-    path.chmod(0o600)
-    entry["sha256"] = digest(path)
-    state["managed_agents"] = list(JD_AGENT_NAMES)
-    state["preserved_integrations"] = migration_integrations(json.loads((target["config"] / "opencode.json").read_text(encoding="utf-8")))
-    target["state"].write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-    status = " and JD definitions repaired" if repaired else ""
-    print(f"MIGRATION contract refreshed from private backup{status}")
-    return 0
+def ensure_prerequisites() -> None:
+    if sys.platform != "linux" or os.geteuid() == 0:
+        fail("internal target mode requires an unprivileged Linux user")
 
 
-def refresh_launcher_internal() -> int:
-    """Update only the target-owned launcher after a harness launcher change."""
+def install(args: argparse.Namespace) -> int:
     ensure_prerequisites()
     target = paths()
-    installed = target["data"] / "bin" / "pegasus"
-    if not installed.parent.is_dir() or not target["state"].is_file():
-        fail("no harness-managed installation found; run `pegasus install` first")
-    state = json.loads(target["state"].read_text(encoding="utf-8"))
-    if state.get("schema") not in {"pegasus-harness-install/v2", "pegasus-harness-migration/v1"}:
-        fail("ownership migration required; run `pegasus migrate-ownership` first")
-    entry = next((item for item in state["ownership"] if item["path"] == str(installed)), None)
-    if entry is None or not is_expected(entry):
-        fail("refusing to replace a modified Pegasus launcher")
-    source = Path(__file__).resolve().read_bytes()
-    with tempfile.NamedTemporaryFile(dir=installed.parent, prefix=".pegasus-refresh-", delete=False) as temporary:
-        temporary.write(source)
-        temporary.flush()
-        os.fsync(temporary.fileno())
-        replacement = Path(temporary.name)
-    replacement.chmod(0o755)
-    os.replace(replacement, installed)
-    entry["sha256"] = digest(installed)
-    target["state"].write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-    print(f"REFRESHED launcher={target['bin'] / 'pegasus'} source={Path(__file__).resolve()}")
-    return 0
-
-
-def migrate_ownership_internal() -> int:
-    """Adopt only known legacy Pegasus files; never adopt whole directories."""
-    ensure_prerequisites()
-    target = paths()
-    if not target["state"].is_file():
-        fail("no legacy harness state found; run `pegasus install` first")
-    legacy = json.loads(target["state"].read_text(encoding="utf-8"))
-    if legacy.get("schema") == "pegasus-harness-install/v2":
-        print("OWNERSHIP already-current")
-        return 0
-    backup = Path(str(legacy.get("backup", "")))
-    entries: list[dict[str, object]] = []
-
-    def adopt(path: Path, relative: Path) -> None:
-        if not path.exists() and not path.is_symlink():
-            return
-        if path.is_dir():
-            return
-        prior: dict[str, str] | None = None
-        saved = backup / relative
-        if saved.is_file() and not saved.is_symlink():
-            prior = {"kind": "file", "path": str(saved), "sha256": digest(saved)}
-        elif saved.is_symlink():
-            prior = {"kind": "symlink", "target": os.readlink(saved)}
-        if path.is_symlink():
-            entries.append({"path": str(path), "kind": "symlink", "target": os.readlink(path), "backup": prior})
-        else:
-            entries.append({"path": str(path), "kind": "file", "sha256": digest(path), "backup": prior})
-
-    config = target["config"]
-    for relative in (Path("opencode.json"), Path("pegasus.env"), Path("pegasus-skill-registry.env"), Path("plugins/pegasus-skill-registry.ts")):
-        adopt(config / relative, relative)
-    for root, source_root in ((Path("prompts"), SOURCE / "opencode" / "prompts"), (Path("agents"), SOURCE / "agents")):
-        for source in source_root.rglob("*"):
-            if source.is_file():
-                relative = source.relative_to(source_root)
-                adopt(config / root / relative, root / relative)
-    data = target["data"]
-    for name in ("pegasus_skill_registry.py", "pegasus-skill-registry", "pegasus"):
-        adopt(data / "bin" / name, Path("data") / "bin" / name)
-    adopt(target["bin"] / "pegasus", Path("local-bin-pegasus"))
-    target["state"].write_text(json.dumps({"schema": "pegasus-harness-install/v2", "installed_at_utc": legacy.get("installed_at_utc"), "backup": str(backup), "ownership": entries, "migrated_from": legacy.get("schema")}, indent=2) + "\n", encoding="utf-8")
-    print(f"MIGRATED ownership={len(entries)} backup={backup}")
-    return 0
-
-
-def install_internal(args: argparse.Namespace) -> int:
-    ensure_prerequisites()
-    target = paths()
-    if not SOURCE.is_dir():
-        fail("installer source template is unavailable; rerun from the harness checkout")
     clients = selected_clients(args.client)
+    if target["state"].exists():
+        fail("Pegasus is already installed for this user; uninstall it before installing again")
+    if "opencode" in clients and target["config"].exists():
+        fail("clean installation requires an unused ~/.config/opencode directory")
+    if "claude-code" in clients and target["claude"].exists():
+        fail("clean installation requires an unused ~/.claude directory")
     cbm = target["bin"] / "codebase-memory-mcp"
     if "opencode" in clients and not args.skip_opencode_install:
-        subprocess.run(["bash", "-c", f"curl --proto '=https' --tlsv1.2 -fsSL {INSTALLER_URL} | bash"], check=True)
+        subprocess.run(["bash", "-c", f"curl --proto '=https' --tlsv1.2 -fsSL {OPENCODE_INSTALLER} | bash"], check=True)
     if "opencode" in clients and not args.skip_cbm_install:
-        subprocess.run(["bash", "-c", f"curl --proto '=https' --tlsv1.2 -fsSL {CBM_INSTALLER_URL} | bash -s -- --skip-config"], check=True)
+        subprocess.run(["bash", "-c", f"curl --proto '=https' --tlsv1.2 -fsSL {CBM_INSTALLER} | bash -s -- --skip-config"], check=True)
     if "opencode" in clients and (not cbm.is_file() or not os.access(cbm, os.X_OK)):
-        fail(f"CBM install did not produce an executable: {cbm}")
-    if target["state"].is_file():
-        state = json.loads(target["state"].read_text(encoding="utf-8"))
-        if state.get("schema") != "pegasus-harness-install/v2":
-            fail("ownership migration required; run `pegasus migrate-ownership` before install")
-        modified = [entry["path"] for entry in state["ownership"] if not is_expected(entry)]
-        if modified:
-            fail("refusing to overwrite modified managed assets: " + ", ".join(modified))
-        if tuple(state.get("clients", ("opencode",))) != clients:
-            fail("existing harness installation has different client targets; uninstall before changing targets")
-        print(f"INSTALLED already-current platform={platform_label()} clients={','.join(clients)}")
-        return 0
-    backup = snapshot(target)
-    materialize(target, backup, cbm, clients)
-    print(f"INSTALLED platform={platform_label()} clients={','.join(clients)} backup={backup}")
+        fail(f"CBM executable is unavailable: {cbm}")
+    materialize(target, cbm, clients)
+    print(f"INSTALLED clients={','.join(clients)}")
     return 0
 
 
-def validate_internal(args: argparse.Namespace) -> int:
+def validate(args: argparse.Namespace) -> int:
     ensure_prerequisites()
     target = paths()
     errors: list[str] = []
-    warnings: list[str] = []
-    config_path = target["config"] / "opencode.json"
-    state: dict[str, object] = {}
-    clients = selected_clients(args.client)
-    if not target["state"].is_file():
-        errors.append("missing harness installation state")
-    else:
-        try:
-            state = json.loads(target["state"].read_text(encoding="utf-8"))
-            if state.get("schema") not in {"pegasus-harness-install/v2", "pegasus-harness-migration/v1"}:
-                errors.append("ownership migration required")
-            else:
-                for entry in state.get("ownership", []):
-                    if not is_expected(entry): warnings.append(f"managed asset modified; uninstall will preserve it: {entry['path']}")
-        except (OSError, json.JSONDecodeError) as error:
-            errors.append(f"invalid ownership manifest: {error}")
-    if "opencode" in clients:
-      try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-      except (OSError, json.JSONDecodeError) as error:
-        errors.append(f"invalid OpenCode config JSON: {error}")
-        config = {}
-    else:
-        config = {}
-    if state.get("schema") == "pegasus-harness-migration/v1" and isinstance(config, dict):
-        errors.extend(migration_integrity_errors(target, state, config))
-    for name, agent in config.get("agent", {}).items():
-        if name.startswith("review-") or (name.startswith("jd-") and name not in JD_AGENT_NAMES):
-            errors.append(f"native review agent is active: {name}")
-        prompt = agent.get("prompt") if isinstance(agent, dict) else None
-        if isinstance(prompt, str) and prompt.startswith("{file:") and prompt.endswith("}"):
-            candidate = (config_path.parent / prompt[6:-1]).resolve()
-            if not candidate.is_file(): errors.append(f"unresolved relative prompt: {name} -> {prompt}")
-    if "opencode" in clients and "codebase-memory-mcp" not in config.get("mcp", {}): errors.append("CBM MCP is not configured")
-    cbm = target["bin"] / "codebase-memory-mcp"
-    if "opencode" in clients and (not cbm.is_file() or not os.access(cbm, os.X_OK)): errors.append("CBM binary unavailable")
-    if "opencode" in clients:
-      try:
-        executable, source, discovered = resolve_opencode(os.environ.copy())
-        print(f"OPENCODE: source={source} discovered={discovered} resolved={executable}")
-      except RuntimeError as error:
-        errors.append(str(error))
-    # Skills and documentation may describe a historical command defensively;
-    # only executable runtime surfaces are prohibited from invoking it.
-    managed_scan = [config_path, target["config"] / "plugins"]
-    for root in managed_scan:
-        if root.exists():
-            candidates = [root] if root.is_file() else root.rglob("*")
-            for path in candidates:
-                legacy_name = "gent" + "le-ai"
-                if path.is_file() and path.read_text(encoding="utf-8", errors="ignore").lower().find(legacy_name) >= 0:
-                    errors.append(f"forbidden legacy runtime reference: {path}")
-                retired_graph = "code" + "graph"
-                if path.is_file() and retired_graph in path.read_text(encoding="utf-8", errors="ignore").lower():
-                    errors.append(f"forbidden {retired_graph} reference: {path}")
-    if "opencode" in clients:
-      with tempfile.TemporaryDirectory(prefix="pegasus-registry-") as temporary:
-        project = Path(temporary) / "project"
-        skill = project / "skills" / "portable" / "SKILL.md"
-        skill.parent.mkdir(parents=True)
-        skill.write_text("---\nname: portable\ndescription: portable registry smoke skill\n---\n", encoding="utf-8")
-        generator = target["data"] / "bin" / "pegasus-skill-registry"
-        result = subprocess.run([str(generator), "--project-root", str(project), "--skill-root", str(project / "skills")], text=True, capture_output=True, check=False)
-        registry = project / ".atl" / "skill-registry.md"
-        if result.returncode or not registry.is_file() or "`portable`" not in registry.read_text(encoding="utf-8"):
-            errors.append(f"registry generation failed: {result.stderr.strip() or result.stdout.strip()}")
-        if cbm.is_file():
-            help_result = subprocess.run([str(cbm), "--help"], text=True, capture_output=True, check=False)
-            if help_result.returncode: errors.append("CBM help command failed")
-            index_result = subprocess.run([str(cbm), "cli", "index_repository", "--repo-path", str(project), "--mode", "fast"], text=True, capture_output=True, check=False)
-            if index_result.returncode: errors.append(f"CBM temporary-project index failed: {index_result.stderr.strip()}")
-    for client in clients:
-        skill_root = target["config"] / "skills" if client == "opencode" else target["claude"] / "skills"
-        for _, relative in skill_asset_files():
-            if not (skill_root / relative).is_file(): errors.append(f"missing canonical skill for {client}: {relative}")
-    for variable, label in (("ENGRAM_BIN", "Engram"), ("PLAYWRIGHT_MCP_CWD", "Playwright"), ("XIAOMI_API_KEY", "model provider")):
-        if not os.environ.get(variable): warnings.append(f"OPTIONAL EXTERNAL PENDING: {label} ({variable} is not configured)")
-    warnings.extend(("OPTIONAL EXTERNAL PENDING: Jira remote MCP requires a target-user authentication flow", "OPTIONAL EXTERNAL PENDING: Figma MCP is not installed/configured"))
-    for item in warnings: print(f"WARNING: {item}")
+    try:
+        state = json.loads(target["state"].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        errors.append(f"invalid installation state: {error}")
+        state = {}
+    if state.get("schema") != "pegasus-harness/v2":
+        errors.append("missing v2 installation state")
+    for entry in state.get("ownership", []):
+        path = Path(entry["path"])
+        if "symlink" in entry:
+            if not path.is_symlink() or os.readlink(path) != entry["symlink"]: errors.append(f"changed launcher: {path}")
+        elif not path.is_file() or digest(path) != entry["sha256"]:
+            errors.append(f"changed managed asset: {path}")
+    if "opencode" in selected_clients(args.client):
+        try: json.loads((target["config"] / "opencode.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error: errors.append(f"invalid OpenCode config: {error}")
+        cbm = target["bin"] / "codebase-memory-mcp"
+        if not cbm.is_file() or not os.access(cbm, os.X_OK): errors.append("CBM executable is unavailable")
     if errors:
-        for item in errors: print(f"BLOCKING: {item}")
+        print("\n".join(f"BLOCKING: {error}" for error in errors))
         return 1
-    if state.get("schema") == "pegasus-harness-migration/v1":
-        print(f"PASS: post-migration integrity: {len(state['ownership'])} exact managed assets, retained integrations, approved JD agents, config JSON, registry, and CBM smoke checks passed")
-    else:
-        print("PASS: config JSON, relative prompts, Pegasus registry, no legacy/native-review runtime assets, and CBM smoke checks passed")
+    print("PASS: v2 assets, configuration, and CBM availability are valid")
     return 0
 
 
-def uninstall_internal() -> int:
+def uninstall() -> int:
     target = paths()
-    if not target["state"].is_file(): fail("no harness-managed installation state found")
     state = json.loads(target["state"].read_text(encoding="utf-8"))
-    if state.get("schema") not in {"pegasus-harness-install/v2", "pegasus-harness-migration/v1"}:
-        fail("ownership migration required; run `pegasus migrate-ownership` before uninstall")
-    retained: list[dict[str, object]] = []
+    if state.get("schema") != "pegasus-harness/v2": fail("missing v2 installation state")
     for entry in reversed(state["ownership"]):
-        path = Path(str(entry["path"]))
-        if not is_expected(entry):
-            retained.append(entry)
-            print(f"WARNING: preserved modified managed asset: {path}")
-            continue
-        path.unlink(missing_ok=True)
-        restore(entry)
-    if retained:
-        state["ownership"] = list(reversed(retained))
-        target["state"].write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-        print("PARTIAL: modified managed assets were preserved; restore or remove them before retrying uninstall")
-        return 1
+        path = Path(entry["path"])
+        if "symlink" in entry:
+            if path.is_symlink(): path.unlink()
+        elif path.is_file() and digest(path) == entry["sha256"]: path.unlink()
     target["state"].unlink()
-    for directory in (target["data"] / "bin", target["data"], target["config"] / "plugins", target["config"] / "prompts", target["config"] / "agents"):
-        try: directory.rmdir()
-        except OSError: pass
-    print(f"UNINSTALLED restored_backup={state['backup']}")
+    print("UNINSTALLED v2 managed assets")
     return 0
 
 
@@ -872,49 +194,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--as-target", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--target-user", default=os.environ.get("USER", ""))
-    parser.add_argument("--client", choices=(*CLIENT_TARGETS, "all"), default="opencode", help="installation target (default: opencode)")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    install = subparsers.add_parser("install")
-    install.add_argument("--skip-opencode-install", action="store_true")
-    install.add_argument("--skip-cbm-install", action="store_true")
-    subparsers.add_parser("validate")
-    subparsers.add_parser("uninstall")
-    subparsers.add_parser("refresh-launcher")
-    subparsers.add_parser("migrate-ownership")
-    subparsers.add_parser("migrate", help="safely migrate an existing OpenCode user")
-    run = subparsers.add_parser("run")
-    run.add_argument("run_command", nargs=argparse.REMAINDER)
+    parser.add_argument("--client", choices=(*CLIENTS, "all"), default="opencode")
+    commands = parser.add_subparsers(dest="command", required=True)
+    install_parser = commands.add_parser("install")
+    install_parser.add_argument("--skip-opencode-install", action="store_true")
+    install_parser.add_argument("--skip-cbm-install", action="store_true")
+    commands.add_parser("validate")
+    commands.add_parser("uninstall")
     args = parser.parse_args()
     if not args.target_user: fail("--target-user is required")
-    current_user = pwd.getpwuid(os.geteuid()).pw_name
-    if not args.as_target and args.target_user != current_user:
+    if not args.as_target and args.target_user != pwd.getpwuid(os.geteuid()).pw_name:
         return run_as_target(args.target_user, ["--as-target", *sys.argv[1:]])
-    if args.command == "install": return install_internal(args)
-    if args.command == "validate": return validate_internal(args)
-    if args.command == "uninstall": return uninstall_internal()
-    if args.command == "refresh-launcher": return refresh_launcher_internal()
-    if args.command == "migrate-ownership": return migrate_ownership_internal()
-    if args.command == "migrate": return migrate_internal()
-    if args.command == "run":
-        if args.run_command[:1] == ["--"]:
-            args.run_command = args.run_command[1:]
-        if not args.run_command: fail("run requires a command after --")
-        environment = os.environ.copy()
-        for line in (paths()["config"] / "pegasus.env").read_text(encoding="utf-8").splitlines():
-            if "=" in line and not line.lstrip().startswith("#"):
-                key, value = line.split("=", 1); environment.setdefault(key, value)
-        if args.run_command[0] == "opencode":
-            executable, source, discovered = resolve_opencode(environment)
-            print(f"OPENCODE: source={source} discovered={discovered} resolved={executable}", file=sys.stderr)
-            environment["PATH"] = f"{executable.parent}:{environment.get('PATH', '')}"
-            args.run_command[0] = str(executable)
-        return subprocess.run(args.run_command, env=environment, check=False).returncode
-    return 2
+    if args.command == "install": return install(args)
+    if args.command == "validate": return validate(args)
+    return uninstall()
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
+    try: raise SystemExit(main())
     except (RuntimeError, subprocess.CalledProcessError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         raise SystemExit(1)

@@ -1,0 +1,16 @@
+{
+  "schema": "pegasus-harness-release-contract/v2",
+  "version": "2.0.0",
+  "installation": {
+    "mode": "clean only",
+    "target_user": "required non-root Linux account",
+    "python": "3.12+",
+    "clients": ["opencode", "claude-code", "all"]
+  },
+  "distribution_assets": [
+    {"path": "install.sh", "sha256": "9f2723a049a76ea4ffe5137963b59d45c6520d11277874c52da60e1ba6cc1ba4"}
+  ],
+  "claude_code": "canonical skills and adapter only; no plugins",
+  "readiness_authority": "sdd-verify",
+  "code_intelligence": "CBM is mandatory for applicable structural analysis and does not prove behavior"
+}

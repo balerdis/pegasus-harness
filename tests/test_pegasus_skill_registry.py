@@ -138,29 +138,17 @@ class PegasusSkillRegistryTests(unittest.TestCase):
         self.assertEqual(target.read_text(), "complete\n")
         self.assertFalse(list(target.parent.glob(".registry.md.*.tmp")))
 
-    def test_production_files_and_output_have_no_legacy_dependency(self) -> None:
+    def test_production_files_and_output_have_no_external_dependency(self) -> None:
         completed = self.run_generator()
         self.assertEqual(completed.returncode, 0, completed.stderr)
         forbidden = "gent" + "le-ai"
         production = [
             ROOT / "tools" / "pegasus_skill_registry.py",
             ROOT / "tools" / "pegasus-skill-registry",
-            ROOT / "source" / "opencode" / "plugins" / "pegasus-skill-registry.ts",
             self.project / ".atl" / "skill-registry.md",
         ]
         for path in production:
             self.assertNotIn(forbidden, path.read_text().lower(), path)
-
-    def test_plugin_uses_only_the_portable_pegasus_environment_contract(self) -> None:
-        plugin = (ROOT / "source" / "opencode" / "plugins" / "pegasus-skill-registry.ts").read_text()
-        self.assertIn("PEGASUS_SKILL_REGISTRY_BIN", plugin)
-        self.assertIn("PEGASUS_SKILL_ROOTS", plugin)
-        self.assertIn("pegasus-skill-registry.env", plugin)
-        self.assertIn("XDG_CONFIG_HOME", plugin)
-        self.assertIn('join(projectRoot, "skills")', plugin)
-        self.assertIn("execFileAsync(generator, args", plugin)
-        self.assertNotIn("/home/", plugin)
-
 
 if __name__ == "__main__":
     unittest.main()
