@@ -1,4 +1,4 @@
-# Instalacion limpia v2
+# Instalacion limpia v2.0.1
 
 Pegasus Harness v2 se instala desde cero. No reutilice una configuracion existente en la cuenta destino.
 
@@ -9,17 +9,20 @@ Pegasus Harness v2 se instala desde cero. No reutilice una configuracion existen
 - Python 3.12 o superior.
 - Una cuenta Linux no root sin `~/.config/opencode` para OpenCode y sin `~/.claude` para Claude Code.
 - Archivo de release y checksum obtenidos por un canal autenticado.
+- Para OpenCode: `~/.opencode/bin/opencode` o `~/.local/bin/opencode` ejecutable, y `~/.local/bin/codebase-memory-mcp` ejecutable. Ambos deben responder a `--version` y `--help`.
 
 ## Instalacion
 
 ```sh
-sha256sum -c pegasus-harness-v2.0.0.tar.gz.sha256
-tar -xzf pegasus-harness-v2.0.0.tar.gz
-cd pegasus-harness-v2.0.0
+sha256sum -c pegasus-harness-v2.0.1.tar.gz.sha256
+tar -xzf pegasus-harness-v2.0.1.tar.gz
+cd pegasus-harness-v2.0.1
 sudo ./install.sh --target-user <linux-user> --client all
 ```
 
-El instalador nunca descarga Pegasus. Instala los binarios requeridos para OpenCode dentro de la cuenta destino y luego valida los assets administrados.
+Pegasus no descarga ni instala OpenCode, CBM ni otra dependencia. Solo descubre esos ejecutables dentro del home de la cuenta destino, ejecuta las sondas no mutantes `--version` y `--help`, y recién entonces materializa sus propios assets. Root no aporta su `PATH`: el wrapper entra a la cuenta destino con `sudo -u <linux-user> -H`.
+
+Si alguna sonda falla, falta un binario, la cuenta no es válida o el directorio de cliente ya existe, el proceso se corta con error. Prepare o actualice OpenCode y CBM fuera de Pegasus y vuelva a ejecutar el comando.
 
 ## Si la cuenta ya tiene configuracion
 

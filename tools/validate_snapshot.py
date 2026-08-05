@@ -32,6 +32,15 @@ def forbidden_patterns() -> list[re.Pattern[str]]:
     return [re.compile("".join(part), re.IGNORECASE) for part in parts]
 
 
+def remote_installer_patterns() -> list[re.Pattern[str]]:
+    return [
+        re.compile(r"\b(?:curl|wget)\b", re.IGNORECASE),
+        re.compile(r"\b(?:ba)?sh\s+-c\b", re.IGNORECASE),
+        re.compile(r"https?://[^\s\"']*(?:install|installer)", re.IGNORECASE),
+        re.compile(r"--skip-(?:opencode|cbm)-install", re.IGNORECASE),
+    ]
+
+
 def main() -> int:
     errors: list[str] = []
     try:
@@ -42,6 +51,21 @@ def main() -> int:
     installer = next((asset for asset in contract.get("distribution_assets", []) if asset.get("path") == "install.sh"), None)
     if not installer or installer.get("sha256") != digest(ROOT / "install.sh"):
         errors.append("release contract digest does not match install.sh")
+    if contract.get("version") != "2.0.1":
+        errors.append("release contract is not prepared for v2.0.1")
+    installation = contract.get("installation", {})
+    if installation.get("remote_dependency_installation") != "forbidden":
+        errors.append("release contract must forbid remote dependency installation")
+    prerequisites = installation.get("prerequisites", {})
+    if set(prerequisites) != {"opencode", "codebase-memory-mcp"}:
+        errors.append("release contract must declare OpenCode and CBM prerequisites")
+    installer_surfaces = (ROOT / "install.sh", ROOT / "bin" / "pegasus")
+    for path in installer_surfaces:
+        content = path.read_text(encoding="utf-8")
+        for pattern in remote_installer_patterns():
+            if pattern.search(content):
+                errors.append(f"remote installer behavior: {path.relative_to(ROOT)}")
+                break
     patterns = forbidden_patterns()
     for path in tracked_files():
         try:

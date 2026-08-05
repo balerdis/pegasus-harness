@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Install Pegasus from a verified, extracted release archive.
+# Install Pegasus from a verified, extracted release archive without fetching dependencies.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
 Usage: sudo ./install.sh --target-user <linux-user> [--client opencode|claude-code|all]
 
-Installs Pegasus only for the named non-root Linux user.
+Installs Pegasus only for the named non-root Linux user after its local prerequisites pass validation.
 --client defaults to all.
 EOF
 }

@@ -1,14 +1,19 @@
 {
   "schema": "pegasus-harness-release-contract/v2",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "installation": {
     "mode": "clean only",
     "target_user": "required non-root Linux account",
     "python": "3.12+",
-    "clients": ["opencode", "claude-code", "all"]
+    "clients": ["opencode", "claude-code", "all"],
+    "prerequisites": {
+      "opencode": "required for opencode/all; executable in ~/.opencode/bin or ~/.local/bin; --version and --help must succeed",
+      "codebase-memory-mcp": "required for opencode/all; executable in ~/.local/bin; --version and --help must succeed"
+    },
+    "remote_dependency_installation": "forbidden"
   },
   "distribution_assets": [
-    {"path": "install.sh", "sha256": "9f2723a049a76ea4ffe5137963b59d45c6520d11277874c52da60e1ba6cc1ba4"}
+    {"path": "install.sh", "sha256": "e38ac2732edcc855473ea71b831f840df180c8081029917fc03275e048f1a836"}
   ],
   "claude_code": "canonical skills and adapter only; no plugins",
   "readiness_authority": "sdd-verify",
