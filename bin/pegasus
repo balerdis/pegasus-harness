@@ -489,23 +489,45 @@ def write_journal(target: dict[str, Path], journal: dict) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def journal_release(release_root: Path) -> dict:
+def validate_rc_release_identity(release_identity: object, release_root: Path) -> dict[str, str]:
+    if not isinstance(release_identity, dict) or set(release_identity) != {
+            "tag", "archive_name", "archive_sha256", "manifest_sha256", "archive_root"}:
+        fail("RC release identity is malformed")
+    identity = release_identity
+    tag = identity["tag"]
+    root = identity["archive_root"]
+    if (not isinstance(tag, str) or not RC_TAG.fullmatch(tag)
+            or not isinstance(root, str) or root != f"pegasus-harness-{tag}"
+            or identity["archive_name"] != f"{root}.tar.gz"
+            or any(not isinstance(identity[name], str) or not re.fullmatch(r"[0-9a-f]{64}", identity[name])
+                   for name in ("archive_sha256", "manifest_sha256"))):
+        fail("RC release identity is invalid")
+    resolved_root = release_root.resolve()
+    if resolved_root.name.startswith("pegasus-harness-") and resolved_root.name != root:
+        fail("RC release identity does not match the extracted release root")
+    return identity
+
+
+def journal_release(release_root: Path, release_identity: dict[str, str] | None = None) -> dict:
     root = release_root.resolve()
     tag = root.name.removeprefix("pegasus-harness-")
-    return {
+    release = {
         "version": RELEASE,
         "tag": tag if RC_TAG.fullmatch(tag) else None,
         "root": root.name,
         "contract_sha256": digest(root / "manifests" / "release-contract.json"),
         "catalog_sha256": digest(root / "manifests" / "artifact-catalog.json"),
     }
+    if release_identity is not None:
+        release.update(release_identity)
+    return release
 
 
 def source_entry(identifier: str) -> dict:
     return next(item for item in load_catalog()["artifacts"] if item["id"] == identifier)
 
 
-def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browser_ready: bool, declined: set[str] | None = None, release_root: Path = ROOT) -> dict:
+def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browser_ready: bool, declined: set[str] | None = None, release_root: Path = ROOT, release_identity: object = None) -> dict:
     declined = declined or set()
     pending = {item["id"] for item in plan_value["dependencies"] if item["action"] == "confirm-required"} - declined
     if not pending.issubset(confirmed):
@@ -513,6 +535,10 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
     playwright = next(item for item in plan_value["dependencies"] if item["id"] == "playwright")
     if playwright["action"] in {"confirm-required", "link-existing"} and "playwright" not in declined and not browser_ready:
         fail("Playwright browser preflight blocks apply; cancel or install externally and retry")
+    external_release = release_root.resolve() != ROOT.resolve()
+    if external_release and release_identity is None:
+        fail("validated RC release identity is required before apply")
+    identity = validate_rc_release_identity(release_identity, release_root) if release_identity is not None else None
     journal, created, config = load_journal(target), [], read_config(target["opencode_config"])
     try:
         for dependency in plan_value["dependencies"]:
@@ -573,7 +599,7 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
             target["opencode_config"].write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         if created:
             if not journal["entries"][:-len(created)]:
-                journal["release"] = journal_release(release_root)
+                journal["release"] = journal_release(release_root, identity)
             write_journal(target, journal)
     except Exception:
         rollback(target, journal)
@@ -635,8 +661,14 @@ def validate(target: dict[str, Path]) -> int:
         release = journal["release"]
         if (release.get("version") != RELEASE or not isinstance(release.get("root"), str)
                 or not all(isinstance(release.get(name), str) and len(release[name]) == 64
-                           for name in ("contract_sha256", "catalog_sha256"))):
+                            for name in ("contract_sha256", "catalog_sha256"))):
             fail("journal release identity is malformed and remains unowned")
+        if release.get("tag") is not None:
+            try:
+                validate_rc_release_identity({name: release[name] for name in (
+                    "tag", "archive_name", "archive_sha256", "manifest_sha256", "archive_root")}, Path(release["archive_root"]))
+            except (KeyError, RuntimeError):
+                fail("journal RC release identity is malformed and remains unowned")
         for entry in journal["entries"]:
             try:
                 Path(entry["target"]).relative_to(target["home"])
@@ -664,6 +696,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", type=Path, help="test-only target home; never use for another user")
     parser.add_argument("--release-root", type=Path, default=ROOT, help="verified extracted release root")
+    parser.add_argument("--release-identity", help="validated RC archive identity from acceptance preflight")
     parser.add_argument("--target-user", default=os.environ.get("USER", ""))
     parser.add_argument("--client", choices=(*CLIENTS, "all"), default="opencode")
     parser.add_argument("--confirm", action="append", default=[])
@@ -680,7 +713,11 @@ def main() -> int:
     if args.command == "plan": print(json.dumps(value, indent=2)); return 0
     if args.command == "apply":
         ready = browser_preflight(value, target)["ready"]
-        print(json.dumps(apply(value, target, set(args.confirm), ready, set(args.decline), args.release_root), indent=2)); return 0
+        try:
+            identity = json.loads(args.release_identity) if args.release_identity else None
+        except json.JSONDecodeError:
+            fail("RC release identity is invalid JSON")
+        print(json.dumps(apply(value, target, set(args.confirm), ready, set(args.decline), args.release_root, identity), indent=2)); return 0
     if args.command == "uninstall": print(json.dumps(rollback(target), indent=2)); return 0
     return validate(target)
 

@@ -46,6 +46,7 @@ target_user=$(PREFLIGHT="$preflight" python3 -c 'import json, os; print(json.loa
 confirm_csv=$(PREFLIGHT="$preflight" python3 -c 'import json, os; print(",".join(json.loads(os.environ["PREFLIGHT"])["confirm"]))')
 decline_csv=$(PREFLIGHT="$preflight" python3 -c 'import json, os; print(",".join(json.loads(os.environ["PREFLIGHT"])["decline"]))')
 release_root=$(PREFLIGHT="$preflight" python3 -c 'import json, os; print(json.loads(os.environ["PREFLIGHT"])["release_root"])')
+release_identity=$(PREFLIGHT="$preflight" python3 -c 'import json, os; print(json.dumps(json.loads(os.environ["PREFLIGHT"])["release_identity"]))')
 [[ $target_user != serg && $target_user != root && $recreate_user == "$target_user" ]] || fail 'serg and unsafe recreation acknowledgements are refused'
 [[ -f $release_root/bin/pegasus ]] || fail 'validated RC archive lacks Pegasus'
 
@@ -70,7 +71,7 @@ IFS=, read -r -a declined <<< "$decline_csv"
 for mcp in "${confirmed[@]}"; do [[ -n $mcp ]] && confirm_args+=(--confirm "$mcp"); done
 for mcp in "${declined[@]}"; do [[ -n $mcp ]] && decline_args+=(--decline "$mcp"); done
 apply_result="$staging_dir/apply-result.json"
-sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --release-root "$release_root" --home "$target_home" --target-user "$target_user" --client opencode "${confirm_args[@]}" "${decline_args[@]}" apply > "$apply_result"
+sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --release-root "$release_root" --release-identity "$release_identity" --home "$target_home" --target-user "$target_user" --client opencode "${confirm_args[@]}" "${decline_args[@]}" apply > "$apply_result"
 sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --release-root "$release_root" --home "$target_home" --target-user "$target_user" --client opencode validate
 sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" npm --prefix "$target_home/.config/opencode/notifier" ci --ignore-scripts
 

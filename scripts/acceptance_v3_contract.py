@@ -104,6 +104,18 @@ def validate_rc_inputs(profile: str, archive: Path, checksum: Path, manifest_pat
     return root
 
 
+def rc_release_identity(archive: Path, manifest_path: Path, root: str) -> dict[str, str]:
+    """Return the immutable RC identity only after validate_rc_inputs succeeds."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    return {
+        "tag": manifest["tag"],
+        "archive_name": archive.name,
+        "archive_sha256": sha256(archive),
+        "manifest_sha256": sha256(manifest_path),
+        "archive_root": root,
+    }
+
+
 def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
@@ -258,7 +270,9 @@ def main() -> int:
         parser.error("RC preflight requires profile, archive, checksum, manifest, and extract directory")
     root = validate_rc_inputs(args.profile, args.rc_archive, args.rc_checksum, args.release_manifest)
     release_root = extract_verified_archive(args.rc_archive, args.extract_dir, root)
-    print(json.dumps({"profile": args.profile, "release_root": str(release_root), **profile_plan(args.profile)}))
+    print(json.dumps({"profile": args.profile, "release_root": str(release_root),
+                      "release_identity": rc_release_identity(args.rc_archive, args.release_manifest, root),
+                      **profile_plan(args.profile)}))
     return 0
 
 

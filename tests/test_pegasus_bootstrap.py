@@ -104,6 +104,16 @@ class AdditiveHarnessTests(unittest.TestCase):
             contents.extractall(extracted, filter="data")
         return extracted / prefix, bundle
 
+    def rc_release_identity_fixture(self, release_root: Path) -> dict[str, str]:
+        tag = release_root.name.removeprefix("pegasus-harness-")
+        return {
+            "tag": tag,
+            "archive_name": f"pegasus-harness-{tag}.tar.gz",
+            "archive_sha256": "a" * 64,
+            "manifest_sha256": "b" * 64,
+            "archive_root": release_root.name,
+        }
+
     def fixture_command(self, path: Path, output: str, exit_code: int = 0) -> None:
         path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\nexit {exit_code}\n", encoding="utf-8")
         path.chmod(0o755)
@@ -206,7 +216,7 @@ class AdditiveHarnessTests(unittest.TestCase):
     def test_acceptance_script_is_static_and_refuses_unsafe_defaults(self) -> None:
         script = ROOT / "scripts/accept-v3-isolated.sh"
         source = script.read_text(encoding="utf-8")
-        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "pegasus-harness-journal/v3", "mapped user", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root"):
+        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "--release-identity", "release_identity", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "pegasus-harness-journal/v3", "mapped user", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root"):
             self.assertIn(required, source)
         self.assertIn('"$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user"', source)
         for forbidden in ("useradd", "userdel", "rm -rf", "--confirm-clean-home"):
@@ -387,6 +397,10 @@ class AdditiveHarnessTests(unittest.TestCase):
                         "archive_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in evidence.items()],
                     }), encoding="utf-8")
                     self.assertEqual(contract.validate_rc_inputs("cbm", archive, checksum, manifest), prefix[:-1])
+                    self.assertEqual(contract.rc_release_identity(archive, manifest, prefix[:-1]), {
+                        "tag": tag, "archive_name": archive.name, "archive_sha256": archive_digest,
+                        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(), "archive_root": prefix[:-1],
+                    })
             checksum.write_text("0" * 64 + f"  {archive.name}\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "checksum"):
                 contract.validate_rc_inputs("cbm", archive, checksum, manifest)
@@ -631,7 +645,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
             next(entry for entry in plan["dependencies"] if entry["id"] == "cbm")["metadata"] = item
             with patch.object(self.engine.urllib.request, "urlopen", side_effect=AssertionError("release bundle must stay offline")) as urlopen:
-                result = self.engine.apply(plan, target, {"cbm"}, browser_ready=True, declined={"engram", "playwright", "context7"}, release_root=release_root)
+                result = self.engine.apply(plan, target, {"cbm"}, browser_ready=True, declined={"engram", "playwright", "context7"}, release_root=release_root, release_identity=self.rc_release_identity_fixture(release_root))
             urlopen.assert_not_called()
             self.assertIn("opencode-mcp", result["created"])
             self.assertTrue((target["dependencies"] / "cbm" / "bin/codebase-memory-mcp").is_file())
@@ -642,6 +656,9 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertEqual(target["journal"].stat().st_uid, target["home"].stat().st_uid)
             self.assertNotEqual(target["journal"].stat().st_uid, 0)
             self.assertEqual(journal["release"]["tag"], "v3.1.0-rc.1")
+            self.assertEqual(journal["release"]["archive_name"], "pegasus-harness-v3.1.0-rc.1.tar.gz")
+            self.assertEqual(journal["release"]["archive_sha256"], "a" * 64)
+            self.assertEqual(journal["release"]["manifest_sha256"], "b" * 64)
             self.assertEqual(journal["release"]["version"], "3.1.0")
             dependency = next(entry for entry in journal["entries"] if entry["id"] == "dependency-cbm")
             self.assertEqual(dependency["target"], str(target["dependencies"] / "cbm"))
@@ -653,6 +670,28 @@ class AdditiveHarnessTests(unittest.TestCase):
             rollback = self.engine.rollback(target)
             self.assertIn("dependency-cbm", rollback["removed"])
             self.assertFalse(target["journal"].exists())
+            self.assertFalse((target["dependencies"] / "cbm").exists())
+
+    def test_external_rc_apply_rejects_missing_or_wrong_identity_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root, _ = self.extracted_rc_bundle_fixture(root)
+            target = self.temporary_target(root / "home")
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            arguments = {"declined": {"engram", "playwright", "context7"}, "release_root": release_root}
+            with self.assertRaisesRegex(RuntimeError, "identity is required"):
+                self.engine.apply(plan, target, {"cbm"}, browser_ready=True, **arguments)
+            wrong = self.rc_release_identity_fixture(release_root)
+            wrong["tag"] = "v3.1.0-rc.2"
+            wrong["archive_name"] = "pegasus-harness-v3.1.0-rc.2.tar.gz"
+            wrong["archive_root"] = "pegasus-harness-v3.1.0-rc.2"
+            with self.assertRaisesRegex(RuntimeError, "does not match"):
+                self.engine.apply(plan, target, {"cbm"}, browser_ready=True, release_identity=wrong, **arguments)
+            with self.assertRaisesRegex(RuntimeError, "identity is malformed"):
+                self.engine.apply(plan, target, {"cbm"}, browser_ready=True,
+                                  release_identity={"tag": "invalid"}, **arguments)
+            self.assertFalse(target["journal"].exists())
+            self.assertFalse(target["opencode_config"].exists())
             self.assertFalse((target["dependencies"] / "cbm").exists())
 
     def test_atomic_journal_failure_leaves_no_partial_or_published_file(self) -> None:
@@ -718,7 +757,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             next(entry for entry in plan["dependencies"] if entry["id"] == "cbm")["metadata"] = item
             with patch.object(self.engine.urllib.request, "urlopen", side_effect=AssertionError("release bundle must stay offline")) as urlopen:
                 with self.assertRaisesRegex(RuntimeError, "integrity"):
-                    self.engine.apply(plan, target, {"cbm"}, browser_ready=True, declined={"engram", "playwright", "context7"}, release_root=release_root)
+                    self.engine.apply(plan, target, {"cbm"}, browser_ready=True, declined={"engram", "playwright", "context7"}, release_root=release_root, release_identity=self.rc_release_identity_fixture(release_root))
             urlopen.assert_not_called()
             self.assertFalse(target["dependencies"].exists())
             self.assertFalse(target["journal"].exists())
