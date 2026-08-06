@@ -94,11 +94,16 @@ config = json.loads((target / ".config/opencode/opencode.json").read_text(encodi
 journal_path = target / ".local/share/pegasus-harness/journal-v3.json"
 journal = json.loads(journal_path.read_text(encoding="utf-8"))
 entries = journal.get("entries", [])
+manifest = Path(os.environ["RELEASE_MANIFEST"])
+manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
 actual = set(config.get("mcp", {}))
 expected = {keys[item] for item in confirmed}
 if actual != expected or any((target / ".local/share/pegasus-harness/dependencies" / item).exists() for item in declined):
     raise SystemExit("selected MCP result or declined MCP no-orphan proof failed")
-if not entries or any(item.get("release") != "3.1.0" or not item.get("baseline_digest") for item in entries):
+release = journal.get("release", {})
+if (journal.get("schema") != "pegasus-harness-journal/v3" or journal.get("version") != "3.1.0"
+        or release.get("version") != "3.1.0" or release.get("tag") != manifest_value["tag"]
+        or not entries or any(item.get("ownership") != "owned" or not item.get("target") or not item.get("baseline_digest") for item in entries)):
     raise SystemExit("journal does not prove additive v3 ownership baselines")
 apply = json.loads(Path(os.environ["APPLY_RESULT"]).read_text(encoding="utf-8"))
 if (bool(confirmed - {"context7"}) != ("opencode-mcp" in apply.get("created", []))
@@ -106,7 +111,6 @@ if (bool(confirmed - {"context7"}) != ("opencode-mcp" in apply.get("created", []
     raise SystemExit("apply result does not prove the selected MCP plan")
 archive = Path(os.environ["RC_ARCHIVE"])
 checksum = Path(os.environ["RC_CHECKSUM"])
-manifest = Path(os.environ["RELEASE_MANIFEST"])
 evidence = {
     "schema": "pegasus-harness-rc-acceptance/v3",
     "status": "PASS",
@@ -117,7 +121,7 @@ evidence = {
     "rc_checksum": {"path": str(checksum), "sha256": hashlib.sha256(checksum.read_bytes()).hexdigest()},
     "release_manifest": {"path": str(manifest), "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest()},
     "rc": {
-        "tag": json.loads(manifest.read_text(encoding="utf-8"))["tag"],
+        "tag": manifest_value["tag"],
         "archive_name": archive.name,
         "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "checksum_sha256": hashlib.sha256(checksum.read_bytes()).hexdigest(),

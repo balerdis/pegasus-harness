@@ -90,12 +90,14 @@ class AdditiveHarnessTests(unittest.TestCase):
     def extracted_rc_bundle_fixture(self, root: Path) -> tuple[Path, Path]:
         bundle = root / "codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz"
         self.write_archive(bundle, [(self.regular_member("bin/codebase-memory-mcp"), b"#!/bin/sh\nprintf 'codebase-memory-mcp 0.9.0\\n'\n")])
-        archive = root / "pegasus-harness-v3.1.0-rc.fixture.tar.gz"
-        prefix = "pegasus-harness-v3.1.0-rc.fixture"
+        archive = root / "pegasus-harness-v3.1.0-rc.1.tar.gz"
+        prefix = "pegasus-harness-v3.1.0-rc.1"
         self.write_archive(archive, [
             (self.directory_member(prefix), b""),
             (self.directory_member(prefix + "/dependencies"), b""),
             (self.regular_member(prefix + "/dependencies/codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz"), bundle.read_bytes()),
+            (self.regular_member(prefix + "/manifests/release-contract.json"), (ROOT / "manifests/release-contract.json").read_bytes()),
+            (self.regular_member(prefix + "/manifests/artifact-catalog.json"), (ROOT / "manifests/artifact-catalog.json").read_bytes()),
         ])
         extracted = root / "extracted"
         with tarfile.open(archive, "r:gz") as contents:
@@ -204,7 +206,7 @@ class AdditiveHarnessTests(unittest.TestCase):
     def test_acceptance_script_is_static_and_refuses_unsafe_defaults(self) -> None:
         script = ROOT / "scripts/accept-v3-isolated.sh"
         source = script.read_text(encoding="utf-8")
-        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "ownership", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root"):
+        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "pegasus-harness-journal/v3", "mapped user", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root"):
             self.assertIn(required, source)
         self.assertIn('"$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user"', source)
         for forbidden in ("useradd", "userdel", "rm -rf", "--confirm-clean-home"):
@@ -634,7 +636,59 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertIn("opencode-mcp", result["created"])
             self.assertTrue((target["dependencies"] / "cbm" / "bin/codebase-memory-mcp").is_file())
             self.assertIn("codebase-memory-mcp", json.loads(target["opencode_config"].read_text())["mcp"])
+            journal = self.engine.load_journal(target)
             self.assertTrue(target["journal"].is_file())
+            self.assertEqual(target["journal"], target["home"] / ".local/share/pegasus-harness/journal-v3.json")
+            self.assertEqual(target["journal"].stat().st_uid, target["home"].stat().st_uid)
+            self.assertNotEqual(target["journal"].stat().st_uid, 0)
+            self.assertEqual(journal["release"]["tag"], "v3.1.0-rc.1")
+            self.assertEqual(journal["release"]["version"], "3.1.0")
+            dependency = next(entry for entry in journal["entries"] if entry["id"] == "dependency-cbm")
+            self.assertEqual(dependency["target"], str(target["dependencies"] / "cbm"))
+            self.assertEqual(dependency["source_digest"], hashlib.sha256(bundle.read_bytes()).hexdigest())
+            self.assertEqual(dependency["baseline_digest"], self.engine.directory_digest(target["dependencies"] / "cbm"))
+            self.assertTrue(all(entry["ownership"] == "owned" for entry in journal["entries"]))
+            self.assertEqual(self.engine.validate(target), 0)
+            self.assertTrue(target["journal"].is_file())
+            rollback = self.engine.rollback(target)
+            self.assertIn("dependency-cbm", rollback["removed"])
+            self.assertFalse(target["journal"].exists())
+            self.assertFalse((target["dependencies"] / "cbm").exists())
+
+    def test_atomic_journal_failure_leaves_no_partial_or_published_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root, _ = self.extracted_rc_bundle_fixture(root)
+            target = self.temporary_target(root / "home")
+            target["home"].mkdir()
+            journal = {"schema": "pegasus-harness-journal/v3", "version": "3.1.0",
+                       "release": self.engine.journal_release(release_root), "entries": [], "links": []}
+            with patch.object(self.engine.os, "replace", side_effect=OSError("disk error")):
+                with self.assertRaisesRegex(OSError, "disk error"):
+                    self.engine.write_journal(target, journal)
+            self.assertFalse(target["journal"].exists())
+            self.assertFalse(list(target["journal"].parent.glob(".journal-v3.*.partial")))
+
+    def test_root_cannot_write_an_ownership_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = self.temporary_target(Path(temporary))
+            with patch.object(self.engine.os, "geteuid", return_value=0):
+                with self.assertRaisesRegex(RuntimeError, "non-root target user"):
+                    self.engine.write_journal(target, {"schema": "pegasus-harness-journal/v3", "version": "3.1.0", "entries": [], "links": []})
+
+    def test_journal_records_existing_dependencies_as_non_owning_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = self.temporary_target(Path(temporary))
+            target["opencode_config"].parent.mkdir(parents=True)
+            executable = target["home"] / "safe-cbm"
+            self.fixture_command(executable, "codebase-memory-mcp 0.9.0")
+            target["opencode_config"].write_text(json.dumps({"mcp": {"codebase-memory-mcp": {"type": "local", "command": [str(executable)]}}}), encoding="utf-8")
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            self.engine.apply(plan, target, {"context7"}, browser_ready=True, declined={"engram", "playwright"})
+            journal = self.engine.load_journal(target)
+            self.assertIn({"id": "cbm", "target": str(executable), "ownership": "non-owning-link"}, journal["links"])
+            self.assertNotIn("dependency-cbm", {entry["id"] for entry in journal["entries"]})
+            self.assertEqual(self.engine.validate(target), 0)
 
     def test_release_bundle_rejects_unsafe_missing_and_symlinked_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

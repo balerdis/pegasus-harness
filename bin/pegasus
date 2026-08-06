@@ -17,12 +17,14 @@ import tempfile
 import tarfile
 import urllib.request
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = ROOT / "manifests" / "artifact-catalog.json"
 CONTRACT_PATH = ROOT / "manifests" / "release-contract.json"
 CLIENTS = ("opencode", "claude-code")
 RELEASE = "3.1.0"
+RC_TAG = re.compile(r"^v3\.1\.0-rc\.[1-9][0-9]*$")
 CONTEXT7 = {
     "id": "context7",
     "config_key": "context7",
@@ -54,6 +56,20 @@ def sha256_bytes(value: bytes) -> str:
 
 def digest(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
+
+
+def directory_digest(path: Path) -> str:
+    """Hash a dependency tree so rollback removes only an unchanged install."""
+    if not path.is_dir() or path.is_symlink():
+        fail(f"dependency is not a real directory: {path}")
+    records = []
+    for item in sorted(path.rglob("*")):
+        if item.is_dir():
+            continue
+        if item.is_symlink() or not item.is_file():
+            fail(f"dependency contains an unsafe artifact: {item}")
+        records.append(f"{item.relative_to(path).as_posix()}:{digest(item)}")
+    return sha256_bytes("\n".join(records).encode())
 
 
 def load_json(path: Path) -> dict:
@@ -435,17 +451,54 @@ def install_dependency(item: dict, destination: Path, archive: Path | None = Non
 
 def load_journal(target: dict[str, Path]) -> dict:
     if not target["journal"].exists():
-        return {"schema": "pegasus-harness-journal/v3", "entries": []}
+        return {"schema": "pegasus-harness-journal/v3", "version": RELEASE, "entries": [], "links": []}
     journal = load_json(target["journal"])
-    if journal.get("schema") != "pegasus-harness-journal/v3" or not isinstance(journal.get("entries"), list):
+    if (journal.get("schema") != "pegasus-harness-journal/v3" or journal.get("version") != RELEASE
+            or not isinstance(journal.get("release"), dict) or not isinstance(journal.get("entries"), list)
+            or not isinstance(journal.get("links", []), list)):
         fail("journal is malformed and remains unowned")
     return journal
 
 
 def write_journal(target: dict[str, Path], journal: dict) -> None:
-    target["journal"].parent.mkdir(parents=True, exist_ok=True)
-    target["journal"].write_text(json.dumps(journal, indent=2) + "\n", encoding="utf-8")
-    target["journal"].chmod(0o600)
+    owner = target["home"].stat().st_uid
+    if owner == 0 or os.geteuid() != owner:
+        fail("journal must be written by the non-root target user")
+    parent = target["journal"].parent
+    parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=parent,
+                                         prefix=".journal-v3.", suffix=".partial", delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(journal, output, indent=2)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.chmod(0o600)
+        os.replace(temporary, target["journal"])
+        directory = os.open(parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        if target["journal"].stat().st_uid != owner:
+            fail("journal ownership does not match the target user")
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def journal_release(release_root: Path) -> dict:
+    root = release_root.resolve()
+    tag = root.name.removeprefix("pegasus-harness-")
+    return {
+        "version": RELEASE,
+        "tag": tag if RC_TAG.fullmatch(tag) else None,
+        "root": root.name,
+        "contract_sha256": digest(root / "manifests" / "release-contract.json"),
+        "catalog_sha256": digest(root / "manifests" / "artifact-catalog.json"),
+    }
 
 
 def source_entry(identifier: str) -> dict:
@@ -470,6 +523,15 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
                     install_playwright(metadata, destination)
                 else:
                     install_dependency(metadata, destination, release_root=release_root)
+                journal["entries"].append({"id": f"dependency-{metadata['id']}", "release": RELEASE,
+                                           "kind": "dependency", "target": str(destination), "key": None,
+                                           "source_digest": metadata["integrity"].get("sha256"),
+                                           "baseline_digest": directory_digest(destination), "ownership": "owned",
+                                           "created_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+                created.append(f"dependency-{metadata['id']}")
+            elif dependency["action"] == "link-existing":
+                journal["links"].append({"id": dependency["id"], "target": dependency["resolved_path"],
+                                         "ownership": "non-owning-link"})
         for action in plan_value["artifacts"]:
             if action["action"] != "create" or action.get("dependency") in declined:
                 continue
@@ -495,19 +557,23 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
                 target_file = target["opencode_config"]
                 baseline = sha256_bytes(json.dumps(value, sort_keys=True).encode())
             journal["entries"].append({"id": entry["id"], "release": RELEASE, "kind": entry["kind"], "target": str(target_file), "key": entry.get("key"),
-                                       "source_digest": entry["digest"], "baseline_digest": baseline, "created_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+                                        "source_digest": entry["digest"], "baseline_digest": baseline, "ownership": "owned",
+                                        "created_at": dt.datetime.now(dt.timezone.utc).isoformat()})
             created.append(entry["id"])
         for remote in plan_value["remote_mcps"]:
             if remote["action"] != "confirm-required" or remote["id"] not in confirmed:
                 continue
             config.setdefault("mcp", {})[remote["config_key"]] = {"type": "remote", "url": remote["endpoint"], "enabled": True}
             journal["entries"].append({"id": "context7-mcp", "release": RELEASE, "kind": "json-mcp-key", "target": str(target["opencode_config"]), "key": remote["config_key"],
-                                       "source_digest": None, "baseline_digest": sha256_bytes(json.dumps(config["mcp"][remote["config_key"]], sort_keys=True).encode()), "created_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+                                        "source_digest": None, "baseline_digest": sha256_bytes(json.dumps(config["mcp"][remote["config_key"]], sort_keys=True).encode()),
+                                        "ownership": "owned", "created_at": dt.datetime.now(dt.timezone.utc).isoformat()})
             created.append("context7-mcp")
         if any(item["kind"] != "file" and item["id"] in created for item in plan_value["artifacts"]) or "context7-mcp" in created:
             target["opencode_config"].parent.mkdir(parents=True, exist_ok=True)
             target["opencode_config"].write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         if created:
+            if not journal["entries"][:-len(created)]:
+                journal["release"] = journal_release(release_root)
             write_journal(target, journal)
     except Exception:
         rollback(target, journal)
@@ -521,7 +587,13 @@ def rollback(target: dict[str, Path], journal: dict | None = None) -> dict:
     kept = []
     for entry in reversed(journal["entries"]):
         path = Path(entry["target"])
-        if entry["kind"] == "file":
+        if entry["kind"] == "dependency":
+            unchanged = path.is_dir() and not path.is_symlink() and directory_digest(path) == entry["baseline_digest"]
+            if unchanged:
+                shutil.rmtree(path); removed.append(entry["id"])
+            else:
+                preserved.append(entry["id"]); kept.append(entry)
+        elif entry["kind"] == "file":
             unchanged = path.is_file() and not path.is_symlink() and digest(path) == entry["baseline_digest"]
             if unchanged:
                 path.unlink(); removed.append(entry["id"])
@@ -557,9 +629,25 @@ def rollback(target: dict[str, Path], journal: dict | None = None) -> dict:
 def validate(target: dict[str, Path]) -> int:
     validate_catalog(load_catalog()); validate_contract(load_contract())
     journal = load_journal(target)
-    result = rollback(target, {"schema": journal["schema"], "entries": []})
-    if result["removed"] or result["preserved"]:
-        fail("internal validation error")
+    if journal["entries"]:
+        if target["journal"].stat().st_uid != target["home"].stat().st_uid or target["journal"].stat().st_uid == 0:
+            fail("journal ownership is not the non-root target user")
+        release = journal["release"]
+        if (release.get("version") != RELEASE or not isinstance(release.get("root"), str)
+                or not all(isinstance(release.get(name), str) and len(release[name]) == 64
+                           for name in ("contract_sha256", "catalog_sha256"))):
+            fail("journal release identity is malformed and remains unowned")
+        for entry in journal["entries"]:
+            try:
+                Path(entry["target"]).relative_to(target["home"])
+            except (KeyError, ValueError):
+                fail("journal entry target is outside the target home")
+            if (entry.get("ownership") != "owned" or entry.get("kind") not in {"file", "json-key", "json-array-item", "json-mcp-key", "dependency"}
+                    or not isinstance(entry.get("baseline_digest"), str) or len(entry["baseline_digest"]) != 64):
+                fail("journal entry is malformed and remains unowned")
+        if any(link.get("ownership") != "non-owning-link" or not isinstance(link.get("id"), str)
+               or not isinstance(link.get("target"), str) for link in journal["links"]):
+            fail("journal link is malformed and remains non-owning")
     print(f"PASS: catalog, provenance, and {len(journal['entries'])} ownership entries are valid")
     return 0
 
