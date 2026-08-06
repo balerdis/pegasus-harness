@@ -1,0 +1,852 @@
+{
+  "schema": "pegasus-harness-artifact-catalog/v3",
+  "artifacts": [
+    {
+      "id": "opencode-default-agent",
+      "client": "opencode",
+      "kind": "json-key",
+      "source": "source/opencode/opencode.json",
+      "source_key": "default_agent",
+      "target": ".config/opencode/opencode.json",
+      "key": "default_agent",
+      "merge": "create-absent-key",
+      "digest": "bdebbe9f0dafcfdbcc2b85f8070f152cb641cca67f403992d812056562c26121"
+    },
+    {
+      "id": "opencode-agent",
+      "client": "opencode",
+      "kind": "json-key",
+      "source": "source/opencode/opencode.json",
+      "source_key": "agent",
+      "target": ".config/opencode/opencode.json",
+      "key": "agent",
+      "merge": "create-absent-key",
+      "digest": "bdebbe9f0dafcfdbcc2b85f8070f152cb641cca67f403992d812056562c26121"
+    },
+    {
+      "id": "opencode-mcp",
+      "client": "opencode",
+      "kind": "json-key",
+      "source": "source/opencode/opencode.json",
+      "source_key": "mcp",
+      "target": ".config/opencode/opencode.json",
+      "key": "mcp",
+      "merge": "create-absent-key",
+      "digest": "bdebbe9f0dafcfdbcc2b85f8070f152cb641cca67f403992d812056562c26121"
+    },
+    {
+      "id": "opencode-skills",
+      "client": "opencode",
+      "kind": "json-key",
+      "source": "source/opencode/opencode.json",
+      "source_key": "skills",
+      "target": ".config/opencode/opencode.json",
+      "key": "skills",
+      "merge": "create-absent-key",
+      "digest": "bdebbe9f0dafcfdbcc2b85f8070f152cb641cca67f403992d812056562c26121"
+    },
+    {
+      "id": "opencode-share",
+      "client": "opencode",
+      "kind": "json-key",
+      "source": "source/opencode/opencode.json",
+      "source_key": "share",
+      "target": ".config/opencode/opencode.json",
+      "key": "share",
+      "merge": "create-absent-key",
+      "digest": "bdebbe9f0dafcfdbcc2b85f8070f152cb641cca67f403992d812056562c26121"
+    },
+    {
+      "id": "file-source-opencode-commands-context-load-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/context-load.md",
+      "target": "commands/context-load.md",
+      "merge": "create-absent-file",
+      "digest": "709aad80f76c37b65b8d9fec1be1aba9cf1fd6c4a8441e5ebd4f045d346e17e2"
+    },
+    {
+      "id": "file-source-opencode-commands-context-save-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/context-save.md",
+      "target": "commands/context-save.md",
+      "merge": "create-absent-file",
+      "digest": "fa61888de86a5f1165114704eaf7a19dac98721df374499a8cd31726736464af"
+    },
+    {
+      "id": "file-source-opencode-commands-handoff-load-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/handoff-load.md",
+      "target": "commands/handoff-load.md",
+      "merge": "create-absent-file",
+      "digest": "12650cf5a89ffa06dfd726694e1eba0f584b8f7d52fe03d77de21b54c5aefecb"
+    },
+    {
+      "id": "file-source-opencode-commands-handoff-save-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/handoff-save.md",
+      "target": "commands/handoff-save.md",
+      "merge": "create-absent-file",
+      "digest": "e197e138c563826a3c8aceee377fd1232f59b948db02269ae0d37f7c0d5dc44b"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-apply-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-apply.md",
+      "target": "commands/sdd-apply.md",
+      "merge": "create-absent-file",
+      "digest": "0652bfd127e9df00178b6c427da13a6f9508cc71b84f3c06e3969a42cfd4ecc7"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-archive-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-archive.md",
+      "target": "commands/sdd-archive.md",
+      "merge": "create-absent-file",
+      "digest": "cdf0b678afcc01f4857026a61438ba4617caf19991642ea04c10f502ce61fc9e"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-continue-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-continue.md",
+      "target": "commands/sdd-continue.md",
+      "merge": "create-absent-file",
+      "digest": "2c2cfe12050350106d3290e1b106f597d50bddf2a297faaeb542e9444aa61d19"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-explore-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-explore.md",
+      "target": "commands/sdd-explore.md",
+      "merge": "create-absent-file",
+      "digest": "64da0143aea42b1ac63093609eb660a8aeae46aa797cd7db7d5f68adceb4579d"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-ff-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-ff.md",
+      "target": "commands/sdd-ff.md",
+      "merge": "create-absent-file",
+      "digest": "1e1c749a1825fb77804e288b635e3d1883a1ab0df3d65a7e9c1a6f5d15a9bad8"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-init-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-init.md",
+      "target": "commands/sdd-init.md",
+      "merge": "create-absent-file",
+      "digest": "fd71343258665acb0b3b0d3e25f7e056dc3d772ac4c5d5baebaf54108b0a3b21"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-new-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-new.md",
+      "target": "commands/sdd-new.md",
+      "merge": "create-absent-file",
+      "digest": "b9290cb5a4f28255e9195bbbf25e2572541c54289d0ffe4ef27e804e60c56b76"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-onboard-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-onboard.md",
+      "target": "commands/sdd-onboard.md",
+      "merge": "create-absent-file",
+      "digest": "f623d2fa876d4633f915969e05ad1b2aa5db358e56b8095fa3813d1de5dd7abc"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-status-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-status.md",
+      "target": "commands/sdd-status.md",
+      "merge": "create-absent-file",
+      "digest": "a2ebe02b370921c4910236422d4958fe2d16bcd148696cf59107e65c33fdceec"
+    },
+    {
+      "id": "file-source-opencode-commands-sdd-verify-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/sdd-verify.md",
+      "target": "commands/sdd-verify.md",
+      "merge": "create-absent-file",
+      "digest": "ffaec50ba5b8ff70c9a6edf3b1e35ddfe0e3c1e2a3800015714cce61c4a37c4b"
+    },
+    {
+      "id": "file-source-opencode-commands-skill-creator-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/skill-creator.md",
+      "target": "commands/skill-creator.md",
+      "merge": "create-absent-file",
+      "digest": "a53ffc0f4125d0d48b8a82a480b3eaae1f5a55f82633f40aa6ff6f84f15f5da4"
+    },
+    {
+      "id": "file-source-opencode-commands-skill-registry-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/commands/skill-registry.md",
+      "target": "commands/skill-registry.md",
+      "merge": "create-absent-file",
+      "digest": "66090c90f5b471bb4c0af77679753cf7a46b9357d13c87ef5f9e3ef8ad8c1796"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-apply-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-apply.md",
+      "target": "prompts/sdd/sdd-apply.md",
+      "merge": "create-absent-file",
+      "digest": "e6aefbf65faf5ef579c07702ad3c47ee491671acc52d9157d7dfa8a554ecf32c"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-archive-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-archive.md",
+      "target": "prompts/sdd/sdd-archive.md",
+      "merge": "create-absent-file",
+      "digest": "27667a76d38aa098e6f6112a654292fb6053c0e3303c230ffa134e3a8263d6d6"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-design-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-design.md",
+      "target": "prompts/sdd/sdd-design.md",
+      "merge": "create-absent-file",
+      "digest": "1d61e186a6efa33c99cb7b4e264b9b320e815312b9afafdbe342834b84f569ef"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-explore-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-explore.md",
+      "target": "prompts/sdd/sdd-explore.md",
+      "merge": "create-absent-file",
+      "digest": "048974dc269b012e523a9dfa5d573881166991ee24c311acb098974a437ee974"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-init-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-init.md",
+      "target": "prompts/sdd/sdd-init.md",
+      "merge": "create-absent-file",
+      "digest": "cb142d44174bfb46dc2bbc2ffcfa64cbee94d7593a9c76fc6649d8e988baa64d"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-onboard-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-onboard.md",
+      "target": "prompts/sdd/sdd-onboard.md",
+      "merge": "create-absent-file",
+      "digest": "0de40df490e991dae9d30cb4115f3f58d40dd3e3c37ae42d7bfe5b7e80385e7f"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-propose-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-propose.md",
+      "target": "prompts/sdd/sdd-propose.md",
+      "merge": "create-absent-file",
+      "digest": "e0a5f32d8e6c953f91e758e8b4dab98309aa5c0ad568dd681cc783e2934cb04e"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-spec-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-spec.md",
+      "target": "prompts/sdd/sdd-spec.md",
+      "merge": "create-absent-file",
+      "digest": "0c5ff855a5f6e4cf6680dead75db70d32ce1e187e6848d4f53ffd9a048391f28"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-tasks-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-tasks.md",
+      "target": "prompts/sdd/sdd-tasks.md",
+      "merge": "create-absent-file",
+      "digest": "989fb92972e53e9260d6f86644b7667abf10cd75c0c769cedcb4ca031f8bd67d"
+    },
+    {
+      "id": "file-source-opencode-prompts-sdd-sdd-verify-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/prompts/sdd/sdd-verify.md",
+      "target": "prompts/sdd/sdd-verify.md",
+      "merge": "create-absent-file",
+      "digest": "e1ddc9dd7349a6bac05879f062420eedf5d1fab5f4a5a358fc68f62fa9d1c88e"
+    },
+    {
+      "id": "file-source-opencode-agents-pegasus-AGENTS-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/agents/pegasus-AGENTS.md",
+      "target": "agents/pegasus-AGENTS.md",
+      "merge": "create-absent-file",
+      "digest": "73db9acab6468a24896d58a52a48da3ca8acc4d6795c0d31a6972d385fdc9a5b"
+    },
+    {
+      "id": "file-source-opencode-agents-pegasus-orchestrator-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/agents/pegasus-orchestrator.md",
+      "target": "agents/pegasus-orchestrator.md",
+      "merge": "create-absent-file",
+      "digest": "55e65fa29df5579eb06ea5622b33a33da84c1d9dbdc980cda5f43f7d00ed9592"
+    },
+    {
+      "id": "file-source-opencode-plugins-pegasus-orchestrator-notifier-ts",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/plugins/pegasus-orchestrator-notifier.ts",
+      "target": "plugins/pegasus-orchestrator-notifier.ts",
+      "merge": "create-absent-file",
+      "digest": "622e1bfb8b461724825f519341e53445880d1c3906c9256a131a3e5d6e885434"
+    },
+    {
+      "id": "file-source-opencode-plugins-pegasus-skill-registry-ts",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/plugins/pegasus-skill-registry.ts",
+      "target": "plugins/pegasus-skill-registry.ts",
+      "merge": "create-absent-file",
+      "digest": "7cb700126b42aaac82690068131294cbd714f9bab258f0016d3a51c139d57871"
+    },
+    {
+      "id": "file-source-opencode-plugins-pegasus-zellij-state-ts",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/plugins/pegasus-zellij-state.ts",
+      "target": "plugins/pegasus-zellij-state.ts",
+      "merge": "create-absent-file",
+      "digest": "2a65c9b73a37033060b22940281ba2c7e1c74b4c4c786de27d18d4b1f4534dd6"
+    },
+    {
+      "id": "file-source-opencode-plugins-engram-ts",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/plugins/engram.ts",
+      "target": "plugins/engram.ts",
+      "merge": "create-absent-file",
+      "digest": "7cbdf0e5bd9bda510496a97b44fba24f534c412712a3d1330b072c66c8d26aef"
+    },
+    {
+      "id": "file-source-opencode-notifier-package-json",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/notifier/package.json",
+      "target": "notifier/package.json",
+      "merge": "create-absent-file",
+      "digest": "f50229e395c945e727d57390f013df775e2cde157ebfc7bff06e391b07719fba"
+    },
+    {
+      "id": "file-source-opencode-notifier-package-lock-json",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/notifier/package-lock.json",
+      "target": "notifier/package-lock.json",
+      "merge": "create-absent-file",
+      "digest": "ee6edf07cb5920836c48c1b6b08f61af8e6bc147642fd72aea579048ed50f14b"
+    },
+    {
+      "id": "file-source-opencode-plugins-zellij-status-js",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/plugins/zellij-status.js",
+      "target": "plugins/zellij-status.js",
+      "merge": "create-absent-file",
+      "digest": "ec2b58049450bd6fa46ee17604e93dec3532ba537965b1633eb78eae5476fee9"
+    },
+    {
+      "id": "file-source-opencode-pegasus-skill-registry-pegasus-skill-registry",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/pegasus/skill-registry/pegasus-skill-registry",
+      "target": "pegasus/skill-registry/pegasus-skill-registry",
+      "merge": "create-absent-file",
+      "digest": "48321cd0cf818b0e03c74a43b9ac78ec1367b5e35aa76c5979b4d007dd45e7ab"
+    },
+    {
+      "id": "file-source-opencode-pegasus-skill-registry-pegasus_skill_registry-py",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/pegasus/skill-registry/pegasus_skill_registry.py",
+      "target": "pegasus/skill-registry/pegasus_skill_registry.py",
+      "merge": "create-absent-file",
+      "digest": "b0b0060e426f85408f6bf21e5f5ef6993feaa1dfc5b152e8582da4c8cdc562ec"
+    },
+    {
+      "id": "file-source-opencode-env-pegasus-skill-registry-env-example",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/env/pegasus-skill-registry.env.example",
+      "target": "env/pegasus-skill-registry.env.example",
+      "merge": "create-absent-file",
+      "digest": "21d01c7b3213a8e1f041780416ed121db34fcc25aeb4b017a89ee5fa8affeeb7"
+    },
+    {
+      "id": "file-source-opencode-registry-assets-json",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/opencode/registry/assets.json",
+      "target": "registry/assets.json",
+      "merge": "create-absent-file",
+      "digest": "dc874119b3ff822d295b80f0507d82d114c01ed2a806503f3e753e3752c54b34"
+    },
+    {
+      "id": "file-source-core-skills-_shared-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/_shared/SKILL.md",
+      "target": "skills/_shared/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "f28af4e2d94fac13f82a0d2be61af30fa6ae8739b99385ddd4cd3e85abaef648"
+    },
+    {
+      "id": "file-source-core-skills-_shared-engram-convention-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/_shared/engram-convention.md",
+      "target": "skills/_shared/engram-convention.md",
+      "merge": "create-absent-file",
+      "digest": "03309724fbf6c54241f8df8baf24fd06a1fb5ea569b1aff8883ce460dc51607a"
+    },
+    {
+      "id": "file-source-core-skills-_shared-openspec-convention-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/_shared/openspec-convention.md",
+      "target": "skills/_shared/openspec-convention.md",
+      "merge": "create-absent-file",
+      "digest": "d8243687abe4d27323839936147633e3cde48356d922aa74fc6008e85689ee65"
+    },
+    {
+      "id": "file-source-core-skills-_shared-persistence-contract-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/_shared/persistence-contract.md",
+      "target": "skills/_shared/persistence-contract.md",
+      "merge": "create-absent-file",
+      "digest": "2f52681aa54f3420a7dcfd551418d4708ce073d5ddeb585c61bcddbd9f57a250"
+    },
+    {
+      "id": "file-source-core-skills-_shared-sdd-phase-common-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/_shared/sdd-phase-common.md",
+      "target": "skills/_shared/sdd-phase-common.md",
+      "merge": "create-absent-file",
+      "digest": "cc1328dc3e2bf56869d7f68d69b16d0cd93c8eafca2f0826d334999a8ec90d93"
+    },
+    {
+      "id": "file-source-core-skills-_shared-sdd-status-contract-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/_shared/sdd-status-contract.md",
+      "target": "skills/_shared/sdd-status-contract.md",
+      "merge": "create-absent-file",
+      "digest": "579994573fa26e5639d0f5942134995da98f83a5f06f41b5827f32b00d46f848"
+    },
+    {
+      "id": "file-source-core-skills-_shared-skill-resolver-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/_shared/skill-resolver.md",
+      "target": "skills/_shared/skill-resolver.md",
+      "merge": "create-absent-file",
+      "digest": "513799c247a16766792912a32b053ebb200b45146a376caf795f29721be94236"
+    },
+    {
+      "id": "file-source-core-skills-api-service-contract-documentation-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/api-service-contract-documentation/SKILL.md",
+      "target": "skills/api-service-contract-documentation/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "b5101b2f33ce245f493a7db820f427d703dd4053cc05c0771c13763463b442da"
+    },
+    {
+      "id": "file-source-core-skills-branch-pr-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/branch-pr/SKILL.md",
+      "target": "skills/branch-pr/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "8553fdde3397c7dc1c2fda2b4ca848baf5d9185d0db65635b151755c4e627dc8"
+    },
+    {
+      "id": "file-source-core-skills-chained-pr-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/chained-pr/SKILL.md",
+      "target": "skills/chained-pr/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "865f2e78db039797eabfe46d80589677c1420c052ed2b993c4435b487b17e83b"
+    },
+    {
+      "id": "file-source-core-skills-chained-pr-references-chaining-details-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/chained-pr/references/chaining-details.md",
+      "target": "skills/chained-pr/references/chaining-details.md",
+      "merge": "create-absent-file",
+      "digest": "09534b2a10a6819721cbb4b08a59bcb859b2859e65bb2977c7b979a2307e10f3"
+    },
+    {
+      "id": "file-source-core-skills-cognitive-doc-design-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/cognitive-doc-design/SKILL.md",
+      "target": "skills/cognitive-doc-design/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "80dcaeca45c35e830939ef5440ca270b147f6370e4afcb47cdab762097f8cde0"
+    },
+    {
+      "id": "file-source-core-skills-comment-writer-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/comment-writer/SKILL.md",
+      "target": "skills/comment-writer/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "cb980612f7237b31a4afea87899275ba20f1f621ba237ecd4a3b440f0cf2e6da"
+    },
+    {
+      "id": "file-source-core-skills-issue-creation-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/issue-creation/SKILL.md",
+      "target": "skills/issue-creation/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "32d2cdfe36095ede49d422311a8b2bdeaebff4810d980fdfd4e309478344cfe4"
+    },
+    {
+      "id": "file-source-core-skills-laravel-security-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/laravel-security/SKILL.md",
+      "target": "skills/laravel-security/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "27ab6dd8633b89b4fa479b729c6c49a102d7ba1b5e5c18737be28a107e2b6d20"
+    },
+    {
+      "id": "file-source-core-skills-laravel-security-references-laravel-security-checklist-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/laravel-security/references/laravel-security-checklist.md",
+      "target": "skills/laravel-security/references/laravel-security-checklist.md",
+      "merge": "create-absent-file",
+      "digest": "420c12e050bcfeea6bbdf4837b7618dd13ddb25ee14eb7c96a8c298655ae5b75"
+    },
+    {
+      "id": "file-source-core-skills-lazy-load-prompt-audit-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/lazy-load-prompt-audit/SKILL.md",
+      "target": "skills/lazy-load-prompt-audit/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "6035219669dc5965528aeb4849e7375e5dbdb945cdce7114524b20388b526d43"
+    },
+    {
+      "id": "file-source-core-skills-lazy-load-prompt-audit-references-deployment-transport-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
+      "target": "skills/lazy-load-prompt-audit/references/deployment-transport.md",
+      "merge": "create-absent-file",
+      "digest": "9892c7192354944649c50c14f61c072044b5dd70ed6aef7115dc4eca23c36f0d"
+    },
+    {
+      "id": "file-source-core-skills-lazy-load-prompt-audit-references-lazy-load-framework-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/lazy-load-prompt-audit/references/lazy-load-framework.md",
+      "target": "skills/lazy-load-prompt-audit/references/lazy-load-framework.md",
+      "merge": "create-absent-file",
+      "digest": "de7bf73cd16dd9a170fceb1749d1ae196ef287bdc32a65a9f90c3a73c44822ee"
+    },
+    {
+      "id": "file-source-core-skills-project-agents-bootstrap-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/project-agents-bootstrap/SKILL.md",
+      "target": "skills/project-agents-bootstrap/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "da5d4b656ec6983ad0334e96f141a6e04fa5730d9dd642a7f4bb0cd1805b3ffd"
+    },
+    {
+      "id": "file-source-core-skills-sdd-apply-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-apply/SKILL.md",
+      "target": "skills/sdd-apply/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "e6aefbf65faf5ef579c07702ad3c47ee491671acc52d9157d7dfa8a554ecf32c"
+    },
+    {
+      "id": "file-source-core-skills-sdd-apply-references-cbm-index-coherence-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-apply/references/cbm-index-coherence.md",
+      "target": "skills/sdd-apply/references/cbm-index-coherence.md",
+      "merge": "create-absent-file",
+      "digest": "a306b86bcd548de5363167890dd7e9f2001b156d4f9396a5870ea23b768e7928"
+    },
+    {
+      "id": "file-source-core-skills-sdd-apply-strict-tdd-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-apply/strict-tdd.md",
+      "target": "skills/sdd-apply/strict-tdd.md",
+      "merge": "create-absent-file",
+      "digest": "2b0340bfa1160db7f609a4e1b6a24bbd3a1b1a8347b2b65d400865c104fdd237"
+    },
+    {
+      "id": "file-source-core-skills-sdd-archive-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-archive/SKILL.md",
+      "target": "skills/sdd-archive/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "27667a76d38aa098e6f6112a654292fb6053c0e3303c230ffa134e3a8263d6d6"
+    },
+    {
+      "id": "file-source-core-skills-sdd-design-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-design/SKILL.md",
+      "target": "skills/sdd-design/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "1d61e186a6efa33c99cb7b4e264b9b320e815312b9afafdbe342834b84f569ef"
+    },
+    {
+      "id": "file-source-core-skills-sdd-design-references-threat-matrix-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-design/references/threat-matrix.md",
+      "target": "skills/sdd-design/references/threat-matrix.md",
+      "merge": "create-absent-file",
+      "digest": "77cffeb7f4c2146d77694b0b5a8baae3d57c9f048bccc9670951f4235531a5fc"
+    },
+    {
+      "id": "file-source-core-skills-sdd-explore-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-explore/SKILL.md",
+      "target": "skills/sdd-explore/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "048974dc269b012e523a9dfa5d573881166991ee24c311acb098974a437ee974"
+    },
+    {
+      "id": "file-source-core-skills-sdd-init-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-init/SKILL.md",
+      "target": "skills/sdd-init/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "cb142d44174bfb46dc2bbc2ffcfa64cbee94d7593a9c76fc6649d8e988baa64d"
+    },
+    {
+      "id": "file-source-core-skills-sdd-init-references-init-details-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-init/references/init-details.md",
+      "target": "skills/sdd-init/references/init-details.md",
+      "merge": "create-absent-file",
+      "digest": "496875386f1ddaf1e44db4a484a396a22e28f92c0a4e0c6d9055541a59d87a34"
+    },
+    {
+      "id": "file-source-core-skills-sdd-onboard-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-onboard/SKILL.md",
+      "target": "skills/sdd-onboard/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "0de40df490e991dae9d30cb4115f3f58d40dd3e3c37ae42d7bfe5b7e80385e7f"
+    },
+    {
+      "id": "file-source-core-skills-sdd-propose-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-propose/SKILL.md",
+      "target": "skills/sdd-propose/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "e0a5f32d8e6c953f91e758e8b4dab98309aa5c0ad568dd681cc783e2934cb04e"
+    },
+    {
+      "id": "file-source-core-skills-sdd-spec-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-spec/SKILL.md",
+      "target": "skills/sdd-spec/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "0c5ff855a5f6e4cf6680dead75db70d32ce1e187e6848d4f53ffd9a048391f28"
+    },
+    {
+      "id": "file-source-core-skills-sdd-tasks-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-tasks/SKILL.md",
+      "target": "skills/sdd-tasks/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "989fb92972e53e9260d6f86644b7667abf10cd75c0c769cedcb4ca031f8bd67d"
+    },
+    {
+      "id": "file-source-core-skills-sdd-verify-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-verify/SKILL.md",
+      "target": "skills/sdd-verify/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "78039ca09cf806368e812d0f5d966d9af300fb3587d536d7a3ea4224758636f9"
+    },
+    {
+      "id": "file-source-core-skills-sdd-verify-references-report-format-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-verify/references/report-format.md",
+      "target": "skills/sdd-verify/references/report-format.md",
+      "merge": "create-absent-file",
+      "digest": "417d1cd2786c72b5672987bbf19eb974729453766bd1274d0a4a9d73a564d209"
+    },
+    {
+      "id": "file-source-core-skills-sdd-verify-strict-tdd-verify-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/sdd-verify/strict-tdd-verify.md",
+      "target": "skills/sdd-verify/strict-tdd-verify.md",
+      "merge": "create-absent-file",
+      "digest": "becb50da4841aae5f6b157462efbfcd4f20332c0c054c82a55970450be8e649c"
+    },
+    {
+      "id": "file-source-core-skills-session-context-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/session-context/SKILL.md",
+      "target": "skills/session-context/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "a34f085611e528f298fcf68a3a05bafe1a66fb782c589f2c68a3c954f890f2ed"
+    },
+    {
+      "id": "file-source-core-skills-session-handoff-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/session-handoff/SKILL.md",
+      "target": "skills/session-handoff/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "03cd3cf2b9ccb702b6715a6bb97fa8096519ecd86cf53a77677df0c531f686c2"
+    },
+    {
+      "id": "file-source-core-skills-session-handoff-references-anti-stale-checklist-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/session-handoff/references/anti-stale-checklist.md",
+      "target": "skills/session-handoff/references/anti-stale-checklist.md",
+      "merge": "create-absent-file",
+      "digest": "09c5611c2da5be38ecf522b8300ed39f588a6ad9c856aaf6a14357a683d5367b"
+    },
+    {
+      "id": "file-source-core-skills-skill-creator-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/skill-creator/SKILL.md",
+      "target": "skills/skill-creator/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "2e560aec25d3e6f880626b894333c141c7dd98e6a0f3c35af9693b6e8538f357"
+    },
+    {
+      "id": "file-source-core-skills-skill-creator-references-skill-style-guide-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/skill-creator/references/skill-style-guide.md",
+      "target": "skills/skill-creator/references/skill-style-guide.md",
+      "merge": "create-absent-file",
+      "digest": "b994cb52bad5a00a4a77873182292dea2d7fafceb442180ab088aa884475175a"
+    },
+    {
+      "id": "file-source-core-skills-skill-improver-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/skill-improver/SKILL.md",
+      "target": "skills/skill-improver/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "336dad49725e2bb08e9f4dfada7452d2414ceda65d991539c42c53fbe9ce83e7"
+    },
+    {
+      "id": "file-source-core-skills-skill-improver-references-skill-style-guide-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/skill-improver/references/skill-style-guide.md",
+      "target": "skills/skill-improver/references/skill-style-guide.md",
+      "merge": "create-absent-file",
+      "digest": "b994cb52bad5a00a4a77873182292dea2d7fafceb442180ab088aa884475175a"
+    },
+    {
+      "id": "file-source-core-skills-skill-registry-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/skill-registry/SKILL.md",
+      "target": "skills/skill-registry/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "06b49f63bd311218618d79cbdaeed63f49c5853fda552ffe2c3e81e42e94f189"
+    },
+    {
+      "id": "file-source-core-skills-skill-versiones-estandar-asi-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/skill-versiones-estandar-asi/SKILL.md",
+      "target": "skills/skill-versiones-estandar-asi/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "b27d6ca62fb4e57c35c761914cabfaa22c28d1fac76555ff40d2a926ed0dec43"
+    },
+    {
+      "id": "file-source-core-skills-skill-versiones-estandar-asi-references-provenance-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/skill-versiones-estandar-asi/references/provenance.md",
+      "target": "skills/skill-versiones-estandar-asi/references/provenance.md",
+      "merge": "create-absent-file",
+      "digest": "9e818410eb5ed89ce31f9acd0c7b2d3e5b34851c270db77b226d06e9d466a5cb"
+    },
+    {
+      "id": "file-source-core-skills-skill-versiones-estandar-asi-references-version-matrix-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/skill-versiones-estandar-asi/references/version-matrix.md",
+      "target": "skills/skill-versiones-estandar-asi/references/version-matrix.md",
+      "merge": "create-absent-file",
+      "digest": "d2809b86e8b8c4ace3ace0411b937eb2405d5c7cab6bdfc0b0e24e0dfde048d1"
+    },
+    {
+      "id": "file-source-core-skills-work-unit-commits-SKILL-md",
+      "client": "opencode",
+      "kind": "file",
+      "source": "source/core/skills/work-unit-commits/SKILL.md",
+      "target": "skills/work-unit-commits/SKILL.md",
+      "merge": "create-absent-file",
+      "digest": "a84bd2313615a315299e53f3ea00863c5f896d77db1a6e79d5fc484cd1310dfd"
+    },
+    {
+      "id": "file-source-adapters-claude-code-CLAUDE-md",
+      "client": "claude-code",
+      "kind": "file",
+      "source": "source/adapters/claude-code/CLAUDE.md",
+      "target": "CLAUDE.md",
+      "merge": "create-absent-file",
+      "digest": "231e18b94d88f9a7929ce7b531ee65313d8b64953c9b5e00c708e2226860b08f"
+    }
+  ]
+}

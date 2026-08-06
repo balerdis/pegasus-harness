@@ -1,0 +1,31 @@
+name: Curate Pegasus release
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: Immutable v3.1.0-rc.N tag to curate
+        required: true
+        type: string
+
+jobs:
+  build-rc-evidence:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.rc_tag }}
+      - name: Build RC archive evidence only
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "${{ inputs.rc_tag }}")" = tag
+          [[ "${{ inputs.rc_tag }}" =~ ^v3\.1\.0-rc\.[1-9][0-9]*$ ]]
+          python3 tools/validate_snapshot.py
+          python3 tools/build_release_manifest.py --tag "${{ inputs.rc_tag }}" --archive "dist/pegasus-harness-${{ inputs.rc_tag }}.tar.gz" --output dist/release-manifest.json
+      - name: Preserve manual promotion gate
+        run: |
+          set -euo pipefail
+          test ! -e dist/rc-acceptance-evidence.json
+          printf '%s\n' 'Manual acceptance must create rc-acceptance-evidence.json before an operator creates immutable v3.1.0.'

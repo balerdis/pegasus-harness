@@ -1,21 +1,41 @@
 {
-  "schema": "pegasus-harness-release-contract/v2",
-  "version": "2.0.1",
+  "schema": "pegasus-harness-release-contract/v3",
+  "version": "3.1.0",
+  "catalog": "manifests/artifact-catalog.json",
   "installation": {
-    "mode": "clean only",
+    "mode": "additive",
     "target_user": "required non-root Linux account",
     "python": "3.12+",
-    "clients": ["opencode", "claude-code", "all"],
-    "prerequisites": {
-      "opencode": "required for opencode/all; executable in ~/.opencode/bin or ~/.local/bin; --version and --help must succeed",
-      "codebase-memory-mcp": "required for opencode/all; executable in ~/.local/bin; --version and --help must succeed"
-    },
-    "remote_dependency_installation": "forbidden"
+    "remote_shell_installation": "forbidden",
+    "host_client_installation": "forbidden"
   },
-  "distribution_assets": [
-    {"path": "install.sh", "sha256": "e38ac2732edcc855473ea71b831f840df180c8081029917fc03275e048f1a836"}
-  ],
-  "claude_code": "canonical skills and adapter only; no plugins",
-  "readiness_authority": "sdd-verify",
-  "code_intelligence": "CBM is mandatory for applicable structural analysis and does not prove behavior"
+  "dependencies": [
+    {
+      "id": "cbm",
+      "version": "0.9.0",
+      "source_url": "release-bundle:dependencies/codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz",
+      "integrity": {"sha256": "192eb13dbbd858e0363e4cd24b889bd7c08381d81553a6bb863772d7450938f8", "provenance": "manifests/cbm-linux-x64-provenance.json"},
+      "install_argv": ["pegasus-extract", "cbm", "0.9.0"],
+      "runtime_argv": ["{dependency}/bin/codebase-memory-mcp"],
+      "config_key": "codebase-memory-mcp"
+    },
+    {
+      "id": "engram",
+      "version": "1.20.0",
+      "source_url": "https://github.com/Gentleman-Programming/engram/releases/download/v1.20.0/engram_1.20.0_linux_amd64.tar.gz",
+      "integrity": {"sha256": "7dc3003318e303bee269a4772144f3ce01c8ec700bfd524aaec76770acd389ca"},
+      "install_argv": ["pegasus-download", "engram", "1.20.0"],
+      "runtime_argv": ["{dependency}/engram", "mcp", "--tools=agent"],
+      "config_key": "engram"
+    },
+    {
+      "id": "playwright",
+      "version": "0.0.78",
+      "source_url": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.78.tgz",
+      "integrity": {"package": "manifests/playwright-mcp-package.json", "lockfile": "manifests/playwright-mcp-package-lock.json"},
+      "install_argv": ["npm", "ci", "--ignore-scripts"],
+      "runtime_argv": ["node", "{dependency}/@playwright/mcp/cli.js"],
+      "config_key": "playwright"
+    }
+  ]
 }

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Install Pegasus from a verified, extracted release archive without fetching dependencies.
+# Start Pegasus v3's additive plan/apply flow from a verified release archive.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./install.sh --target-user <linux-user> [--client opencode|claude-code|all]
+Usage: sudo ./install.sh --target-user <linux-user> [--client opencode|claude-code|all] [--confirm cbm|engram|playwright|context7] [--decline cbm|engram|playwright|context7]
 
-Installs Pegasus only for the named non-root Linux user after its local prerequisites pass validation.
+Prints and applies an additive plan only for the named non-root Linux user.
 --client defaults to all.
 EOF
 }
@@ -18,6 +18,8 @@ fail() {
 
 target_user=''
 client='all'
+confirm=()
+decline=()
 
 while (($#)); do
   case "$1" in
@@ -29,6 +31,12 @@ while (($#)); do
     --client)
       (($# >= 2)) || fail '--client requires opencode, claude-code, or all'
       client=$2
+      shift 2
+      ;;
+    --confirm|--decline)
+      (($# >= 2)) || fail "$1 requires cbm, engram, playwright, or context7"
+      case "$2" in cbm|engram|playwright|context7) ;; *) fail "unsupported dependency: $2" ;; esac
+      if [[ $1 == --confirm ]]; then confirm+=(--confirm "$2"); else decline+=(--decline "$2"); fi
       shift 2
       ;;
     --help|-h)
@@ -47,6 +55,8 @@ case "$client" in opencode|claude-code|all) ;; *) fail "unsupported client: $cli
 
 target_uid=$(id -u -- "$target_user" 2>/dev/null) || fail "target user does not exist: $target_user"
 [[ $target_uid -ne 0 ]] || fail '--target-user must be a non-root Linux user'
+target_home=$(getent passwd -- "$target_user" | cut -d: -f6)
+[[ -n $target_home && -d $target_home ]] || fail "target user home is unavailable: $target_user"
 command -v sudo >/dev/null 2>&1 || fail 'sudo is required to enter the target user account'
 sudo -n -u "$target_user" -H true >/dev/null 2>&1 || fail "sudo cannot run commands as target user: $target_user"
 
@@ -66,5 +76,5 @@ done
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 [[ -f $script_dir/bin/pegasus ]] || fail 'release archive is incomplete: bin/pegasus is missing'
 
-"$python" "$script_dir/bin/pegasus" --target-user "$target_user" --client "$client" install
-exec "$python" "$script_dir/bin/pegasus" --target-user "$target_user" --client "$client" validate
+sudo -n -u "$target_user" -H env "HOME=$target_home" "$python" "$script_dir/bin/pegasus" --home "$target_home" --target-user "$target_user" --client "$client" plan
+exec sudo -n -u "$target_user" -H env "HOME=$target_home" "$python" "$script_dir/bin/pegasus" --home "$target_home" --target-user "$target_user" --client "$client" "${confirm[@]}" "${decline[@]}" apply

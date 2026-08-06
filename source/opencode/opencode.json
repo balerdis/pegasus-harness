@@ -9,6 +9,11 @@
       "prompt": "{file:../agents/pegasus-orchestrator.md}",
       "permission": {"task": {"*": "deny", "explore": "allow", "general": "allow", "sdd-verify": "allow"}}
     },
+    "king-gentleman": {
+      "description": "Core Pegasus implementation agent",
+      "mode": "subagent",
+      "model": "openai/gpt-5.6-terra"
+    },
     "sdd-verify": {
       "description": "Sole readiness authority for executable and configuration changes",
       "hidden": true,
@@ -18,7 +23,12 @@
       "tools": {"bash": true, "codebase-memory-mcp*": true, "read": true, "write": true}
     }
   },
-  "mcp": {"codebase-memory-mcp": {"enabled": true, "type": "local", "command": ["{env:CODEBASE_MEMORY_MCP_BIN}"]}},
+  "mcp": {
+    "codebase-memory-mcp": {"enabled": true, "type": "local", "command": ["{env:PEGASUS_CBM_BIN}"]},
+    "engram": {"enabled": true, "type": "local", "command": ["{env:PEGASUS_ENGRAM_BIN}"]},
+    "playwright": {"enabled": true, "type": "local", "command": ["{env:PEGASUS_PLAYWRIGHT_MCP_BIN}"]}
+  },
+  "plugin": ["@mohak34/opencode-notifier@0.2.4"],
   "skills": {"paths": ["./skills"]},
   "share": "disabled"
 }

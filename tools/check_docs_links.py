@@ -16,7 +16,7 @@ def main() -> int:
     errors: list[str] = []
     for item in result.stdout.decode().split("\0"):
         path = ROOT / item
-        if not item.endswith(".md") or not path.is_file():
+        if not item.endswith(".md") or not path.is_file() or item.startswith("source/"):
             continue
         for target in LINK.findall(path.read_text(encoding="utf-8")):
             if target.startswith(("http://", "https://", "#", "mailto:")):

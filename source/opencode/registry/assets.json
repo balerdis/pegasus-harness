@@ -1,0 +1,5 @@
+{
+  "schema": "pegasus-registry-assets/v3",
+  "commands": ["sdd-verify"],
+  "plugins": ["zellij-status"]
+}

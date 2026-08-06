@@ -1,12 +1,20 @@
-# Pegasus Harness v2.0.1
+# Pegasus Harness v3.1.0
 
-Pegasus prepara una configuracion limpia para OpenCode o Claude Code. La preparacion de release es `2.0.1`. Pegasus NO instala OpenCode, CBM ni ninguna dependencia externa: no descarga, no ejecuta instaladores remotos y no usa excepciones para saltear esa regla.
+Pegasus suma artifacts seleccionados a una instalación existente de OpenCode o Claude Code. La línea de release es `3.1.0`: no reemplaza directorios, archivos ni claves de usuario, y no toma propiedad de lo que ya existía.
+
+## Camino rápido
+
+1. Lea el plan: `sudo ./install.sh --target-user <linux-user> --client opencode`.
+2. Revise cada dependencia ausente y confirme o rechace individualmente con `--confirm` o `--decline`.
+3. Reinicie OpenCode después de una aplicación exitosa: su configuración se carga al inicio.
+
+La guía completa, migración y aceptación aislada están en [instalación aditiva v3](docs/instalacion-aditiva-v3.md).
 
 ## Antes de instalar
 
 La frontera de confianza es simple: usted obtiene el archivo, checksum y manifest desde un canal autenticado; verifica su integridad; y prepara OpenCode/CBM por fuera de Pegasus, con el procedimiento que usted considere confiable. Recién después Pegasus copia solo sus assets locales verificados a la cuenta indicada.
 
-Para `--client opencode` o `--client all`, la cuenta destino necesita antes:
+Para `--client opencode` o `--client all`, la cuenta destino necesita OpenCode instalado por fuera de Pegasus. Para Playwright también necesita un navegador compatible instalado externamente antes del apply.
 
 - OpenCode ejecutable en `~/.opencode/bin/opencode` o `~/.local/bin/opencode`.
 - CBM ejecutable en `~/.local/bin/codebase-memory-mcp`.
@@ -17,21 +25,21 @@ El wrapper se ejecuta como root, exige Python `3.12+`, exige `--target-user` no 
 ## Instalación segura
 
 ```sh
-sha256sum -c pegasus-harness-v2.0.1.tar.gz.sha256
-tar -xzf pegasus-harness-v2.0.1.tar.gz
-cd pegasus-harness-v2.0.1
-sudo ./install.sh --target-user <linux-user> --client opencode
+sha256sum -c pegasus-harness-v3.1.0.tar.gz.sha256
+tar -xzf pegasus-harness-v3.1.0.tar.gz
+cd pegasus-harness-v3.1.0
+sudo ./install.sh --target-user <linux-user> --client opencode --decline cbm --decline engram --decline playwright
 ```
 
 `--client` acepta `opencode`, `claude-code` o `all`. Para preparar un release seguro, primero valide el snapshot, cree un tag anotado sobre ese commit, genere un archivo nuevo y publique juntos archivo, checksum y manifest. El generador no crea tags ni publica assets:
 
 ```sh
-python3 tools/build_release_manifest.py --tag v2.0.1 --archive dist/pegasus-harness-v2.0.1.tar.gz --output dist/release-manifest.json
+python3 tools/build_release_manifest.py --tag v3.1.0-rc.1 --archive dist/pegasus-harness-v3.1.0-rc.1.tar.gz --output dist/release-manifest.json
 ```
 
-## Instalacion limpia
+## Migración desde v2
 
-Esta version solo admite instalacion limpia. Si la cuenta destino ya tiene configuracion de OpenCode o Claude Code, el instalador se detiene sin modificarla. Limpie manualmente esa configuracion o use una cuenta nueva antes de instalar v2. No existe un camino automatico de actualizacion.
+El estado v2 es ambiguo. v3 lo informa, no lo adopta, no lo reescribe y no lo elimina. Los collisions se preservan y el journal v3 solo registra creaciones verificables.
 
 ## Arquitectura
 
