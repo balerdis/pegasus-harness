@@ -327,7 +327,8 @@ def resolve_release_bundle(source_url: str, release_root: Path) -> Path:
         if release_root.is_symlink() or not root.is_dir():
             fail("release bundle root is not a real directory")
         candidate = root / path
-        for current in (root, *candidate.relative_to(root).parents, candidate):
+        ancestors = candidate.relative_to(root).parents
+        for current in (root, *(root / ancestor for ancestor in ancestors if ancestor != Path(".")), candidate):
             if stat.S_ISLNK(os.lstat(current).st_mode):
                 fail("release bundle path contains a symlink")
         if not candidate.is_file() or candidate.is_symlink():

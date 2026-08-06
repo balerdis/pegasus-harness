@@ -88,14 +88,14 @@ class AdditiveHarnessTests(unittest.TestCase):
         return item
 
     def extracted_rc_bundle_fixture(self, root: Path) -> tuple[Path, Path]:
-        bundle = root / "curated-cbm.tar.gz"
+        bundle = root / "codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz"
         self.write_archive(bundle, [(self.regular_member("bin/codebase-memory-mcp"), b"#!/bin/sh\nprintf 'codebase-memory-mcp 0.9.0\\n'\n")])
         archive = root / "pegasus-harness-v3.1.0-rc.fixture.tar.gz"
         prefix = "pegasus-harness-v3.1.0-rc.fixture"
         self.write_archive(archive, [
             (self.directory_member(prefix), b""),
             (self.directory_member(prefix + "/dependencies"), b""),
-            (self.regular_member(prefix + "/dependencies/curated-cbm.tar.gz"), bundle.read_bytes()),
+            (self.regular_member(prefix + "/dependencies/codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz"), bundle.read_bytes()),
         ])
         extracted = root / "extracted"
         with tarfile.open(archive, "r:gz") as contents:
@@ -624,7 +624,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             root = Path(temporary)
             release_root, bundle = self.extracted_rc_bundle_fixture(root)
             item = self.fixture_dependency("cbm", bundle)
-            item["source_url"] = "release-bundle:dependencies/curated-cbm.tar.gz"
+            self.assertEqual(item["source_url"], "release-bundle:dependencies/codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz")
             target = self.temporary_target(root / "home")
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
             next(entry for entry in plan["dependencies"] if entry["id"] == "cbm")["metadata"] = item
@@ -641,7 +641,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             root = Path(temporary)
             release_root, _ = self.extracted_rc_bundle_fixture(root)
             linked = release_root / "dependencies" / "linked.tar.gz"
-            linked.symlink_to(release_root / "dependencies" / "curated-cbm.tar.gz")
+            linked.symlink_to(release_root / "dependencies" / "codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz")
             for source in (
                 "release-bundle:/etc/passwd",
                 "release-bundle:../outside.tar.gz",
@@ -657,7 +657,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             root = Path(temporary)
             release_root, bundle = self.extracted_rc_bundle_fixture(root)
             item = self.fixture_dependency("cbm", bundle)
-            item["source_url"] = "release-bundle:dependencies/curated-cbm.tar.gz"
+            self.assertEqual(item["source_url"], "release-bundle:dependencies/codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz")
             item["integrity"]["sha256"] = "0" * 64
             target = self.temporary_target(root / "home")
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
