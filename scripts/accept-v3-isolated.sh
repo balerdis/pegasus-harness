@@ -63,15 +63,15 @@ host_path="$target_home/.local/pegasus-acceptance/node/bin:$target_home/.local/b
 # copying. The target receives group read/execute permission, never write access.
 release_root=$(python3 "$contract_tool" --prepare-handoff --release-root "$release_root" --target-user "$target_user") || fail 'verified RC handoff could not be secured'
 
-sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --home "$target_home" --target-user "$target_user" --client opencode plan
+sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --release-root "$release_root" --home "$target_home" --target-user "$target_user" --client opencode plan
 confirm_args=() decline_args=()
 IFS=, read -r -a confirmed <<< "$confirm_csv"
 IFS=, read -r -a declined <<< "$decline_csv"
 for mcp in "${confirmed[@]}"; do [[ -n $mcp ]] && confirm_args+=(--confirm "$mcp"); done
 for mcp in "${declined[@]}"; do [[ -n $mcp ]] && decline_args+=(--decline "$mcp"); done
 apply_result="$staging_dir/apply-result.json"
-sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --home "$target_home" --target-user "$target_user" --client opencode "${confirm_args[@]}" "${decline_args[@]}" apply > "$apply_result"
-sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --home "$target_home" --target-user "$target_user" --client opencode validate
+sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --release-root "$release_root" --home "$target_home" --target-user "$target_user" --client opencode "${confirm_args[@]}" "${decline_args[@]}" apply > "$apply_result"
+sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --release-root "$release_root" --home "$target_home" --target-user "$target_user" --client opencode validate
 sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" npm --prefix "$target_home/.config/opencode/notifier" ci --ignore-scripts
 
 [[ -f $target_home/.local/share/pegasus-harness/journal-v3.json ]] || fail 'apply did not create an ownership journal'

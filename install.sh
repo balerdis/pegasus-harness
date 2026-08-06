@@ -76,5 +76,5 @@ done
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 [[ -f $script_dir/bin/pegasus ]] || fail 'release archive is incomplete: bin/pegasus is missing'
 
-sudo -n -u "$target_user" -H env "HOME=$target_home" "$python" "$script_dir/bin/pegasus" --home "$target_home" --target-user "$target_user" --client "$client" plan
-exec sudo -n -u "$target_user" -H env "HOME=$target_home" "$python" "$script_dir/bin/pegasus" --home "$target_home" --target-user "$target_user" --client "$client" "${confirm[@]}" "${decline[@]}" apply
+sudo -n -u "$target_user" -H env "HOME=$target_home" "$python" "$script_dir/bin/pegasus" --release-root "$script_dir" --home "$target_home" --target-user "$target_user" --client "$client" plan
+exec sudo -n -u "$target_user" -H env "HOME=$target_home" "$python" "$script_dir/bin/pegasus" --release-root "$script_dir" --home "$target_home" --target-user "$target_user" --client "$client" "${confirm[@]}" "${decline[@]}" apply

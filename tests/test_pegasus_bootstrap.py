@@ -87,6 +87,21 @@ class AdditiveHarnessTests(unittest.TestCase):
         item["integrity"] = {"sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
         return item
 
+    def extracted_rc_bundle_fixture(self, root: Path) -> tuple[Path, Path]:
+        bundle = root / "curated-cbm.tar.gz"
+        self.write_archive(bundle, [(self.regular_member("bin/codebase-memory-mcp"), b"#!/bin/sh\nprintf 'codebase-memory-mcp 0.9.0\\n'\n")])
+        archive = root / "pegasus-harness-v3.1.0-rc.fixture.tar.gz"
+        prefix = "pegasus-harness-v3.1.0-rc.fixture"
+        self.write_archive(archive, [
+            (self.directory_member(prefix), b""),
+            (self.directory_member(prefix + "/dependencies"), b""),
+            (self.regular_member(prefix + "/dependencies/curated-cbm.tar.gz"), bundle.read_bytes()),
+        ])
+        extracted = root / "extracted"
+        with tarfile.open(archive, "r:gz") as contents:
+            contents.extractall(extracted, filter="data")
+        return extracted / prefix, bundle
+
     def fixture_command(self, path: Path, output: str, exit_code: int = 0) -> None:
         path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\nexit {exit_code}\n", encoding="utf-8")
         path.chmod(0o755)
@@ -603,6 +618,70 @@ class AdditiveHarnessTests(unittest.TestCase):
                     self.engine.install_dependency(self.fixture_dependency(identifier, archive), destination, archive)
                     self.assertEqual({path.relative_to(destination).as_posix() for path in destination.rglob("*") if path.is_file()}, set(files))
                     self.assertFalse((root / f"{identifier}.download.partial").exists())
+
+    def test_release_bundle_installs_from_verified_extracted_rc_without_network(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root, bundle = self.extracted_rc_bundle_fixture(root)
+            item = self.fixture_dependency("cbm", bundle)
+            item["source_url"] = "release-bundle:dependencies/curated-cbm.tar.gz"
+            target = self.temporary_target(root / "home")
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            next(entry for entry in plan["dependencies"] if entry["id"] == "cbm")["metadata"] = item
+            with patch.object(self.engine.urllib.request, "urlopen", side_effect=AssertionError("release bundle must stay offline")) as urlopen:
+                result = self.engine.apply(plan, target, {"cbm"}, browser_ready=True, declined={"engram", "playwright", "context7"}, release_root=release_root)
+            urlopen.assert_not_called()
+            self.assertIn("opencode-mcp", result["created"])
+            self.assertTrue((target["dependencies"] / "cbm" / "bin/codebase-memory-mcp").is_file())
+            self.assertIn("codebase-memory-mcp", json.loads(target["opencode_config"].read_text())["mcp"])
+            self.assertTrue(target["journal"].is_file())
+
+    def test_release_bundle_rejects_unsafe_missing_and_symlinked_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root, _ = self.extracted_rc_bundle_fixture(root)
+            linked = release_root / "dependencies" / "linked.tar.gz"
+            linked.symlink_to(release_root / "dependencies" / "curated-cbm.tar.gz")
+            for source in (
+                "release-bundle:/etc/passwd",
+                "release-bundle:../outside.tar.gz",
+                "release-bundle:dependencies/../outside.tar.gz",
+                "release-bundle:dependencies/missing.tar.gz",
+                "release-bundle:dependencies/linked.tar.gz",
+            ):
+                with self.subTest(source=source), self.assertRaisesRegex(RuntimeError, "release bundle"):
+                    self.engine.resolve_release_bundle(source, release_root)
+
+    def test_release_bundle_sha_mismatch_leaves_no_dependency_journal_or_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root, bundle = self.extracted_rc_bundle_fixture(root)
+            item = self.fixture_dependency("cbm", bundle)
+            item["source_url"] = "release-bundle:dependencies/curated-cbm.tar.gz"
+            item["integrity"]["sha256"] = "0" * 64
+            target = self.temporary_target(root / "home")
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            next(entry for entry in plan["dependencies"] if entry["id"] == "cbm")["metadata"] = item
+            with patch.object(self.engine.urllib.request, "urlopen", side_effect=AssertionError("release bundle must stay offline")) as urlopen:
+                with self.assertRaisesRegex(RuntimeError, "integrity"):
+                    self.engine.apply(plan, target, {"cbm"}, browser_ready=True, declined={"engram", "playwright", "context7"}, release_root=release_root)
+            urlopen.assert_not_called()
+            self.assertFalse(target["dependencies"].exists())
+            self.assertFalse(target["journal"].exists())
+            self.assertFalse(target["opencode_config"].exists())
+            self.assertFalse((target["dependencies"].parent / "cbm.download.partial").exists())
+
+    def test_fixed_remote_dependency_still_uses_its_https_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "engram.tar.gz"
+            self.write_archive(archive, [(self.regular_member("engram"), b"#!/bin/sh\nprintf 'engram 1.20.0\\n'\n")])
+            item = self.fixture_dependency("engram", archive)
+            destination = root / "dependencies" / "engram"
+            with patch.object(self.engine.urllib.request, "urlopen", return_value=io.BytesIO(archive.read_bytes())) as urlopen:
+                self.engine.install_dependency(item, destination)
+            urlopen.assert_called_once_with(item["source_url"], timeout=30)
+            self.assertTrue((destination / "engram").is_file())
 
     def test_tampered_dependency_bytes_and_integrity_leave_no_staging_or_destination(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

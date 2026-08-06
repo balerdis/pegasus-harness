@@ -10,6 +10,7 @@ import json
 import os
 import pwd
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -315,6 +316,27 @@ def expected_archive_members(item: dict) -> set[str]:
         fail(f"unknown dependency archive layout: {item.get('id')}")
 
 
+def resolve_release_bundle(source_url: str, release_root: Path) -> Path:
+    """Return a regular, non-linked bundle contained by the verified RC root."""
+    relative = source_url.removeprefix("release-bundle:")
+    path = Path(relative)
+    if not source_url.startswith("release-bundle:") or not relative or path.is_absolute() or ".." in path.parts:
+        fail("release bundle path is unsafe")
+    try:
+        root = release_root.absolute()
+        if release_root.is_symlink() or not root.is_dir():
+            fail("release bundle root is not a real directory")
+        candidate = root / path
+        for current in (root, *candidate.relative_to(root).parents, candidate):
+            if stat.S_ISLNK(os.lstat(current).st_mode):
+                fail("release bundle path contains a symlink")
+        if not candidate.is_file() or candidate.is_symlink():
+            fail("release bundle path is missing or not a regular file")
+    except (OSError, ValueError):
+        fail("release bundle path is outside the verified root")
+    return candidate
+
+
 def safe_extract_archive(archive: Path, destination: Path, expected: set[str]) -> None:
     """Extract exactly declared regular members without traversal or links."""
     staging = destination.with_name(destination.name + ".partial")
@@ -379,7 +401,7 @@ def install_playwright(item: dict, destination: Path, npm: str = "npm") -> None:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def install_dependency(item: dict, destination: Path, archive: Path | None = None) -> None:
+def install_dependency(item: dict, destination: Path, archive: Path | None = None, release_root: Path = ROOT) -> None:
     """Verify a private archive, atomically extract it, then validate its runtime."""
     if item["id"] == "playwright":
         fail("Playwright must be installed with the committed npm graph")
@@ -389,15 +411,22 @@ def install_dependency(item: dict, destination: Path, archive: Path | None = Non
     temporary = destination.with_name(destination.name + ".download.partial")
     try:
         if archive is None:
-            with urllib.request.urlopen(item["source_url"], timeout=30) as response, temporary.open("wb") as output:
-                shutil.copyfileobj(response, output)
-        else:
+            if item["source_url"].startswith("release-bundle:"):
+                archive = resolve_release_bundle(item["source_url"], release_root)
+            else:
+                with urllib.request.urlopen(item["source_url"], timeout=30) as response, temporary.open("wb") as output:
+                    shutil.copyfileobj(response, output)
+        if archive is not None:
             shutil.copyfile(archive, temporary)
         verify_download(item, temporary)
         safe_extract_archive(temporary, destination, expected_archive_members(item))
         probe_dependency(item, destination)
     except Exception:
         shutil.rmtree(destination, ignore_errors=True)
+        try:
+            destination.parent.rmdir()
+        except OSError:
+            pass
         raise
     finally:
         temporary.unlink(missing_ok=True)
@@ -422,7 +451,7 @@ def source_entry(identifier: str) -> dict:
     return next(item for item in load_catalog()["artifacts"] if item["id"] == identifier)
 
 
-def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browser_ready: bool, declined: set[str] | None = None) -> dict:
+def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browser_ready: bool, declined: set[str] | None = None, release_root: Path = ROOT) -> dict:
     declined = declined or set()
     pending = {item["id"] for item in plan_value["dependencies"] if item["action"] == "confirm-required"} - declined
     if not pending.issubset(confirmed):
@@ -439,7 +468,7 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
                 if metadata["id"] == "playwright":
                     install_playwright(metadata, destination)
                 else:
-                    install_dependency(metadata, destination)
+                    install_dependency(metadata, destination, release_root=release_root)
         for action in plan_value["artifacts"]:
             if action["action"] != "create" or action.get("dependency") in declined:
                 continue
@@ -545,6 +574,7 @@ def target_home(user: str) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", type=Path, help="test-only target home; never use for another user")
+    parser.add_argument("--release-root", type=Path, default=ROOT, help="verified extracted release root")
     parser.add_argument("--target-user", default=os.environ.get("USER", ""))
     parser.add_argument("--client", choices=(*CLIENTS, "all"), default="opencode")
     parser.add_argument("--confirm", action="append", default=[])
@@ -561,7 +591,7 @@ def main() -> int:
     if args.command == "plan": print(json.dumps(value, indent=2)); return 0
     if args.command == "apply":
         ready = browser_preflight(value, target)["ready"]
-        print(json.dumps(apply(value, target, set(args.confirm), ready, set(args.decline)), indent=2)); return 0
+        print(json.dumps(apply(value, target, set(args.confirm), ready, set(args.decline), args.release_root), indent=2)); return 0
     if args.command == "uninstall": print(json.dumps(rollback(target), indent=2)); return 0
     return validate(target)
 
