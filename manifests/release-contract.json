@@ -24,6 +24,10 @@
       "version": "1.20.0",
       "source_url": "https://github.com/Gentleman-Programming/engram/releases/download/v1.20.0/engram_1.20.0_linux_amd64.tar.gz",
       "integrity": {"sha256": "7dc3003318e303bee269a4772144f3ce01c8ec700bfd524aaec76770acd389ca"},
+      "archive_layout": {
+        "members": ["CHANGELOG.md", "LICENSE", "README.md", "engram"],
+        "executables": {"engram": "0755"}
+      },
       "install_argv": ["pegasus-download", "engram", "1.20.0"],
       "runtime_argv": ["{dependency}/engram", "mcp", "--tools=agent"],
       "config_key": "engram"

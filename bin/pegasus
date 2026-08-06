@@ -151,6 +151,10 @@ def validate_contract(contract: dict) -> bool:
             fail("CBM requires curated bundle SHA-256 and provenance")
         if item["id"] == "engram" and len(integrity.get("sha256", "")) != 64:
             fail("Engram requires SHA-256")
+        if item["id"] == "engram" and item.get("archive_layout") != {
+                "members": ["CHANGELOG.md", "LICENSE", "README.md", "engram"],
+                "executables": {"engram": "0755"}}:
+            fail("Engram requires the fixed Linux amd64 archive layout")
         if item["id"] == "playwright":
             if not integrity.get("package") or not integrity.get("lockfile"):
                 fail("Playwright requires committed package and lockfiles")
@@ -322,14 +326,17 @@ def verify_download(item: dict, destination: Path) -> None:
 
 
 def expected_archive_members(item: dict) -> set[str]:
-    layouts = {
-        "cbm": {"bin/codebase-memory-mcp"},
-        "engram": {"engram"},
-    }
-    try:
-        return layouts[item["id"]]
-    except KeyError:
-        fail(f"unknown dependency archive layout: {item.get('id')}")
+    if item["id"] == "cbm":
+        return {"bin/codebase-memory-mcp"}
+    if item["id"] == "engram":
+        return set(item["archive_layout"]["members"])
+    fail(f"unknown dependency archive layout: {item.get('id')}")
+
+
+def expected_archive_executables(item: dict) -> dict[str, int]:
+    if item["id"] != "engram":
+        return {}
+    return {name: int(mode, 8) for name, mode in item["archive_layout"]["executables"].items()}
 
 
 def resolve_release_bundle(source_url: str, release_root: Path) -> Path:
@@ -354,9 +361,12 @@ def resolve_release_bundle(source_url: str, release_root: Path) -> Path:
     return candidate
 
 
-def safe_extract_archive(archive: Path, destination: Path, expected: set[str]) -> None:
+def safe_extract_archive(archive: Path, destination: Path, expected: set[str], executables: dict[str, int] | None = None) -> None:
     """Extract exactly declared regular members without traversal or links."""
     staging = destination.with_name(destination.name + ".partial")
+    executables = executables or {}
+    if destination.exists() or destination.is_symlink():
+        fail(f"dependency destination already exists: {destination}")
     shutil.rmtree(staging, ignore_errors=True)
     try:
         with tarfile.open(archive, "r:gz") as contents:
@@ -365,8 +375,10 @@ def safe_extract_archive(archive: Path, destination: Path, expected: set[str]) -
                 name = Path(member.name)
                 if name.is_absolute() or ".." in name.parts or not member.isfile() or member.issym() or member.islnk():
                     fail("archive contains unsafe member")
-            if {member.name for member in members} != expected:
+            if len(members) != len(expected) or {member.name for member in members} != expected:
                 fail("archive members do not match declared layout")
+            if any(member.mode & 0o777 != executables[member.name] for member in members if member.name in executables):
+                fail("archive executable permissions do not match declared layout")
             for member in members:
                 name = Path(member.name)
                 output = staging / name
@@ -436,7 +448,7 @@ def install_dependency(item: dict, destination: Path, archive: Path | None = Non
         if archive is not None:
             shutil.copyfile(archive, temporary)
         verify_download(item, temporary)
-        safe_extract_archive(temporary, destination, expected_archive_members(item))
+        safe_extract_archive(temporary, destination, expected_archive_members(item), expected_archive_executables(item))
         probe_dependency(item, destination)
     except Exception:
         shutil.rmtree(destination, ignore_errors=True)

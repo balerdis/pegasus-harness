@@ -116,6 +116,10 @@ def main() -> int:
         if dependency.get("id") == "playwright" and (dependency.get("install_argv") != ["npm", "ci", "--ignore-scripts"]
                 or dependency.get("runtime_argv") != ["node", "{dependency}/@playwright/mcp/cli.js"]):
             errors.append("unsafe Playwright install or runtime argv")
+        if dependency.get("id") == "engram" and dependency.get("archive_layout") != {
+                "members": ["CHANGELOG.md", "LICENSE", "README.md", "engram"],
+                "executables": {"engram": "0755"}}:
+            errors.append("invalid fixed Engram Linux amd64 archive layout")
     if errors:
         print("FAIL\n" + "\n".join(errors))
         return 1

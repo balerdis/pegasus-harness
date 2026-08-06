@@ -69,9 +69,9 @@ class AdditiveHarnessTests(unittest.TestCase):
                 info.size = len(payload)
                 output.addfile(info, io.BytesIO(payload))
 
-    def regular_member(self, name: str) -> tarfile.TarInfo:
+    def regular_member(self, name: str, mode: int = 0o755) -> tarfile.TarInfo:
         info = tarfile.TarInfo(name)
-        info.mode = 0o755
+        info.mode = mode
         return info
 
     def directory_member(self, name: str) -> tarfile.TarInfo:
@@ -86,6 +86,14 @@ class AdditiveHarnessTests(unittest.TestCase):
             raise ValueError("Playwright fixtures use fake npm, never archive extraction")
         item["integrity"] = {"sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
         return item
+
+    def engram_archive_members(self) -> list[tuple[tarfile.TarInfo, bytes]]:
+        return [
+            (self.regular_member("CHANGELOG.md", 0o644), b"changelog\n"),
+            (self.regular_member("LICENSE", 0o644), b"license\n"),
+            (self.regular_member("README.md", 0o644), b"readme\n"),
+            (self.regular_member("engram", 0o755), b"#!/bin/sh\nprintf 'engram 1.20.0\\n'\n"),
+        ]
 
     def extracted_rc_bundle_fixture(self, root: Path) -> tuple[Path, Path]:
         bundle = root / "codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz"
@@ -622,7 +630,6 @@ class AdditiveHarnessTests(unittest.TestCase):
     def test_local_dependency_fixtures_extract_expected_layout_and_probe(self) -> None:
         fixtures = {
             "cbm": {"bin/codebase-memory-mcp": b"#!/bin/sh\nprintf 'codebase-memory-mcp 0.9.0\\n'\n"},
-            "engram": {"engram": b"#!/bin/sh\nprintf 'engram 1.20.0\\n'\n"},
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -634,6 +641,44 @@ class AdditiveHarnessTests(unittest.TestCase):
                     self.engine.install_dependency(self.fixture_dependency(identifier, archive), destination, archive)
                     self.assertEqual({path.relative_to(destination).as_posix() for path in destination.rglob("*") if path.is_file()}, set(files))
                     self.assertFalse((root / f"{identifier}.download.partial").exists())
+
+            archive = root / "engram.tar.gz"
+            self.write_archive(archive, self.engram_archive_members())
+            destination = root / "engram"
+            self.engine.install_dependency(self.fixture_dependency("engram", archive), destination, archive)
+            self.assertEqual({path.relative_to(destination).as_posix() for path in destination.rglob("*") if path.is_file()},
+                             {"CHANGELOG.md", "LICENSE", "README.md", "engram"})
+            self.assertEqual((destination / "engram").stat().st_mode & 0o777, 0o755)
+            self.assertFalse((root / "engram.download.partial").exists())
+
+    def test_engram_archive_requires_the_fixed_linux_amd64_member_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            item = copy.deepcopy(next(item for item in self.engine.load_contract()["dependencies"] if item["id"] == "engram"))
+            expected = self.engine.expected_archive_members(item)
+            executables = self.engine.expected_archive_executables(item)
+            unsafe = tarfile.TarInfo("engram")
+            unsafe.type, unsafe.linkname = tarfile.SYMTYPE, "target"
+            cases = [
+                ("actual", self.engram_archive_members(), None),
+                ("missing", self.engram_archive_members()[:-1], "layout"),
+                ("extra", self.engram_archive_members() + [(self.regular_member("NOTICE", 0o644), b"notice\n")], "layout"),
+                ("unsafe", [(unsafe, b"")], "unsafe"),
+                ("wrong-mode", self.engram_archive_members()[:-1] + [(self.regular_member("engram", 0o644), b"#!/bin/sh\nprintf 'engram 1.20.0\\n'\n")], "permissions"),
+            ]
+            for name, members, error in cases:
+                with self.subTest(name=name):
+                    archive, destination = root / f"{name}.tar.gz", root / name
+                    self.write_archive(archive, members)
+                    if error:
+                        with self.assertRaisesRegex(RuntimeError, error):
+                            self.engine.safe_extract_archive(archive, destination, expected, executables)
+                        self.assertFalse(destination.exists())
+                        self.assertFalse(destination.with_name(destination.name + ".partial").exists())
+                    else:
+                        self.engine.safe_extract_archive(archive, destination, expected, executables)
+                        self.assertEqual({path.name for path in destination.iterdir()}, expected)
+                        self.assertEqual((destination / "engram").stat().st_mode & 0o777, 0o755)
 
     def test_release_bundle_installs_from_verified_extracted_rc_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -768,7 +813,7 @@ class AdditiveHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             archive = root / "engram.tar.gz"
-            self.write_archive(archive, [(self.regular_member("engram"), b"#!/bin/sh\nprintf 'engram 1.20.0\\n'\n")])
+            self.write_archive(archive, self.engram_archive_members())
             item = self.fixture_dependency("engram", archive)
             destination = root / "dependencies" / "engram"
             with patch.object(self.engine.urllib.request, "urlopen", return_value=io.BytesIO(archive.read_bytes())) as urlopen:
@@ -781,7 +826,6 @@ class AdditiveHarnessTests(unittest.TestCase):
             root = Path(temporary)
             for identifier, files in {
                 "cbm": {"bin/codebase-memory-mcp": b"#!/bin/sh\nprintf '0.9.0\\n'\n"},
-                "engram": {"engram": b"#!/bin/sh\nprintf '1.20.0\\n'\n"},
             }.items():
                 with self.subTest(dependency=identifier):
                     archive = root / f"{identifier}.tar.gz"
@@ -795,6 +839,16 @@ class AdditiveHarnessTests(unittest.TestCase):
                     self.assertFalse(destination.exists())
                     self.assertFalse(destination.with_name(destination.name + ".partial").exists())
                     self.assertFalse(destination.with_name(destination.name + ".download.partial").exists())
+            archive = root / "engram.tar.gz"
+            self.write_archive(archive, self.engram_archive_members())
+            item = self.fixture_dependency("engram", archive)
+            item["integrity"]["sha256"] = "0" * 64
+            destination = root / "engram-failed"
+            with self.assertRaisesRegex(RuntimeError, "integrity"):
+                self.engine.install_dependency(item, destination, archive)
+            self.assertFalse(destination.exists())
+            self.assertFalse(destination.with_name(destination.name + ".partial").exists())
+            self.assertFalse(destination.with_name(destination.name + ".download.partial").exists())
 
     def test_playwright_npm_staging_promotes_only_verified_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -859,6 +913,7 @@ class AdditiveHarnessTests(unittest.TestCase):
         self.assertIn("unavailable", provenance["signature_verification"])
         contract = self.engine.load_contract()
         self.assertEqual(contract["dependencies"][1]["integrity"]["sha256"], "7dc3003318e303bee269a4772144f3ce01c8ec700bfd524aaec76770acd389ca")
+        self.assertEqual(contract["dependencies"][1]["archive_layout"], {"members": ["CHANGELOG.md", "LICENSE", "README.md", "engram"], "executables": {"engram": "0755"}})
         packages = json.loads((ROOT / "manifests" / "playwright-mcp-package-lock.json").read_text())["packages"]
         self.assertEqual(set(packages) - {""}, {"node_modules/@playwright/mcp", "node_modules/fsevents", "node_modules/playwright", "node_modules/playwright-core"})
         self.assertTrue(all(packages[name]["integrity"].startswith("sha512-") for name in packages if name))
