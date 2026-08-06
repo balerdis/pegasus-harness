@@ -16,6 +16,10 @@ NOTIFIER_VERSION = "0.2.4"
 NOTIFIER_INTEGRITY = "sha512-xsfmqr6scB43pi+fZ0R74xD63ELM0MqMZnR/9AWWSescEObYyAcXvaSgiXG/9b2KrXxc8NvcLqTOLPiVJOhKaw=="
 PLAYWRIGHT_PACKAGE = "@playwright/mcp"
 PLAYWRIGHT_VERSION = "0.0.78"
+FORBIDDEN_PAYLOAD_SOURCES = {
+    "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
+    "source/opencode/tui.json",
+}
 
 
 def digest(path: Path) -> str:
@@ -36,6 +40,9 @@ def main() -> int:
         return 1
     if catalog.get("schema") != "pegasus-harness-artifact-catalog/v3" or contract.get("version") != "3.1.0":
         errors.append("v3.1 catalog and contract are required")
+    for source in FORBIDDEN_PAYLOAD_SOURCES:
+        if (ROOT / source).exists():
+            errors.append(f"forbidden payload source is present: {source}")
     try:
         provenance = json.loads((ROOT / "manifests" / "cbm-linux-x64-provenance.json").read_text(encoding="utf-8"))
         required = {"repository", "tag", "commit", "tree", "builder_image_digest", "build_command", "build_command_sha256", "output_path", "output_sha256", "signature_verification"}
@@ -66,7 +73,7 @@ def main() -> int:
         catalog_sources.add(source)
         if not path.is_file() or path.is_symlink() or digest(path) != entry.get("digest"):
             errors.append(f"catalog digest mismatch: {source}")
-        if "judgment-day" in source or "sergio-" in source or source == "source/opencode/tui.json":
+        if "judgment-day" in source or "sergio-" in source or source in FORBIDDEN_PAYLOAD_SOURCES:
             errors.append(f"excluded artifact in catalog: {source}")
         if entry.get("executable") and (source not in {"install.sh", "bin/pegasus"} or not os.access(path, os.X_OK)):
             errors.append(f"invalid executable artifact: {source}")

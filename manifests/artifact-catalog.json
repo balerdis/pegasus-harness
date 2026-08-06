@@ -561,22 +561,13 @@
       "digest": "6035219669dc5965528aeb4849e7375e5dbdb945cdce7114524b20388b526d43"
     },
     {
-      "id": "file-source-core-skills-lazy-load-prompt-audit-references-deployment-transport-md",
-      "client": "opencode",
-      "kind": "file",
-      "source": "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
-      "target": "skills/lazy-load-prompt-audit/references/deployment-transport.md",
-      "merge": "create-absent-file",
-      "digest": "9892c7192354944649c50c14f61c072044b5dd70ed6aef7115dc4eca23c36f0d"
-    },
-    {
       "id": "file-source-core-skills-lazy-load-prompt-audit-references-lazy-load-framework-md",
       "client": "opencode",
       "kind": "file",
       "source": "source/core/skills/lazy-load-prompt-audit/references/lazy-load-framework.md",
       "target": "skills/lazy-load-prompt-audit/references/lazy-load-framework.md",
       "merge": "create-absent-file",
-      "digest": "de7bf73cd16dd9a170fceb1749d1ae196ef287bdc32a65a9f90c3a73c44822ee"
+      "digest": "4ac1b6bc5c7aad4612dfec455a7358a7751d2db3fe7fcfd242e6bb9bcbad2c18"
     },
     {
       "id": "file-source-core-skills-project-agents-bootstrap-SKILL-md",

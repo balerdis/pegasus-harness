@@ -22,7 +22,7 @@ El release incluye solamente lo siguiente:
 
 1. Todos los commands, el registro de skills y los assets del registro.
 2. Los MCP CBM, Engram y Playwright.
-3. El plugin local `engram.ts`, estado de Zellij y plugins de registro. El notifier externo `@mohak34/opencode-notifier@0.2.4` se fija con su `package-lock.json` y se instala solo con `npm ci --ignore-scripts` durante la aceptación aislada.
+3. Los plugins locales aprobados `engram.ts`, `pegasus-zellij-state.ts`, `zellij-status.js` y los plugins de registro. El notifier externo `@mohak34/opencode-notifier@0.2.4` se fija con su `package-lock.json` y se instala solo con `npm ci --ignore-scripts` durante la aceptación aislada.
 4. Skills:
    - Todos los Core y SDD.
    - Todos los de contexto, Git y colaboracion, excepto los que comienzan con `sergio-`.
@@ -30,7 +30,7 @@ El release incluye solamente lo siguiente:
    - De domain: solamente `skill-versiones-estandar-asi`.
    - `api-service-contract-documentation`.
 
-`tui.json`, toda configuración/salida de plugins TUI y `judgment-day` no se distribuyen. Si hay una copia local existente, se preserva y no se toca.
+`tui.json`, toda configuración/salida de plugins TUI, `judgment-day` y la referencia de transporte de deployment de `lazy-load-prompt-audit` no se distribuyen. La ausencia de esa referencia bloquea el flujo de deployment con `blocked-missing-reference`; no se infiere ni se recrea. Si hay una copia local existente, se preserva y no se toca.
 
 Los items no incluidos en esta lista no se distribuyen. No se agregan como efecto indirecto de otro modulo, ni se dejan referencias de configuracion hacia ellos.
 
@@ -67,5 +67,5 @@ Antes de publicar, el release tiene que poder demostrar:
 - Cada MCP o dependencia nueva tiene confirmacion por dependencia, procedencia, version fija e integridad.
 - Una negativa del usuario no deja descargas, instalaciones ni referencias de configuracion.
 - La ausencia de Zellij mantiene inerte su plugin.
-- `tui.json`, configuración/salida TUI, `judgment-day` y todo item no incluido quedan fuera de la distribucion.
+- `tui.json`, configuración/salida TUI, `judgment-day`, la referencia de transporte de deployment y todo item no incluido quedan fuera de la distribucion.
 - El rollback no elimina contenido del usuario.

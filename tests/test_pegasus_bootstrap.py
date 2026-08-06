@@ -120,7 +120,9 @@ class AdditiveHarnessTests(unittest.TestCase):
         self.assertIn("source/opencode/notifier/package.json", sources)
         self.assertIn("source/opencode/notifier/package-lock.json", sources)
         self.assertIn("source/opencode/env/pegasus-skill-registry.env.example", sources)
-        self.assertIn("source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md", sources)
+        self.assertIn("source/opencode/plugins/zellij-status.js", sources)
+        self.assertNotIn("source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md", sources)
+        self.assertFalse((ROOT / "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md").exists())
         self.assertNotIn("source/opencode/plugins/skill-registry.ts", sources)
         self.assertNotIn("source/opencode/tui.json", sources)
         self.assertFalse((ROOT / "source/opencode/tui.json").exists())
@@ -129,6 +131,22 @@ class AdditiveHarnessTests(unittest.TestCase):
         self.assertIn("codebase-memory-mcp", config["mcp"])
         self.assertNotIn("cbm", config["mcp"])
         self.assertEqual(config["plugin"], ["@mohak34/opencode-notifier@0.2.4"])
+        registry_assets = json.loads((ROOT / "source/opencode/registry/assets.json").read_text())
+        self.assertEqual(registry_assets["plugins"], ["zellij-status"])
+
+    def test_catalog_rejects_the_unselected_deployment_transport_reference(self) -> None:
+        catalog = self.engine.load_catalog()
+        catalog["artifacts"].append({
+            "id": "forbidden-deployment-transport",
+            "client": "opencode",
+            "kind": "file",
+            "source": "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
+            "target": "skills/lazy-load-prompt-audit/references/deployment-transport.md",
+            "merge": "create-absent-file",
+            "digest": "unused",
+        })
+        with self.assertRaisesRegex(RuntimeError, "excluded"):
+            self.engine.validate_catalog(catalog, ROOT)
 
     def test_notifier_is_locked_and_acceptance_uses_no_lifecycle_scripts(self) -> None:
         self.assertTrue(self.engine.validate_notifier_lockfile())

@@ -150,27 +150,12 @@ This grows the macro with case-specific workflow, recovery, status, and transpor
 
 ### Good: Structural Extraction
 
-Primary prompt:
+Primary prompt when a required reference is absent:
 
 ```markdown
-When deployment is authorized, read `references/deployment-transport.md` before acting.
-It owns upload status, recovery, and transport literals. If required and unreadable,
-stop and return `blocked-missing-reference`; do not infer or proceed.
+The required deployment transport reference is unavailable. Stop and return
+`blocked-missing-reference`; do not infer or proceed.
 ```
 
-`references/deployment-transport.md`:
-
-```markdown
-# Deployment Transport
-
-## Scope
-Own upload status, retries, manifest recovery, cache handling, and mirror transport.
-
-## Authority
-Canonical owner of `READY`, `E_UPLOAD_17`, `upload_partial`, and related behavior.
-
-When status is `READY` but upload fails with `E_UPLOAD_17`, retry twice, rewrite the
-manifest, clear the cache, and return `upload_partial` unless the mirror also failed.
-```
-
-The correction preserves every semantic and exact literal while leaving only the loading gate and truthful blocked result in the macro.
+The correction preserves the loading gate and truthful blocked result. It does not infer
+or recreate unavailable deployment behavior.

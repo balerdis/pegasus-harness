@@ -37,6 +37,10 @@ PLAYWRIGHT_PACKAGE = "@playwright/mcp"
 PLAYWRIGHT_VERSION = "0.0.78"
 PLAYWRIGHT_PACKAGE_PATH = ROOT / "manifests" / "playwright-mcp-package.json"
 PLAYWRIGHT_LOCK_PATH = ROOT / "manifests" / "playwright-mcp-package-lock.json"
+FORBIDDEN_PAYLOAD_SOURCES = {
+    "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
+    "source/opencode/tui.json",
+}
 
 
 def fail(message: str) -> None:
@@ -140,10 +144,12 @@ def validate_contract(contract: dict) -> bool:
 def validate_catalog(catalog: dict, root: Path = ROOT) -> bool:
     if catalog.get("schema") != "pegasus-harness-artifact-catalog/v3":
         fail("invalid artifact catalog schema")
+    if any((root / source).exists() for source in FORBIDDEN_PAYLOAD_SOURCES):
+        fail("forbidden payload source is present")
     ids: set[str] = set()
     for entry in catalog.get("artifacts", []):
         identifier, source = entry.get("id"), entry.get("source", "")
-        if not identifier or identifier in ids or "judgment-day" in source or "/sergio-" in source or source == "source/opencode/tui.json":
+        if not identifier or identifier in ids or "judgment-day" in source or "/sergio-" in source or source in FORBIDDEN_PAYLOAD_SOURCES:
             fail("catalog has an excluded or duplicate artifact")
         ids.add(identifier)
         path = root / source
