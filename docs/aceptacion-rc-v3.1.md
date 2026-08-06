@@ -6,7 +6,7 @@ Esta guía prepara evidencia manual y aislada. No se ejecuta desde tests ni modi
 
 1. Elegí un perfil, su usuario mapeado y un RC con archive, checksum y manifest publicados.
 2. Ejecutá únicamente el orquestador; valida el RC antes de llamar al provisionador y exige reconocer explícitamente la recreación.
-3. Revisá el JSON de evidencia: plan MCP, resultado seleccionado, ausencias/no-orphans, ownership y snapshot de `serg`.
+3. Reuní los cinco JSON en un directorio nuevo fuera de `/home` y ejecutá el verificador de matriz; su único `PASS` agregado es entrada del gate de promoción, no crea tags ni releases.
 
 ## Perfiles
 
@@ -40,6 +40,20 @@ Para Playwright, instalá el navegador externamente en la cuenta recreada antes 
 - Node `24.15.0`: descarga oficial Linux x64 y SHA-256 `472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6`; queda en `~/.local/pegasus-acceptance/node`.
 - OpenCode: únicamente `opencode-linux-x64@1.18.13`, SRI fijado y launcher propio en `~/.local/bin/opencode`. No usa wrapper `opencode-ai`, npm, postinstall, NVM ni actualización automática.
 
+## Gate de matriz
+
+Luego de ejecutar los cinco perfiles contra el mismo archive RC, checksum y manifest, guardá exactamente sus cinco evidencias JSON en un directorio nuevo fuera de `/home`. Cada evidencia emitida por el orquestador incluye `rc.tag`, nombre y SHA-256 del archive, SHA-256 del checksum, SHA-256 del manifest y `archive_root`; esa identidad debe ser idéntica en toda la matriz.
+
+```sh
+python3 ./scripts/verify-v3-acceptance-matrix.py \
+  --rc-archive /releases/pegasus-harness-v3.1.0-rc.1.tar.gz \
+  --rc-checksum /releases/pegasus-harness-v3.1.0-rc.1.tar.gz.sha256 \
+  --release-manifest /releases/release-manifest.json \
+  --evidence-dir /var/tmp/pegasus-v3.1.0-rc.1-evidence
+```
+
+El verificador es test-only y no invoca provisionamiento, aceptación, creación de usuarios, tags, releases ni Pegasus. Rechaza paths inseguros, JSON inválido, perfiles faltantes o duplicados, cualquier resultado distinto de `PASS` y cualquier identidad RC distinta. Solo entonces escribe `rc-acceptance-aggregate.json` en ese directorio. No lo ejecutes otra vez sobre el mismo directorio: el archivo agregado existente se rechaza para conservar una única evidencia de promoción.
+
 ## Checklist de evidencia
 
 - [ ] Archivo RC, usuario y home dedicado anotados.
@@ -49,3 +63,5 @@ Para Playwright, instalá el navegador externamente en la cuenta recreada antes 
 - [ ] Los artifacts de aceptación pertenecen solo al usuario mapeado.
 - [ ] Snapshot de `serg` idéntico antes y después.
 - [ ] No se descargaron modelos, LSP ni cambios de perfil shell.
+- [ ] Hay exactamente una evidencia `PASS` de cada perfil y las cinco tienen la misma identidad RC.
+- [ ] `rc-acceptance-aggregate.json` fue generado por el verificador antes del tag final.

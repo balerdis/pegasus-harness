@@ -45,6 +45,15 @@ def load_acceptance_contract():
     return module
 
 
+def load_acceptance_matrix():
+    path = ROOT / "scripts" / "verify-v3-acceptance-matrix.py"
+    loader = importlib.machinery.SourceFileLoader("pegasus_acceptance_matrix", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 class AdditiveHarnessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.engine = load_engine()
@@ -172,7 +181,7 @@ class AdditiveHarnessTests(unittest.TestCase):
     def test_acceptance_script_is_static_and_refuses_unsafe_defaults(self) -> None:
         script = ROOT / "scripts/accept-v3-isolated.sh"
         source = script.read_text(encoding="utf-8")
-        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "ownership"):
+        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "ownership", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root"):
             self.assertIn(required, source)
         self.assertIn('"$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user"', source)
         for forbidden in ("useradd", "userdel", "rm -rf", "--confirm-clean-home"):
@@ -244,6 +253,61 @@ class AdditiveHarnessTests(unittest.TestCase):
                 contract.validate_rc_inputs("cbm", archive, checksum, manifest)
             with self.assertRaisesRegex(ValueError, "unknown acceptance profile"):
                 contract.validate_rc_inputs("serg", archive, checksum, manifest)
+
+    def test_acceptance_matrix_aggregates_only_the_five_passing_profiles_for_one_rc_offline(self) -> None:
+        matrix = load_acceptance_matrix()
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as temporary:
+            root = Path(temporary)
+            tag = "v3.1.0-rc.1"
+            archive = root / f"pegasus-harness-{tag}.tar.gz"
+            prefix = f"pegasus-harness-{tag}/"
+            payloads = {
+                "manifests/release-contract.json": b"{}",
+                "manifests/artifact-catalog.json": b"{}",
+                "manifests/cbm-linux-x64-provenance.json": b'{}',
+                "dependencies/cbm.tar.gz": b"cbm",
+            }
+            members = [(self.regular_member(prefix + path), payload) for path, payload in payloads.items()]
+            members.extend([(self.regular_member(prefix + "bin/pegasus"), b"#!/usr/bin/env python3\n"), (self.regular_member(prefix + "install.sh"), b"#!/bin/sh\n")])
+            self.write_archive(archive, members)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            checksum = root / f"{archive.name}.sha256"
+            checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+            manifest = root / "release-manifest.json"
+            manifest.write_text(json.dumps({"schema": "pegasus-harness-release/v3", "tag": tag, "archive_root": prefix[:-1], "assets": [{"name": archive.name, "sha256": digest}], "curated_dependencies": [{"id": "cbm", "path": "dependencies/cbm.tar.gz"}], "archive_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in payloads.items()]}), encoding="utf-8")
+            identity = matrix.expected_identity(archive, checksum, manifest)
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
+            for profile in sorted(matrix.PROFILES):
+                (evidence_dir / f"{profile}.json").write_text(json.dumps({"schema": matrix.SCHEMA, "status": "PASS", "profile": profile, "rc": identity, "journal": {"path": f"/{profile}", "sha256": profile, "entries": 1}}), encoding="utf-8")
+            output = matrix.aggregate(archive, checksum, manifest, evidence_dir)
+            aggregate = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(aggregate["status"], "PASS")
+            self.assertEqual(aggregate["profiles"], sorted(matrix.PROFILES))
+
+    def test_acceptance_matrix_rejects_missing_duplicate_invalid_failed_mismatched_or_unsafe_evidence(self) -> None:
+        matrix = load_acceptance_matrix()
+        identity = {"tag": "v3.1.0-rc.1"}
+        valid = {"schema": matrix.SCHEMA, "status": "PASS", "profile": "cbm", "rc": identity, "journal": {}}
+        with self.assertRaisesRegex(ValueError, "exactly"):
+            matrix.verify_records([valid], identity)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            matrix.verify_records([valid, valid], identity)
+        records = [dict(valid, profile=profile) for profile in matrix.PROFILES]
+        records[0]["status"] = "FAIL"
+        with self.assertRaisesRegex(ValueError, "did not pass"):
+            matrix.verify_records(records, identity)
+        records = [dict(valid, profile=profile) for profile in matrix.PROFILES]
+        records[0]["rc"] = {"tag": "v3.1.0-rc.2"}
+        with self.assertRaisesRegex(ValueError, "identity mismatch"):
+            matrix.verify_records(records, identity)
+        with self.assertRaisesRegex(ValueError, "outside /home"):
+            matrix.safe_evidence_dir(Path("/home"))
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence_dir = Path(temporary)
+            (evidence_dir / "broken.json").write_text("{", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "invalid JSON"):
+                matrix.read_evidence(evidence_dir)
 
     def test_acceptance_laboratory_is_not_a_pegasus_catalog_artifact(self) -> None:
         catalog = self.engine.load_catalog()

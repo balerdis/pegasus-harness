@@ -72,4 +72,4 @@ Acceptance MUST use an archive-based immutable `v3.1.0-rc.N` install. `scripts/p
 #### Scenario: Final aggregate gate
 - GIVEN all five matrix users pass and their evidence is complete
 - WHEN final release acceptance runs
-- THEN aggregate proof is recorded before immutable `v3.1.0` is created
+- THEN the test-only matrix verifier accepts explicit RC archive/checksum/manifest identity and an outside-`/home` evidence directory, requires exactly one valid JSON `PASS` record for `cbm`, `engram`, `playwright`, `context7`, and `final`, rejects duplicate/missing/failed/mismatched identity records, and writes one aggregate proof before immutable `v3.1.0` is created

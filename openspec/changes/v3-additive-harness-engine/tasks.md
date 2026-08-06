@@ -18,7 +18,7 @@ Chain strategy: size-exception
 
 ## Current Status
 
-Baseline engine, payload, and the five-profile acceptance laboratory are implemented. **14/14 tasks are complete.** No runtime/local system changes were run as part of this update.
+Baseline engine, payload, five-profile acceptance laboratory, and its test-only aggregate promotion gate are implemented. **15/15 tasks are complete.** No runtime/local system changes were run as part of this update.
 
 ### Suggested Work Units
 
@@ -54,3 +54,4 @@ Baseline engine, payload, and the five-profile acceptance laboratory are impleme
 - [x] 4.3 Implement the single test-only `scripts/accept-v3-isolated.sh` orchestrator for `cbm` → `pegasus-harness`, `engram` → `pegasus-harness-engram`, `playwright` → `pegasus-harness-playwright`, `context7` → `pegasus-harness-context7`, and `final` → `pegasus-harness-final`; require explicit profile, RC archive/checksum/manifest, and exact recreation acknowledgement; record profile MCP plan/result, declined no-orphan proof, ownership, and `serg` protection.
 - [x] 4.4 Keep `scripts/provision-v3-rc-host.sh` as the test-only host emulator: it recreates only the profile-mapped dedicated user after an exact acknowledgement, then installs fixed Node `24.15.0` and OpenCode `1.18.13`; it never touches `serg` and is never run from unit tests.
 - [x] 4.5 Update `docs/aceptacion-rc-v3.1.md`, `docs/release-distribution.md`, and `docs/instalacion-aditiva-v3.md` with the orchestrator-only matrix commands, preflight/evidence boundaries, fixed-host behavior, non-product rule, and new-commit/new-RC rule after failure.
+- [x] 4.6 Add a test-only matrix verifier that requires exactly the five `PASS` profile records for one explicit RC archive/checksum/manifest identity, rejects unsafe or malformed evidence, and writes one aggregate promotion-gate input; cover it with offline fixtures.

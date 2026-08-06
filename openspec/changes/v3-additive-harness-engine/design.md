@@ -29,7 +29,7 @@ confirmed plan ─> CBM bundle/provenance + MCP compatibility gates ─> browser
 
 Unjournaled content is user-owned. Plans expose id, target/key, action, reason, exact artifact metadata, CBM provenance/output SHA, Context7 endpoint/no-integrity state, and browser state. Any verify/extract/probe failure removes temp/created dependency paths, skips dependent config/journal, and preserves user content.
 
-`v3.1.0-rc.N` archive + checksum + manifest → acceptance preflight → profile-mapped host recreation/provision → explicit profile MCP plan → result/no-orphan/ownership evidence → immutable `v3.1.0`. Profiles are `cbm` → `pegasus-harness`, `engram` → `pegasus-harness-engram`, `playwright` → `pegasus-harness-playwright`, `context7` → `pegasus-harness-context7`, and `final` → `pegasus-harness-final`. Failure means new commit/RC; never mutate tags.
+`v3.1.0-rc.N` archive + checksum + manifest → acceptance preflight → profile-mapped host recreation/provision → explicit profile MCP plan → result/no-orphan/ownership evidence with canonical RC identity → test-only matrix verifier → immutable `v3.1.0`. The verifier accepts explicit RC inputs plus a safe evidence directory, validates exactly one `PASS` JSON record per profile against the same tag/archive/checksum/manifest identity, and writes its single aggregate record only after all checks pass. Profiles are `cbm` → `pegasus-harness`, `engram` → `pegasus-harness-engram`, `playwright` → `pegasus-harness-playwright`, `context7` → `pegasus-harness-context7`, and `final` → `pegasus-harness-final`. Failure means new commit/RC; never mutate tags.
 
 ## File Changes
 
@@ -40,7 +40,7 @@ Unjournaled content is user-owned. Plans expose id, target/key, action, reason, 
 | `manifests/artifact-catalog.json` | Create | Exact selected artifact and dependency/provenance catalog. |
 | `manifests/release-contract.json`, `manifests/cbm-linux-x64-provenance.json` | Modify/Create | v3 pins plus curated-CBM source, builder, command, and output evidence. |
 | `manifests/playwright-mcp-package-lock.json` | Modify/Create | Verified Playwright graph. |
-| `scripts/acceptance_v3_contract.py`, `scripts/accept-v3-isolated.sh`, `scripts/provision-v3-rc-host.sh` | Create/Modify | Test-only RC preflight, single acceptance orchestrator, and fixed-host emulator; none are Pegasus payload. |
+| `scripts/acceptance_v3_contract.py`, `scripts/accept-v3-isolated.sh`, `scripts/verify-v3-acceptance-matrix.py`, `scripts/provision-v3-rc-host.sh` | Create/Modify | Test-only RC preflight, single acceptance orchestrator, aggregate promotion gate, and fixed-host emulator; none are Pegasus payload. |
 | `docs/aceptacion-rc-v3.1.md` | Create | Five-profile laboratory and evidence contract. |
 | `.github/workflows/release.yml` | Create | RC archive build, pinned Linux x64 CI/provenance, acceptance-gated final release. |
 | `source/opencode/`, `source/core/skills/`, `source/adapters/` | Modify | Contract-selected payload only. |
@@ -58,7 +58,7 @@ Unjournaled content is user-owned. Plans expose id, target/key, action, reason, 
 |---|---|---|
 | Unit | Exact metadata, safe archive members, Playwright lock/`npm ci --ignore-scripts`, links, Context7 | RED rejects placeholders, traversal/symlinks, lock drift, lifecycle scripts, failed probes, remote version/integrity claims. |
 | Integration | Plan/gates/apply/rollback | Tampered CBM/Engram/Playwright or incompatible existing MCP cleans temp/owned paths and leaves no config/journal; Context7 decline leaves no remote entry. |
-| Release | RC → final | CI publishes `v3.1.0-rc.N` archive/provenance; only a passing fresh-user archive acceptance promotes the same verified artifact/commit to `v3.1.0`. |
+| Release | RC → final | CI publishes `v3.1.0-rc.N` archive/provenance; offline fixture tests verify the aggregate gate rejects unsafe, incomplete, duplicate, failed, malformed, or mismatched evidence. Only one aggregate `PASS` for the same verified artifact/commit is promotion input for `v3.1.0`. |
 | Rollout | Five dedicated homes | Profiles: `cbm` → `pegasus-harness`; `engram` → `pegasus-harness-engram`; `playwright` → `pegasus-harness-playwright`; `context7` → `pegasus-harness-context7`; `final` → `pegasus-harness-final`. Each confirms only its mapped MCP plan, declines the remainder, proves no-orphans/ownership and unchanged `serg`; scripts have no defaults and never run in automated tests. |
 
 ## Threat Matrix

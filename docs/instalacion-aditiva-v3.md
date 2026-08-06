@@ -37,7 +37,8 @@ sudo ./scripts/accept-v3-isolated.sh \
 ```
 
 5. El script rechaza tags finales/no RC, profiles desconocidos, acknowledgement incorrecto, archivos/checksum/manifest inconsistentes, staging/evidence preexistentes y paths/homes inseguros. Después extrae el archive validado, llama al provisionador y ejecuta plan/apply/validate con el plan explícito del perfil. Verifica MCP seleccionado, MCP rechazados sin config/dependencia/ownership huérfano, ownership del usuario mapeado y el snapshot final de `serg`.
-6. Revise el JSON de evidencia. Solo si contiene `status: "PASS"`, el `profile` esperado, el SHA-256 del archive/checksum/manifest publicados y el journal esperado, cree el tag anotado e inmutable `v3.1.0` sobre el mismo commit. Si falla cualquier paso, corrija en un commit nuevo y cree otro `v3.1.0-rc.N`; nunca mueva un tag RC ni el tag final.
+6. Repita el paso para los cinco perfiles y guarde los JSON en un directorio nuevo fuera de `/home`. Cada registro debe contener `status: "PASS"`, el `profile` esperado, el journal y la misma identidad RC canónica: tag, nombre/SHA-256 del archive, SHA-256 del checksum, SHA-256 del manifest y `archive_root`.
+7. Ejecute `python3 scripts/verify-v3-acceptance-matrix.py --rc-archive <archive> --rc-checksum <checksum> --release-manifest <manifest> --evidence-dir <directorio-nuevo-fuera-de-home>`. El gate rechaza faltantes, duplicados, JSON inválido, perfiles fallidos, identidad RC diferente y paths inseguros. Solo su único `rc-acceptance-aggregate.json` con `status: "PASS"` habilita crear el tag anotado e inmutable `v3.1.0` sobre el mismo commit. No crea tags ni releases. Si falla cualquier paso, corrija en un commit nuevo y cree otro `v3.1.0-rc.N`; nunca mueva un tag RC ni el tag final.
 
 El resultado esperado es `PASS`, artifacts pertenecientes a la cuenta dedicada, evidencia persistida y ningún cambio en la instalación activa de `serg`.
 
