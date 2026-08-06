@@ -15,6 +15,7 @@ Replace v2’s clean-only path with Python-standard-library `detect → plan →
 | MCP integrity/remediation | Store verified Engram metadata. For Playwright, ship the committed lockfile and run `npm ci --ignore-scripts` only in a fresh Pegasus-owned staging directory; verify the lockfile/package tree, atomically promote it, then direct-entrypoint probe. Existing MCPs become links only after exact config shape, resolved executable, `--version`, and required probe pass. | Placeholder hashes, tarball-as-runtime, lifecycle scripts, `npx`, unverified config, reinstall/adoption/removal. |
 | Context7 | Confirm `https://mcp.context7.com/mcp` independently and add only its remote config entry/journal record. Show provider-managed/no Pegasus version or integrity. | Invented pin, checksum, download, or compatibility-version claim. |
 | Runtime gates | Keep `bin/pegasus` wrapper; add read-only plan, confirmations, transactional apply, validator/rollback. Missing browser blocks before writes; retry rechecks only. | No framework, browser download, or partial apply. |
+| RC acceptance laboratory | `scripts/provision-v3-rc-host.sh` is the test-only destructive host emulator: it recreates only the profile-mapped dedicated user and installs fixed Node `24.15.0` and OpenCode `1.18.13`. `scripts/accept-v3-isolated.sh` is the only test-only orchestrator: explicit `--profile`, `--rc-archive`, checksum, manifest, and exact `--confirm-recreate-user` are required before preflight and provision. | No Pegasus host bootstrap, catalog entry, owned user artifact, or runtime product behavior. |
 
 ## Data Flow
 
@@ -28,6 +29,8 @@ confirmed plan ─> CBM bundle/provenance + MCP compatibility gates ─> browser
 
 Unjournaled content is user-owned. Plans expose id, target/key, action, reason, exact artifact metadata, CBM provenance/output SHA, Context7 endpoint/no-integrity state, and browser state. Any verify/extract/probe failure removes temp/created dependency paths, skips dependent config/journal, and preserves user content.
 
+`v3.1.0-rc.N` archive + checksum + manifest → acceptance preflight → profile-mapped host recreation/provision → explicit profile MCP plan → result/no-orphan/ownership evidence → immutable `v3.1.0`. Profiles are `cbm` → `pegasus-harness`, `engram` → `pegasus-harness-engram`, `playwright` → `pegasus-harness-playwright`, `context7` → `pegasus-harness-context7`, and `final` → `pegasus-harness-final`. Failure means new commit/RC; never mutate tags.
+
 ## File Changes
 
 | File | Action | Description |
@@ -36,7 +39,9 @@ Unjournaled content is user-owned. Plans expose id, target/key, action, reason, 
 | `install.sh` | Modify | Delegate additive plan/apply; retain argument/root/target-user boundary checks. |
 | `manifests/artifact-catalog.json` | Create | Exact selected artifact and dependency/provenance catalog. |
 | `manifests/release-contract.json`, `manifests/cbm-linux-x64-provenance.json` | Modify/Create | v3 pins plus curated-CBM source, builder, command, and output evidence. |
-| `manifests/playwright-mcp-package-lock.json`, `scripts/accept-v3-isolated.sh` | Modify/Create | Verified Playwright graph and post-remediation fresh-home acceptance only. |
+| `manifests/playwright-mcp-package-lock.json` | Modify/Create | Verified Playwright graph. |
+| `scripts/acceptance_v3_contract.py`, `scripts/accept-v3-isolated.sh`, `scripts/provision-v3-rc-host.sh` | Create/Modify | Test-only RC preflight, single acceptance orchestrator, and fixed-host emulator; none are Pegasus payload. |
+| `docs/aceptacion-rc-v3.1.md` | Create | Five-profile laboratory and evidence contract. |
 | `.github/workflows/release.yml` | Create | RC archive build, pinned Linux x64 CI/provenance, acceptance-gated final release. |
 | `source/opencode/`, `source/core/skills/`, `source/adapters/` | Modify | Contract-selected payload only. |
 | `tools/build_release_manifest.py`, `tools/validate_snapshot.py` | Modify | Validate archive, catalog, provenance, pins, hashes, exclusions, modes. |
@@ -54,7 +59,7 @@ Unjournaled content is user-owned. Plans expose id, target/key, action, reason, 
 | Unit | Exact metadata, safe archive members, Playwright lock/`npm ci --ignore-scripts`, links, Context7 | RED rejects placeholders, traversal/symlinks, lock drift, lifecycle scripts, failed probes, remote version/integrity claims. |
 | Integration | Plan/gates/apply/rollback | Tampered CBM/Engram/Playwright or incompatible existing MCP cleans temp/owned paths and leaves no config/journal; Context7 decline leaves no remote entry. |
 | Release | RC → final | CI publishes `v3.1.0-rc.N` archive/provenance; only a passing fresh-user archive acceptance promotes the same verified artifact/commit to `v3.1.0`. |
-| Rollout | Fresh `/home/pegasus-harness` account | Acceptance script consumes the RC archive with isolated HOME/XDG, proves ownership and unchanged `serg`, then records versions/digests; never runs during automated tests. |
+| Rollout | Five dedicated homes | Profiles: `cbm` → `pegasus-harness`; `engram` → `pegasus-harness-engram`; `playwright` → `pegasus-harness-playwright`; `context7` → `pegasus-harness-context7`; `final` → `pegasus-harness-final`. Each confirms only its mapped MCP plan, declines the remainder, proves no-orphans/ownership and unchanged `serg`; scripts have no defaults and never run in automated tests. |
 
 ## Threat Matrix
 
@@ -68,7 +73,7 @@ Unjournaled content is user-owned. Plans expose id, target/key, action, reason, 
 
 ## Migration / Rollout
 
-v2 state is ambiguous: detect/report only; rollback is journal/baseline-gated. Release order is `v3.1.0-rc.N` archive → fresh-user acceptance script → `v3.1.0` from the accepted commit/artifact evidence. No design-time acceptance action.
+v2 state is ambiguous: detect/report only; rollback is journal/baseline-gated. Release order is RC archive → five-user acceptance matrix → aggregate proof → `v3.1.0` from the accepted commit/artifact evidence. No design-time provisioning or acceptance action.
 
 ## Open Questions
 

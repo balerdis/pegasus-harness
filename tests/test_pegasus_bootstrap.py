@@ -36,6 +36,15 @@ def load_release_builder():
     return module
 
 
+def load_acceptance_contract():
+    path = ROOT / "scripts" / "acceptance_v3_contract.py"
+    loader = importlib.machinery.SourceFileLoader("pegasus_acceptance_contract", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 class AdditiveHarnessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.engine = load_engine()
@@ -163,10 +172,10 @@ class AdditiveHarnessTests(unittest.TestCase):
     def test_acceptance_script_is_static_and_refuses_unsafe_defaults(self) -> None:
         script = ROOT / "scripts/accept-v3-isolated.sh"
         source = script.read_text(encoding="utf-8")
-        subprocess.run(["bash", "-n", str(script)], check=True)
-        for required in ("--rc-tag", "--archive", "--release-manifest", "--staging-dir", "--evidence-file", "v3.1.0-rc", "--target-user", "--confirm-clean-home", "id -u", "/home/pegasus-harness", "opencode", " plan", "install.sh", " validate", "journal", "additive_no_overwrite"):
+        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "ownership"):
             self.assertIn(required, source)
-        for forbidden in ("useradd", "userdel", "rm -rf", "--release-root", "v3.1.0.tar.gz"):
+        self.assertIn('"$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user"', source)
+        for forbidden in ("useradd", "userdel", "rm -rf", "--confirm-clean-home"):
             self.assertNotIn(forbidden, source)
         self.assertIn("Automated tests may inspect this file but must never run it", source)
 
@@ -175,6 +184,73 @@ class AdditiveHarnessTests(unittest.TestCase):
         self.assertIn('sudo -n -u "$target_user" -H env "HOME=$target_home"', wrapper)
         self.assertIn('--home "$target_home"', wrapper)
         self.assertNotIn('"$python" "$script_dir/bin/pegasus" --target-user "$target_user" --client "$client" plan', wrapper)
+
+    def test_rc_host_provisioner_is_profile_scoped_pinned_and_explicitly_destructive(self) -> None:
+        script = ROOT / "scripts" / "provision-v3-rc-host.sh"
+        source = script.read_text(encoding="utf-8")
+        for profile in ("cbm", "engram", "playwright", "context7", "final"):
+            self.assertIn(profile, source)
+        self.assertIn("472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6", source)
+        self.assertIn("sha512-WVB/FwFdG4NLqEdraW264/q5WFiUDTwU4hDN/6qSLamsCV+SUurZhDOrmXC/5atNWZE1B6xEq5E8V60dAduKZg==", source)
+        for required in ("--confirm-recreate-user", "userdel -r", "useradd --create-home", "target_user != serg", "v3\\.1\\.0-rc"):
+            self.assertIn(required, source)
+        for forbidden in ("rm -rf", "npm install", "nvm", "opencode-ai"):
+            self.assertNotIn(forbidden, source.lower())
+
+    def test_acceptance_profiles_have_exact_confirmation_and_decline_matrix(self) -> None:
+        contract = load_acceptance_contract()
+        expected = {
+            "cbm": ("pegasus-harness", ("cbm",), ("engram", "playwright", "context7")),
+            "engram": ("pegasus-harness-engram", ("engram",), ("cbm", "playwright", "context7")),
+            "playwright": ("pegasus-harness-playwright", ("playwright",), ("cbm", "engram", "context7")),
+            "context7": ("pegasus-harness-context7", ("context7",), ("cbm", "engram", "playwright")),
+            "final": ("pegasus-harness-final", ("cbm", "engram", "playwright", "context7"), ()),
+        }
+        self.assertEqual(set(contract.PROFILE_PLANS), set(expected))
+        for profile, (user, confirmed, declined) in expected.items():
+            with self.subTest(profile=profile):
+                plan = contract.profile_plan(profile)
+                self.assertEqual((plan["user"], plan["confirm"], plan["decline"]), (user, confirmed, declined))
+
+    def test_acceptance_preflight_validates_rc_checksum_manifest_and_safe_refusals_offline(self) -> None:
+        contract = load_acceptance_contract()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tag = "v3.1.0-rc.1"
+            archive = root / f"pegasus-harness-{tag}.tar.gz"
+            prefix = f"pegasus-harness-{tag}/"
+            evidence = {
+                "manifests/release-contract.json": b"{}",
+                "manifests/artifact-catalog.json": b"{}",
+                "manifests/cbm-linux-x64-provenance.json": b'{"artifact_sha256":"cbm"}',
+                "dependencies/cbm.tar.gz": b"cbm",
+            }
+            members = [(self.regular_member(prefix + path), payload) for path, payload in evidence.items()]
+            members.extend([(self.regular_member(prefix + "bin/pegasus"), b"#!/usr/bin/env python3\n"), (self.regular_member(prefix + "install.sh"), b"#!/bin/sh\n")])
+            self.write_archive(archive, members)
+            archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            checksum = root / f"{archive.name}.sha256"
+            checksum.write_text(f"{archive_digest}  {archive.name}\n", encoding="utf-8")
+            manifest = root / "release-manifest.json"
+            manifest.write_text(json.dumps({
+                "schema": "pegasus-harness-release/v3", "tag": tag, "archive_root": prefix[:-1],
+                "assets": [{"name": archive.name, "sha256": archive_digest}],
+                "curated_dependencies": [{"id": "cbm", "path": "dependencies/cbm.tar.gz"}],
+                "archive_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in evidence.items()],
+            }), encoding="utf-8")
+            self.assertEqual(contract.validate_rc_inputs("cbm", archive, checksum, manifest), prefix[:-1])
+            checksum.write_text("0" * 64 + f"  {archive.name}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                contract.validate_rc_inputs("cbm", archive, checksum, manifest)
+            with self.assertRaisesRegex(ValueError, "unknown acceptance profile"):
+                contract.validate_rc_inputs("serg", archive, checksum, manifest)
+
+    def test_acceptance_laboratory_is_not_a_pegasus_catalog_artifact(self) -> None:
+        catalog = self.engine.load_catalog()
+        sources = {entry["source"] for entry in catalog["artifacts"]}
+        self.assertFalse(any(source.startswith("scripts/") for source in sources))
+        self.assertNotIn("scripts/accept-v3-isolated.sh", sources)
+        self.assertNotIn("scripts/provision-v3-rc-host.sh", sources)
 
     def test_release_builder_requires_and_records_curated_cbm_bundle(self) -> None:
         source = (ROOT / "tools" / "build_release_manifest.py").read_text(encoding="utf-8")

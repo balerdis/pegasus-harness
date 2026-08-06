@@ -15,29 +15,29 @@ El journal en `~/.local/share/pegasus-harness/journal-v3.json` registra cada cre
 
 ## Aceptación aislada de mantenimiento
 
-Este procedimiento es manual y posterior al release. Ningún test ejecuta el script, ni crea, borra, resetea o reutiliza `/home/pegasus-harness`.
+Este procedimiento es manual y posterior al release. Ningún test ejecuta los scripts ni crea, borra, resetea o reutiliza usuarios. El laboratorio no es código de producto: Pegasus no lo instala, no lo cataloga ni lo registra como ownership.
 
 ### Procedimiento exacto: RC a tag final
 
 1. Valide el commit y cree un tag anotado e inmutable `v3.1.0-rc.N`. Genere y publique juntos el archive RC, su `.sha256` y `release-manifest.json`. El tag final `v3.1.0` NO se crea en este paso.
-2. Cree previamente la cuenta Linux dedicada `pegasus-harness` con home exacto `/home/pegasus-harness`. El home debe estar vacío, ser un directorio real y pertenecer a esa cuenta. El script se niega a limpiar o reutilizar un home con contenido.
-3. Instale OpenCode y npm exclusivamente dentro de esa cuenta. No reutilice binarios, cachés, HOME, XDG ni configuración de `serg`.
-4. Desde un checkout del mismo tag RC, verifique el checksum del archive y ejecute como root con rutas explícitas nuevas para staging y evidencia:
+2. Seleccione uno de los cinco perfiles documentados en [la matriz RC](aceptacion-rc-v3.1.md#perfiles). El orquestador deriva el único usuario permitido y exige `--confirm-recreate-user` con ese nombre exacto; protege `serg`, root, homes inseguros, perfiles desconocidos y archives no RC.
+3. El orquestador valida archive, checksum y manifest antes de invocar el emulador de host. El emulador recrea únicamente el usuario mapeado e instala Node `24.15.0` y OpenCode `1.18.13` dentro de ese home. No reutiliza binarios, cachés, HOME, XDG ni configuración de `serg`.
+4. Desde un checkout del mismo tag RC, ejecute como root con rutas explícitas nuevas para staging y evidencia:
 
 ```sh
 sha256sum -c /releases/pegasus-harness-v3.1.0-rc.1.tar.gz.sha256
 sudo ./scripts/accept-v3-isolated.sh \
-  --rc-tag v3.1.0-rc.1 \
-  --archive /releases/pegasus-harness-v3.1.0-rc.1.tar.gz \
+  --profile cbm \
+  --rc-archive /releases/pegasus-harness-v3.1.0-rc.1.tar.gz \
+  --rc-checksum /releases/pegasus-harness-v3.1.0-rc.1.tar.gz.sha256 \
   --release-manifest /releases/release-manifest.json \
   --staging-dir /var/tmp/pegasus-v3.1.0-rc.1-acceptance \
   --evidence-file /var/tmp/pegasus-v3.1.0-rc.1-evidence.json \
-  --target-user pegasus-harness \
-  --confirm-clean-home
+  --confirm-recreate-user pegasus-harness
 ```
 
-5. El script rechaza tags finales/no RC, archivos o manifest inconsistentes, CBM sin digest/provenance coincidente, staging/evidence preexistentes, home no vacío y ownership incorrecto. Después extrae el archive validado, ejecuta plan/apply/validate con CBM, Engram, Playwright y Context7 rechazados, instala el notifier bloqueado con `npm ci --ignore-scripts`, verifica journal/ownership/no-overwrite y compara el snapshot final de `serg`.
-6. Revise el JSON de evidencia. Solo si contiene `status: "PASS"`, el mismo `rc_tag`, el SHA-256 del archive publicado y el journal esperado, cree el tag anotado e inmutable `v3.1.0` sobre el mismo commit. Si falla cualquier paso, corrija en un commit nuevo y cree otro `v3.1.0-rc.N`; nunca mueva un tag RC ni el tag final.
+5. El script rechaza tags finales/no RC, profiles desconocidos, acknowledgement incorrecto, archivos/checksum/manifest inconsistentes, staging/evidence preexistentes y paths/homes inseguros. Después extrae el archive validado, llama al provisionador y ejecuta plan/apply/validate con el plan explícito del perfil. Verifica MCP seleccionado, MCP rechazados sin config/dependencia/ownership huérfano, ownership del usuario mapeado y el snapshot final de `serg`.
+6. Revise el JSON de evidencia. Solo si contiene `status: "PASS"`, el `profile` esperado, el SHA-256 del archive/checksum/manifest publicados y el journal esperado, cree el tag anotado e inmutable `v3.1.0` sobre el mismo commit. Si falla cualquier paso, corrija en un commit nuevo y cree otro `v3.1.0-rc.N`; nunca mueva un tag RC ni el tag final.
 
 El resultado esperado es `PASS`, artifacts pertenecientes a la cuenta dedicada, evidencia persistida y ningún cambio en la instalación activa de `serg`.
 

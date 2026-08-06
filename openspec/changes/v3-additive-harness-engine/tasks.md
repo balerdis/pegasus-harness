@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Estimated changed lines | 850–1,150 authored lines |
+| Estimated changed lines | 950–1,250 authored lines |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes, but the accepted exception keeps one release line |
-| Suggested split | One release line/tag `v3.1.0` with RC acceptance; four work-unit commits |
+| Suggested split | One release line/tag `v3.1.0` with five-user RC acceptance; four work-unit commits |
 | Delivery strategy | size-exception |
 | Chain strategy | size-exception |
 
@@ -18,7 +18,7 @@ Chain strategy: size-exception
 
 ## Current Status
 
-Baseline engine, payload, and isolated acceptance script are implemented. **12/12 tasks are complete.** No runtime/local system changes are part of this update.
+Baseline engine, payload, and the five-profile acceptance laboratory are implemented. **14/14 tasks are complete.** No runtime/local system changes were run as part of this update.
 
 ### Suggested Work Units
 
@@ -27,7 +27,7 @@ Baseline engine, payload, and isolated acceptance script are implemented. **12/1
 | 1 | CBM/MCP integrity and Playwright lock install | Commit 1 | `python -m unittest tests.test_pegasus_bootstrap` | N/A: fixtures/temp paths | manifests, lockfile, verifier tests |
 | 2 | Plan, strict compatibility, remote confirmation | Commit 2 | `python -m unittest tests.test_pegasus_bootstrap` | N/A: isolated temp homes | `bin/pegasus`, `install.sh` gates |
 | 3 | Apply and ownership lifecycle | Commit 3 | `python -m unittest tests.test_pegasus_bootstrap` | N/A: isolated temp homes | applier, journal, rollback |
-| 4 | Catalog and v3.1.0 RC acceptance | Commit 4 | `python tools/validate_snapshot.py && python -m unittest` | Post-remediation RC only: `/home/pegasus-harness` | release workflow, acceptance script, evidence |
+| 4 | Five-user RC acceptance and host provisioning | Commit 4 | `python tools/validate_snapshot.py && python -m unittest` | Manual RC only: five named users/homes | operator scripts, docs, evidence |
 
 ## Phase 1: Safety and Contract Foundation
 
@@ -51,4 +51,6 @@ Baseline engine, payload, and isolated acceptance script are implemented. **12/1
 
 - [x] 4.1 **RED** update catalog tests for `context-load`, `skill-creator`, `skill-registry`, `engram.ts`, notifier `0.2.4`, exclusions, and explicitly absent `tui.json`.
 - [x] 4.2 **GREEN** baseline payload exists; add the command/plugin/catalog delta, locked notifier install, `source/opencode/plugins/engram.ts`, and remove `source/opencode/tui.json` from distribution.
-- [x] 4.3 RC archive staging proves curated CBM membership plus digest/provenance/manifest consistency; the manual-only operator validates explicit `v3.1.0-rc.N` archive/manifest inputs, isolated ownership and additive no-overwrite evidence before final-tag promotion. Tests never execute it or recreate a user.
+- [x] 4.3 Implement the single test-only `scripts/accept-v3-isolated.sh` orchestrator for `cbm` → `pegasus-harness`, `engram` → `pegasus-harness-engram`, `playwright` → `pegasus-harness-playwright`, `context7` → `pegasus-harness-context7`, and `final` → `pegasus-harness-final`; require explicit profile, RC archive/checksum/manifest, and exact recreation acknowledgement; record profile MCP plan/result, declined no-orphan proof, ownership, and `serg` protection.
+- [x] 4.4 Keep `scripts/provision-v3-rc-host.sh` as the test-only host emulator: it recreates only the profile-mapped dedicated user after an exact acknowledgement, then installs fixed Node `24.15.0` and OpenCode `1.18.13`; it never touches `serg` and is never run from unit tests.
+- [x] 4.5 Update `docs/aceptacion-rc-v3.1.md`, `docs/release-distribution.md`, and `docs/instalacion-aditiva-v3.md` with the orchestrator-only matrix commands, preflight/evidence boundaries, fixed-host behavior, non-product rule, and new-commit/new-RC rule after failure.
