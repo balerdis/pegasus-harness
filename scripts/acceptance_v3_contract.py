@@ -45,6 +45,12 @@ def checksum_digest(checksum: Path, archive: Path) -> str:
     return fields[0]
 
 
+def archive_member_in_root(name: str, root: str) -> bool:
+    if name in {root, root + "/"}:
+        return True
+    return name.startswith(root + "/") and all(part not in {"", ".", ".."} for part in name.split("/"))
+
+
 def validate_rc_inputs(profile: str, archive: Path, checksum: Path, manifest_path: Path) -> str:
     profile_plan(profile)
     regular_file(archive, "RC archive")
@@ -77,7 +83,8 @@ def validate_rc_inputs(profile: str, archive: Path, checksum: Path, manifest_pat
             members = contents.getmembers()
             if any(member.issym() or member.islnk() or not (member.isfile() or member.isdir()) for member in members):
                 raise ValueError("RC archive contains unsafe member types")
-            if any(not member.name.startswith(root + "/") for member in members):
+            if (not any(member.name in {root, root + "/"} and member.isdir() for member in members)
+                    or any(not archive_member_in_root(member.name, root) for member in members)):
                 raise ValueError("RC archive has an unexpected top-level path")
             for item in evidence:
                 member = contents.getmember(f"{root}/{item['path']}")

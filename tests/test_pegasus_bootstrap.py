@@ -72,6 +72,12 @@ class AdditiveHarnessTests(unittest.TestCase):
         info.mode = 0o755
         return info
 
+    def directory_member(self, name: str) -> tarfile.TarInfo:
+        info = tarfile.TarInfo(name)
+        info.type = tarfile.DIRTYPE
+        info.mode = 0o755
+        return info
+
     def fixture_dependency(self, identifier: str, archive: Path, node: Path | None = None) -> dict:
         item = copy.deepcopy(next(item for item in self.engine.load_contract()["dependencies"] if item["id"] == identifier))
         if identifier == "playwright":
@@ -226,7 +232,6 @@ class AdditiveHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             tag = "v3.1.0-rc.1"
-            archive = root / f"pegasus-harness-{tag}.tar.gz"
             prefix = f"pegasus-harness-{tag}/"
             evidence = {
                 "manifests/release-contract.json": b"{}",
@@ -234,25 +239,37 @@ class AdditiveHarnessTests(unittest.TestCase):
                 "manifests/cbm-linux-x64-provenance.json": b'{"artifact_sha256":"cbm"}',
                 "dependencies/cbm.tar.gz": b"cbm",
             }
-            members = [(self.regular_member(prefix + path), payload) for path, payload in evidence.items()]
-            members.extend([(self.regular_member(prefix + "bin/pegasus"), b"#!/usr/bin/env python3\n"), (self.regular_member(prefix + "install.sh"), b"#!/bin/sh\n")])
-            self.write_archive(archive, members)
-            archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-            checksum = root / f"{archive.name}.sha256"
-            checksum.write_text(f"{archive_digest}  {archive.name}\n", encoding="utf-8")
             manifest = root / "release-manifest.json"
-            manifest.write_text(json.dumps({
-                "schema": "pegasus-harness-release/v3", "tag": tag, "archive_root": prefix[:-1],
-                "assets": [{"name": archive.name, "sha256": archive_digest}],
-                "curated_dependencies": [{"id": "cbm", "path": "dependencies/cbm.tar.gz"}],
-                "archive_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in evidence.items()],
-            }), encoding="utf-8")
-            self.assertEqual(contract.validate_rc_inputs("cbm", archive, checksum, manifest), prefix[:-1])
+            for root_member in (prefix[:-1], prefix):
+                with self.subTest(root_member=root_member):
+                    archive = root / f"{prefix[:-1]}.tar.gz"
+                    members = [(self.directory_member(root_member), b"")]
+                    members.extend((self.regular_member(prefix + path), payload) for path, payload in evidence.items())
+                    members.extend([(self.regular_member(prefix + "bin/pegasus"), b"#!/usr/bin/env python3\n"), (self.regular_member(prefix + "install.sh"), b"#!/bin/sh\n")])
+                    self.write_archive(archive, members)
+                    archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+                    checksum = root / f"{archive.name}.sha256"
+                    checksum.write_text(f"{archive_digest}  {archive.name}\n", encoding="utf-8")
+                    manifest.write_text(json.dumps({
+                        "schema": "pegasus-harness-release/v3", "tag": tag, "archive_root": prefix[:-1],
+                        "assets": [{"name": archive.name, "sha256": archive_digest}],
+                        "curated_dependencies": [{"id": "cbm", "path": "dependencies/cbm.tar.gz"}],
+                        "archive_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in evidence.items()],
+                    }), encoding="utf-8")
+                    self.assertEqual(contract.validate_rc_inputs("cbm", archive, checksum, manifest), prefix[:-1])
             checksum.write_text("0" * 64 + f"  {archive.name}\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "checksum"):
                 contract.validate_rc_inputs("cbm", archive, checksum, manifest)
             with self.assertRaisesRegex(ValueError, "unknown acceptance profile"):
                 contract.validate_rc_inputs("serg", archive, checksum, manifest)
+
+    def test_acceptance_preflight_rejects_adversarial_archive_roots_offline(self) -> None:
+        contract = load_acceptance_contract()
+        root = "pegasus-harness-v3.1.0-rc.1"
+        self.assertFalse(contract.archive_member_in_root("pegasus-harness-v3.1.0-rc.2", root))
+        self.assertFalse(contract.archive_member_in_root(root + "/../escape", root))
+        self.assertFalse(contract.archive_member_in_root("/" + root + "/escape", root))
+        self.assertFalse(contract.archive_member_in_root(root + "//escape", root))
 
     def test_acceptance_matrix_aggregates_only_the_five_passing_profiles_for_one_rc_offline(self) -> None:
         matrix = load_acceptance_matrix()
@@ -267,7 +284,8 @@ class AdditiveHarnessTests(unittest.TestCase):
                 "manifests/cbm-linux-x64-provenance.json": b'{}',
                 "dependencies/cbm.tar.gz": b"cbm",
             }
-            members = [(self.regular_member(prefix + path), payload) for path, payload in payloads.items()]
+            members = [(self.directory_member(prefix), b"")]
+            members.extend((self.regular_member(prefix + path), payload) for path, payload in payloads.items())
             members.extend([(self.regular_member(prefix + "bin/pegasus"), b"#!/usr/bin/env python3\n"), (self.regular_member(prefix + "install.sh"), b"#!/bin/sh\n")])
             self.write_archive(archive, members)
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
