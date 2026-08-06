@@ -7,12 +7,14 @@ import io
 import importlib.machinery
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import tarfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -194,6 +196,117 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertNotIn(forbidden, source)
         self.assertIn("Automated tests may inspect this file but must never run it", source)
 
+    def handoff_release_fixture(self, root: Path) -> Path:
+        release = root / "verified-release"
+        entrypoint = release / "bin" / "pegasus"
+        entrypoint.parent.mkdir(parents=True)
+        entrypoint.write_text("#!/bin/sh\nprintf executed\\n", encoding="utf-8")
+        entrypoint.chmod(0o755)
+        (release / "manifest.json").write_text('{"release":"fixture"}', encoding="utf-8")
+        return release
+
+    def controlled_handoff_ancestry(self, root: Path):
+        def path_from_root(path: Path) -> list[Path]:
+            relative = Path(path).relative_to(root)
+            components = [root]
+            current = root
+            for part in relative.parts:
+                current /= part
+                components.append(current)
+            return components
+
+        return path_from_root
+
+    def virtual_handoff_filesystem(self, contract, root: Path):
+        ownership = {root: (0, 0)}
+        original_lstat = contract.os.lstat
+
+        def chown(path: Path, uid: int, gid: int) -> None:
+            ownership[Path(path)] = (uid, gid)
+
+        def lstat(path: Path):
+            metadata = original_lstat(path)
+            uid, gid = ownership.get(Path(path), (metadata.st_uid, metadata.st_gid))
+            values = list(metadata)
+            values[4], values[5] = uid, gid
+            return os.stat_result(values)
+
+        return ownership, chown, lstat
+
+    def target_has_access(self, lstat, path: Path, target_gid: int, required: int) -> bool:
+        metadata = lstat(path)
+        permissions = metadata.st_mode & 0o777
+        granted = (permissions >> 3) & 0o7 if metadata.st_gid == target_gid else permissions & 0o7
+        return granted & required == required
+
+    def test_prepare_handoff_grants_target_access_without_target_replacement_offline(self) -> None:
+        contract = load_acceptance_contract()
+        target_gid = 42002
+        target_user = "pegasus-handoff-fixture"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o755)
+            release = self.handoff_release_fixture(root)
+            handoff_base = root / "pegasus-acceptance"
+            ownership, chown, lstat = self.virtual_handoff_filesystem(contract, root)
+            with patch.object(contract, "HANDOFF_BASE", handoff_base), \
+                    patch.object(contract, "path_from_root", self.controlled_handoff_ancestry(root)), \
+                    patch.object(contract.os, "geteuid", return_value=0), \
+                    patch.object(contract.os, "chown", side_effect=chown), \
+                    patch.object(contract.os, "lstat", side_effect=lstat), \
+                    patch.object(contract.pwd, "getpwnam", return_value=SimpleNamespace(pw_gid=target_gid)):
+                payload = contract.prepare_handoff(release, target_user, handoff_base)
+
+            entrypoint = payload / "bin" / "pegasus"
+            manifest = payload / "manifest.json"
+            self.assertEqual(lstat(payload).st_mode & 0o777, 0o750)
+            self.assertEqual(lstat(entrypoint).st_mode & 0o777, 0o750)
+            self.assertEqual(lstat(manifest).st_mode & 0o777, 0o640)
+            self.assertEqual((lstat(entrypoint).st_uid, lstat(entrypoint).st_gid), (0, target_gid))
+            self.assertEqual((lstat(manifest).st_uid, lstat(manifest).st_gid), (0, target_gid))
+            self.assertTrue(self.target_has_access(lstat, entrypoint, target_gid, 0o5))
+            self.assertTrue(self.target_has_access(lstat, manifest, target_gid, 0o4))
+            for directory in (entrypoint.parent, payload, payload.parent, payload.parent.parent):
+                with self.subTest(directory=directory):
+                    self.assertTrue(self.target_has_access(lstat, directory, target_gid, 0o1))
+                    self.assertFalse(self.target_has_access(lstat, directory, target_gid, 0o3))
+            for protected, parent in {
+                "payload file": entrypoint.parent,
+                "payload directory": payload.parent,
+                "handoff ancestor": payload.parent.parent,
+            }.items():
+                with self.subTest(protected=protected):
+                    self.assertFalse(self.target_has_access(lstat, parent, target_gid, 0o3))
+
+    def test_prepare_handoff_refuses_unsafe_ancestors_offline(self) -> None:
+        contract = load_acceptance_contract()
+        target_user = "pegasus-handoff-fixture"
+        target_uid, target_gid = 42001, 42002
+        for scenario in ("target-owned", "symlink", "world-writable"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                root.chmod(0o755)
+                release = self.handoff_release_fixture(root)
+                handoff_base = root / "pegasus-acceptance"
+                ownership, chown, lstat = self.virtual_handoff_filesystem(contract, root)
+                if scenario == "target-owned":
+                    handoff_base.mkdir()
+                    ownership[handoff_base] = (target_uid, 0)
+                elif scenario == "symlink":
+                    target = root / "linked-target"
+                    target.mkdir()
+                    handoff_base.symlink_to(target, target_is_directory=True)
+                else:
+                    root.chmod(0o777)
+                with patch.object(contract, "HANDOFF_BASE", handoff_base), \
+                        patch.object(contract, "path_from_root", self.controlled_handoff_ancestry(root)), \
+                        patch.object(contract.os, "geteuid", return_value=0), \
+                        patch.object(contract.os, "chown", side_effect=chown), \
+                        patch.object(contract.os, "lstat", side_effect=lstat), \
+                        patch.object(contract.pwd, "getpwnam", return_value=SimpleNamespace(pw_gid=target_gid)):
+                    with self.assertRaisesRegex(ValueError, "unsafe|root-controlled|real directory|handoff base"):
+                        contract.prepare_handoff(release, target_user, handoff_base)
+
     def test_root_wrapper_delegates_all_target_writes_to_target_user(self) -> None:
         wrapper = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn('sudo -n -u "$target_user" -H env "HOME=$target_home"', wrapper)
@@ -270,6 +383,54 @@ class AdditiveHarnessTests(unittest.TestCase):
         self.assertFalse(contract.archive_member_in_root(root + "/../escape", root))
         self.assertFalse(contract.archive_member_in_root("/" + root + "/escape", root))
         self.assertFalse(contract.archive_member_in_root(root + "//escape", root))
+
+    def test_verified_extraction_keeps_root_staging_private_offline(self) -> None:
+        contract = load_acceptance_contract()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "archive.tar.gz"
+            prefix = "pegasus-harness-v3.1.0-rc.1"
+            self.write_archive(archive, [
+                (self.directory_member(prefix), b""),
+                (self.regular_member(prefix + "/bin/pegasus"), b"#!/usr/bin/env python3\n"),
+                (self.regular_member(prefix + "/install.sh"), b"#!/bin/sh\n"),
+            ])
+            staging = root / "root-staging"
+            release_root = contract.extract_verified_archive(archive, staging, prefix)
+            self.assertEqual(staging.stat().st_mode & 0o777, 0o700)
+            self.assertTrue((release_root / "bin" / "pegasus").is_file())
+
+    def test_acceptance_preflight_refuses_unsafe_archive_permission_bits_offline(self) -> None:
+        contract = load_acceptance_contract()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tag = "v3.1.0-rc.1"
+            prefix = f"pegasus-harness-{tag}/"
+            archive = root / f"pegasus-harness-{tag}.tar.gz"
+            evidence = {
+                "manifests/release-contract.json": b"{}",
+                "manifests/artifact-catalog.json": b"{}",
+                "manifests/cbm-linux-x64-provenance.json": b'{"artifact_sha256":"cbm"}',
+                "dependencies/cbm.tar.gz": b"cbm",
+            }
+            unsafe = self.regular_member(prefix + "bin/pegasus")
+            unsafe.mode = 0o4755
+            members = [(self.directory_member(prefix), b"")]
+            members.extend((self.regular_member(prefix + path), payload) for path, payload in evidence.items())
+            members.extend([(unsafe, b"#!/usr/bin/env python3\n"), (self.regular_member(prefix + "install.sh"), b"#!/bin/sh\n")])
+            self.write_archive(archive, members)
+            archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            checksum = root / f"{archive.name}.sha256"
+            checksum.write_text(f"{archive_digest}  {archive.name}\n", encoding="utf-8")
+            manifest = root / "release-manifest.json"
+            manifest.write_text(json.dumps({
+                "schema": "pegasus-harness-release/v3", "tag": tag, "archive_root": prefix[:-1],
+                "assets": [{"name": archive.name, "sha256": archive_digest}],
+                "curated_dependencies": [{"id": "cbm", "path": "dependencies/cbm.tar.gz"}],
+                "archive_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in evidence.items()],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unsafe permission bits"):
+                contract.validate_rc_inputs("cbm", archive, checksum, manifest)
 
     def test_acceptance_matrix_aggregates_only_the_five_passing_profiles_for_one_rc_offline(self) -> None:
         matrix = load_acceptance_matrix()

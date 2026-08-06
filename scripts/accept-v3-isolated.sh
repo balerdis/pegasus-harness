@@ -59,6 +59,10 @@ fi
 "$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user"
 target_home="/home/$target_user"
 host_path="$target_home/.local/pegasus-acceptance/node/bin:$target_home/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# The contract tool creates and validates every ancestor under /var/lib before
+# copying. The target receives group read/execute permission, never write access.
+release_root=$(python3 "$contract_tool" --prepare-handoff --release-root "$release_root" --target-user "$target_user") || fail 'verified RC handoff could not be secured'
+
 sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --home "$target_home" --target-user "$target_user" --client opencode plan
 confirm_args=() decline_args=()
 IFS=, read -r -a confirmed <<< "$confirm_csv"

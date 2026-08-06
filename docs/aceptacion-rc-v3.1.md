@@ -20,7 +20,7 @@ Esta guía prepara evidencia manual y aislada. No se ejecuta desde tests ni modi
 
 ## Ejecución
 
-El único punto de entrada es `accept-v3-isolated.sh`. `provision-v3-rc-host.sh` no es un flujo de producto: es el emulador de host de laboratorio que el orquestador invoca después del preflight.
+El único punto de entrada es `accept-v3-isolated.sh`. `provision-v3-rc-host.sh` no es un flujo de producto: es el emulador de host de laboratorio que el orquestador invoca después del preflight. Root extrae y verifica el RC en el staging privado; después entrega una copia nueva bajo `/var/lib/pegasus-acceptance/<target>/rc`, cuyos ancestros son root-owned y no admiten escritura del target. El payload permanece `root:<grupo primario del target>` con directorios y `bin/pegasus` en `0750`, otros archivos en `0640`: el target puede recorrer, leer y ejecutar el payload verificado, pero no reemplazarlo; no es legible globalmente.
 
 ```sh
 sudo ./scripts/accept-v3-isolated.sh \
@@ -61,6 +61,7 @@ El verificador es test-only y no invoca provisionamiento, aceptación, creación
 - [ ] SHA/SRI y probes de Node/OpenCode registrados.
 - [ ] El resultado contiene únicamente los MCP confirmados; los rechazados no tienen config, dependencia ni ownership huérfanos.
 - [ ] Los artifacts de aceptación pertenecen solo al usuario mapeado.
+- [ ] El payload de handoff está bajo `/var/lib/pegasus-acceptance/<target>/rc`; todos sus ancestros son root-owned sin escritura grupal/global, y el payload es `root:<grupo del target>` (`0750` directorios/entrypoint, `0640` otros archivos), sin lectura global.
 - [ ] Snapshot de `serg` idéntico antes y después.
 - [ ] No se descargaron modelos, LSP ni cambios de perfil shell.
 - [ ] Hay exactamente una evidencia `PASS` de cada perfil y las cinco tienen la misma identidad RC.
