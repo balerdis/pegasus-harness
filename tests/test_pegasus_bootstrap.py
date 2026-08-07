@@ -278,7 +278,7 @@ class AdditiveHarnessTests(unittest.TestCase):
     def test_acceptance_script_is_static_and_refuses_unsafe_defaults(self) -> None:
         script = ROOT / "scripts/accept-v3-isolated.sh"
         source = script.read_text(encoding="utf-8")
-        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "--browser", "browser_args", "--release-identity", "release_identity", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "pegasus-harness-journal/v3", "mapped user", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root", "playwright_graph", "https://registry.npmjs.org/", '"npm", "ci", "--ignore-scripts"', "direct_entrypoint", "os.link"):
+        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--evidence-verifier", "--confirm-recreate-user", "--browser", "browser_args", "--release-identity", "release_identity", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "pegasus-harness-journal/v3", "mapped user", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root", "playwright_graph", "https://registry.npmjs.org/", '"npm", "ci", "--ignore-scripts"', "direct_entrypoint", "EVIDENCE_VERIFIER_GID", "os.chown", "0o640", "os.link"):
             self.assertIn(required, source)
         self.assertIn('"$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user"', source)
         provisioner = (ROOT / "scripts/provision-v3-rc-host.sh").read_text(encoding="utf-8")
@@ -286,6 +286,7 @@ class AdditiveHarnessTests(unittest.TestCase):
         for forbidden in ("useradd", "userdel", "rm -rf", "--confirm-clean-home"):
             self.assertNotIn(forbidden, source)
         self.assertIn("Automated tests may inspect this file but must never run it", source)
+        self.assertIn("stat.S_IMODE(metadata.st_mode) != 0o750", source)
 
     def test_acceptance_playwright_probe_failure_diagnostics_are_redacted_and_bounded(self) -> None:
         source = (ROOT / "scripts/accept-v3-isolated.sh").read_text(encoding="utf-8")
@@ -586,17 +587,72 @@ class AdditiveHarnessTests(unittest.TestCase):
                 if profile in matrix.PLAYWRIGHT_PROFILES:
                     record["playwright_graph"] = self.playwright_acceptance_evidence(matrix)
                 (evidence_dir / f"{profile}.json").write_text(json.dumps(record), encoding="utf-8")
-            output = matrix.aggregate(archive, checksum, manifest, evidence_dir)
+            output_dir = root / "aggregate"
+            output_dir.mkdir(mode=0o700)
+            output = matrix.aggregate(archive, checksum, manifest, evidence_dir, output_dir / matrix.AGGREGATE_NAME)
             aggregate = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(aggregate["status"], "PASS")
             self.assertEqual(aggregate["profiles"], sorted(matrix.PROFILES))
             self.assertEqual(set(aggregate["playwright_graph"]), matrix.PLAYWRIGHT_PROFILES)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+    def test_documented_handoff_creates_a_verifier_owned_private_aggregate_output_offline(self) -> None:
+        output_setup = "sudo -n -u serg -H install -d -m 0700 /var/tmp/pegasus-v3.1.0-rc.1-aggregate-serg"
+        for document in ("docs/aceptacion-rc-v3.1.md", "docs/instalacion-aditiva-v3.md"):
+            with self.subTest(document=document):
+                self.assertIn(output_setup, (ROOT / document).read_text(encoding="utf-8"))
+
+        matrix = load_acceptance_matrix()
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as temporary:
+            root = Path(temporary)
+            tag = "v3.1.0-rc.1"
+            archive = root / f"pegasus-harness-{tag}.tar.gz"
+            prefix = f"pegasus-harness-{tag}/"
+            payloads = {
+                "manifests/release-contract.json": b"{}",
+                "manifests/artifact-catalog.json": b"{}",
+                "manifests/cbm-linux-x64-provenance.json": b"{}",
+                "dependencies/cbm.tar.gz": b"cbm",
+            }
+            members = [(self.directory_member(prefix), b"")]
+            members.extend((self.regular_member(prefix + path), payload) for path, payload in payloads.items())
+            members.extend([(self.regular_member(prefix + "bin/pegasus"), b"#!/usr/bin/env python3\n"), (self.regular_member(prefix + "install.sh"), b"#!/bin/sh\n")])
+            self.write_archive(archive, members)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            checksum = root / f"{archive.name}.sha256"
+            checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+            manifest = root / "release-manifest.json"
+            manifest.write_text(json.dumps({"schema": "pegasus-harness-release/v3", "tag": tag, "archive_root": prefix[:-1], "assets": [{"name": archive.name, "sha256": digest}], "curated_dependencies": [{"id": "cbm", "path": "dependencies/cbm.tar.gz"}], "archive_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in payloads.items()]}), encoding="utf-8")
+            identity = matrix.expected_identity(archive, checksum, manifest)
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
+            for profile in sorted(matrix.PROFILES):
+                record = {"schema": matrix.SCHEMA, "status": "PASS", "profile": profile, "rc": identity, "journal": {}}
+                if profile in matrix.PLAYWRIGHT_PROFILES:
+                    record["playwright_graph"] = self.playwright_acceptance_evidence(matrix)
+                (evidence_dir / f"{profile}.json").write_text(json.dumps(record), encoding="utf-8")
+            output_dir = root / "aggregate-serg"
+            output_dir.mkdir(mode=0o700)
+            self.assertEqual((output_dir.stat().st_uid, output_dir.stat().st_mode & 0o777), (os.geteuid(), 0o700))
+            output_file = output_dir / matrix.AGGREGATE_NAME
+            result = subprocess.run([
+                sys.executable, str(ROOT / "scripts/verify-v3-acceptance-matrix.py"),
+                "--rc-archive", str(archive), "--rc-checksum", str(checksum),
+                "--release-manifest", str(manifest), "--evidence-dir", str(evidence_dir),
+                "--output-file", str(output_file),
+            ], capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("PASS: aggregate acceptance evidence recorded at", result.stdout)
+            self.assertEqual(json.loads(output_file.read_text(encoding="utf-8"))["status"], "PASS")
+            self.assertEqual(output_file.stat().st_mode & 0o777, 0o600)
 
     def test_acceptance_matrix_requires_exact_playwright_graph_and_leaves_no_aggregate_on_failure(self) -> None:
         matrix = load_acceptance_matrix()
         identity = {"tag": "v3.1.0-rc.1"}
         with tempfile.TemporaryDirectory(dir="/var/tmp") as temporary:
-            evidence_dir = Path(temporary)
+            root = Path(temporary)
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
             records = []
             for profile in sorted(matrix.PROFILES):
                 record = {"schema": matrix.SCHEMA, "status": "PASS", "profile": profile, "rc": identity, "journal": {}}
@@ -618,11 +674,13 @@ class AdditiveHarnessTests(unittest.TestCase):
                         matrix.verify_records(invalid, identity)
             missing_graph = copy.deepcopy(records)
             del next(record for record in missing_graph if record["profile"] == "playwright")["playwright_graph"]
+            output_dir = root / "aggregate"
+            output_dir.mkdir(mode=0o700)
             with patch.object(matrix, "expected_identity", return_value=identity), \
                     patch.object(matrix, "read_evidence", return_value=missing_graph), \
                     self.assertRaisesRegex(ValueError, "missing"):
-                matrix.aggregate(Path("/rc-archive"), Path("/rc-checksum"), Path("/rc-manifest"), evidence_dir)
-            self.assertFalse((evidence_dir / matrix.AGGREGATE_NAME).exists())
+                matrix.aggregate(Path("/rc-archive"), Path("/rc-checksum"), Path("/rc-manifest"), evidence_dir, output_dir / matrix.AGGREGATE_NAME)
+            self.assertFalse((output_dir / matrix.AGGREGATE_NAME).exists())
             records_by_profile = {record["profile"]: record for record in records}
             records_by_profile["cbm"]["playwright_graph"] = self.playwright_acceptance_evidence(matrix)
             with self.assertRaisesRegex(ValueError, "unexpected"):
@@ -651,6 +709,16 @@ class AdditiveHarnessTests(unittest.TestCase):
             (evidence_dir / "broken.json").write_text("{", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "invalid JSON"):
                 matrix.read_evidence(evidence_dir)
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as temporary:
+            root = Path(temporary)
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
+            with self.assertRaisesRegex(ValueError, "separate from evidence"):
+                matrix.safe_output_file(evidence_dir / matrix.AGGREGATE_NAME, evidence_dir)
+            public_output = root / "public-output"
+            public_output.mkdir(mode=0o755)
+            with self.assertRaisesRegex(ValueError, "inaccessible"):
+                matrix.safe_output_file(public_output / matrix.AGGREGATE_NAME, evidence_dir)
 
     def test_acceptance_laboratory_is_not_a_pegasus_catalog_artifact(self) -> None:
         catalog = self.engine.load_catalog()

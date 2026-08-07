@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: sudo scripts/accept-v3-isolated.sh --profile <cbm|engram|playwright|context7|final> --rc-archive <RC-archive.tar.gz> --rc-checksum <RC-archive.tar.gz.sha256> --release-manifest <RC-manifest.json> --staging-dir <new-absolute-directory> --evidence-file <new-absolute-file> --confirm-recreate-user <mapped-user> [--browser <absolute-path>]
+Usage: sudo scripts/accept-v3-isolated.sh --profile <cbm|engram|playwright|context7|final> --rc-archive <RC-archive.tar.gz> --rc-checksum <RC-archive.tar.gz.sha256> --release-manifest <RC-manifest.json> --staging-dir <new-absolute-directory> --evidence-file <new-absolute-file> --evidence-verifier <non-root-user> --confirm-recreate-user <mapped-user> [--browser <absolute-path>]
 
 This test-only acceptance orchestrator validates the RC before recreating its
 single mapped account, provisions its fixed host, and applies the profile plan.
@@ -12,7 +12,7 @@ EOF
 }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 2; }
 
-profile='' archive='' rc_checksum='' release_manifest='' staging_dir='' evidence_file='' recreate_user='' browser=''
+profile='' archive='' rc_checksum='' release_manifest='' staging_dir='' evidence_file='' evidence_verifier='' recreate_user='' browser=''
 while (($#)); do
   case "$1" in
     --profile) (($# >= 2)) || fail '--profile requires a profile name'; profile=$2; shift 2 ;;
@@ -21,6 +21,7 @@ while (($#)); do
     --release-manifest) (($# >= 2)) || fail '--release-manifest requires the RC manifest path'; release_manifest=$2; shift 2 ;;
     --staging-dir) (($# >= 2)) || fail '--staging-dir requires a new absolute directory'; staging_dir=$2; shift 2 ;;
     --evidence-file) (($# >= 2)) || fail '--evidence-file requires a new absolute file'; evidence_file=$2; shift 2 ;;
+    --evidence-verifier) (($# >= 2)) || fail '--evidence-verifier requires a non-root user'; evidence_verifier=$2; shift 2 ;;
     --confirm-recreate-user) (($# >= 2)) || fail '--confirm-recreate-user requires the mapped user'; recreate_user=$2; shift 2 ;;
     --browser) (($# >= 2)) || fail '--browser requires an absolute browser path'; browser=$2; shift 2 ;;
     --help|-h) usage; exit 0 ;;
@@ -29,11 +30,27 @@ while (($#)); do
 done
 
 [[ $(id -u) -eq 0 ]] || fail 'run this RC acceptance as root with sudo'
-[[ -n $profile && -n $archive && -n $rc_checksum && -n $release_manifest && -n $staging_dir && -n $evidence_file && -n $recreate_user ]] || fail 'profile, RC archive/checksum/manifest, paths, and recreation acknowledgement are required'
+[[ -n $profile && -n $archive && -n $rc_checksum && -n $release_manifest && -n $staging_dir && -n $evidence_file && -n $evidence_verifier && -n $recreate_user ]] || fail 'profile, RC archive/checksum/manifest, paths, evidence verifier, and recreation acknowledgement are required'
 [[ $staging_dir == /* && $evidence_file == /* ]] || fail 'staging directory and evidence file must be absolute paths'
 [[ -z $browser || $browser == /* ]] || fail 'browser path must be absolute'
 [[ $staging_dir != / && $staging_dir != /home/* && ! -e $staging_dir && ! -e $evidence_file ]] || fail 'staging/evidence paths must be new and outside /home'
 [[ -d $(dirname -- "$staging_dir") && -d $(dirname -- "$evidence_file") ]] || fail 'staging and evidence parents must already exist'
+verifier_uid=$(id -u "$evidence_verifier") || fail 'evidence verifier does not exist'
+verifier_gid=$(id -g "$evidence_verifier") || fail 'evidence verifier has no primary group'
+[[ $verifier_uid -ne 0 ]] || fail 'root cannot be the evidence verifier'
+evidence_parent=$(dirname -- "$evidence_file")
+EVIDENCE_PARENT="$evidence_parent" VERIFIER_GID="$verifier_gid" python3 - <<'PY' || fail 'evidence directory must be a root-controlled verifier-readable handoff'
+import os
+import stat
+from pathlib import Path
+
+directory = Path(os.environ["EVIDENCE_PARENT"])
+metadata = os.lstat(directory)
+if (not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0 or metadata.st_gid != int(os.environ["VERIFIER_GID"])
+        or stat.S_IMODE(metadata.st_mode) != 0o750):
+    raise SystemExit(1)
+PY
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 contract_tool="$script_dir/acceptance_v3_contract.py"
 provisioner="$script_dir/provision-v3-rc-host.sh"
@@ -87,7 +104,7 @@ else
   [[ ! -e /home/serg/.config/opencode ]] || fail 'serg OpenCode configuration was created'
 fi
 
-PROFILE="$profile" TARGET_USER="$target_user" TARGET_HOME="$target_home" CONFIRM="$confirm_csv" DECLINE="$decline_csv" APPLY_RESULT="$apply_result" RC_ARCHIVE="$archive" RC_CHECKSUM="$rc_checksum" RELEASE_MANIFEST="$release_manifest" RELEASE_ROOT="$release_root" EVIDENCE_FILE="$evidence_file" SNAPSHOT="$snapshot" python3 - <<'PY'
+PROFILE="$profile" TARGET_USER="$target_user" TARGET_HOME="$target_home" CONFIRM="$confirm_csv" DECLINE="$decline_csv" APPLY_RESULT="$apply_result" RC_ARCHIVE="$archive" RC_CHECKSUM="$rc_checksum" RELEASE_MANIFEST="$release_manifest" RELEASE_ROOT="$release_root" EVIDENCE_FILE="$evidence_file" EVIDENCE_VERIFIER_GID="$verifier_gid" SNAPSHOT="$snapshot" python3 - <<'PY'
 import hashlib, json, os, re, subprocess, tempfile
 from pathlib import Path
 
@@ -193,7 +210,8 @@ try:
         output.write("\n")
         output.flush()
         os.fsync(output.fileno())
-    temporary.chmod(0o600)
+    os.chown(temporary, 0, int(os.environ["EVIDENCE_VERIFIER_GID"]))
+    temporary.chmod(0o640)
     os.link(temporary, evidence_path)
 finally:
     if temporary is not None:

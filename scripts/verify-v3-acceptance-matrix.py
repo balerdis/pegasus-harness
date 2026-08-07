@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import stat
 from pathlib import Path
 
 
@@ -76,6 +78,21 @@ def read_evidence(directory: Path) -> list[dict]:
     return records
 
 
+def safe_output_file(path: Path, evidence_dir: Path) -> Path:
+    if not path.is_absolute() or path.is_symlink() or path.exists():
+        raise ValueError("aggregate output must be a new absolute non-symlink file")
+    parent = path.parent
+    if (not parent.is_dir() or parent.is_symlink()
+            or parent.resolve(strict=True) == evidence_dir
+            or parent.resolve(strict=True) == Path("/home")
+            or Path("/home") in parent.resolve(strict=True).parents):
+        raise ValueError("aggregate output parent must be an existing private directory outside /home and separate from evidence")
+    metadata = parent.stat()
+    if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise ValueError("aggregate output parent must be owned by the verifier and inaccessible to group and others")
+    return path
+
+
 def expected_identity(archive: Path, checksum: Path, manifest: Path) -> dict[str, str]:
     contract = load_contract()
     root = contract.validate_rc_inputs("final", archive, checksum, manifest)
@@ -137,11 +154,9 @@ def verify_records(records: list[dict], identity: dict[str, str]) -> dict[str, d
     return by_profile
 
 
-def aggregate(archive: Path, checksum: Path, manifest: Path, evidence_dir: Path) -> Path:
+def aggregate(archive: Path, checksum: Path, manifest: Path, evidence_dir: Path, output_file: Path) -> Path:
     directory = safe_evidence_dir(evidence_dir)
-    output = directory / AGGREGATE_NAME
-    if output.exists() or output.is_symlink():
-        raise ValueError("aggregate evidence output must not already exist")
+    output = safe_output_file(output_file, directory)
     identity = expected_identity(archive, checksum, manifest)
     records = verify_records(read_evidence(directory), identity)
     payload = json.dumps({
@@ -153,7 +168,8 @@ def aggregate(archive: Path, checksum: Path, manifest: Path, evidence_dir: Path)
         "playwright_graph": {profile: records[profile]["playwright_graph"] for profile in sorted(PLAYWRIGHT_PROFILES)},
         "purpose": "promotion-gate-input-only",
     }, indent=2) + "\n"
-    with output.open("x", encoding="utf-8") as stream:
+    descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         stream.write(payload)
     return output
 
@@ -164,9 +180,11 @@ def main() -> int:
     parser.add_argument("--rc-checksum", type=Path, required=True)
     parser.add_argument("--release-manifest", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
+    parser.add_argument("--output-file", type=Path, required=True,
+                        help="new private output file outside the root-controlled evidence directory")
     args = parser.parse_args()
     try:
-        output = aggregate(args.rc_archive, args.rc_checksum, args.release_manifest, args.evidence_dir)
+        output = aggregate(args.rc_archive, args.rc_checksum, args.release_manifest, args.evidence_dir, args.output_file)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
     print(f"PASS: aggregate acceptance evidence recorded at {output}")

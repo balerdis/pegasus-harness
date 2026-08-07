@@ -5,7 +5,7 @@ La promoción v3.1 exige un RC inmutable y su evidencia operatoria antes del tag
 1. Ejecute los validadores locales y cree el tag anotado `v3.1.0-rc.N` sobre el commit validado.
 2. Genere un archive RC nuevo, su checksum y manifest con el CBM curado.
 3. Publique esos tres assets para el RC y ejecute los cinco perfiles de aceptación aislada manual.
-4. Reúna los cinco JSON en un directorio nuevo fuera de `/home` y ejecute `python3 scripts/verify-v3-acceptance-matrix.py` con el mismo archive, checksum y manifest.
+4. Emita los cinco JSON en un directorio root-controlado fuera de `/home`, legible sin escritura sólo por `serg`, y ejecute el verificador como `serg` con `--output-file` nuevo dentro de un directorio `0700` separado.
 5. Solo el `rc-acceptance-aggregate.json` con `status: "PASS"` es entrada para crear `v3.1.0` sobre el mismo commit. El verificador no crea tags ni releases. Un fallo exige otro commit y otro RC, nunca mutar tags.
 
 ```sh
