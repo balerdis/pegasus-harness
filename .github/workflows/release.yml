@@ -7,6 +7,20 @@ on:
         description: Immutable v3.1.0-rc.N tag to curate
         required: true
         type: string
+      final_tag:
+        description: Immutable final tag; only v3.1.1 is accepted
+        required: true
+        default: v3.1.1
+        type: string
+      promotion_rc_tag:
+        description: Manually accepted RC26 promotion input
+        required: true
+        default: v3.1.0-rc.26
+        type: string
+      accepted_rc26_aggregate_b64:
+        description: Base64-encoded accepted RC26 aggregate evidence
+        required: true
+        type: string
 
 jobs:
   build-rc-evidence:
@@ -29,3 +43,66 @@ jobs:
           set -euo pipefail
           test ! -e dist/rc-acceptance-evidence.json
           printf '%s\n' 'Manual acceptance must create rc-acceptance-evidence.json before an operator creates immutable v3.1.0.'
+
+  publish-v3-1-1-final:
+    needs: build-rc-evidence
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.final_tag }}
+      - name: Verify immutable final promotion input
+        run: |
+          set -euo pipefail
+          test "${{ inputs.final_tag }}" = v3.1.1
+          test "${{ inputs.promotion_rc_tag }}" = v3.1.0-rc.26
+          test "${{ inputs.rc_tag }}" = "${{ inputs.promotion_rc_tag }}"
+          test "$(git cat-file -t v3.1.1)" = tag
+          test "$(git cat-file -t v3.1.0-rc.26)" = tag
+          test "$(git rev-list -n 1 v3.1.1)" = "$(git rev-list -n 1 v3.1.0-rc.26)"
+      - name: Download RC26 release assets that acceptance identified
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir rc26-input
+          gh release download "${{ inputs.promotion_rc_tag }}" --repo "${{ github.repository }}" --dir rc26-input \
+            --pattern 'pegasus-harness-v3.1.0-rc.26.tar.gz' \
+            --pattern 'pegasus-harness-v3.1.0-rc.26.tar.gz.sha256' \
+            --pattern 'release-manifest.json'
+      - name: Validate accepted RC26 aggregate promotion evidence
+        env:
+          ACCEPTED_RC26_AGGREGATE_B64: ${{ inputs.accepted_rc26_aggregate_b64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$ACCEPTED_RC26_AGGREGATE_B64" | base64 --decode > rc26-input/rc-acceptance-aggregate.json
+          python3 scripts/validate-v3-acceptance-aggregate.py \
+            --aggregate rc26-input/rc-acceptance-aggregate.json \
+            --rc-archive rc26-input/pegasus-harness-v3.1.0-rc.26.tar.gz \
+            --rc-checksum rc26-input/pegasus-harness-v3.1.0-rc.26.tar.gz.sha256 \
+            --release-manifest rc26-input/release-manifest.json
+      - name: Build final archive, checksum, and manifest
+        run: |
+          set -euo pipefail
+          python3 tools/validate_snapshot.py
+          python3 tools/build_release_manifest.py \
+            --tag v3.1.1 --promotion-rc-tag v3.1.0-rc.26 \
+            --archive dist/pegasus-harness-v3.1.1.tar.gz \
+            --output dist/release-manifest.json
+          test -f dist/pegasus-harness-v3.1.1.tar.gz
+          test -f dist/pegasus-harness-v3.1.1.tar.gz.sha256
+          test -f dist/release-manifest.json
+      - name: Publish final latest-capable asset set
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v3.1.1
+          draft: false
+          prerelease: false
+          files: |
+            dist/pegasus-harness-v3.1.1.tar.gz
+            dist/pegasus-harness-v3.1.1.tar.gz.sha256
+            dist/release-manifest.json

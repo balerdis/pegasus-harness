@@ -14,7 +14,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RC_TAG = re.compile(r"^v3\.1\.0-rc\.[1-9][0-9]*$")
+FINAL_TAG = "v3.1.1"
+FINAL_PROMOTION_RC_TAG = "v3.1.0-rc.26"
 RELEASE_VERSION = "3.1.0"
+FINAL_DOCUMENTS = (
+    "README.md",
+    "INSTALL.md",
+    "INSTALL_BY_AGENT.md",
+    "MANUAL.md",
+    "docs/release-distribution.md",
+)
 
 
 def git(*args: str) -> str:
@@ -129,26 +138,54 @@ def archive_evidence(tag: str, archive: Path, curated: dict[str, str]) -> list[d
     return evidence
 
 
+def documentation_evidence(tag: str, archive: Path) -> list[dict[str, str]]:
+    """Prove the final archive includes the selected authored installation guides."""
+    prefix = f"pegasus-harness-{tag}/"
+    evidence = []
+    with tarfile.open(archive, "r:gz") as contents:
+        for path in FINAL_DOCUMENTS:
+            member = contents.getmember(prefix + path)
+            payload = contents.extractfile(member)
+            expected = tagged_file(tag, path)
+            if not member.isfile() or payload is None or payload.read() != expected:
+                raise ValueError(f"release archive documentation does not match the selected tag: {path}")
+            evidence.append({"path": path, "sha256": hashlib.sha256(expected).hexdigest()})
+    return evidence
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
+    parser.add_argument("--promotion-rc-tag")
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if not RC_TAG.fullmatch(args.tag):
-        parser.error("--tag must be an RC tag matching v3.1.0-rc.N")
+    is_final = args.tag == FINAL_TAG
+    if not is_final and not RC_TAG.fullmatch(args.tag):
+        parser.error("--tag must be v3.1.1 or an RC tag matching v3.1.0-rc.N")
+    if is_final and args.promotion_rc_tag != FINAL_PROMOTION_RC_TAG:
+        parser.error("v3.1.1 requires --promotion-rc-tag v3.1.0-rc.26")
+    if not is_final and args.promotion_rc_tag:
+        parser.error("--promotion-rc-tag is valid only for v3.1.1")
     if git("cat-file", "-t", args.tag) != "tag":
         parser.error("--tag must name an annotated tag")
+    if is_final and git("cat-file", "-t", args.promotion_rc_tag) != "tag":
+        parser.error("--promotion-rc-tag must name an annotated tag")
     if args.archive.exists():
         parser.error("--archive must name a new source archive")
     commit = git("rev-list", "-n", "1", args.tag)
     tag_object = git("rev-parse", f"{args.tag}^{{tag}}")
+    if is_final and commit != git("rev-list", "-n", "1", args.promotion_rc_tag):
+        parser.error("v3.1.1 and its accepted RC26 promotion input must name the same commit")
     try:
         curated = build_archive(args.tag, args.archive)
         installer = release_installer(args.tag, args.archive)
         evidence = archive_evidence(args.tag, args.archive, curated)
+        docs = documentation_evidence(args.tag, args.archive) if is_final else []
     except (subprocess.CalledProcessError, KeyError, ValueError, tarfile.TarError) as error:
         parser.error(str(error))
+    checksum = args.archive.with_name(args.archive.name + ".sha256")
+    checksum.write_text(checksum_line(args.archive), encoding="utf-8")
     payload = {
         "schema": "pegasus-harness-release/v3",
         "tag": args.tag,
@@ -161,10 +198,15 @@ def main() -> int:
         "archive_evidence": evidence,
         "curated_dependencies": [{"id": "cbm", **curated}],
     }
+    if is_final:
+        payload.update({
+            "release_kind": "final",
+            "promotion_rc_tag": args.promotion_rc_tag,
+            "documentation_evidence": docs,
+            "published_assets": [args.archive.name, checksum.name, args.output.name],
+        })
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    checksum = args.archive.with_name(args.archive.name + ".sha256")
-    checksum.write_text(checksum_line(args.archive), encoding="utf-8")
     print(f"WROTE checksum: {checksum}")
     print(f"WROTE release manifest: {args.output}")
     return 0

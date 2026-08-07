@@ -708,6 +708,7 @@ def source_entry(identifier: str) -> dict:
 def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browser_ready: bool, declined: set[str] | None = None, release_root: Path = ROOT, release_identity: object = None) -> dict:
     declined = declined or set()
     pending = {item["id"] for item in plan_value["dependencies"] if item["action"] == "confirm-required"} - declined
+    pending |= {item["id"] for item in plan_value["remote_mcps"] if item["action"] == "confirm-required"} - declined
     if not pending.issubset(confirmed):
         fail("per-dependency confirmation is required before apply")
     playwright = next(item for item in plan_value["dependencies"] if item["id"] == "playwright")

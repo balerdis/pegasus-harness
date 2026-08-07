@@ -39,6 +39,15 @@ def load_release_builder():
     return module
 
 
+def load_agent_preflight():
+    path = ROOT / "tools" / "agent_install_preflight.py"
+    loader = importlib.machinery.SourceFileLoader("pegasus_agent_preflight", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 def load_acceptance_contract():
     path = ROOT / "scripts" / "acceptance_v3_contract.py"
     loader = importlib.machinery.SourceFileLoader("pegasus_acceptance_contract", str(path))
@@ -51,6 +60,15 @@ def load_acceptance_contract():
 def load_acceptance_matrix():
     path = ROOT / "scripts" / "verify-v3-acceptance-matrix.py"
     loader = importlib.machinery.SourceFileLoader("pegasus_acceptance_matrix", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def load_rc_acceptance_aggregate_validator():
+    path = ROOT / "scripts" / "validate-v3-acceptance-aggregate.py"
+    loader = importlib.machinery.SourceFileLoader("pegasus_rc_acceptance_aggregate_validator", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
@@ -130,6 +148,49 @@ class AdditiveHarnessTests(unittest.TestCase):
     def fixture_command(self, path: Path, output: str, exit_code: int = 0) -> None:
         path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\nexit {exit_code}\n", encoding="utf-8")
         path.chmod(0o755)
+
+    def final_release_fixture(self, root: Path) -> tuple[Path, Path, Path]:
+        tag = "v3.1.1"
+        archive = root / f"pegasus-harness-{tag}.tar.gz"
+        archive_root = f"pegasus-harness-{tag}"
+        documents = {
+            "README.md": b"readme\n",
+            "INSTALL.md": b"install\n",
+            "INSTALL_BY_AGENT.md": b"agent install\n",
+            "MANUAL.md": b"manual\n",
+            "docs/release-distribution.md": b"release distribution\n",
+        }
+        evidence = {
+            "manifests/release-contract.json": b"{}",
+            "manifests/artifact-catalog.json": b"{}",
+            "manifests/cbm-linux-x64-provenance.json": b'{"artifact_sha256":"cbm"}',
+            "dependencies/cbm.tar.gz": b"cbm",
+            **documents,
+        }
+        members = [(self.directory_member(archive_root), b"")]
+        members.extend((self.regular_member(f"{archive_root}/{path}", 0o644), payload) for path, payload in evidence.items())
+        members.extend([
+            (self.regular_member(f"{archive_root}/install.sh"), b"#!/bin/sh\n"),
+            (self.regular_member(f"{archive_root}/bin/pegasus"), b"#!/usr/bin/env python3\n"),
+        ])
+        self.write_archive(archive, members)
+        archive_digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        checksum = archive.with_name(archive.name + ".sha256")
+        checksum.write_text(f"{archive_digest}  {archive.name}\n", encoding="utf-8")
+        manifest = root / "release-manifest.json"
+        manifest.write_text(json.dumps({
+            "schema": "pegasus-harness-release/v3",
+            "release_kind": "final",
+            "tag": tag,
+            "promotion_rc_tag": "v3.1.0-rc.26",
+            "archive_root": archive_root,
+            "assets": [{"name": archive.name, "sha256": archive_digest}],
+            "published_assets": [archive.name, checksum.name, manifest.name],
+            "curated_dependencies": [{"id": "cbm", "path": "dependencies/cbm.tar.gz"}],
+            "archive_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in evidence.items() if path not in documents],
+            "documentation_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in documents.items()],
+        }), encoding="utf-8")
+        return archive, checksum, manifest
 
     def playwright_acceptance_evidence(self, matrix) -> dict:
         return {
@@ -428,11 +489,55 @@ class AdditiveHarnessTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "unsafe|root-controlled|real directory|handoff base"):
                         contract.prepare_handoff(release, target_user, handoff_base)
 
-    def test_root_wrapper_delegates_all_target_writes_to_target_user(self) -> None:
+    def test_current_user_wrapper_rejects_root_and_legacy_target_selection(self) -> None:
         wrapper = (ROOT / "install.sh").read_text(encoding="utf-8")
-        self.assertIn('sudo -n -u "$target_user" -H env "HOME=$target_home"', wrapper)
-        self.assertIn('--home "$target_home"', wrapper)
-        self.assertNotIn('"$python" "$script_dir/bin/pegasus" --target-user "$target_user" --client "$client" plan', wrapper)
+        self.assertIn('[[ $(id -u) -ne 0 ]]', wrapper)
+        self.assertIn('--target-user is no longer supported', wrapper)
+        self.assertIn('current_user=$(id -un)', wrapper)
+        self.assertIn('current_home=${HOME:-}', wrapper)
+        self.assertNotIn('sudo -n -u', wrapper)
+        self.assertNotIn('getent passwd', wrapper)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_id = Path(temporary) / "id"
+            fake_id.write_text("#!/bin/sh\nprintf '0\\n'\n", encoding="utf-8")
+            fake_id.chmod(0o755)
+            root_result = subprocess.run(
+                ["bash", str(ROOT / "install.sh"), "--decline", "cbm"],
+                env=os.environ | {"PATH": f"{temporary}:{os.environ['PATH']}"},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertNotEqual(root_result.returncode, 0)
+        self.assertIn("must not run as root", root_result.stderr)
+
+    def test_current_user_wrapper_help_and_legacy_flag_contract(self) -> None:
+        help_result = subprocess.run(["bash", str(ROOT / "install.sh"), "--help"], text=True, capture_output=True, check=False)
+        self.assertEqual(help_result.returncode, 0)
+        self.assertIn("Usage: ./install.sh", help_result.stdout)
+        self.assertNotIn("--target-user <linux-user>", help_result.stdout)
+
+        legacy_result = subprocess.run(["bash", str(ROOT / "install.sh"), "--target-user", "someone"], text=True, capture_output=True, check=False)
+        self.assertNotEqual(legacy_result.returncode, 0)
+        self.assertIn("no longer supported", legacy_result.stderr)
+
+    def test_current_user_wrapper_runs_plan_then_apply_in_simulated_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            environment = os.environ | {"HOME": str(home), "USER": "ignored-by-wrapper"}
+            result = subprocess.run(
+                ["bash", str(ROOT / "install.sh"), "--client", "opencode",
+                 "--decline", "cbm", "--decline", "engram", "--decline", "playwright", "--decline", "context7"],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertGreaterEqual(result.stdout.count('"schema": "pegasus-harness-plan/v3"'), 1)
+            self.assertTrue((home / ".config" / "opencode" / "opencode.json").is_file())
 
     def test_rc_host_provisioner_is_profile_scoped_pinned_and_explicitly_destructive(self) -> None:
         script = ROOT / "scripts" / "provision-v3-rc-host.sh"
@@ -801,6 +906,171 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertIn(required, workflow)
         for required in ("v3.1.0-rc.N", "evidencia", "v3.1.0", "nunca mutar"):
             self.assertIn(required, docs)
+
+    def test_final_release_builder_records_v311_identity_promotion_and_documentation(self) -> None:
+        builder = load_release_builder()
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary)
+            (fixture / "manifests").mkdir()
+            (fixture / "bin").mkdir()
+            (fixture / "dependencies").mkdir()
+            (fixture / "docs").mkdir()
+            (fixture / "install.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (fixture / "install.sh").chmod(0o755)
+            (fixture / "bin" / "pegasus").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            curated = fixture / "dependencies" / "curated-cbm.tar.gz"
+            curated.write_bytes(b"curated CBM artifact fixture")
+            curated_digest = hashlib.sha256(curated.read_bytes()).hexdigest()
+            (fixture / "manifests" / "release-contract.json").write_text(json.dumps({"schema": "pegasus-harness-release-contract/v3", "version": "3.1.0", "dependencies": [{"id": "cbm", "source_url": "release-bundle:dependencies/curated-cbm.tar.gz"}]}), encoding="utf-8")
+            (fixture / "manifests" / "artifact-catalog.json").write_text(json.dumps({"schema": "pegasus-harness-artifact-catalog/v3", "artifacts": []}), encoding="utf-8")
+            (fixture / "manifests" / "cbm-linux-x64-provenance.json").write_text(json.dumps({"artifact_sha256": curated_digest, "build_command": "canonical", "build_command_sha256": hashlib.sha256(b"canonical").hexdigest()}), encoding="utf-8")
+            for path in ("README.md", "INSTALL.md", "INSTALL_BY_AGENT.md", "MANUAL.md", "docs/release-distribution.md"):
+                (fixture / path).write_text(path + "\n", encoding="utf-8")
+            for command in (("git", "init", "-q"), ("git", "config", "user.email", "tests@example.invalid"), ("git", "config", "user.name", "Pegasus tests"), ("git", "add", "."), ("git", "commit", "-qm", "final fixture"), ("git", "tag", "-am", "accepted RC", "v3.1.0-rc.26"), ("git", "tag", "-am", "final", "v3.1.1")):
+                subprocess.run(command, cwd=fixture, check=True)
+            archive = fixture / "dist" / "pegasus-harness-v3.1.1.tar.gz"
+            output = fixture / "dist" / "release-manifest.json"
+            argv = ["build_release_manifest.py", "--tag", "v3.1.1", "--promotion-rc-tag", "v3.1.0-rc.26", "--archive", str(archive), "--output", str(output)]
+            with patch.object(builder, "ROOT", fixture), patch.object(sys, "argv", argv):
+                self.assertEqual(builder.main(), 0)
+            manifest = json.loads(output.read_text(encoding="utf-8"))
+            checksum = archive.with_name(archive.name + ".sha256")
+            self.assertEqual(manifest["release_kind"], "final")
+            self.assertEqual(manifest["promotion_rc_tag"], "v3.1.0-rc.26")
+            self.assertEqual(manifest["published_assets"], [archive.name, checksum.name, "release-manifest.json"])
+            self.assertEqual({item["path"] for item in manifest["documentation_evidence"]}, {"README.md", "INSTALL.md", "INSTALL_BY_AGENT.md", "MANUAL.md", "docs/release-distribution.md"})
+            self.assertEqual(manifest["assets"], [{"name": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}])
+
+    def test_final_preflight_refuses_mismatched_or_unsafe_release_identity(self) -> None:
+        preflight = load_agent_preflight()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, checksum, manifest = self.final_release_fixture(root)
+            with patch.object(preflight.os, "geteuid", return_value=1000), patch.object(preflight, "discover_executable", return_value="/usr/bin/true"), patch.object(preflight, "probe", return_value="1.2.3"):
+                result = preflight.collect_preflight(archive, checksum, manifest, [])
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["release"]["tag"], "v3.1.1")
+            checksum.write_text("0" * 64 + f"  {archive.name}\n", encoding="utf-8")
+            with self.assertRaisesRegex(preflight.PreflightError, "checksum"):
+                preflight.collect_preflight(archive, checksum, manifest, [])
+            checksum.write_text(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n", encoding="utf-8")
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            payload["tag"] = "v3.1.0-rc.26"
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(preflight.PreflightError, "final identity"):
+                preflight.collect_preflight(archive, checksum, manifest, [])
+            manifest.unlink()
+            manifest.symlink_to(root / "missing.json")
+            with self.assertRaisesRegex(preflight.PreflightError, "regular"):
+                preflight.collect_preflight(archive, checksum, manifest, [])
+
+    def test_rc26_aggregate_validator_refuses_invalid_evidence_before_final_publish(self) -> None:
+        validator = load_rc_acceptance_aggregate_validator()
+        matrix = load_acceptance_matrix()
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as temporary:
+            root = Path(temporary)
+            tag = "v3.1.0-rc.26"
+            archive = root / f"pegasus-harness-{tag}.tar.gz"
+            prefix = f"pegasus-harness-{tag}/"
+            payloads = {
+                "manifests/release-contract.json": b"{}",
+                "manifests/artifact-catalog.json": b"{}",
+                "manifests/cbm-linux-x64-provenance.json": b"{}",
+                "dependencies/cbm.tar.gz": b"cbm",
+            }
+            members = [(self.directory_member(prefix), b"")]
+            members.extend((self.regular_member(prefix + path), payload) for path, payload in payloads.items())
+            members.extend([
+                (self.regular_member(prefix + "bin/pegasus"), b"#!/usr/bin/env python3\n"),
+                (self.regular_member(prefix + "install.sh"), b"#!/bin/sh\n"),
+            ])
+            self.write_archive(archive, members)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            checksum = root / f"{archive.name}.sha256"
+            checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+            manifest = root / "release-manifest.json"
+            manifest.write_text(json.dumps({
+                "schema": "pegasus-harness-release/v3", "tag": tag,
+                "archive_root": prefix[:-1], "assets": [{"name": archive.name, "sha256": digest}],
+                "curated_dependencies": [{"id": "cbm", "path": "dependencies/cbm.tar.gz"}],
+                "archive_evidence": [{"path": path, "sha256": hashlib.sha256(payload).hexdigest()} for path, payload in payloads.items()],
+            }), encoding="utf-8")
+            identity = matrix.expected_identity(archive, checksum, manifest)
+            graph = self.playwright_acceptance_evidence(matrix)
+            aggregate = root / "rc-acceptance-aggregate.json"
+            payload = {
+                "schema": matrix.AGGREGATE_SCHEMA, "status": "PASS", "rc": identity,
+                "profiles": sorted(matrix.PROFILES),
+                "profile_evidence": {profile: {} for profile in matrix.PROFILES},
+                "playwright_graph": {profile: graph for profile in matrix.PLAYWRIGHT_PROFILES},
+                "purpose": "promotion-gate-input-only",
+            }
+            aggregate.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertEqual(validator.validate(aggregate, archive, checksum, manifest), identity)
+            payload["status"] = "FAIL"
+            aggregate.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "PASS"):
+                validator.validate(aggregate, archive, checksum, manifest)
+            payload["status"] = "PASS"
+            payload["rc"] = {**identity, "archive_sha256": "0" * 64}
+            aggregate.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "identity"):
+                validator.validate(aggregate, archive, checksum, manifest)
+
+    def test_agent_preflight_is_json_only_allowlisted_and_redacted(self) -> None:
+        preflight = load_agent_preflight()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, checksum, manifest = self.final_release_fixture(root)
+            commands = {name: root / name for name in ("python", "opencode", "codebase-memory-mcp", "engram", "browser")}
+            for path in commands.values():
+                self.fixture_command(path, "private-token=never-disclose 1.2.3")
+            def discover(name: str) -> str | None:
+                return str(commands["python"]) if name.startswith("python") else (str(commands[name]) if name in commands else None)
+            with patch.object(preflight.os, "geteuid", return_value=1000), patch.object(preflight, "discover_executable", side_effect=discover):
+                result = preflight.collect_preflight(archive, checksum, manifest, ["cbm", "engram", "playwright", "context7"], commands["browser"])
+            rendered = json.dumps(result)
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["mcps"]["context7"]["status"], "decision-required")
+            self.assertNotIn("private-token", rendered)
+            self.assertNotIn("opencode debug config", (ROOT / "tools" / "agent_install_preflight.py").read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(preflight.PreflightError, "duplicate"):
+                preflight.collect_preflight(archive, checksum, manifest, ["cbm", "cbm"])
+            with self.assertRaisesRegex(preflight.PreflightError, "unknown"):
+                preflight.collect_preflight(archive, checksum, manifest, ["unknown"])
+            with patch.object(preflight.os, "geteuid", return_value=0):
+                with self.assertRaisesRegex(preflight.PreflightError, "non-root"):
+                    preflight.collect_preflight(archive, checksum, manifest, [])
+            calls = []
+            with patch.object(preflight.subprocess, "run", side_effect=lambda argv, **_: calls.append(argv) or SimpleNamespace(returncode=0, stdout="1.2.3")):
+                self.assertEqual(preflight.probe("/safe/executable", "--help"), "1.2.3")
+            self.assertEqual(calls, [["/safe/executable", "--help"]])
+
+    def test_agent_preflight_cli_emits_only_redacted_json_on_failure(self) -> None:
+        preflight = load_agent_preflight()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, checksum, manifest = self.final_release_fixture(root)
+            with patch.object(preflight.os, "geteuid", return_value=0), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(preflight.main(["--archive", str(archive), "--checksum", str(checksum), "--release-manifest", str(manifest)]), 2)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload, {"schema": "pegasus-harness-agent-preflight/v3", "status": "blocked", "reason": "a non-root Linux account is required"})
+
+    def test_final_release_workflow_and_agent_docs_define_latest_contract_without_config_dump(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        agent = (ROOT / "INSTALL_BY_AGENT.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
+        release_docs = (ROOT / "docs/release-distribution.md").read_text(encoding="utf-8")
+        for required in ("v3.1.1", "prerelease: false", "pegasus-harness-v3.1.1.tar.gz", "release-manifest.json", "promotion_rc_tag", "accepted_rc26_aggregate_b64", "validate-v3-acceptance-aggregate.py", "gh release download"):
+            self.assertIn(required, workflow)
+        self.assertLess(workflow.index("validate-v3-acceptance-aggregate.py"), workflow.index("softprops/action-gh-release@v2"))
+        for required in ("releases/download/v3.1.1", "releases/latest/download", "agent_install_preflight.py", "cbm", "engram", "playwright", "context7", "/connect", "/models"):
+            self.assertIn(required, agent)
+        self.assertNotIn("opencode debug config", agent)
+        self.assertIn("INSTALL_BY_AGENT.md", readme)
+        self.assertIn("INSTALL_BY_AGENT.md", install)
+        self.assertIn("v3.1.1", release_docs)
 
     def test_safe_archive_extraction_rejects_all_unsafe_member_classes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1436,7 +1706,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
             with self.assertRaisesRegex(RuntimeError, "confirmation"):
                 self.engine.apply(plan, target, set(), browser_ready=True)
-            result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"cbm", "engram", "playwright"})
+            result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"cbm", "engram", "playwright", "context7"})
             self.assertNotIn("opencode-mcp", result["created"])
             self.assertNotIn("opencode-mcp", {entry["id"] for entry in self.engine.load_journal(target)["entries"]})
             self.assertFalse(target["dependencies"].exists())
@@ -1453,7 +1723,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             link = next(item for item in plan["dependencies"] if item["id"] == "cbm")
             self.assertEqual(link["action"], "link-existing")
             self.assertFalse(link["ownership"])
-            result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"engram", "playwright"})
+            result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"engram", "playwright", "context7"})
             self.assertNotIn("opencode-mcp", result["created"])
             self.assertEqual(json.loads(target["opencode_config"].read_text())["mcp"]["codebase-memory-mcp"]["command"], [str(executable)])
             self.assertNotIn("opencode-mcp", {entry["id"] for entry in self.engine.load_journal(target)["entries"]})
@@ -1548,7 +1818,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             target["opencode_config"].parent.mkdir(parents=True)
             target["opencode_config"].write_text(json.dumps({"mcp": {"codebase-memory-mcp": {"type": "local", "command": "bad"}}}), encoding="utf-8")
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
-            result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"engram", "playwright"})
+            result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"engram", "playwright", "context7"})
             self.assertEqual(json.loads(target["opencode_config"].read_text())["mcp"]["codebase-memory-mcp"]["command"], "bad")
             self.assertNotIn("opencode-mcp", result["created"])
             self.assertFalse(target["dependencies"].joinpath("cbm").exists())
@@ -1562,6 +1832,8 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertTrue(context7["provider_managed"])
             self.assertIsNone(context7["integrity"])
             plan["artifacts"] = [item for item in plan["artifacts"] if item["id"] == "opencode-mcp"]
+            with self.assertRaisesRegex(RuntimeError, "confirmation"):
+                self.engine.apply(plan, target, set(), browser_ready=True, declined={"cbm", "engram", "playwright"})
             result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"cbm", "engram", "playwright", "context7"})
             self.assertNotIn("context7-mcp", result["created"])
             self.assertFalse(target["opencode_config"].exists())
@@ -1583,7 +1855,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
             self.assertFalse(self.engine.browser_preflight(plan, target)["ready"])
             with self.assertRaisesRegex(RuntimeError, "browser"):
-                self.engine.apply(plan, target, {"cbm", "engram", "playwright"}, browser_ready=False)
+                self.engine.apply(plan, target, {"cbm", "engram", "playwright"}, browser_ready=False, declined={"context7"})
             self.assertFalse(target["journal"].exists())
             browser = home / ".cache" / "ms-playwright" / "chromium"
             browser.parent.mkdir(parents=True)
@@ -1626,7 +1898,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             target["opencode_config"].parent.mkdir(parents=True)
             target["opencode_config"].write_text(json.dumps({"user": {"keep": True}}), encoding="utf-8")
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
-            result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"cbm", "engram", "playwright"})
+            result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"cbm", "engram", "playwright", "context7"})
             self.assertTrue(result["created"])
             config = json.loads(target["opencode_config"].read_text())
             self.assertEqual(config["user"], {"keep": True})

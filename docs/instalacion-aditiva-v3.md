@@ -5,8 +5,8 @@ Pegasus v3 agrega únicamente los artifacts del catálogo. No reemplaza archivos
 ## Camino rápido
 
 1. Verifique el archivo de release y ejecute `python3 tools/validate_snapshot.py`.
-2. Muestre el plan: `sudo ./install.sh --target-user <linux-user> --client opencode`.
-3. Confirme cada MCP ausente explícitamente o rechácelo. Ejemplo sin dependencias: `--decline cbm --decline engram --decline playwright`.
+2. Muestre el plan: `./install.sh --client opencode` desde la cuenta Linux actual no-root.
+3. Confirme cada MCP ausente explícitamente o rechácelo. Ejemplo sin dependencias: `--decline cbm --decline engram --decline playwright --decline context7`.
 4. Si falta el navegador de Playwright, cancele. Instálelo externamente y vuelva a ejecutar el plan; Pegasus no descarga navegadores.
 
 ## Propiedad y reversión

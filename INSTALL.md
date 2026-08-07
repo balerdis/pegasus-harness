@@ -1,103 +1,68 @@
-# Instalación limpia en una cuenta Linux separada
+# Instalar Pegasus en la cuenta Linux actual
 
-Este es el recorrido seguro para una persona nueva: OpenCode y la elección de proveedor/modelo son de su cuenta; Pegasus solo agrega sus artifacts. No ejecutes el instalador de OpenCode como root ni copies la configuración de otra persona.
+Este recorrido instala Pegasus para la persona que está usando la terminal. No uses `sudo` ni apuntes a otra cuenta: Pegasus agrega artifacts a tu `~/.config` y `~/.local` sin reemplazar lo que ya existe.
 
-## Camino exacto
+## 1. Prerrequisitos
 
-### 1. Abrir una shell de la cuenta destino
-
-Desde una cuenta administradora, reemplazá el nombre y entrá a la cuenta Linux nueva. No continúes si `HOME` no es el home esperado.
-
-```sh
-export PEGASUS_TARGET_USER="NUEVO_USUARIO"
-id "$PEGASUS_TARGET_USER"
-sudo -iu "$PEGASUS_TARGET_USER"
-printf 'usuario=%s home=%s\n' "$(id -un)" "$HOME"
-```
-
-### 2. Instalar y localizar OpenCode como esa persona
-
-El instalador oficial corre dentro de esta shell, por lo que instala para la cuenta destino. No uses `sudo` en este paso.
+Necesitás Python 3.12+ y OpenCode en esta cuenta. Si OpenCode todavía no está disponible, instalalo con el procedimiento oficial como tu usuario actual y verificá el binario:
 
 ```sh
 curl -fsSL https://opencode.ai/install | bash
-
-OPENCODE_BIN="$(command -v opencode || true)"
-if [ -z "$OPENCODE_BIN" ] && [ -x "$HOME/.opencode/bin/opencode" ]; then
-  OPENCODE_BIN="$HOME/.opencode/bin/opencode"
-fi
-if [ -z "$OPENCODE_BIN" ] && [ -x "$HOME/.local/bin/opencode" ]; then
-  OPENCODE_BIN="$HOME/.local/bin/opencode"
-fi
-test -n "$OPENCODE_BIN" || { printf '%s\n' 'OpenCode no quedó en PATH, ~/.opencode/bin ni ~/.local/bin.' >&2; exit 1; }
-"$OPENCODE_BIN" --version
-printf 'OpenCode: %s\n' "$OPENCODE_BIN"
+opencode --version
 ```
 
-La ruta real puede ser `~/.opencode/bin/opencode` o `~/.local/bin/opencode`; el valor de `OPENCODE_BIN` evita asumir una de las dos.
+Si la instalación oficial no deja `opencode` en `PATH`, abrí una shell nueva o seguí la indicación que muestra el instalador oficial antes de continuar.
 
-### 3. Descargar y comprobar el RC publicado que incluye este cambio
+Si pensás confirmar CBM, verificá también su ejecutable local con `codebase-memory-mcp --version` y `codebase-memory-mcp --help`. Para Playwright, instalá un navegador compatible por separado antes de confirmarlo.
 
-El release final no adjunta los tres assets de distribución. Usá únicamente el RC publicado cuyas notas declaren este fallback de modelo; un RC anterior no lo incorpora solo por tener el mismo nombre de producto. Reemplazá `v3.1.0-rc.N` por ese tag antes de ejecutar los comandos.
+## 2. Trabajar desde un checkout verificado
+
+Usá un checkout o archive que hayas verificado. Para un archive, comprobá su checksum antes de extraerlo; en ambos casos, validá el snapshot desde la raíz del checkout:
 
 ```sh
-RELEASE_TAG="v3.1.0-rc.N"
-mkdir -p "$HOME/Downloads/pegasus-$RELEASE_TAG"
-cd "$HOME/Downloads/pegasus-$RELEASE_TAG"
-
-BASE_URL="https://github.com/balerdis/pegasus-harness/releases/download/$RELEASE_TAG"
-ARCHIVE="pegasus-harness-$RELEASE_TAG.tar.gz"
-curl -fL -O "$BASE_URL/$ARCHIVE"
-curl -fL -O "$BASE_URL/$ARCHIVE.sha256"
-sha256sum -c "$ARCHIVE.sha256"
-tar -xzf "$ARCHIVE"
-cd "pegasus-harness-$RELEASE_TAG"
+sha256sum -c pegasus-harness.tar.gz.sha256
+tar -xzf pegasus-harness.tar.gz
+cd pegasus-harness
 python3 tools/validate_snapshot.py
 ```
 
-Seguís únicamente si el checksum termina en `OK` y el validador termina en `PASS`.
+Continuá solamente si el checksum termina en `OK` y el validador termina en `PASS`.
 
-### 4. Aplicar Pegasus con MCPs selectivos
+## 3. Ejecutar el instalador
 
-El comando usa `sudo` solamente para que el wrapper entre de manera explícita a la misma cuenta destino. Arrancá sin MCPs: elegí uno por vez más adelante.
+Desde ese checkout, ejecutá el wrapper como tu usuario actual. Primero muestra y valida el plan; solo después ejecuta el apply.
 
-```sh
-sudo ./install.sh --target-user "$(id -un)" --client opencode \
-  --decline cbm --decline engram --decline playwright --decline context7
-```
+Cada MCP faltante recibe una única decisión: `--confirm <mcp>` lo instala o configura, y `--decline <mcp>` no lo descarga, configura ni registra. No omitas decisiones para MCPs faltantes.
 
-Para sumar uno, confirmá solo ese MCP y rechazá los demás. Por ejemplo, Context7:
+Este ejemplo confirma Context7 y rechaza los otros MCPs opcionales:
 
 ```sh
-sudo ./install.sh --target-user "$(id -un)" --client opencode \
+./install.sh --client opencode \
   --confirm context7 \
   --decline cbm --decline engram --decline playwright
 ```
 
-Revisá el plan antes de aplicar: el target debe ser esta cuenta nueva. Pegasus no instala navegadores; confirmá Playwright únicamente después de preparar un navegador compatible por fuera de Pegasus.
-
-### 5. Verificar, conectar y elegir el modelo
+## 4. Verificar y configurar OpenCode
 
 ```sh
-"$OPENCODE_BIN" debug config
-"$OPENCODE_BIN" debug info
+opencode debug config
+opencode debug info
 test -f "$HOME/.local/share/pegasus-harness/journal-v3.json" && printf '%s\n' 'journal de Pegasus presente'
-
-mkdir -p "$HOME/practica/ejemplo"
-cd "$HOME/practica/ejemplo"
-"$OPENCODE_BIN"
+opencode
 ```
 
-Dentro de OpenCode, ejecutá `/connect` para configurar las credenciales del proveedor de esta cuenta. Después ejecutá `/models` para elegir el modelo. Hacé ambas cosas antes de pedir trabajo a Pegasus. Pegasus no contiene credenciales ni un `model` por agente: el modelo elegido queda bajo control de esta cuenta. Si querés un default persistente, configurá el `model` global en tu propio `~/.config/opencode/opencode.json`; no hace falta editar los agentes de Pegasus.
+Dentro de OpenCode, ejecutá `/connect` para configurar las credenciales del proveedor y `/models` para elegir el modelo. Pegasus no maneja ninguno de los dos.
 
-## Control final
+## Lo que sigue bajo su control
 
-- [ ] OpenCode fue instalado y ejecutado como la cuenta destino, no root.
-- [ ] Se verificaron el archive, checksum y snapshot extraído antes del apply.
-- [ ] Se confirmó como máximo el MCP que se decidió usar.
-- [ ] `opencode debug config` reconoce el payload y el journal existe.
-- [ ] `/connect` configuró las credenciales del proveedor antes del primer uso de Pegasus.
-- [ ] `/models` seleccionó el modelo antes del primer uso de Pegasus.
-- [ ] Proveedor, credenciales y modelo siguen bajo control de la cuenta destino.
+| Tema | Cómo trabaja Pegasus |
+| --- | --- |
+| OpenCode | Usted instala, actualiza y configura el cliente anfitrión. Pegasus no lo hace por usted. |
+| Archivos y claves de configuración existentes | Se detectan y se preservan. Un collision se informa; no se sobreescribe. |
+| MCPs opcionales | Cada MCP faltante requiere su propia confirmación. Rechazarlo no deja descarga, clave de configuración ni huérfano. |
+| Credenciales, proveedores y modelos | Nunca se distribuyen ni se imponen acá. La persona configura las credenciales del proveedor con /connect y selecciona el modelo con /models. |
+| Rollback | El comando uninstall elimina solamente artifacts sin cambios que Pegasus creó y registró en su journal. |
 
 Para el uso diario, seguí [MANUAL.md](MANUAL.md). Para la política de ownership y rollback, consultá [docs/instalacion-aditiva-v3.md](docs/instalacion-aditiva-v3.md).
+
+Si un agente te asiste, usá el preflight read-only y el registro de decisiones de [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md) antes de recibir comandos de apply. Esa guía no lee ni imprime tu configuración o credenciales de OpenCode.

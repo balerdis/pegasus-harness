@@ -4,9 +4,10 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./install.sh --target-user <linux-user> [--client opencode|claude-code|all] [--confirm cbm|engram|playwright|context7] [--decline cbm|engram|playwright|context7]
+Usage: ./install.sh [--client opencode|claude-code|all] [--confirm cbm|engram|playwright|context7] [--decline cbm|engram|playwright|context7]
 
-Prints and applies an additive plan only for the named non-root Linux user.
+Runs the additive plan and apply flow for the current non-root Linux user.
+Each missing optional MCP requires exactly one --confirm or --decline decision.
 --client defaults to all.
 EOF
 }
@@ -16,7 +17,6 @@ fail() {
   exit 1
 }
 
-target_user=''
 client='all'
 confirm=()
 decline=()
@@ -24,9 +24,7 @@ decline=()
 while (($#)); do
   case "$1" in
     --target-user)
-      (($# >= 2)) || fail '--target-user requires a Linux user name'
-      target_user=$2
-      shift 2
+      fail '--target-user is no longer supported; run install.sh directly from the Linux account that will use Pegasus'
       ;;
     --client)
       (($# >= 2)) || fail '--client requires opencode, claude-code, or all'
@@ -49,16 +47,12 @@ while (($#)); do
   esac
 done
 
-[[ $(id -u) -eq 0 ]] || fail 'install.sh must be run as root with sudo from a verified, extracted release archive'
-[[ -n $target_user ]] || fail '--target-user <linux-user> is required'
+[[ $(id -u) -ne 0 ]] || fail 'install.sh must not run as root; open a shell as the Linux user who will use Pegasus and run it directly'
 case "$client" in opencode|claude-code|all) ;; *) fail "unsupported client: $client" ;; esac
 
-target_uid=$(id -u -- "$target_user" 2>/dev/null) || fail "target user does not exist: $target_user"
-[[ $target_uid -ne 0 ]] || fail '--target-user must be a non-root Linux user'
-target_home=$(getent passwd -- "$target_user" | cut -d: -f6)
-[[ -n $target_home && -d $target_home ]] || fail "target user home is unavailable: $target_user"
-command -v sudo >/dev/null 2>&1 || fail 'sudo is required to enter the target user account'
-sudo -n -u "$target_user" -H true >/dev/null 2>&1 || fail "sudo cannot run commands as target user: $target_user"
+current_user=$(id -un)
+current_home=${HOME:-}
+[[ -n $current_home && -d $current_home && -O $current_home ]] || fail 'HOME must be an existing directory owned by the current Linux user'
 
 python=''
 reported_versions=()
@@ -75,6 +69,8 @@ done
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 [[ -f $script_dir/bin/pegasus ]] || fail 'release archive is incomplete: bin/pegasus is missing'
+[[ -f $script_dir/tools/validate_snapshot.py ]] || fail 'release archive is incomplete: tools/validate_snapshot.py is missing'
 
-sudo -n -u "$target_user" -H env "HOME=$target_home" "$python" "$script_dir/bin/pegasus" --release-root "$script_dir" --home "$target_home" --target-user "$target_user" --client "$client" plan
-exec sudo -n -u "$target_user" -H env "HOME=$target_home" "$python" "$script_dir/bin/pegasus" --release-root "$script_dir" --home "$target_home" --target-user "$target_user" --client "$client" "${confirm[@]}" "${decline[@]}" apply
+"$python" "$script_dir/tools/validate_snapshot.py"
+"$python" "$script_dir/bin/pegasus" --release-root "$script_dir" --home "$current_home" --target-user "$current_user" --client "$client" plan
+exec "$python" "$script_dir/bin/pegasus" --release-root "$script_dir" --home "$current_home" --target-user "$current_user" --client "$client" "${confirm[@]}" "${decline[@]}" apply

@@ -4,17 +4,16 @@ Este manual sirve para preparar OpenCode y sumar Pegasus sin entregar el control
 
 ## Antes de empezar
 
-Necesitás una cuenta Linux no-root para usar como destino y permisos para ejecutar `sudo` hacia esa cuenta. Pegasus corre el wrapper como root, pero el trabajo de aplicación ocurre dentro del home de la persona indicada.
+Necesitás una cuenta Linux no-root: Pegasus se ejecuta directamente desde esa cuenta y aplica sus artifacts en su home actual.
 
 | Requisito | Cómo comprobarlo | Para qué sirve |
 | --- | --- | --- |
 | OpenCode instalado por fuera de Pegasus | `~/.opencode/bin/opencode --version` o `~/.local/bin/opencode --version` | El cliente anfitrión no se instala desde este repo. |
 | Python 3.12 o superior | `python3 --version` | Ejecuta el motor de Pegasus. |
-| `sudo` | `sudo -n -u <linux-user> -H true` | Permite entrar de forma explícita a la cuenta destino. |
 | CBM, si lo vas a usar | `~/.local/bin/codebase-memory-mcp --version` y `--help` | Pegasus valida que el binario local responda antes de configurarlo. |
 | Navegador compatible, si confirmás Playwright | revisión externa antes de apply | Pegasus no descarga navegadores. |
 
-No uses root como `--target-user`. No corras Pegasus sobre una cuenta que no querés que reciba sus propios artifacts en `~/.config` y `~/.local`.
+No uses root. No corras Pegasus desde una cuenta que no querés que reciba sus propios artifacts en `~/.config` y `~/.local`.
 
 ## Instalar OpenCode
 
@@ -43,7 +42,7 @@ sha256sum -c pegasus-harness-v3.1.0-rc.N.tar.gz.sha256
 tar -xzf pegasus-harness-v3.1.0-rc.N.tar.gz
 cd pegasus-harness-v3.1.0-rc.N
 
-sudo ./install.sh --target-user <linux-user> --client opencode \
+./install.sh --client opencode \
   --decline cbm --decline engram --decline playwright --decline context7
 ```
 
@@ -52,7 +51,7 @@ Para habilitar una integración ausente, cambiá solo esa decisión por `--confi
 Ejemplo: confirmar CBM y rechazar el resto.
 
 ```sh
-sudo ./install.sh --target-user <linux-user> --client opencode \
+./install.sh --client opencode \
   --confirm cbm \
   --decline engram --decline playwright --decline context7
 ```
