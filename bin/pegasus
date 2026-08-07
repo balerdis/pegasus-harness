@@ -451,8 +451,26 @@ def probe_dependency(item: dict, destination: Path) -> None:
         fail(f"dependency probe failed for {item['id']}")
 
 
+def npm_isolation_environment(cwd: Path) -> dict[str, str]:
+    """Create npm 24-compatible config isolation inside the disposable staging directory."""
+    user_config = cwd / ".npmrc.userconfig"
+    global_config = cwd / ".npmrc.globalconfig"
+    user_config.write_text("", encoding="utf-8")
+    global_config.write_text("", encoding="utf-8")
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(cwd),
+        "NPM_CONFIG_CACHE": str(cwd / ".npm-cache"),
+        "NPM_CONFIG_REGISTRY": "https://registry.npmjs.org/",
+        "NPM_CONFIG_USERCONFIG": str(user_config),
+        "NPM_CONFIG_GLOBALCONFIG": str(global_config),
+        "NPM_CONFIG_IGNORE_SCRIPTS": "true",
+        "npm_config_registry": "https://registry.npmjs.org/",
+    }
+
+
 def run_npm(command: list[str], cwd: Path) -> None:
-    environment = {"PATH": os.environ.get("PATH", ""), "HOME": str(cwd), "NPM_CONFIG_REGISTRY": "https://registry.npmjs.org/", "NPM_CONFIG_USERCONFIG": os.devnull, "NPM_CONFIG_GLOBALCONFIG": os.devnull, "NPM_CONFIG_IGNORE_SCRIPTS": "true", "npm_config_registry": "https://registry.npmjs.org/"}
+    environment = npm_isolation_environment(cwd)
     result = subprocess.run(command, cwd=cwd, env=environment, text=True, capture_output=True, timeout=120, check=False)
     if result.returncode:
         fail(f"npm ci failed: {(result.stderr or result.stdout).strip()}")

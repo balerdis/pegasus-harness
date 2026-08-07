@@ -146,11 +146,26 @@ class AdditiveHarnessTests(unittest.TestCase):
     def fake_npm(self, path: Path, mode: str = "success") -> None:
         path.write_text(
             "#!/usr/bin/env python3\n"
-            "import pathlib, sys\n"
+            "import json, os, pathlib, sys\n"
             "root = pathlib.Path.cwd()\n"
             "(root.parent / 'npm-argv.txt').write_text(' '.join(sys.argv[1:]))\n"
+            "user_config = pathlib.Path(os.environ['NPM_CONFIG_USERCONFIG'])\n"
+            "global_config = pathlib.Path(os.environ['NPM_CONFIG_GLOBALCONFIG'])\n"
+            "cache = pathlib.Path(os.environ['NPM_CONFIG_CACHE'])\n"
+            "cache.mkdir(parents=True, exist_ok=True)\n"
+            "(root.parent / 'npm-environment.json').write_text(json.dumps({\n"
+            "    'registry': os.environ.get('NPM_CONFIG_REGISTRY'),\n"
+            "    'ignore_scripts': os.environ.get('NPM_CONFIG_IGNORE_SCRIPTS'),\n"
+            "    'cache': str(cache),\n"
+            "    'user_config': str(user_config),\n"
+            "    'global_config': str(global_config),\n"
+            "    'config_collision': user_config == global_config,\n"
+            "    'configs_exist': user_config.is_file() and global_config.is_file(),\n"
+            "    'proxy_variables': sorted(name for name in os.environ if 'proxy' in name.lower()),\n"
+            "}))\n"
             f"mode = {mode!r}\n"
             "if mode == 'fail': sys.exit(23)\n"
+            "if mode == 'config-collision' and (user_config == global_config or not user_config.is_file() or not global_config.is_file()): sys.exit(24)\n"
             "if mode == 'lock-drift': (root / 'package-lock.json').write_text('{}')\n"
             "if mode in {'wrong-registry', 'wrong-sri'}:\n"
             "    lock = __import__('json').loads((root / 'package-lock.json').read_text())\n"
@@ -950,8 +965,26 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertEqual((destination.parent / "npm-argv.txt").read_text(), "ci --ignore-scripts")
             source = SCRIPT.read_text(encoding="utf-8")
             self.assertIn('"NPM_CONFIG_REGISTRY": "https://registry.npmjs.org/"', source)
-            self.assertIn('"NPM_CONFIG_USERCONFIG": os.devnull', source)
+            self.assertIn('"NPM_CONFIG_USERCONFIG": str(user_config)', source)
+            self.assertIn('"NPM_CONFIG_GLOBALCONFIG": str(global_config)', source)
             self.assertIn('"NPM_CONFIG_IGNORE_SCRIPTS": "true"', source)
+
+    def test_playwright_npm_uses_distinct_disposable_configs_for_npm_24(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            npm, destination = root / "npm", root / "dependencies" / "playwright"
+            self.fake_npm(npm, "config-collision")
+            item = copy.deepcopy(next(item for item in self.engine.load_contract()["dependencies"] if item["id"] == "playwright"))
+            self.engine.install_playwright(item, destination, str(npm))
+            environment = json.loads((destination.parent / "npm-environment.json").read_text(encoding="utf-8"))
+            self.assertEqual(environment["registry"], "https://registry.npmjs.org/")
+            self.assertEqual(environment["ignore_scripts"], "true")
+            self.assertFalse(environment["config_collision"])
+            self.assertTrue(environment["configs_exist"])
+            self.assertEqual(environment["proxy_variables"], [])
+            self.assertNotEqual(environment["user_config"], os.devnull)
+            self.assertNotEqual(environment["global_config"], os.devnull)
+            self.assertFalse(any(destination.parent.glob(".playwright-npm-*")))
 
     def test_playwright_npm_failures_leave_no_runtime_or_staging(self) -> None:
         item = copy.deepcopy(next(item for item in self.engine.load_contract()["dependencies"] if item["id"] == "playwright"))
@@ -984,6 +1017,26 @@ class AdditiveHarnessTests(unittest.TestCase):
                 self.assertFalse(any(target["dependencies"].parent.glob(".playwright-npm-*")))
                 self.assertFalse(target["opencode_config"].exists())
                 self.assertFalse(target["journal"].exists())
+
+    def test_playwright_npm_failure_leaves_no_artifact_config_or_journal_residue(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = self.temporary_target(root / "home")
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            npm = root / "npm"
+            self.fake_npm(npm, "fail")
+            install_playwright = self.engine.install_playwright
+            with patch.object(self.engine, "install_playwright", side_effect=lambda item, destination: install_playwright(item, destination, str(npm))):
+                with self.assertRaisesRegex(RuntimeError, "npm ci failed"):
+                    self.engine.apply(plan, target, {"playwright"}, browser_ready=True,
+                                      declined={"cbm", "engram", "context7"})
+            self.assertFalse((target["dependencies"] / "playwright").exists())
+            self.assertFalse(any(target["dependencies"].parent.glob(".playwright-npm-*")))
+            self.assertFalse(target["opencode_config"].exists())
+            self.assertFalse(target["journal"].exists())
+            environment = json.loads((target["dependencies"] / "npm-environment.json").read_text(encoding="utf-8"))
+            for path in (environment["user_config"], environment["global_config"], environment["cache"]):
+                self.assertFalse(Path(path).exists())
 
     def test_playwright_rejects_lifecycle_scripts_and_lock_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
