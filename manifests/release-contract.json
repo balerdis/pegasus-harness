@@ -17,6 +17,7 @@
       "integrity": {"sha256": "192eb13dbbd858e0363e4cd24b889bd7c08381d81553a6bb863772d7450938f8", "provenance": "manifests/cbm-linux-x64-provenance.json"},
       "install_argv": ["pegasus-extract", "cbm", "0.9.0"],
       "runtime_argv": ["{dependency}/bin/codebase-memory-mcp"],
+      "probe_argv": ["{dependency}/bin/codebase-memory-mcp", "--version"],
       "config_key": "codebase-memory-mcp"
     },
     {
@@ -30,6 +31,7 @@
       },
       "install_argv": ["pegasus-download", "engram", "1.20.0"],
       "runtime_argv": ["{dependency}/engram", "mcp", "--tools=agent"],
+      "probe_argv": ["{dependency}/engram", "--version"],
       "config_key": "engram"
     },
     {
@@ -39,6 +41,7 @@
       "integrity": {"package": "manifests/playwright-mcp-package.json", "lockfile": "manifests/playwright-mcp-package-lock.json"},
       "install_argv": ["npm", "ci", "--ignore-scripts"],
       "runtime_argv": ["node", "{dependency}/@playwright/mcp/cli.js"],
+      "probe_argv": ["node", "{dependency}/@playwright/mcp/cli.js", "--version"],
       "config_key": "playwright"
     }
   ]

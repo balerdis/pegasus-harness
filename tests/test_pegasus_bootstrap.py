@@ -87,23 +87,27 @@ class AdditiveHarnessTests(unittest.TestCase):
         item["integrity"] = {"sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
         return item
 
-    def engram_archive_members(self) -> list[tuple[tarfile.TarInfo, bytes]]:
+    def engram_archive_members(self, version: str = "1.20.0", standalone_probe: bool = False) -> list[tuple[tarfile.TarInfo, bytes]]:
+        guard = "[ \"$#\" -eq 1 ] && [ \"$1\" = \"--version\" ] || exit 17\n" if standalone_probe else ""
         return [
             (self.regular_member("CHANGELOG.md", 0o644), b"changelog\n"),
             (self.regular_member("LICENSE", 0o644), b"license\n"),
             (self.regular_member("README.md", 0o644), b"readme\n"),
-            (self.regular_member("engram", 0o755), b"#!/bin/sh\nprintf 'engram 1.20.0\\n'\n"),
+            (self.regular_member("engram", 0o755), f"#!/bin/sh\n{guard}printf 'engram {version}\\n'\n".encode()),
         ]
 
     def extracted_rc_bundle_fixture(self, root: Path) -> tuple[Path, Path]:
         bundle = root / "codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz"
         self.write_archive(bundle, [(self.regular_member("bin/codebase-memory-mcp"), b"#!/bin/sh\nprintf 'codebase-memory-mcp 0.9.0\\n'\n")])
+        engram_bundle = root / "engram_1.20.0_linux_amd64.tar.gz"
+        self.write_archive(engram_bundle, self.engram_archive_members(standalone_probe=True))
         archive = root / "pegasus-harness-v3.1.0-rc.1.tar.gz"
         prefix = "pegasus-harness-v3.1.0-rc.1"
         self.write_archive(archive, [
             (self.directory_member(prefix), b""),
             (self.directory_member(prefix + "/dependencies"), b""),
             (self.regular_member(prefix + "/dependencies/codebase-memory-mcp-v0.9.0-linux-x86_64.tar.gz"), bundle.read_bytes()),
+            (self.regular_member(prefix + "/dependencies/engram_1.20.0_linux_amd64.tar.gz"), engram_bundle.read_bytes()),
             (self.regular_member(prefix + "/manifests/release-contract.json"), (ROOT / "manifests/release-contract.json").read_bytes()),
             (self.regular_member(prefix + "/manifests/artifact-catalog.json"), (ROOT / "manifests/artifact-catalog.json").read_bytes()),
         ])
@@ -717,6 +721,20 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertFalse(target["journal"].exists())
             self.assertFalse((target["dependencies"] / "cbm").exists())
 
+    def test_extracted_rc_fixture_uses_standalone_engram_probe_without_changing_runtime_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root, _ = self.extracted_rc_bundle_fixture(root)
+            contract = json.loads((release_root / "manifests" / "release-contract.json").read_text(encoding="utf-8"))
+            item = next(dependency for dependency in contract["dependencies"] if dependency["id"] == "engram")
+            archive = release_root / "dependencies" / "engram_1.20.0_linux_amd64.tar.gz"
+            item["integrity"] = {"sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
+            self.assertEqual(item["runtime_argv"], ["{dependency}/engram", "mcp", "--tools=agent"])
+            self.assertEqual(item["probe_argv"], ["{dependency}/engram", "--version"])
+            destination = root / "dependencies" / "engram"
+            self.engine.install_dependency(item, destination, archive, release_root)
+            self.assertTrue((destination / "engram").is_file())
+
     def test_external_rc_apply_rejects_missing_or_wrong_identity_without_writes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -901,6 +919,15 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertFalse(destination.exists())
             self.assertFalse(destination.with_name(destination.name + ".partial").exists())
             self.assertFalse(destination.with_name(destination.name + ".download.partial").exists())
+            engram_archive = root / "engram.tar.gz"
+            self.write_archive(engram_archive, self.engram_archive_members("1.20.1", standalone_probe=True))
+            engram_item = self.fixture_dependency("engram", engram_archive)
+            engram_destination = root / "engram"
+            with self.assertRaisesRegex(RuntimeError, "probe"):
+                self.engine.install_dependency(engram_item, engram_destination, engram_archive)
+            self.assertFalse(engram_destination.exists())
+            self.assertFalse(engram_destination.with_name(engram_destination.name + ".partial").exists())
+            self.assertFalse(engram_destination.with_name(engram_destination.name + ".download.partial").exists())
 
     def test_release_integrity_records_are_real_and_complete(self) -> None:
         provenance = json.loads((ROOT / "manifests" / "cbm-linux-x64-provenance.json").read_text())

@@ -120,6 +120,8 @@ def main() -> int:
                 "members": ["CHANGELOG.md", "LICENSE", "README.md", "engram"],
                 "executables": {"engram": "0755"}}:
             errors.append("invalid fixed Engram Linux amd64 archive layout")
+        if dependency.get("id") == "engram" and dependency.get("probe_argv") != ["{dependency}/engram", "--version"]:
+            errors.append("Engram must use a standalone version probe")
     if errors:
         print("FAIL\n" + "\n".join(errors))
         return 1
