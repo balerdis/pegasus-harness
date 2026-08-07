@@ -26,6 +26,8 @@ El commit que contendrá el release final (incluidos los cambios posteriores a R
 
 El manifest final registra `release_kind: final`, `promotion_rc_tag: v3.1.1-rc.1`, tag object, commit, digest del archive, installer y evidencia de `README.md`, `INSTALL.md`, `INSTALL_BY_AGENT.md`, `MANUAL.md` y esta guía. El release de GitHub debe ser no-draft y `prerelease: false`; sólo así GitHub puede ofrecer el contrato `latest`.
 
+El smoke manual de `v3.1.1-rc.1` usa exclusivamente los tres assets versionados de ese RC. La preflight acepta el RC sólo si el tag, archive, checksum, manifest, raíz y evidencia del archive son el mismo conjunto inmutable. Ese smoke no habilita `latest` ni sustituye la distribución final. La instalación/distribución final usa sólo `v3.1.1`; las rutas versionada y `latest` deben conservar bytes, checksum y manifest idénticos.
+
 Después de publicar, descargá cada asset por sus dos rutas y compará bytes antes de reportar distribución lista. No ejecutes esta verificación desde tests ni como parte de la aceptación:
 
 ```text

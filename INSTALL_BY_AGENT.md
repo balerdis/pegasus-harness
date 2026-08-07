@@ -2,9 +2,19 @@
 
 Este instructivo es para un agente que asiste a una persona en la cuenta Linux actual. El agente inspecciona y propone; la persona decide los MCPs y mantiene el control de credenciales y modelos.
 
-## Release final y preflight privado
+## Smoke manual RC y distribución final
 
-Usá exclusivamente los tres assets del release final `v3.1.1`. Los locators inmutables son:
+Para un smoke manual pre-release, usá sólo el conjunto inmutable y coincidente de `v3.1.1-rc.1`:
+
+```text
+https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1-rc.1/pegasus-harness-v3.1.1-rc.1.tar.gz
+https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1-rc.1/pegasus-harness-v3.1.1-rc.1.tar.gz.sha256
+https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1-rc.1/release-manifest.json
+```
+
+El preflight acepta ese RC únicamente cuando tag, basename del archive, checksum, manifest, raíz del archive y evidencia interna coinciden. Es una ruta de smoke manual: nunca la presentes como `latest`, no combines assets RC/finales y no la uses como distribución final general.
+
+Para instalar la distribución final, usá exclusivamente los tres assets de `v3.1.1`. Los locators inmutables son:
 
 ```text
 https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1/pegasus-harness-v3.1.1.tar.gz
@@ -14,16 +24,32 @@ https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1/release-man
 
 Después de que el release final no-prerelease esté publicado, los mismos basenames deben resolver por `https://github.com/balerdis/pegasus-harness/releases/latest/download/<asset>`. Descargá ambos conjuntos sólo para la verificación operatoria posterior: cada par debe tener el mismo basename, bytes, checksum y `tag: v3.1.1`. No trates un RC ni un redirect sin esa comparación como `latest` válido.
 
-Antes de mostrar comandos de instalación o apply, ejecutá únicamente el preflight read-only sobre los tres assets seleccionados. Su salida es un único JSON allowlisted; no lee ni muestra configuraciones de OpenCode, valores de entorno, rutas de configuración, credenciales o tokens.
+Antes de mostrar comandos de instalación o apply, ejecutá únicamente el preflight read-only sobre los tres assets seleccionados. Descubrí primero el binario de OpenCode en la shell real de la cuenta; no supongas que una shell de login tenga el mismo `PATH`. Si la cuenta lo configura mediante un profile conocido, la persona puede abrir/sourciar ese profile en su propia shell y luego capturar el resultado de `command -v opencode`.
 
 ```sh
+# Elegí el tag del conjunto de assets que descargaste: RC para smoke o final para distribución.
+RELEASE_TAG="v3.1.1-rc.1"
+ARCHIVE="pegasus-harness-${RELEASE_TAG}.tar.gz"
+CHECKSUM="${ARCHIVE}.sha256"
+RELEASE_MANIFEST="release-manifest.json"
+
+test -f "$ARCHIVE" -a -f "$CHECKSUM" -a -f "$RELEASE_MANIFEST"
+
+OPENCODE_BIN="$(command -v opencode || true)"
+[ -n "$OPENCODE_BIN" ] || OPENCODE_BIN="$HOME/.opencode/bin/opencode"
+[ -x "$OPENCODE_BIN" ] || OPENCODE_BIN="$HOME/.local/bin/opencode"
+test -x "$OPENCODE_BIN"
+
 python3 tools/agent_install_preflight.py \
-  --archive pegasus-harness-v3.1.1.tar.gz \
-  --checksum pegasus-harness-v3.1.1.tar.gz.sha256 \
-  --release-manifest release-manifest.json \
+  --archive "$ARCHIVE" \
+  --checksum "$CHECKSUM" \
+  --release-manifest "$RELEASE_MANIFEST" \
+  --opencode "$OPENCODE_BIN" \
   --mcp cbm --mcp engram --mcp playwright --mcp context7 \
   --browser /absolute/path/to/browser
 ```
+
+Su salida es un único JSON allowlisted; no lee ni muestra configuraciones de OpenCode, valores de entorno, rutas de configuración, credenciales o tokens.
 
 Detenete si el JSON no devuelve `"status": "ready"`. El preflight comprueba una cuenta no-root, Python/OpenCode, identidad del archive/checksum/manifest, snapshot contenido y sólo probes fijos de ejecutables elegidos. Context7 queda como confirmación remota: no se inspecciona configuración para decidirlo. El navegador sólo se exige si se solicita Playwright.
 

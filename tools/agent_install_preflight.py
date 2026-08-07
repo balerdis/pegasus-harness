@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only, JSON-only validation for a selected Pegasus v3.1.1 release."""
+"""Read-only, JSON-only validation for selected final or RC Pegasus assets."""
 from __future__ import annotations
 
 import argparse
@@ -58,19 +58,31 @@ def validate_assets(archive: Path, checksum: Path, manifest_path: Path) -> dict:
     fields = checksum.read_text(encoding="utf-8").strip().split()
     if len(fields) != 2 or fields[1].lstrip("*") != archive.name or fields[0] != digest:
         raise PreflightError("checksum does not match the supplied archive")
-    root = f"pegasus-harness-{FINAL_TAG}"
-    if (manifest.get("schema") != "pegasus-harness-release/v3" or manifest.get("release_kind") != "final"
-            or manifest.get("tag") != FINAL_TAG or manifest.get("promotion_rc_tag") != PROMOTION_RC_TAG
-            or manifest.get("archive_root") != root
-            or manifest.get("assets") != [{"name": archive.name, "sha256": digest}]
-            or manifest.get("published_assets") != [archive.name, checksum.name, manifest_path.name]):
-        raise PreflightError("final identity does not describe the supplied assets")
-    expected_docs = manifest.get("documentation_evidence")
-    if not isinstance(expected_docs, list) or {item.get("path") for item in expected_docs if isinstance(item, dict)} != set(DOCUMENTS):
-        raise PreflightError("final manifest lacks required documentation evidence")
-    expected = list(manifest.get("archive_evidence", [])) + expected_docs
+    tag = manifest.get("tag")
+    if manifest.get("release_kind") == "final":
+        root = f"pegasus-harness-{FINAL_TAG}"
+        if (manifest.get("schema") != "pegasus-harness-release/v3" or tag != FINAL_TAG
+                or manifest.get("promotion_rc_tag") != PROMOTION_RC_TAG or manifest.get("archive_root") != root
+                or manifest.get("assets") != [{"name": archive.name, "sha256": digest}]
+                or manifest.get("published_assets") != [archive.name, checksum.name, manifest_path.name]):
+            raise PreflightError("final identity does not describe the supplied assets")
+        expected_docs = manifest.get("documentation_evidence")
+        if not isinstance(expected_docs, list) or {item.get("path") for item in expected_docs if isinstance(item, dict)} != set(DOCUMENTS):
+            raise PreflightError("final manifest lacks required documentation evidence")
+        expected = list(manifest.get("archive_evidence", [])) + expected_docs
+        identity = "final"
+    elif tag == PROMOTION_RC_TAG:
+        root = f"pegasus-harness-{PROMOTION_RC_TAG}"
+        if (manifest.get("schema") != "pegasus-harness-release/v3" or manifest.get("release_kind") is not None
+                or manifest.get("promotion_rc_tag") is not None or manifest.get("archive_root") != root
+                or manifest.get("assets") != [{"name": archive.name, "sha256": digest}]):
+            raise PreflightError("RC identity does not describe the supplied assets")
+        expected = list(manifest.get("archive_evidence", []))
+        identity = "RC"
+    else:
+        raise PreflightError("release tag is not an accepted immutable final or RC tag")
     if not expected or any(not isinstance(item, dict) for item in expected):
-        raise PreflightError("final manifest lacks archive evidence")
+        raise PreflightError(f"{identity} manifest lacks archive evidence")
     try:
         with tarfile.open(archive, "r:gz") as contents:
             members = contents.getmembers()
@@ -79,7 +91,7 @@ def validate_assets(archive: Path, checksum: Path, manifest_path: Path) -> dict:
             if any(member.mode & ~0o777 for member in members):
                 raise PreflightError("archive contains unsafe permission bits")
             if not any(member.name.rstrip("/") == root and member.isdir() for member in members):
-                raise PreflightError("archive has no final root")
+                raise PreflightError(f"archive has no {identity} root")
             for member in members:
                 if member.name.rstrip("/") != root and (not member.name.startswith(root + "/") or ".." in member.name.split("/")):
                     raise PreflightError("archive has an unexpected top-level path")
@@ -87,16 +99,18 @@ def validate_assets(archive: Path, checksum: Path, manifest_path: Path) -> dict:
                 member = contents.getmember(f"{root}/{item['path']}")
                 payload = contents.extractfile(member)
                 if not member.isfile() or payload is None or hashlib.sha256(payload.read()).hexdigest() != item.get("sha256"):
-                    raise PreflightError("archive evidence does not match the final manifest")
+                    raise PreflightError(f"archive evidence does not match the {identity} manifest")
     except (KeyError, tarfile.TarError) as error:
-        raise PreflightError("archive cannot satisfy the final manifest") from error
-    return {"tag": FINAL_TAG, "archive": archive.name, "sha256": digest}
+        raise PreflightError(f"archive cannot satisfy the {identity} manifest") from error
+    return {"tag": tag, "archive": archive.name, "sha256": digest}
 
 
-def executable(name: str, flag: str = "--version") -> dict[str, str]:
-    path = discover_executable(name)
+def executable(name: str, flag: str = "--version", supplied_path: Path | None = None) -> dict[str, str]:
+    path = str(supplied_path) if supplied_path is not None else discover_executable(name)
     if not path:
         raise PreflightError("required executable is unavailable")
+    if supplied_path is not None and not supplied_path.is_absolute():
+        raise PreflightError("supplied executable path must be absolute")
     return {"path": path, "version": probe(path, flag)}
 
 
@@ -109,7 +123,8 @@ def browser_executable(browser: Path | None) -> dict[str, str]:
     return {"path": str(browser), "version": probe(str(browser))}
 
 
-def collect_preflight(archive: Path, checksum: Path, manifest: Path, mcps: list[str], browser: Path | None = None) -> dict:
+def collect_preflight(archive: Path, checksum: Path, manifest: Path, mcps: list[str], browser: Path | None = None,
+                      opencode: Path | None = None) -> dict:
     if os.geteuid() == 0:
         raise PreflightError("a non-root Linux account is required")
     if len(set(mcps)) != len(mcps):
@@ -118,7 +133,7 @@ def collect_preflight(archive: Path, checksum: Path, manifest: Path, mcps: list[
     if unknown:
         raise PreflightError("unknown MCP request")
     release = validate_assets(archive, checksum, manifest)
-    executables = {"python": executable(Path(sys.executable).name), "opencode": executable("opencode")}
+    executables = {"python": executable(Path(sys.executable).name), "opencode": executable("opencode", supplied_path=opencode)}
     statuses: dict[str, dict[str, str]] = {}
     for name in mcps:
         if name == "context7":
@@ -141,11 +156,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--release-manifest", type=Path)
     parser.add_argument("--mcp", action="append", default=[])
     parser.add_argument("--browser", type=Path)
+    parser.add_argument("--opencode", type=Path)
     try:
         args, unknown = parser.parse_known_args(argv)
         if unknown or not all((args.archive, args.checksum, args.release_manifest)):
             raise PreflightError("archive, checksum, and release manifest are required")
-        payload = collect_preflight(args.archive, args.checksum, args.release_manifest, args.mcp, args.browser)
+        payload = collect_preflight(args.archive, args.checksum, args.release_manifest, args.mcp, args.browser, args.opencode)
         status = 0
     except PreflightError as error:
         payload, status = {"schema": "pegasus-harness-agent-preflight/v3", "status": "blocked", "reason": str(error)}, 2
