@@ -93,7 +93,7 @@ No se cambia de estrategia a mitad de la cadena. Si el diff trae cambios que no 
 
 - [README.md](README.md): adopción, límites y pre-chequeos.
 - [MANUAL.md](MANUAL.md): instalación y uso de OpenCode con Pegasus.
-- [source/opencode/opencode.json](source/opencode/opencode.json): agentes, modelos y MCPs que distribuye esta línea.
+- [source/opencode/opencode.json](source/opencode/opencode.json): agentes y MCPs que distribuye esta línea; no fija modelos por agente.
 - [source/opencode/agents/pegasus-orchestrator.md](source/opencode/agents/pegasus-orchestrator.md): responsabilidad del orquestador.
 - [docs/contrato-inclusion-artifacts.md](docs/contrato-inclusion-artifacts.md): qué puede entrar al payload y qué queda afuera.
 

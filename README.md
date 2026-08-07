@@ -8,8 +8,8 @@ Pegasus es aditivo. Revisa lo que ya existe, muestra un plan y crea solamente lo
 
 ## Camino rápido
 
-1. Lea [MANUAL.md](MANUAL.md) y prepare OpenCode por fuera de Pegasus.
-2. Verifique el archive, checksum y manifest obtenidos desde su canal confiable.
+1. Siga [INSTALL.md](INSTALL.md) para preparar OpenCode y elegir proveedor/modelo en la cuenta destino, por fuera de Pegasus.
+2. Verifique el archive y checksum obtenidos desde su canal confiable; después extraiga el archive y valide el snapshot.
 3. Revise el plan, confirme solamente los MCPs que va a usar y reinicie OpenCode después de un apply exitoso.
 
 ```sh
@@ -29,7 +29,7 @@ El último comando es un ejemplo sin MCPs opcionales. Revise el plan y reemplace
 | OpenCode | Usted instala, actualiza y configura el cliente anfitrión. Pegasus no lo hace por usted. |
 | Archivos y claves de configuración existentes | Se detectan y se preservan. Un collision se informa; no se sobreescribe. |
 | MCPs opcionales | Cada MCP faltante requiere su propia confirmación. Rechazarlo no deja descarga, clave de configuración ni huérfano. |
-| Credenciales y proveedores | Nunca se distribuyen acá. Configúrelos con el mecanismo seguro de la cuenta destino. |
+| Credenciales, proveedores y modelos | Nunca se distribuyen ni se imponen acá. La persona configura las credenciales del proveedor con `/connect` y selecciona el modelo con `/models`. |
 | Rollback | El comando `uninstall` elimina solamente artifacts sin cambios que Pegasus creó y registró en su journal. |
 
 El límite completo de distribución está en [docs/contrato-inclusion-artifacts.md](docs/contrato-inclusion-artifacts.md). El procedimiento práctico de instalación aditiva y rollback está en [docs/instalacion-aditiva-v3.md](docs/instalacion-aditiva-v3.md).
@@ -55,7 +55,7 @@ Para cambios ejecutables o de configuración, `sdd-verify` es la autoridad final
 
 Para `--client opencode`, la cuenta destino necesita tener OpenCode instalado antes de ejecutar Pegasus. El wrapper también requiere Python 3.12+, una cuenta destino no-root y acceso `sudo` para entrar en esa cuenta. Para CBM, el ejecutable local debe responder a `--version` y `--help`; Playwright necesita un navegador compatible instalado externamente antes del apply.
 
-[MANUAL.md](MANUAL.md) tiene los pre-chequeos, el uso diario y la configuración de modelo por agente que distribuye esta línea.
+[INSTALL.md](INSTALL.md) tiene el flujo probado de cuenta separada; [MANUAL.md](MANUAL.md) cubre los pre-chequeos y el uso diario. Pegasus no configura credenciales, proveedor ni modelo: en el primer uso configurá las credenciales del proveedor con `/connect` y seleccioná el modelo con `/models`.
 
 ## Validar un checkout
 

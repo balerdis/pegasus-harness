@@ -10,7 +10,7 @@
       "target": ".config/opencode/opencode.json",
       "key": "default_agent",
       "merge": "create-absent-key",
-      "digest": "22ddef6f85248103ac28754e333df731331f5d49ad124639be08e13099c66b19"
+      "digest": "d492c15a9bc2f08f7252fb01733ae6acd8b470cd045b62a1c246819f94dde0d2"
     },
     {
       "id": "opencode-agent",
@@ -21,7 +21,7 @@
       "target": ".config/opencode/opencode.json",
       "key": "agent",
       "merge": "create-absent-key",
-      "digest": "22ddef6f85248103ac28754e333df731331f5d49ad124639be08e13099c66b19"
+      "digest": "d492c15a9bc2f08f7252fb01733ae6acd8b470cd045b62a1c246819f94dde0d2"
     },
     {
       "id": "opencode-mcp",
@@ -32,7 +32,7 @@
       "target": ".config/opencode/opencode.json",
       "key": "mcp",
       "merge": "create-absent-key",
-      "digest": "22ddef6f85248103ac28754e333df731331f5d49ad124639be08e13099c66b19"
+      "digest": "d492c15a9bc2f08f7252fb01733ae6acd8b470cd045b62a1c246819f94dde0d2"
     },
     {
       "id": "opencode-skills",
@@ -43,7 +43,7 @@
       "target": ".config/opencode/opencode.json",
       "key": "skills",
       "merge": "create-absent-key",
-      "digest": "22ddef6f85248103ac28754e333df731331f5d49ad124639be08e13099c66b19"
+      "digest": "d492c15a9bc2f08f7252fb01733ae6acd8b470cd045b62a1c246819f94dde0d2"
     },
     {
       "id": "opencode-share",
@@ -54,7 +54,7 @@
       "target": ".config/opencode/opencode.json",
       "key": "share",
       "merge": "create-absent-key",
-      "digest": "22ddef6f85248103ac28754e333df731331f5d49ad124639be08e13099c66b19"
+      "digest": "d492c15a9bc2f08f7252fb01733ae6acd8b470cd045b62a1c246819f94dde0d2"
     },
     {
       "id": "file-source-opencode-commands-context-load-md",

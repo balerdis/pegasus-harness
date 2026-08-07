@@ -79,33 +79,13 @@ opencode debug info
 
 Eso sirve para mirar la configuración resuelta y los plugins que OpenCode reconoce. No reemplaza las validaciones de Pegasus ni una prueba de comportamiento.
 
-## Configurar modelo por agente
+## Elegir proveedor y modelo
 
-El payload v3.1 trae sus agentes en la clave `agent` de `~/.config/opencode/opencode.json`. Cada agente tiene su propio campo `model`; no hay que cambiar el modelo de todos para probar uno solo.
+Pegasus distribuye roles, no credenciales ni nombres de modelos. Los tres agentes se instalan sin `model`: el agente principal usa el modelo vigente/configurado de OpenCode y los subagentes heredan el modelo del principal que los invocó. Por eso una instalación limpia no intenta usar un modelo de otro proveedor.
 
-La configuración distribuida hoy usa estos roles:
+En el primer arranque, ejecutá `/connect` para configurar las credenciales del proveedor. Después ejecutá `/models` para seleccionar el modelo que querés usar. Ambas decisiones pertenecen a tu cuenta de OpenCode. Si preferís fijar un valor para toda tu configuración, podés definir el `model` global en tu propia `~/.config/opencode/opencode.json`; si querés una excepción, agregá `model` solo al agente correspondiente. Usá identificadores admitidos por el proveedor conectado.
 
-| Agente | Rol | Modelo distribuido |
-| --- | --- | --- |
-| `pegasus-orchestrator` | Coordina las fases SDD. | `openai/gpt-5.6-terra` |
-| `king-gentleman` | Agente de implementación general. | `openai/gpt-5.6-terra` |
-| `sdd-verify` | Verificación independiente de cambios ejecutables/configurables. | `openai/gpt-5.6-terra` |
-
-Ejemplo de cambio puntual sobre una copia de tu configuración:
-
-```json
-{
-  "agent": {
-    "king-gentleman": {
-      "model": "provider/model-id"
-    }
-  }
-}
-```
-
-Usá el identificador que soporte tu proveedor y configurá sus credenciales por el mecanismo seguro de tu cuenta. No pongas tokens en el repo, prompts, comandos ni archivos que vayan a versionarse. Antes de editar, hacé una copia de tu `opencode.json`; después reiniciá OpenCode y revisá `opencode debug config`.
-
-Importante: Pegasus preserva una clave existente cuando ve un collision. Si ya tenías `agent` o una configuración equivalente, el apply no la pisa para imponerte estos modelos. En ese caso, la decisión de incorporar o adaptar los roles es tuya.
+No pongas tokens en el repo, prompts, comandos ni archivos que vayan a versionarse. Antes de editar tu configuración, hacé una copia; después reiniciá OpenCode y revisá `opencode debug config`. Pegasus preserva una clave existente cuando detecta un collision: no adopta ni pisa tu decisión de proveedor/modelo.
 
 ## Qué hacen los MCPs opcionales
 
@@ -131,5 +111,6 @@ El comando `uninstall` borra únicamente entradas creadas por Pegasus cuyo basel
 ## Próximo paso
 
 - Para entender el flujo y los roles: [architecture.md](architecture.md).
+- Para el recorrido completo con una cuenta Linux separada: [INSTALL.md](INSTALL.md).
 - Para el contrato de inclusión y seguridad: [docs/contrato-inclusion-artifacts.md](docs/contrato-inclusion-artifacts.md).
 - Para instalación aditiva, migración y aceptación RC: [docs/instalacion-aditiva-v3.md](docs/instalacion-aditiva-v3.md).

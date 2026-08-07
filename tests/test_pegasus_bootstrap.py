@@ -1658,6 +1658,19 @@ class AdditiveHarnessTests(unittest.TestCase):
                     resolved = target["opencode_config"].parent / prompt.removeprefix("{file:").removesuffix("}")
                     self.assertTrue(resolved.is_file(), f"OpenCode resolves {prompt} to a missing file: {resolved}")
 
+    def test_installed_opencode_agents_defer_model_selection_to_the_user(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = self.temporary_target(Path(temporary))
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            self.engine.apply(plan, target, set(), browser_ready=True, declined={"cbm", "engram", "playwright", "context7"})
+
+            config = json.loads(target["opencode_config"].read_text(encoding="utf-8"))
+            self.assertNotIn("model", config)
+            self.assertTrue(config["agent"])
+            for name, agent in config["agent"].items():
+                with self.subTest(agent=name):
+                    self.assertNotIn("model", agent)
+
     def test_validator_and_documentation_checks_pass(self) -> None:
         ast.parse(SCRIPT.read_text(encoding="utf-8"))
         subprocess.run([sys.executable, str(ROOT / "tools" / "validate_snapshot.py")], cwd=ROOT, check=True)
