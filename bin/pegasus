@@ -740,7 +740,7 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
             if action["action"] != "create" or action.get("dependency") in declined:
                 continue
             entry = source_entry(action["id"])
-            if entry["id"] == "opencode-mcp" and not confirmed:
+            if entry["id"] == "opencode-mcp" and not confirmed.intersection({"cbm", "engram", "playwright"}):
                 continue
             source = ROOT / entry["source"]
             if entry["kind"] == "file":

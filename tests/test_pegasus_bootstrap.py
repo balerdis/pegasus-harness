@@ -1434,16 +1434,19 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertEqual(context7["endpoint"], "https://mcp.context7.com/mcp")
             self.assertTrue(context7["provider_managed"])
             self.assertIsNone(context7["integrity"])
-            plan["artifacts"] = []
+            plan["artifacts"] = [item for item in plan["artifacts"] if item["id"] == "opencode-mcp"]
             result = self.engine.apply(plan, target, set(), browser_ready=True, declined={"cbm", "engram", "playwright", "context7"})
             self.assertNotIn("context7-mcp", result["created"])
             self.assertFalse(target["opencode_config"].exists())
             self.assertFalse(target["journal"].exists())
             result = self.engine.apply(plan, target, {"context7"}, browser_ready=True, declined={"cbm", "engram", "playwright"})
             self.assertIn("context7-mcp", result["created"])
+            self.assertNotIn("opencode-mcp", result["created"])
             config = json.loads(target["opencode_config"].read_text())
             self.assertEqual(config["mcp"]["context7"], {"type": "remote", "url": "https://mcp.context7.com/mcp", "enabled": True})
-            entry = next(item for item in self.engine.load_journal(target)["entries"] if item["id"] == "context7-mcp")
+            journal = self.engine.load_journal(target)
+            self.assertNotIn("opencode-mcp", {item["id"] for item in journal["entries"]})
+            entry = next(item for item in journal["entries"] if item["id"] == "context7-mcp")
             self.assertEqual(entry["kind"], "json-mcp-key")
 
     def test_missing_playwright_browser_blocks_without_writes_and_retry_can_pass(self) -> None:
