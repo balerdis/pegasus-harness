@@ -198,8 +198,8 @@ class AdditiveHarnessTests(unittest.TestCase):
     def final_release_fixture(self, root: Path) -> tuple[Path, Path, Path]:
         return self.release_fixture(root, "v3.1.1", final=True)
 
-    def rc_release_fixture(self, root: Path) -> tuple[Path, Path, Path]:
-        return self.release_fixture(root, "v3.1.1-rc.1", final=False)
+    def rc_release_fixture(self, root: Path, tag: str = "v3.1.1-rc.1") -> tuple[Path, Path, Path]:
+        return self.release_fixture(root, tag, final=False)
 
     def playwright_acceptance_evidence(self, matrix) -> dict:
         return {
@@ -978,18 +978,45 @@ class AdditiveHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             rc_root, final_root = root / "rc", root / "final"
-            rc_root.mkdir()
-            final_root.mkdir()
-            rc_archive, rc_checksum, rc_manifest = self.rc_release_fixture(rc_root)
+            malformed_root, zero_root, wrong_version_root = root / "malformed", root / "zero", root / "wrong-version"
+            for fixture_root in (rc_root, final_root, malformed_root, zero_root, wrong_version_root):
+                fixture_root.mkdir()
+            rc_archive, rc_checksum, rc_manifest = self.rc_release_fixture(rc_root, "v3.1.1-rc.2")
             final_archive, _, final_manifest = self.final_release_fixture(final_root)
+            malformed_archive, malformed_checksum, malformed_manifest = self.rc_release_fixture(malformed_root, "v3.1.1-rc.2.1")
+            zero_archive, zero_checksum, zero_manifest = self.rc_release_fixture(zero_root, "v3.1.1-rc.0")
+            wrong_version_archive, wrong_version_checksum, wrong_version_manifest = self.rc_release_fixture(wrong_version_root, "v3.1.2-rc.2")
             with patch.object(preflight.os, "geteuid", return_value=1000), patch.object(preflight, "discover_executable", return_value="/usr/bin/true"), patch.object(preflight, "probe", return_value="1.2.3"):
                 result = preflight.collect_preflight(rc_archive, rc_checksum, rc_manifest, [])
-            self.assertEqual(result["release"]["tag"], "v3.1.1-rc.1")
+            self.assertEqual(result["release"]["tag"], "v3.1.1-rc.2")
+            payload = json.loads(rc_manifest.read_text(encoding="utf-8"))
+            payload["tag"] = "v3.1.1-rc.3"
+            rc_manifest.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(preflight.PreflightError, "RC identity"):
+                preflight.collect_preflight(rc_archive, rc_checksum, rc_manifest, [])
+            payload["tag"] = "v3.1.1-rc.2"
+            rc_manifest.write_text(json.dumps(payload), encoding="utf-8")
+            alternate_archive = rc_archive.with_name("pegasus-harness-v3.1.1-rc.2-alternate.tar.gz")
+            shutil.copyfile(rc_archive, alternate_archive)
+            alternate_checksum = alternate_archive.with_name(alternate_archive.name + ".sha256")
+            alternate_digest = hashlib.sha256(alternate_archive.read_bytes()).hexdigest()
+            alternate_checksum.write_text(f"{alternate_digest}  {alternate_archive.name}\n", encoding="utf-8")
+            payload["assets"] = [{"name": alternate_archive.name, "sha256": alternate_digest}]
+            rc_manifest.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(preflight.PreflightError, "RC identity"):
+                preflight.collect_preflight(alternate_archive, alternate_checksum, rc_manifest, [])
+            payload["assets"] = [{"name": rc_archive.name, "sha256": hashlib.sha256(rc_archive.read_bytes()).hexdigest()}]
+            rc_manifest.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaisesRegex(preflight.PreflightError, "final identity"):
                 preflight.collect_preflight(rc_archive, rc_checksum, final_manifest, [])
             final_checksum = final_archive.with_name(final_archive.name + ".sha256")
             with self.assertRaisesRegex(preflight.PreflightError, "RC identity"):
                 preflight.collect_preflight(final_archive, final_checksum, rc_manifest, [])
+            for archive, checksum, manifest in ((malformed_archive, malformed_checksum, malformed_manifest),
+                                                (zero_archive, zero_checksum, zero_manifest),
+                                                (wrong_version_archive, wrong_version_checksum, wrong_version_manifest)):
+                with self.assertRaisesRegex(preflight.PreflightError, "accepted immutable"):
+                    preflight.collect_preflight(archive, checksum, manifest, [])
 
     def test_v311_rc1_aggregate_validator_refuses_invalid_evidence_before_final_publish(self) -> None:
         validator = load_rc_acceptance_aggregate_validator()
@@ -1097,11 +1124,11 @@ class AdditiveHarnessTests(unittest.TestCase):
         self.assertIn("git push origin refs/tags/v3.1.1", workflow)
         self.assertIn('test "$(git rev-list -n 1 v3.1.1)" = "$rc_commit"', workflow)
         self.assertNotIn("v3.1.0-rc.26", workflow)
-        for required in ("v3.1.1-rc.1", "releases/download/v3.1.1", "releases/latest/download", "agent_install_preflight.py", "--opencode", "cbm", "engram", "playwright", "context7", "/connect", "/models"):
+        for required in ("v3.1.1-rc.N", "v3.1.1-rc.2", "releases/download/v3.1.1", "releases/latest/download", "agent_install_preflight.py", "--opencode", "cbm", "engram", "playwright", "context7", "/connect", "/models"):
             self.assertIn(required, agent)
         preflight_block = next(block for block in agent.split("```sh\n")[1:]
                                if "agent_install_preflight.py" in block)
-        for required in ('RELEASE_TAG="v3.1.1-rc.1"', 'ARCHIVE="pegasus-harness-${RELEASE_TAG}.tar.gz"',
+        for required in ('RELEASE_TAG="v3.1.1-rc.2"', 'ARCHIVE="pegasus-harness-${RELEASE_TAG}.tar.gz"',
                          'CHECKSUM="${ARCHIVE}.sha256"', 'RELEASE_MANIFEST="release-manifest.json"',
                          '--archive "$ARCHIVE"', '--checksum "$CHECKSUM"',
                          '--release-manifest "$RELEASE_MANIFEST"'):
@@ -1111,6 +1138,7 @@ class AdditiveHarnessTests(unittest.TestCase):
         self.assertIn("INSTALL_BY_AGENT.md", readme)
         self.assertIn("INSTALL_BY_AGENT.md", install)
         self.assertIn("v3.1.1", release_docs)
+        self.assertIn("v3.1.1-rc.N", release_docs)
 
     def test_safe_archive_extraction_rejects_all_unsafe_member_classes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

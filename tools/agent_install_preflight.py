@@ -16,6 +16,7 @@ from pathlib import Path
 
 FINAL_TAG = "v3.1.1"
 PROMOTION_RC_TAG = "v3.1.1-rc.1"
+RC_TAG = re.compile(r"v3\.1\.1-rc\.[1-9]\d*\Z")
 MCP_NAMES = ("cbm", "engram", "playwright", "context7")
 DOCUMENTS = ("README.md", "INSTALL.md", "INSTALL_BY_AGENT.md", "MANUAL.md", "docs/release-distribution.md")
 VERSION = re.compile(r"\b\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.-]+)?\b")
@@ -71,10 +72,12 @@ def validate_assets(archive: Path, checksum: Path, manifest_path: Path) -> dict:
             raise PreflightError("final manifest lacks required documentation evidence")
         expected = list(manifest.get("archive_evidence", [])) + expected_docs
         identity = "final"
-    elif tag == PROMOTION_RC_TAG:
-        root = f"pegasus-harness-{PROMOTION_RC_TAG}"
+    elif isinstance(tag, str) and RC_TAG.fullmatch(tag):
+        root = f"pegasus-harness-{tag}"
+        expected_archive = f"pegasus-harness-{tag}.tar.gz"
         if (manifest.get("schema") != "pegasus-harness-release/v3" or manifest.get("release_kind") is not None
                 or manifest.get("promotion_rc_tag") is not None or manifest.get("archive_root") != root
+                or archive.name != expected_archive
                 or manifest.get("assets") != [{"name": archive.name, "sha256": digest}]):
             raise PreflightError("RC identity does not describe the supplied assets")
         expected = list(manifest.get("archive_evidence", []))

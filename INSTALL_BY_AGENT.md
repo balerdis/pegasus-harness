@@ -4,15 +4,15 @@ Este instructivo es para un agente que asiste a una persona en la cuenta Linux a
 
 ## Smoke manual RC y distribución final
 
-Para un smoke manual pre-release, usá sólo el conjunto inmutable y coincidente de `v3.1.1-rc.1`:
+Para un smoke manual pre-release, usá sólo un conjunto inmutable y coincidente con un tag `v3.1.1-rc.N` publicado (por ejemplo, `v3.1.1-rc.2`). `N` debe ser un entero positivo; no uses otra versión, un tag malformado ni combines números RC.
 
 ```text
-https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1-rc.1/pegasus-harness-v3.1.1-rc.1.tar.gz
-https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1-rc.1/pegasus-harness-v3.1.1-rc.1.tar.gz.sha256
-https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1-rc.1/release-manifest.json
+https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1-rc.2/pegasus-harness-v3.1.1-rc.2.tar.gz
+https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1-rc.2/pegasus-harness-v3.1.1-rc.2.tar.gz.sha256
+https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1-rc.2/release-manifest.json
 ```
 
-El preflight acepta ese RC únicamente cuando tag, basename del archive, checksum, manifest, raíz del archive y evidencia interna coinciden. Es una ruta de smoke manual: nunca la presentes como `latest`, no combines assets RC/finales y no la uses como distribución final general.
+El preflight acepta cualquier RC `v3.1.1-rc.N` únicamente cuando tag, basename canónico del archive, checksum, manifest, raíz del archive y evidencia interna coinciden. Es una ruta de smoke manual: nunca la presentes como `latest`, no combines assets RC/finales y no la uses como distribución final general.
 
 Para instalar la distribución final, usá exclusivamente los tres assets de `v3.1.1`. Los locators inmutables son:
 
@@ -28,7 +28,7 @@ Antes de mostrar comandos de instalación o apply, ejecutá únicamente el prefl
 
 ```sh
 # Elegí el tag del conjunto de assets que descargaste: RC para smoke o final para distribución.
-RELEASE_TAG="v3.1.1-rc.1"
+RELEASE_TAG="v3.1.1-rc.2"
 ARCHIVE="pegasus-harness-${RELEASE_TAG}.tar.gz"
 CHECKSUM="${ARCHIVE}.sha256"
 RELEASE_MANIFEST="release-manifest.json"
