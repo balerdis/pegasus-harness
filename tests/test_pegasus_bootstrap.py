@@ -1578,6 +1578,27 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertIn(entry["id"], rollback["preserved"])
             self.assertIn(entry["key"], json.loads(target["opencode_config"].read_text()))
 
+    def test_installed_opencode_file_prompts_resolve_inside_global_config_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = self.temporary_target(Path(temporary))
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            self.engine.apply(plan, target, set(), browser_ready=True, declined={"cbm", "engram", "playwright", "context7"})
+
+            config = json.loads(target["opencode_config"].read_text(encoding="utf-8"))
+            prompts = {
+                name: agent["prompt"]
+                for name, agent in config["agent"].items()
+                if isinstance(agent.get("prompt"), str)
+                and agent["prompt"].startswith("{file:")
+                and agent["prompt"].endswith("}")
+            }
+            self.assertEqual(prompts["pegasus-orchestrator"], "{file:./agents/pegasus-orchestrator.md}")
+            self.assertTrue(prompts)
+            for name, prompt in prompts.items():
+                with self.subTest(agent=name):
+                    resolved = target["opencode_config"].parent / prompt.removeprefix("{file:").removesuffix("}")
+                    self.assertTrue(resolved.is_file(), f"OpenCode resolves {prompt} to a missing file: {resolved}")
+
     def test_validator_and_documentation_checks_pass(self) -> None:
         ast.parse(SCRIPT.read_text(encoding="utf-8"))
         subprocess.run([sys.executable, str(ROOT / "tools" / "validate_snapshot.py")], cwd=ROOT, check=True)

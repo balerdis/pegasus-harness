@@ -59,6 +59,8 @@ sudo ./install.sh --target-user <linux-user> --client opencode \
 
 Si el plan encuentra una clave o un archivo tuyo en el destino, lo informa y lo preserva. No lo adopta como si fuera de Pegasus. Si la validación final falla, inspeccioná el estado y usá el uninstall/journal de Pegasus antes de volver a intentar; no fuerces un segundo apply sobre un estado incierto.
 
+El payload de OpenCode queda bajo `~/.config/opencode/`. Sus referencias `{file:./...}` se resuelven desde `~/.config/opencode/opencode.json`, por lo que los agentes quedan en `~/.config/opencode/agents/` y los prompts en `~/.config/opencode/prompts/`. Después de un apply exitoso, cerrá y reiniciá OpenCode para que cargue la configuración nueva.
+
 ## Usarlo todos los días
 
 1. Abrí OpenCode dentro del repositorio en el que vas a trabajar.
