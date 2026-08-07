@@ -757,9 +757,12 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
                         if dependency["id"] in confirmed
                     }
                     value = {key: item for key, item in value.items() if key in config_keys}
-                    if playwright["action"] == "confirm-required" and "playwright" in confirmed:
-                        value[playwright["config_key"]]["command"] = render_owned_runtime_command(
-                            playwright["metadata"], target["dependencies"] / "playwright", playwright_node
+                    for dependency in plan_value["dependencies"]:
+                        if dependency["action"] != "confirm-required" or dependency["id"] not in confirmed:
+                            continue
+                        node = playwright_node if dependency["id"] == "playwright" else None
+                        value[dependency["config_key"]]["command"] = render_owned_runtime_command(
+                            dependency["metadata"], target["dependencies"] / dependency["id"], node
                         )
                 config[entry["key"]] = value
                 target_file = target["opencode_config"]

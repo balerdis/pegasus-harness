@@ -1243,6 +1243,65 @@ class AdditiveHarnessTests(unittest.TestCase):
                 records.append(record)
             self.assertEqual(set(matrix.verify_records(records, {"tag": "v3.1.0-rc.1"})), matrix.PROFILES)
 
+    def test_fresh_owned_local_mcps_render_absolute_commands_without_environment_templates(self) -> None:
+        """A new target can launch every owned local MCP with an empty environment."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root, cbm_archive = self.extracted_rc_bundle_fixture(root)
+            engram_archive = release_root / "dependencies" / "engram_1.20.0_linux_amd64.tar.gz"
+            engram_script = (
+                b"#!/bin/sh\n"
+                b"if [ \"$#\" -eq 1 ] && [ \"$1\" = \"--version\" ]; then printf 'engram 1.20.0\\n'; "
+                b"elif [ \"$#\" -eq 2 ] && [ \"$1\" = \"mcp\" ] && [ \"$2\" = \"--tools=agent\" ]; then "
+                b"printf 'engram mcp started\\n'; else exit 17; fi\n"
+            )
+            self.write_archive(engram_archive, [
+                (self.regular_member("CHANGELOG.md", 0o644), b"changelog\n"),
+                (self.regular_member("LICENSE", 0o644), b"license\n"),
+                (self.regular_member("README.md", 0o644), b"readme\n"),
+                (self.regular_member("engram", 0o755), engram_script),
+            ])
+            target = self.temporary_target(root / "fresh-home")
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            cbm = next(item for item in plan["dependencies"] if item["id"] == "cbm")
+            engram = next(item for item in plan["dependencies"] if item["id"] == "engram")
+            cbm["metadata"] = self.fixture_dependency("cbm", cbm_archive)
+            engram["metadata"]["integrity"] = {"sha256": hashlib.sha256(engram_archive.read_bytes()).hexdigest()}
+            node = root / "provisioned-node" / "bin" / "node"
+            node.parent.mkdir(parents=True)
+            self.fixture_command(node, "Version 0.0.79")
+            npm = root / "npm"
+            self.fake_npm(npm)
+            install_playwright = self.engine.install_playwright
+            with patch.object(self.engine.urllib.request, "urlopen", return_value=io.BytesIO(engram_archive.read_bytes())), \
+                    patch.object(self.engine.shutil, "which", return_value=str(node)), \
+                    patch.object(self.engine, "install_playwright", side_effect=lambda item, destination: install_playwright(item, destination, str(npm))):
+                self.engine.apply(
+                    plan,
+                    target,
+                    {"cbm", "engram", "playwright", "context7"},
+                    browser_ready=True,
+                    release_root=release_root,
+                    release_identity=self.rc_release_identity_fixture(release_root),
+                )
+
+            config = json.loads(target["opencode_config"].read_text(encoding="utf-8"))
+            commands = {key: config["mcp"][key]["command"] for key in ("codebase-memory-mcp", "engram", "playwright")}
+            self.assertNotIn("{env:", json.dumps(commands))
+            self.assertEqual(commands["codebase-memory-mcp"], [str(target["dependencies"] / "cbm" / "bin" / "codebase-memory-mcp")])
+            self.assertEqual(commands["engram"], [str(target["dependencies"] / "engram" / "engram"), "mcp", "--tools=agent"])
+            self.assertEqual(commands["playwright"], [str(node.resolve()), str(target["dependencies"] / "playwright" / "node_modules" / "@playwright" / "mcp" / "cli.js")])
+            self.assertEqual(config["mcp"]["context7"], {"type": "remote", "url": "https://mcp.context7.com/mcp", "enabled": True})
+            expected_output = {
+                "codebase-memory-mcp": "codebase-memory-mcp 0.9.0",
+                "engram": "engram mcp started",
+                "playwright": "Version 0.0.79",
+            }
+            for name, command in commands.items():
+                with self.subTest(mcp=name):
+                    result = subprocess.run(command, text=True, capture_output=True, check=False, env={})
+                    self.assertEqual((result.returncode, (result.stdout + result.stderr).strip()), (0, expected_output[name]))
+
     def test_playwright_rejects_lifecycle_scripts_and_lock_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
