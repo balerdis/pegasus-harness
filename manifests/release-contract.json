@@ -42,6 +42,7 @@
       "install_argv": ["npm", "ci", "--ignore-scripts"],
       "runtime_argv": ["node", "{dependency}/@playwright/mcp/cli.js"],
       "probe_argv": ["node", "{dependency}/@playwright/mcp/cli.js", "--version"],
+      "probe_output": "Version 0.0.79",
       "config_key": "playwright"
     }
   ]

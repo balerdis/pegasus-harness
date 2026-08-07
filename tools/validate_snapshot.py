@@ -132,7 +132,8 @@ def main() -> int:
         if not (dependency.get("source_url", "").startswith("https://") or dependency.get("source_url", "").startswith("release-bundle:")):
             errors.append(f"unproven dependency source: {dependency.get('id')}")
         if dependency.get("id") == "playwright" and (dependency.get("install_argv") != ["npm", "ci", "--ignore-scripts"]
-                or dependency.get("runtime_argv") != ["node", "{dependency}/@playwright/mcp/cli.js"]):
+                or dependency.get("runtime_argv") != ["node", "{dependency}/@playwright/mcp/cli.js"]
+                or dependency.get("probe_output") != "Version 0.0.79"):
             errors.append("unsafe Playwright install or runtime argv")
         if dependency.get("id") == "engram" and dependency.get("archive_layout") != {
                 "members": ["CHANGELOG.md", "LICENSE", "README.md", "engram"],

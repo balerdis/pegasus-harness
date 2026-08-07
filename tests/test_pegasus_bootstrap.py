@@ -138,7 +138,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             "packages": matrix.PLAYWRIGHT_PACKAGES,
             "direct_entrypoint": {
                 "argv": ["/opt/node/bin/node", "/home/fixture/.local/share/pegasus-harness/dependencies/playwright/@playwright/mcp/cli.js", "--version"],
-                "stdout": "@playwright/mcp 0.0.79",
+                "stdout": "Version 0.0.79",
                 "exit_code": 0,
             },
         }
@@ -176,7 +176,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             "    cli = root / 'node_modules/@playwright/mcp/cli.js'\n"
             "    cli.parent.mkdir(parents=True)\n"
             "    version = '0.0.80' if mode == 'wrong-version' else '0.0.79'\n"
-            "    cli.write_text(f\"if (process.argv.includes('--version')) console.log('@playwright/mcp {version}');\\n\")\n",
+            "    cli.write_text(f\"if (process.argv.includes('--version')) console.log('Version {version}');\\n\")\n",
             encoding="utf-8",
         )
         path.chmod(0o755)
@@ -195,6 +195,11 @@ class AdditiveHarnessTests(unittest.TestCase):
         broken = json.loads(json.dumps(contract))
         broken["dependencies"][0]["version"] = "latest"
         with self.assertRaisesRegex(RuntimeError, "fixed version"):
+            self.engine.validate_contract(broken)
+        broken = json.loads(json.dumps(contract))
+        playwright = next(item for item in broken["dependencies"] if item["id"] == "playwright")
+        playwright["probe_output"] = "@playwright/mcp 0.0.79"
+        with self.assertRaisesRegex(RuntimeError, "probe output"):
             self.engine.validate_contract(broken)
 
     def test_release_executables_are_catalogued_regular_files_only(self) -> None:
@@ -562,7 +567,7 @@ class AdditiveHarnessTests(unittest.TestCase):
                 (lambda graph: graph.__setitem__("registry", "https://mirror.invalid/"), "registry"),
                 (lambda graph: graph["packages"]["playwright"].__setitem__("integrity", "sha512-tampered"), "package graph"),
                 (lambda graph: graph["install"].__setitem__("argv", ["npm", "install"]), "install"),
-                (lambda graph: graph["direct_entrypoint"].__setitem__("stdout", "@playwright/mcp 0.0.80"), "entrypoint"),
+                (lambda graph: graph["direct_entrypoint"].__setitem__("stdout", "Version 0.0.80"), "entrypoint"),
             ):
                 with self.subTest(error=error):
                     invalid = copy.deepcopy(records)
@@ -1245,13 +1250,13 @@ class AdditiveHarnessTests(unittest.TestCase):
             node, cli = target["home"] / "node", target["home"] / "node_modules" / "@playwright" / "mcp" / "cli.js"
             cli.parent.mkdir(parents=True)
             cli.write_text("fixture", encoding="utf-8")
-            node.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'v20.0.0\\n'; else printf '@playwright/mcp 0.0.80\\n'; fi\n", encoding="utf-8")
+            node.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'v20.0.0\\n'; else printf 'Version 0.0.80\\n'; fi\n", encoding="utf-8")
             node.chmod(0o755)
             target["opencode_config"].write_text(json.dumps({"mcp": {"playwright": {"type": "local", "command": [str(node), str(cli)]}}}), encoding="utf-8")
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
             entry = next(item for item in plan["dependencies"] if item["id"] == "playwright")
             self.assertEqual(entry["action"], "skip-incompatible-existing")
-            node.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'v20.0.0\\n'; else printf '@playwright/mcp 0.0.79\\n'; fi\n", encoding="utf-8")
+            node.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'v20.0.0\\n'; else printf 'Version 0.0.79\\n'; fi\n", encoding="utf-8")
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
             entry = next(item for item in plan["dependencies"] if item["id"] == "playwright")
             self.assertEqual(entry["action"], "link-existing")

@@ -29,6 +29,7 @@ PLAYWRIGHT_PACKAGES = {
 }
 PLAYWRIGHT_REGISTRY = "https://registry.npmjs.org/"
 PLAYWRIGHT_INSTALL = {"argv": ["npm", "ci", "--ignore-scripts"], "result": "PASS"}
+PLAYWRIGHT_PROBE_OUTPUT = "Version 0.0.79"
 SCHEMA = "pegasus-harness-rc-acceptance/v3"
 AGGREGATE_SCHEMA = "pegasus-harness-rc-acceptance-matrix/v3"
 AGGREGATE_NAME = "rc-acceptance-aggregate.json"
@@ -103,7 +104,7 @@ def verify_playwright_graph(record: dict) -> None:
     if (not isinstance(argv, list) or len(argv) != 3 or not all(isinstance(value, str) for value in argv)
             or not Path(argv[0]).is_absolute() or not Path(argv[1]).is_absolute()
             or not argv[1].endswith("/dependencies/playwright/@playwright/mcp/cli.js")
-            or argv[2] != "--version" or entrypoint.get("stdout") != "@playwright/mcp 0.0.79"
+            or argv[2] != "--version" or entrypoint.get("stdout") != PLAYWRIGHT_PROBE_OUTPUT
             or entrypoint.get("exit_code") != 0):
         raise ValueError("Playwright entrypoint evidence is invalid")
 

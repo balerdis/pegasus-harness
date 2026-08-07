@@ -122,6 +122,9 @@ if "playwright" in confirmed:
         "playwright-core": {"version": "1.63.0-alpha-2026-08-05", "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0-alpha-2026-08-05.tgz", "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg=="},
     }
     lock = json.loads((Path(os.environ["RELEASE_ROOT"]) / "manifests/playwright-mcp-package-lock.json").read_text(encoding="utf-8"))
+    contract = json.loads((Path(os.environ["RELEASE_ROOT"]) / "manifests/release-contract.json").read_text(encoding="utf-8"))
+    playwright = next((item for item in contract.get("dependencies", []) if item.get("id") == "playwright"), {})
+    expected_probe_output = playwright.get("probe_output")
     packages = lock.get("packages", {})
     recorded_packages = {name.removeprefix("node_modules/"): {field: packages.get(name, {}).get(field) for field in ("version", "resolved", "integrity")} for name in ("node_modules/@playwright/mcp", "node_modules/playwright", "node_modules/playwright-core")}
     if recorded_packages != expected_packages:
@@ -130,7 +133,7 @@ if "playwright" in confirmed:
     if not isinstance(command, list) or len(command) != 2 or not all(isinstance(item, str) for item in command):
         raise SystemExit("accepted Playwright config has no direct entrypoint")
     probe = subprocess.run(command + ["--version"], text=True, capture_output=True, check=False)
-    if probe.returncode != 0 or (probe.stdout + probe.stderr).strip() != "@playwright/mcp 0.0.79":
+    if probe.returncode != 0 or (probe.stdout + probe.stderr).strip() != expected_probe_output:
         raise SystemExit("accepted Playwright direct entrypoint probe failed")
     playwright_graph = {"version": "0.0.79", "registry": "https://registry.npmjs.org/", "install": {"argv": ["npm", "ci", "--ignore-scripts"], "result": "PASS"}, "packages": recorded_packages, "direct_entrypoint": {"argv": command + ["--version"], "stdout": (probe.stdout + probe.stderr).strip(), "exit_code": probe.returncode}}
 archive = Path(os.environ["RC_ARCHIVE"])

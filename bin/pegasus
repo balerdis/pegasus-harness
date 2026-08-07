@@ -174,8 +174,9 @@ def validate_contract(contract: dict) -> bool:
         if item["id"] == "engram" and item.get("probe_argv") != ["{dependency}/engram", "--version"]:
             fail("Engram requires a standalone version probe")
         if item["id"] == "playwright":
-            if not integrity.get("package") or not integrity.get("lockfile"):
-                fail("Playwright requires committed package and lockfiles")
+            if (not integrity.get("package") or not integrity.get("lockfile")
+                    or item.get("probe_output") != "Version 0.0.79"):
+                fail("Playwright requires committed package and lockfiles with the exact probe output")
             validate_playwright_lockfile(ROOT / integrity["lockfile"], ROOT / integrity["package"])
     return True
 
@@ -230,10 +231,11 @@ def selected(client: str, entry: dict) -> bool:
 
 
 def expected_probe(item: dict) -> str:
+    if item["id"] == "playwright":
+        return item["probe_output"]
     return {
         "cbm": "codebase-memory-mcp 0.9.0",
         "engram": "engram 1.20.0",
-        "playwright": "@playwright/mcp 0.0.79",
     }[item["id"]]
 
 
