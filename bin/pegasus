@@ -486,8 +486,23 @@ def safe_extract_archive(archive: Path, destination: Path, expected: set[str], e
         raise
 
 
-def probe_dependency(item: dict, destination: Path) -> None:
-    command = [part.replace("{dependency}", str(destination)).replace("{node}", "node") for part in item["probe_argv"]]
+def resolve_node_executable() -> str:
+    """Resolve Node once so persisted MCP commands never depend on PATH."""
+    candidate = shutil.which("node")
+    if candidate is None:
+        fail("Node executable is required for Playwright")
+    try:
+        node = Path(candidate).resolve(strict=True)
+    except OSError as error:
+        fail(f"Node executable is unsafe: {error}")
+    if not node.is_file() or node.is_symlink() or not os.access(node, os.X_OK):
+        fail("Node executable is unsafe")
+    return str(node)
+
+
+def probe_dependency(item: dict, destination: Path, node_executable: str | None = None) -> None:
+    command = [part.replace("{dependency}", str(destination)).replace("{node}", node_executable or "{node}")
+               for part in item["probe_argv"]]
     try:
         result = subprocess.run(command, text=True, capture_output=True, timeout=PROBE_TIMEOUT, check=False)
     except subprocess.TimeoutExpired:
@@ -501,6 +516,12 @@ def probe_dependency(item: dict, destination: Path) -> None:
             f"dependency probe failed for {item['id']}: exit_code={result.returncode}; "
             f"stdout={sanitized_probe_output(result.stdout)}; stderr={sanitized_probe_output(result.stderr)}"
         )
+
+
+def render_owned_runtime_command(item: dict, destination: Path, node_executable: str | None = None) -> list[str]:
+    """Render a fixed dependency runtime template after its owned install exists."""
+    return [part.replace("{dependency}", str(destination)).replace("{node}", node_executable or "{node}")
+            for part in item["runtime_argv"]]
 
 
 def npm_isolation_environment(cwd: Path) -> dict[str, str]:
@@ -528,11 +549,12 @@ def run_npm(command: list[str], cwd: Path) -> None:
         fail(f"npm ci failed: {(result.stderr or result.stdout).strip()}")
 
 
-def install_playwright(item: dict, destination: Path, npm: str = "npm") -> None:
+def install_playwright(item: dict, destination: Path, npm: str = "npm") -> str:
     """Install the committed graph privately and promote only verified node_modules."""
     if destination.exists() or destination.is_symlink():
         fail(f"dependency destination already exists: {destination}")
     validate_playwright_lockfile(ROOT / item["integrity"]["lockfile"], ROOT / item["integrity"]["package"])
+    node_executable = resolve_node_executable()
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".playwright-npm-", dir=destination.parent))
     try:
@@ -544,8 +566,9 @@ def install_playwright(item: dict, destination: Path, npm: str = "npm") -> None:
         cli = runtime / "@playwright" / "mcp" / "cli.js"
         if not runtime.is_dir() or cli.is_symlink() or not cli.is_file():
             fail("Playwright npm install did not create the expected CLI")
-        probe_dependency(item, runtime)
+        probe_dependency(item, runtime, node_executable)
         runtime.replace(destination)
+        return node_executable
     except Exception:
         shutil.rmtree(destination, ignore_errors=True)
         raise
@@ -674,14 +697,14 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
     if external_release and release_identity is None:
         fail("validated RC release identity is required before apply")
     identity = validate_rc_release_identity(release_identity, release_root) if release_identity is not None else None
-    journal, created, config = load_journal(target), [], read_config(target["opencode_config"])
+    journal, created, config, playwright_node = load_journal(target), [], read_config(target["opencode_config"]), None
     try:
         for dependency in plan_value["dependencies"]:
             if dependency["action"] == "confirm-required" and dependency["id"] in confirmed:
                 metadata = dependency["metadata"]
                 destination = target["dependencies"] / dependency["id"]
                 if metadata["id"] == "playwright":
-                    install_playwright(metadata, destination)
+                    playwright_node = install_playwright(metadata, destination)
                 else:
                     install_dependency(metadata, destination, release_root=release_root)
                 journal["entries"].append({"id": f"dependency-{metadata['id']}", "release": RELEASE,
@@ -714,6 +737,10 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
                         if dependency["id"] in confirmed
                     }
                     value = {key: item for key, item in value.items() if key in config_keys}
+                    if playwright["action"] == "confirm-required" and "playwright" in confirmed:
+                        value[playwright["config_key"]]["command"] = render_owned_runtime_command(
+                            playwright["metadata"], target["dependencies"] / "playwright", playwright_node
+                        )
                 config[entry["key"]] = value
                 target_file = target["opencode_config"]
                 baseline = sha256_bytes(json.dumps(value, sort_keys=True).encode())

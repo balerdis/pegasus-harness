@@ -1089,6 +1089,41 @@ class AdditiveHarnessTests(unittest.TestCase):
             for path in (environment["user_config"], environment["global_config"], environment["cache"]):
                 self.assertFalse(Path(path).exists())
 
+    def test_offline_playwright_apply_emits_absolute_node_acceptance_evidence_for_matrix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = self.temporary_target(root / "home")
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            npm = root / "npm"
+            node = root / "provisioned-node" / "bin" / "node"
+            node.parent.mkdir(parents=True)
+            self.fixture_command(node, "Version 0.0.79")
+            self.fake_npm(npm)
+            install_playwright = self.engine.install_playwright
+            with patch.object(self.engine.shutil, "which", return_value=str(node)), \
+                    patch.object(self.engine, "install_playwright", side_effect=lambda item, destination: install_playwright(item, destination, str(npm))):
+                self.engine.apply(plan, target, {"playwright"}, browser_ready=True,
+                                  declined={"cbm", "engram", "context7"})
+            command = json.loads(target["opencode_config"].read_text(encoding="utf-8"))["mcp"]["playwright"]["command"]
+            self.assertEqual(command, [
+                str(node.resolve()), str(target["dependencies"] / "playwright" / "@playwright" / "mcp" / "cli.js")
+            ])
+            self.assertNotIn("{env:PEGASUS_PLAYWRIGHT_MCP_BIN}", command)
+            self.assertNotEqual(command[0], "node")
+
+            probe = subprocess.run(command + ["--version"], text=True, capture_output=True, check=False)
+            self.assertEqual((probe.returncode, (probe.stdout + probe.stderr).strip()), (0, "Version 0.0.79"))
+            matrix = load_acceptance_matrix()
+            graph = self.playwright_acceptance_evidence(matrix)
+            graph["direct_entrypoint"] = {"argv": command + ["--version"], "stdout": (probe.stdout + probe.stderr).strip(), "exit_code": probe.returncode}
+            records = []
+            for profile in sorted(matrix.PROFILES):
+                record = {"schema": matrix.SCHEMA, "status": "PASS", "profile": profile, "rc": {"tag": "v3.1.0-rc.1"}, "journal": {}}
+                if profile in matrix.PLAYWRIGHT_PROFILES:
+                    record["playwright_graph"] = copy.deepcopy(graph)
+                records.append(record)
+            self.assertEqual(set(matrix.verify_records(records, {"tag": "v3.1.0-rc.1"})), matrix.PROFILES)
+
     def test_playwright_rejects_lifecycle_scripts_and_lock_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
