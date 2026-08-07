@@ -25,6 +25,11 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def checksum_line(archive: Path) -> str:
+    """Return the portable checksum record for a published archive asset."""
+    return f"{digest(archive)}  {archive.name}\n"
+
+
 def tagged_file(tag: str, path: str) -> bytes:
     return subprocess.run(
         ["git", "show", f"{tag}:{path}"], cwd=ROOT, capture_output=True, check=True
@@ -159,7 +164,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     checksum = args.archive.with_name(args.archive.name + ".sha256")
-    checksum.write_text(f"{payload['assets'][0]['sha256']}  {args.archive.name}\n", encoding="utf-8")
+    checksum.write_text(checksum_line(args.archive), encoding="utf-8")
     print(f"WROTE checksum: {checksum}")
     print(f"WROTE release manifest: {args.output}")
     return 0

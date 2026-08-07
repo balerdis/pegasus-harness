@@ -644,6 +644,16 @@ class AdditiveHarnessTests(unittest.TestCase):
             manifest = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(manifest["tag"], "v3.1.0-rc.1")
             self.assertEqual(manifest["assets"][0]["sha256"], hashlib.sha256(archive.read_bytes()).hexdigest())
+            checksum = archive.with_name(archive.name + ".sha256")
+            self.assertEqual(
+                checksum.read_text(encoding="utf-8"),
+                f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
+            )
+            self.assertNotIn(str(archive), checksum.read_text(encoding="utf-8"))
+            self.assertEqual(
+                load_acceptance_contract().validate_rc_inputs("cbm", archive, checksum, output),
+                "pegasus-harness-v3.1.0-rc.1",
+            )
             self.assertEqual(manifest["curated_dependencies"], [{"id": "cbm", "path": "dependencies/curated-cbm.tar.gz", "sha256": curated_digest, "provenance": "manifests/cbm-linux-x64-provenance.json"}])
             self.assertEqual(json.loads((fixture / "manifests" / "release-contract.json").read_text())["dependencies"][0]["source_url"], "release-bundle:" + manifest["curated_dependencies"][0]["path"])
             self.assertEqual({item["path"] for item in manifest["archive_evidence"]}, {"manifests/release-contract.json", "manifests/artifact-catalog.json", "manifests/cbm-linux-x64-provenance.json", "dependencies/curated-cbm.tar.gz"})
