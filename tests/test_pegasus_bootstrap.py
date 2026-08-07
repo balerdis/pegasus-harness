@@ -283,6 +283,35 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertNotIn(forbidden, source)
         self.assertIn("Automated tests may inspect this file but must never run it", source)
 
+    def test_acceptance_playwright_probe_failure_diagnostics_are_redacted_and_bounded(self) -> None:
+        source = (ROOT / "scripts/accept-v3-isolated.sh").read_text(encoding="utf-8")
+        embedded = source.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY\n", 1)[0]
+        tree = ast.parse(embedded)
+        diagnostic_nodes = [
+            node for node in tree.body
+            if isinstance(node, ast.Import)
+            or (isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id in {
+                    "PROBE_DIAGNOSTIC_LIMIT", "SENSITIVE_PROBE_VALUE", "SENSITIVE_BEARER_TOKEN"
+                }
+                for target in node.targets
+            ))
+            or (isinstance(node, ast.FunctionDef) and node.name == "sanitized_probe_output")
+        ]
+        namespace: dict[str, object] = {}
+        exec(compile(ast.Module(body=diagnostic_nodes, type_ignores=[]), "accept-v3-isolated diagnostics", "exec"), namespace)
+        sanitize = namespace["sanitized_probe_output"]
+        self.assertEqual(sanitize("unexpected version\n"), repr("unexpected version\n"))
+        secret = "token=do-not-leak " + "x" * (512 + 1)
+        diagnostic = sanitize(secret + "\nAuthorization: Bearer also-do-not-leak")
+        self.assertIn("token=<redacted>", diagnostic)
+        self.assertIn("...<truncated>", diagnostic)
+        self.assertNotIn("do-not-leak", diagnostic)
+        self.assertNotIn("also-do-not-leak", diagnostic)
+        self.assertIn("exit_code={probe.returncode}", embedded)
+        self.assertIn("stdout={sanitized_probe_output(probe.stdout)}", embedded)
+        self.assertIn("stderr={sanitized_probe_output(probe.stderr)}", embedded)
+
     def handoff_release_fixture(self, root: Path) -> Path:
         release = root / "verified-release"
         entrypoint = release / "bin" / "pegasus"

@@ -88,8 +88,24 @@ else
 fi
 
 PROFILE="$profile" TARGET_USER="$target_user" TARGET_HOME="$target_home" CONFIRM="$confirm_csv" DECLINE="$decline_csv" APPLY_RESULT="$apply_result" RC_ARCHIVE="$archive" RC_CHECKSUM="$rc_checksum" RELEASE_MANIFEST="$release_manifest" RELEASE_ROOT="$release_root" EVIDENCE_FILE="$evidence_file" SNAPSHOT="$snapshot" python3 - <<'PY'
-import hashlib, json, os, subprocess, tempfile
+import hashlib, json, os, re, subprocess, tempfile
 from pathlib import Path
+
+PROBE_DIAGNOSTIC_LIMIT = 512
+SENSITIVE_PROBE_VALUE = re.compile(
+    r"(?ix)(?P<key>\b(?:api[_-]?key|access[_-]?token|authorization|cookie|credential|password|passwd|secret|token)\b)(?P<quote>[\"']?)\s*(?P<separator>=|:)\s*(?P<value>(?:[\"'][^\"']*[\"']|(?:bearer\s+)?[^\s,;]+))"
+)
+SENSITIVE_BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
+
+
+def sanitized_probe_output(value: str) -> str:
+    redacted = SENSITIVE_PROBE_VALUE.sub(
+        lambda match: f"{match.group('key')}{match.group('quote')}{match.group('separator')}<redacted>", value
+    )
+    redacted = SENSITIVE_BEARER_TOKEN.sub("Bearer <redacted>", redacted)
+    if len(redacted) > PROBE_DIAGNOSTIC_LIMIT:
+        redacted = redacted[:PROBE_DIAGNOSTIC_LIMIT] + "...<truncated>"
+    return repr(redacted)
 
 keys = {"cbm": "codebase-memory-mcp", "engram": "engram", "playwright": "playwright", "context7": "context7"}
 target = Path(os.environ["TARGET_HOME"])
@@ -134,7 +150,11 @@ if "playwright" in confirmed:
         raise SystemExit("accepted Playwright config has no direct entrypoint")
     probe = subprocess.run(command + ["--version"], text=True, capture_output=True, check=False)
     if probe.returncode != 0 or (probe.stdout + probe.stderr).strip() != expected_probe_output:
-        raise SystemExit("accepted Playwright direct entrypoint probe failed")
+        raise SystemExit(
+            "accepted Playwright direct entrypoint probe failed: "
+            f"exit_code={probe.returncode}; stdout={sanitized_probe_output(probe.stdout)}; "
+            f"stderr={sanitized_probe_output(probe.stderr)}"
+        )
     playwright_graph = {"version": "0.0.79", "registry": "https://registry.npmjs.org/", "install": {"argv": ["npm", "ci", "--ignore-scripts"], "result": "PASS"}, "packages": recorded_packages, "direct_entrypoint": {"argv": command + ["--version"], "stdout": (probe.stdout + probe.stderr).strip(), "exit_code": probe.returncode}}
 archive = Path(os.environ["RC_ARCHIVE"])
 checksum = Path(os.environ["RC_CHECKSUM"])
