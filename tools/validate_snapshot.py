@@ -15,7 +15,24 @@ NOTIFIER_PACKAGE = "@mohak34/opencode-notifier"
 NOTIFIER_VERSION = "0.2.4"
 NOTIFIER_INTEGRITY = "sha512-xsfmqr6scB43pi+fZ0R74xD63ELM0MqMZnR/9AWWSescEObYyAcXvaSgiXG/9b2KrXxc8NvcLqTOLPiVJOhKaw=="
 PLAYWRIGHT_PACKAGE = "@playwright/mcp"
-PLAYWRIGHT_VERSION = "0.0.78"
+PLAYWRIGHT_VERSION = "0.0.79"
+PLAYWRIGHT_LOCK_PACKAGES = {
+    "node_modules/@playwright/mcp": {
+        "version": "0.0.79",
+        "resolved": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.79.tgz",
+        "integrity": "sha512-VpqD4a3vFyGQMY9sh3UJiO6wjcurggkljKfAyCHL0QWGY5m6Ehr3MNsAAHPDHO//n13g0PCjpHatAOiulrqdZQ==",
+    },
+    "node_modules/playwright": {
+        "version": "1.63.0-alpha-2026-08-05",
+        "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.63.0-alpha-2026-08-05.tgz",
+        "integrity": "sha512-zbGZUK+JYkoDV3cUgfvh2czTBJL34Gmz5gHVI25xiIpvYSR17Q1M7TS8hnwECUe+IkKaeXbKrSyJTyogm2DVWw==",
+    },
+    "node_modules/playwright-core": {
+        "version": "1.63.0-alpha-2026-08-05",
+        "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0-alpha-2026-08-05.tgz",
+        "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg==",
+    },
+}
 FORBIDDEN_PAYLOAD_SOURCES = {
     "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
     "source/opencode/tui.json",
@@ -96,14 +113,15 @@ def main() -> int:
         playwright_package = json.loads((ROOT / "manifests/playwright-mcp-package.json").read_text(encoding="utf-8"))
         playwright_lock = json.loads((ROOT / "manifests/playwright-mcp-package-lock.json").read_text(encoding="utf-8"))
         packages = playwright_lock.get("packages", {})
-        expected = {"node_modules/@playwright/mcp", "node_modules/fsevents", "node_modules/playwright", "node_modules/playwright-core"}
+        expected = set(PLAYWRIGHT_LOCK_PACKAGES)
         if (playwright_package != {"name": "pegasus-playwright-mcp", "private": True, "dependencies": {PLAYWRIGHT_PACKAGE: PLAYWRIGHT_VERSION}}
                 or playwright_lock.get("name") != playwright_package["name"]
                 or playwright_lock.get("lockfileVersion") != 3
                 or playwright_lock.get("requires") is not True
                 or set(packages) - {""} != expected
                 or packages.get("", {}).get("dependencies") != playwright_package["dependencies"]
-                or any(not isinstance(packages[name].get("integrity"), str) or not packages[name]["integrity"].startswith("sha512-") for name in expected)):
+                or any(any(packages[name].get(field) != value for field, value in expected_package.items())
+                       for name, expected_package in PLAYWRIGHT_LOCK_PACKAGES.items())):
             errors.append("invalid Playwright package or production lock graph")
     except (OSError, json.JSONDecodeError):
         errors.append("missing Playwright package or lock metadata")

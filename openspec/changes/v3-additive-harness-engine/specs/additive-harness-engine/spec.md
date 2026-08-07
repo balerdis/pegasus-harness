@@ -6,9 +6,9 @@ Define additive releases preserving user artifacts.
 
 ## Requirements
 
-### Requirement: Read-only detection and inspectable planning
+### Requirement: Read-only detection and planning
 
-The system MUST inspect client state without writing. Before apply, the plan MUST expose selected paths/keys, identities, actions, decisions, collisions, and unapproved exclusions.
+The system MUST inspect client state without writing. Before apply, plans MUST expose selected paths/keys, identities, actions, decisions, collisions, and exclusions.
 
 #### Scenario: Collision plan
 - GIVEN a client has user content and a selected collision
@@ -17,7 +17,7 @@ The system MUST inspect client state without writing. Before apply, the plan MUS
 
 ### Requirement: V3.1 selected catalog
 
-The catalog MUST include `context-load`, `skill-creator`, `skill-registry`, `engram.ts`, notifier `@mohak34/opencode-notifier@0.2.4`, CBM, Engram, Playwright, Context7, and selected Core/SDD/context/Git/collaboration skills except `sergio-*`. It MUST exclude `tui.json`, `judgment-day`, unlisted items, and leave Zellij inert when absent.
+The catalog MUST include selected commands, `engram.ts`, notifier `@mohak34/opencode-notifier@0.2.4`, CBM, Engram, Playwright, Context7, and selected Core/SDD/context/Git/collaboration skills except `sergio-*`. It MUST exclude `tui.json`, `judgment-day`, unlisted items, and leave Zellij inert when absent.
 
 #### Scenario: Catalog enforcement
 - GIVEN selected additions and exclusions are in a payload
@@ -26,7 +26,7 @@ The catalog MUST include `context-load`, `skill-creator`, `skill-registry`, `eng
 
 ### Requirement: Fixed MCP provenance and ownership
 
-Absent CBM, Engram, and Playwright MUST expose fixed version/provenance/integrity metadata; Engram MUST remain a fixed verified asset. Existing MCPs MUST be non-owning links. Context7 MUST be a user-confirmed provider-managed remote at `https://mcp.context7.com/mcp`; Pegasus MUST NOT control its version or integrity.
+Absent CBM, Engram, and Playwright MUST expose fixed metadata; Engram MUST remain a fixed verified asset. Existing MCPs MUST be non-owning links. Context7 MUST be a user-confirmed provider-managed remote at `https://mcp.context7.com/mcp`, with no Pegasus version or integrity control.
 
 #### Scenario: MCP policy
 - GIVEN selected MCPs are absent or already installed
@@ -35,28 +35,28 @@ Absent CBM, Engram, and Playwright MUST expose fixed version/provenance/integrit
 
 ### Requirement: Curated CBM Linux x64 artifact
 
-CBM MUST be a bundled static non-UI Linux x64 artifact from `DeusData/codebase-memory-mcp` v0.9.0, commit `b637e3330c96cfe452da623db068c241aaa3ec01`, tree `67ea1cdff279b0cfe0292640c624388ed9db6dce`. Provenance MUST record repository/tag/commit/tree, builder-image/build-command digests, output path, and SHA-256. Npm, postinstall, runtime builds/downloads, and PATH lookup are prohibited.
+CBM MUST be a bundled static non-UI Linux x64 artifact from `DeusData/codebase-memory-mcp` v0.9.0, commit `b637e3330c96cfe452da623db068c241aaa3ec01`, tree `67ea1cdff279b0cfe0292640c624388ed9db6dce`, with repository/tag/commit/tree, builder-image/build-command digests, output path, and SHA-256 provenance. Npm, postinstall, runtime builds/downloads, and PATH lookup are prohibited.
 
 #### Scenario: CBM validation
 - GIVEN a Linux x64 release contains the CBM bundle
 - WHEN release validation runs
 - THEN provenance, executable status, checksum, and version probe pass
 
-### Requirement: Playwright package and browser gate
+### Requirement: Approved Playwright graph and browser gate
 
-After per-dependency confirmation, Playwright MUST use fixed `package.json`/`package-lock` and `npm ci --ignore-scripts`; no bundled `node_modules` or runtime `npx` is permitted. A browser MUST be checked before apply; missing browsers inform the user, allow cancellation, and support external-install retry without Pegasus installation.
+After per-dependency confirmation, Playwright MUST use `@playwright/mcp` `0.0.79`, `playwright` and `playwright-core` `1.63.0-alpha-2026-08-05`, fixed SRIs, and explicit `https://registry.npmjs.org/` URLs; it MUST NOT inherit user registry/mirror/proxy settings. SRIs MUST be mcp=`sha512-VpqD4a3vFyGQMY9sh3UJiO6wjcurggkljKfAyCHL0QWGY5m6Ehr3MNsAAHPDHO//n13g0PCjpHatAOiulrqdZQ==`, playwright=`sha512-zbGZUK+JYkoDV3cUgfvh2czTBJL34Gmz5gHVI25xiIpvYSR17Q1M7TS8hnwECUe+IkKaeXbKrSyJTyogm2DVWw==`, core=`sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg==`. It MUST run `npm ci --ignore-scripts` with no bundled `node_modules`, `npx`, `latest`, or browser download. External Node 24 and Chrome 151 are prerequisites; browser preflight MUST allow cancellation and external-install retry.
 
-#### Scenario: Playwright dependency and browser proof
-- GIVEN Playwright is confirmed and its browser is absent
-- WHEN fixed dependency setup and preflight run
-- THEN `npm ci --ignore-scripts` is used, no orphan config/artifact exists after cancellation, and external installation enables retry
+#### Scenario: Fixed Playwright setup
+- GIVEN Playwright is confirmed and fixed manifests are present
+- WHEN dependency setup runs
+- THEN exact versions/SRIs use npmjs.org and `npm ci --ignore-scripts` succeeds without `npx`
 
-#### Scenario: Trusted explicit external Chrome
-- GIVEN RC acceptance receives `--browser <absolute-path>`
-- WHEN Playwright preflight runs
-- THEN it accepts only a regular, non-symlink executable owned by root with no group/world write bits, whose ancestors are likewise root-controlled and which is outside the target home; otherwise it refuses before apply. Existing target-home browser detection remains the fallback and Pegasus never installs a browser.
+#### Scenario: Browser cancellation and retry
+- GIVEN external Chrome 151 is absent
+- WHEN preflight informs the user, cancellation occurs, then Chrome is installed externally and retried
+- THEN no partial config/artifact exists and preflight can pass
 
-### Requirement: Granular apply and conservative rollback
+### Requirement: Granular apply and rollback
 
 Apply MUST materialize selected artifacts only at file/key granularity, preserve user content/unrelated keys, and journal identity, release, source/hash, target/key, and baseline. Update/removal/rollback MUST require unchanged Pegasus ownership.
 
@@ -67,14 +67,14 @@ Apply MUST materialize selected artifacts only at file/key granularity, preserve
 
 ### Requirement: Real isolated acceptance topology
 
-Acceptance MUST use an archive-based immutable `v3.1.0-rc.N` install. `scripts/provision-v3-rc-host.sh` MUST remain the test-only fixed-host emulator: after an exact recreation acknowledgement, it recreates only the profile-mapped dedicated user and provides Node `24.15.0` and OpenCode `1.18.13` outside Pegasus. `scripts/accept-v3-isolated.sh` MUST be the single test-only orchestrator: it requires explicit `--profile`, `--rc-archive`, checksum, manifest, and exact recreation acknowledgement; validates the RC checksum/manifest before calling the provisioner; keeps its root staging private; then creates a verified root-owned payload below `/var/lib/pegasus-acceptance/<target>/rc`. Every ancestor from `/` through the payload MUST be a non-symlink root-owned directory without group/world write. The handoff directories and entrypoint MUST be `0750`, other files `0640`, all `root:<target primary group>`, so the target can execute but cannot replace the verified payload and no payload is world-readable. It records selected result, declined absence/no-orphans, target ownership, and `serg` protection. Unit tests MUST NOT execute subprocess/user operations. Matrix: `cbm` → `pegasus-harness` accepts CBM and declines Engram/Playwright/Context7; `engram` → `pegasus-harness-engram` accepts only Engram; `playwright` → `pegasus-harness-playwright` accepts only Playwright; `context7` → `pegasus-harness-context7` accepts only Context7; `final` → `pegasus-harness-final` accepts all selected MCPs. Unknown profiles, unsafe names/homes, non-RC archives/tags, unsafe archive permission bits, unsafe handoff paths, and absent acknowledgements MUST be refused. The laboratory MUST NOT be installed, cataloged as owned, or treated as Pegasus runtime product code. Failure requires a new commit/RC tag, never tag mutation.
+Acceptance MUST use an archive-based immutable `v3.1.0-rc.N`. External provisioning MUST provide Node `24.15.0`, OpenCode `1.18.13`, and for Playwright Chrome 151, outside Pegasus. Each profile MUST recreate only its named user, never touch `serg`, record MCP confirmation/result/no-orphan and ownership proof, and unit tests MUST NOT recreate users. Matrix: `pegasus-harness` accepts CBM and declines others; `pegasus-harness-engram`, `-playwright`, and `-context7` accept only their MCP; `pegasus-harness-final` accepts all. Aggregate proof MUST precede immutable `v3.1.0`; failure requires a new RC tag.
 
-#### Scenario: Per-MCP isolated proof
-- GIVEN an RC archive and its named dedicated user/home
-- WHEN the external host is provisioned and that user runs the archive install
-- THEN only that user is recreated, its decisions/proofs/ownership are recorded, and `serg` is unchanged
+#### Scenario: Matrix proof
+- GIVEN an RC archive and named dedicated user/home
+- WHEN external prerequisites are provisioned and that user runs the archive install
+- THEN only that user is recreated, evidence is recorded, and `serg` is unchanged
 
-#### Scenario: Final aggregate gate
-- GIVEN all five matrix users pass and their evidence is complete
-- WHEN final release acceptance runs
-- THEN the test-only matrix verifier accepts explicit RC archive/checksum/manifest identity and an outside-`/home` evidence directory, requires exactly one valid JSON `PASS` record for `cbm`, `engram`, `playwright`, `context7`, and `final`, rejects duplicate/missing/failed/mismatched identity records, and writes one aggregate proof before immutable `v3.1.0` is created
+#### Scenario: Final gate
+- GIVEN all five profiles pass with complete evidence
+- WHEN final acceptance runs
+- THEN aggregate proof is recorded before immutable `v3.1.0`

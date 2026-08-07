@@ -87,8 +87,8 @@ else
   [[ ! -e /home/serg/.config/opencode ]] || fail 'serg OpenCode configuration was created'
 fi
 
-PROFILE="$profile" TARGET_USER="$target_user" TARGET_HOME="$target_home" CONFIRM="$confirm_csv" DECLINE="$decline_csv" APPLY_RESULT="$apply_result" RC_ARCHIVE="$archive" RC_CHECKSUM="$rc_checksum" RELEASE_MANIFEST="$release_manifest" EVIDENCE_FILE="$evidence_file" SNAPSHOT="$snapshot" python3 - <<'PY'
-import hashlib, json, os
+PROFILE="$profile" TARGET_USER="$target_user" TARGET_HOME="$target_home" CONFIRM="$confirm_csv" DECLINE="$decline_csv" APPLY_RESULT="$apply_result" RC_ARCHIVE="$archive" RC_CHECKSUM="$rc_checksum" RELEASE_MANIFEST="$release_manifest" RELEASE_ROOT="$release_root" EVIDENCE_FILE="$evidence_file" SNAPSHOT="$snapshot" python3 - <<'PY'
+import hashlib, json, os, subprocess, tempfile
 from pathlib import Path
 
 keys = {"cbm": "codebase-memory-mcp", "engram": "engram", "playwright": "playwright", "context7": "context7"}
@@ -114,6 +114,25 @@ apply = json.loads(Path(os.environ["APPLY_RESULT"]).read_text(encoding="utf-8"))
 if (bool(confirmed - {"context7"}) != ("opencode-mcp" in apply.get("created", []))
         or ("context7" in confirmed) != ("context7-mcp" in apply.get("created", []))):
     raise SystemExit("apply result does not prove the selected MCP plan")
+playwright_graph = None
+if "playwright" in confirmed:
+    expected_packages = {
+        "@playwright/mcp": {"version": "0.0.79", "resolved": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.79.tgz", "integrity": "sha512-VpqD4a3vFyGQMY9sh3UJiO6wjcurggkljKfAyCHL0QWGY5m6Ehr3MNsAAHPDHO//n13g0PCjpHatAOiulrqdZQ=="},
+        "playwright": {"version": "1.63.0-alpha-2026-08-05", "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.63.0-alpha-2026-08-05.tgz", "integrity": "sha512-zbGZUK+JYkoDV3cUgfvh2czTBJL34Gmz5gHVI25xiIpvYSR17Q1M7TS8hnwECUe+IkKaeXbKrSyJTyogm2DVWw=="},
+        "playwright-core": {"version": "1.63.0-alpha-2026-08-05", "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0-alpha-2026-08-05.tgz", "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg=="},
+    }
+    lock = json.loads((Path(os.environ["RELEASE_ROOT"]) / "manifests/playwright-mcp-package-lock.json").read_text(encoding="utf-8"))
+    packages = lock.get("packages", {})
+    recorded_packages = {name.removeprefix("node_modules/"): {field: packages.get(name, {}).get(field) for field in ("version", "resolved", "integrity")} for name in ("node_modules/@playwright/mcp", "node_modules/playwright", "node_modules/playwright-core")}
+    if recorded_packages != expected_packages:
+        raise SystemExit("approved Playwright lock graph is missing from the accepted RC")
+    command = config.get("mcp", {}).get("playwright", {}).get("command")
+    if not isinstance(command, list) or len(command) != 2 or not all(isinstance(item, str) for item in command):
+        raise SystemExit("accepted Playwright config has no direct entrypoint")
+    probe = subprocess.run(command + ["--version"], text=True, capture_output=True, check=False)
+    if probe.returncode != 0 or (probe.stdout + probe.stderr).strip() != "@playwright/mcp 0.0.79":
+        raise SystemExit("accepted Playwright direct entrypoint probe failed")
+    playwright_graph = {"version": "0.0.79", "registry": "https://registry.npmjs.org/", "install": {"argv": ["npm", "ci", "--ignore-scripts"], "result": "PASS"}, "packages": recorded_packages, "direct_entrypoint": {"argv": command + ["--version"], "stdout": (probe.stdout + probe.stderr).strip(), "exit_code": probe.returncode}}
 archive = Path(os.environ["RC_ARCHIVE"])
 checksum = Path(os.environ["RC_CHECKSUM"])
 evidence = {
@@ -137,7 +156,24 @@ evidence = {
     "ownership": {"target_user_only": True},
     "serg_snapshot_sha256": hashlib.sha256(Path(os.environ["SNAPSHOT"]).read_bytes()).hexdigest(),
 }
-Path(os.environ["EVIDENCE_FILE"]).write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+if playwright_graph is not None:
+    evidence["playwright_graph"] = playwright_graph
+evidence_path = Path(os.environ["EVIDENCE_FILE"])
+if evidence_path.exists() or evidence_path.is_symlink():
+    raise SystemExit("acceptance evidence path already exists")
+temporary = None
+try:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=evidence_path.parent, prefix=".acceptance-record.", suffix=".partial", delete=False) as output:
+        temporary = Path(output.name)
+        json.dump(evidence, output, indent=2)
+        output.write("\n")
+        output.flush()
+        os.fsync(output.fileno())
+    temporary.chmod(0o600)
+    os.link(temporary, evidence_path)
+finally:
+    if temporary is not None:
+        temporary.unlink(missing_ok=True)
 PY
 
 printf '%s\n' "PASS: profile $profile accepted; evidence recorded at $evidence_file. A failure requires a new commit/RC, never tag mutation."

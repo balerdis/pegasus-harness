@@ -36,8 +36,8 @@
     },
     {
       "id": "playwright",
-      "version": "0.0.78",
-      "source_url": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.78.tgz",
+      "version": "0.0.79",
+      "source_url": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.79.tgz",
       "integrity": {"package": "manifests/playwright-mcp-package.json", "lockfile": "manifests/playwright-mcp-package-lock.json"},
       "install_argv": ["npm", "ci", "--ignore-scripts"],
       "runtime_argv": ["node", "{dependency}/@playwright/mcp/cli.js"],

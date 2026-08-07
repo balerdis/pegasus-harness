@@ -130,6 +130,19 @@ class AdditiveHarnessTests(unittest.TestCase):
         path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\nexit {exit_code}\n", encoding="utf-8")
         path.chmod(0o755)
 
+    def playwright_acceptance_evidence(self, matrix) -> dict:
+        return {
+            "version": "0.0.79",
+            "registry": "https://registry.npmjs.org/",
+            "install": {"argv": ["npm", "ci", "--ignore-scripts"], "result": "PASS"},
+            "packages": matrix.PLAYWRIGHT_PACKAGES,
+            "direct_entrypoint": {
+                "argv": ["/opt/node/bin/node", "/home/fixture/.local/share/pegasus-harness/dependencies/playwright/@playwright/mcp/cli.js", "--version"],
+                "stdout": "@playwright/mcp 0.0.79",
+                "exit_code": 0,
+            },
+        }
+
     def fake_npm(self, path: Path, mode: str = "success") -> None:
         path.write_text(
             "#!/usr/bin/env python3\n"
@@ -139,10 +152,15 @@ class AdditiveHarnessTests(unittest.TestCase):
             f"mode = {mode!r}\n"
             "if mode == 'fail': sys.exit(23)\n"
             "if mode == 'lock-drift': (root / 'package-lock.json').write_text('{}')\n"
+            "if mode in {'wrong-registry', 'wrong-sri'}:\n"
+            "    lock = __import__('json').loads((root / 'package-lock.json').read_text())\n"
+            "    field = 'resolved' if mode == 'wrong-registry' else 'integrity'\n"
+            "    lock['packages']['node_modules/playwright'][field] = 'https://mirror.invalid/playwright.tgz' if mode == 'wrong-registry' else 'sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=='\n"
+            "    (root / 'package-lock.json').write_text(__import__('json').dumps(lock))\n"
             "if mode != 'missing-cli':\n"
             "    cli = root / 'node_modules/@playwright/mcp/cli.js'\n"
             "    cli.parent.mkdir(parents=True)\n"
-            "    version = '0.0.79' if mode == 'wrong-version' else '0.0.78'\n"
+            "    version = '0.0.80' if mode == 'wrong-version' else '0.0.79'\n"
             "    cli.write_text(f\"if (process.argv.includes('--version')) console.log('@playwright/mcp {version}');\\n\")\n",
             encoding="utf-8",
         )
@@ -228,7 +246,7 @@ class AdditiveHarnessTests(unittest.TestCase):
     def test_acceptance_script_is_static_and_refuses_unsafe_defaults(self) -> None:
         script = ROOT / "scripts/accept-v3-isolated.sh"
         source = script.read_text(encoding="utf-8")
-        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "--browser", "browser_args", "--release-identity", "release_identity", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "pegasus-harness-journal/v3", "mapped user", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root"):
+        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "--browser", "browser_args", "--release-identity", "release_identity", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "pegasus-harness-journal/v3", "mapped user", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root", "playwright_graph", "https://registry.npmjs.org/", '"npm", "ci", "--ignore-scripts"', "direct_entrypoint", "os.link"):
             self.assertIn(required, source)
         self.assertIn('"$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user"', source)
         provisioner = (ROOT / "scripts/provision-v3-rc-host.sh").read_text(encoding="utf-8")
@@ -503,11 +521,51 @@ class AdditiveHarnessTests(unittest.TestCase):
             evidence_dir = root / "evidence"
             evidence_dir.mkdir()
             for profile in sorted(matrix.PROFILES):
-                (evidence_dir / f"{profile}.json").write_text(json.dumps({"schema": matrix.SCHEMA, "status": "PASS", "profile": profile, "rc": identity, "journal": {"path": f"/{profile}", "sha256": profile, "entries": 1}}), encoding="utf-8")
+                record = {"schema": matrix.SCHEMA, "status": "PASS", "profile": profile, "rc": identity, "journal": {"path": f"/{profile}", "sha256": profile, "entries": 1}}
+                if profile in matrix.PLAYWRIGHT_PROFILES:
+                    record["playwright_graph"] = self.playwright_acceptance_evidence(matrix)
+                (evidence_dir / f"{profile}.json").write_text(json.dumps(record), encoding="utf-8")
             output = matrix.aggregate(archive, checksum, manifest, evidence_dir)
             aggregate = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(aggregate["status"], "PASS")
             self.assertEqual(aggregate["profiles"], sorted(matrix.PROFILES))
+            self.assertEqual(set(aggregate["playwright_graph"]), matrix.PLAYWRIGHT_PROFILES)
+
+    def test_acceptance_matrix_requires_exact_playwright_graph_and_leaves_no_aggregate_on_failure(self) -> None:
+        matrix = load_acceptance_matrix()
+        identity = {"tag": "v3.1.0-rc.1"}
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as temporary:
+            evidence_dir = Path(temporary)
+            records = []
+            for profile in sorted(matrix.PROFILES):
+                record = {"schema": matrix.SCHEMA, "status": "PASS", "profile": profile, "rc": identity, "journal": {}}
+                if profile in matrix.PLAYWRIGHT_PROFILES:
+                    record["playwright_graph"] = self.playwright_acceptance_evidence(matrix)
+                records.append(record)
+            for mutation, error in (
+                (lambda graph: graph.__setitem__("version", "0.0.80"), "version"),
+                (lambda graph: graph.__setitem__("registry", "https://mirror.invalid/"), "registry"),
+                (lambda graph: graph["packages"]["playwright"].__setitem__("integrity", "sha512-tampered"), "package graph"),
+                (lambda graph: graph["install"].__setitem__("argv", ["npm", "install"]), "install"),
+                (lambda graph: graph["direct_entrypoint"].__setitem__("stdout", "@playwright/mcp 0.0.80"), "entrypoint"),
+            ):
+                with self.subTest(error=error):
+                    invalid = copy.deepcopy(records)
+                    playwright_record = next(record for record in invalid if record["profile"] in matrix.PLAYWRIGHT_PROFILES)
+                    mutation(playwright_record["playwright_graph"])
+                    with self.assertRaisesRegex(ValueError, error):
+                        matrix.verify_records(invalid, identity)
+            missing_graph = copy.deepcopy(records)
+            del next(record for record in missing_graph if record["profile"] == "playwright")["playwright_graph"]
+            with patch.object(matrix, "expected_identity", return_value=identity), \
+                    patch.object(matrix, "read_evidence", return_value=missing_graph), \
+                    self.assertRaisesRegex(ValueError, "missing"):
+                matrix.aggregate(Path("/rc-archive"), Path("/rc-checksum"), Path("/rc-manifest"), evidence_dir)
+            self.assertFalse((evidence_dir / matrix.AGGREGATE_NAME).exists())
+            records_by_profile = {record["profile"]: record for record in records}
+            records_by_profile["cbm"]["playwright_graph"] = self.playwright_acceptance_evidence(matrix)
+            with self.assertRaisesRegex(ValueError, "unexpected"):
+                matrix.verify_records(list(records_by_profile.values()), identity)
 
     def test_acceptance_matrix_rejects_missing_duplicate_invalid_failed_mismatched_or_unsafe_evidence(self) -> None:
         matrix = load_acceptance_matrix()
@@ -880,10 +938,14 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertEqual((destination / "@playwright/mcp/cli.js").is_file(), True)
             self.assertFalse(any(destination.parent.glob(".playwright-npm-*")))
             self.assertEqual((destination.parent / "npm-argv.txt").read_text(), "ci --ignore-scripts")
+            source = SCRIPT.read_text(encoding="utf-8")
+            self.assertIn('"NPM_CONFIG_REGISTRY": "https://registry.npmjs.org/"', source)
+            self.assertIn('"NPM_CONFIG_USERCONFIG": os.devnull', source)
+            self.assertIn('"NPM_CONFIG_IGNORE_SCRIPTS": "true"', source)
 
     def test_playwright_npm_failures_leave_no_runtime_or_staging(self) -> None:
         item = copy.deepcopy(next(item for item in self.engine.load_contract()["dependencies"] if item["id"] == "playwright"))
-        for mode, error in (("fail", "npm ci failed"), ("lock-drift", "lockfile"), ("missing-cli", "expected CLI"), ("wrong-version", "probe")):
+        for mode, error in (("fail", "npm ci failed"), ("lock-drift", "lockfile"), ("wrong-registry", "approved package graph"), ("wrong-sri", "approved package graph"), ("missing-cli", "expected CLI"), ("wrong-version", "probe")):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 npm, destination = root / "npm", root / "dependencies" / "playwright"
@@ -895,6 +957,24 @@ class AdditiveHarnessTests(unittest.TestCase):
                 self.assertFalse((root / ".config").exists())
                 self.assertFalse((root / ".local").exists())
 
+    def test_playwright_lock_failures_leave_no_staging_destination_config_or_journal(self) -> None:
+        for mode in ("wrong-registry", "wrong-sri"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                target = self.temporary_target(root / "home")
+                plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+                npm = root / "npm"
+                self.fake_npm(npm, mode)
+                install_playwright = self.engine.install_playwright
+                with patch.object(self.engine, "install_playwright", side_effect=lambda item, destination: install_playwright(item, destination, str(npm))):
+                    with self.assertRaisesRegex(RuntimeError, "approved package graph"):
+                        self.engine.apply(plan, target, {"playwright"}, browser_ready=True,
+                                          declined={"cbm", "engram", "context7"})
+                self.assertFalse((target["dependencies"] / "playwright").exists())
+                self.assertFalse(any(target["dependencies"].parent.glob(".playwright-npm-*")))
+                self.assertFalse(target["opencode_config"].exists())
+                self.assertFalse(target["journal"].exists())
+
     def test_playwright_rejects_lifecycle_scripts_and_lock_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -905,7 +985,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "lifecycle"):
                 self.engine.validate_playwright_lockfile(self.engine.PLAYWRIGHT_LOCK_PATH, package_path)
             package.pop("scripts")
-            package["dependencies"]["@playwright/mcp"] = "0.0.79"
+            package["dependencies"]["@playwright/mcp"] = "0.0.80"
             package_path.write_text(json.dumps(package), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "fixed dependency"):
                 self.engine.validate_playwright_lockfile(self.engine.PLAYWRIGHT_LOCK_PATH, package_path)
@@ -944,7 +1024,7 @@ class AdditiveHarnessTests(unittest.TestCase):
         self.assertEqual(contract["dependencies"][1]["integrity"]["sha256"], "7dc3003318e303bee269a4772144f3ce01c8ec700bfd524aaec76770acd389ca")
         self.assertEqual(contract["dependencies"][1]["archive_layout"], {"members": ["CHANGELOG.md", "LICENSE", "README.md", "engram"], "executables": {"engram": "0755"}})
         packages = json.loads((ROOT / "manifests" / "playwright-mcp-package-lock.json").read_text())["packages"]
-        self.assertEqual(set(packages) - {""}, {"node_modules/@playwright/mcp", "node_modules/fsevents", "node_modules/playwright", "node_modules/playwright-core"})
+        self.assertEqual(set(packages) - {""}, {"node_modules/@playwright/mcp", "node_modules/playwright", "node_modules/playwright-core"})
         self.assertTrue(all(packages[name]["integrity"].startswith("sha512-") for name in packages if name))
 
     def test_tampered_playwright_lockfile_sri_is_rejected(self) -> None:
@@ -953,7 +1033,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             value = json.loads((ROOT / "manifests" / "playwright-mcp-package-lock.json").read_text())
             value["packages"]["node_modules/playwright"]["integrity"] = "sha512-tampered"
             lockfile.write_text(json.dumps(value), encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "SRI"):
+            with self.assertRaisesRegex(RuntimeError, "approved package graph"):
                 self.engine.validate_playwright_lockfile(lockfile)
 
     def test_detect_and_plan_are_read_only_and_expose_collisions(self) -> None:
@@ -1069,13 +1149,13 @@ class AdditiveHarnessTests(unittest.TestCase):
             node, cli = target["home"] / "node", target["home"] / "node_modules" / "@playwright" / "mcp" / "cli.js"
             cli.parent.mkdir(parents=True)
             cli.write_text("fixture", encoding="utf-8")
-            node.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'v20.0.0\\n'; else printf '@playwright/mcp 0.0.79\\n'; fi\n", encoding="utf-8")
+            node.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'v20.0.0\\n'; else printf '@playwright/mcp 0.0.80\\n'; fi\n", encoding="utf-8")
             node.chmod(0o755)
             target["opencode_config"].write_text(json.dumps({"mcp": {"playwright": {"type": "local", "command": [str(node), str(cli)]}}}), encoding="utf-8")
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
             entry = next(item for item in plan["dependencies"] if item["id"] == "playwright")
             self.assertEqual(entry["action"], "skip-incompatible-existing")
-            node.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'v20.0.0\\n'; else printf '@playwright/mcp 0.0.78\\n'; fi\n", encoding="utf-8")
+            node.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'v20.0.0\\n'; else printf '@playwright/mcp 0.0.79\\n'; fi\n", encoding="utf-8")
             plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
             entry = next(item for item in plan["dependencies"] if item["id"] == "playwright")
             self.assertEqual(entry["action"], "link-existing")

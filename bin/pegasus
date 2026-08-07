@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import datetime as dt
 import hashlib
 import json
@@ -37,9 +36,26 @@ NOTIFIER_PACKAGE = "@mohak34/opencode-notifier"
 NOTIFIER_VERSION = "0.2.4"
 NOTIFIER_INTEGRITY = "sha512-xsfmqr6scB43pi+fZ0R74xD63ELM0MqMZnR/9AWWSescEObYyAcXvaSgiXG/9b2KrXxc8NvcLqTOLPiVJOhKaw=="
 PLAYWRIGHT_PACKAGE = "@playwright/mcp"
-PLAYWRIGHT_VERSION = "0.0.78"
+PLAYWRIGHT_VERSION = "0.0.79"
 PLAYWRIGHT_PACKAGE_PATH = ROOT / "manifests" / "playwright-mcp-package.json"
 PLAYWRIGHT_LOCK_PATH = ROOT / "manifests" / "playwright-mcp-package-lock.json"
+PLAYWRIGHT_LOCK_PACKAGES = {
+    "node_modules/@playwright/mcp": {
+        "version": "0.0.79",
+        "resolved": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.79.tgz",
+        "integrity": "sha512-VpqD4a3vFyGQMY9sh3UJiO6wjcurggkljKfAyCHL0QWGY5m6Ehr3MNsAAHPDHO//n13g0PCjpHatAOiulrqdZQ==",
+    },
+    "node_modules/playwright": {
+        "version": "1.63.0-alpha-2026-08-05",
+        "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.63.0-alpha-2026-08-05.tgz",
+        "integrity": "sha512-zbGZUK+JYkoDV3cUgfvh2czTBJL34Gmz5gHVI25xiIpvYSR17Q1M7TS8hnwECUe+IkKaeXbKrSyJTyogm2DVWw==",
+    },
+    "node_modules/playwright-core": {
+        "version": "1.63.0-alpha-2026-08-05",
+        "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0-alpha-2026-08-05.tgz",
+        "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg==",
+    },
+}
 FORBIDDEN_PAYLOAD_SOURCES = {
     "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
     "source/opencode/tui.json",
@@ -97,19 +113,14 @@ def validate_playwright_lockfile(path: Path, package_path: Path = PLAYWRIGHT_PAC
         fail("Playwright package must contain one fixed dependency without lifecycle scripts")
     lockfile = load_json(path)
     packages = lockfile.get("packages")
-    expected = {"node_modules/@playwright/mcp", "node_modules/fsevents", "node_modules/playwright", "node_modules/playwright-core"}
+    expected = set(PLAYWRIGHT_LOCK_PACKAGES)
     if lockfile.get("name") != package["name"] or lockfile.get("lockfileVersion") != 3 or lockfile.get("requires") is not True:
         fail("Playwright lockfile metadata does not match the fixed package")
     if not isinstance(packages, dict) or set(packages) - {""} != expected or packages.get("", {}).get("dependencies") != package["dependencies"]:
         fail("Playwright lockfile must contain the fixed package graph")
-    for name in expected:
-        integrity = packages[name].get("integrity")
-        try:
-            valid = isinstance(integrity, str) and integrity.startswith("sha512-") and len(base64.b64decode(integrity.removeprefix("sha512-"), validate=True)) == 64
-        except ValueError:
-            valid = False
-        if not valid:
-            fail("Playwright lockfile has invalid SRI")
+    for name, expected_package in PLAYWRIGHT_LOCK_PACKAGES.items():
+        if any(packages[name].get(field) != value for field, value in expected_package.items()):
+            fail("Playwright lockfile does not match the approved package graph")
     return True
 
 
@@ -217,7 +228,7 @@ def expected_probe(item: dict) -> str:
     return {
         "cbm": "codebase-memory-mcp 0.9.0",
         "engram": "engram 1.20.0",
-        "playwright": "@playwright/mcp 0.0.78",
+        "playwright": "@playwright/mcp 0.0.79",
     }[item["id"]]
 
 
@@ -441,7 +452,8 @@ def probe_dependency(item: dict, destination: Path) -> None:
 
 
 def run_npm(command: list[str], cwd: Path) -> None:
-    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True, timeout=120, check=False)
+    environment = {"PATH": os.environ.get("PATH", ""), "HOME": str(cwd), "NPM_CONFIG_REGISTRY": "https://registry.npmjs.org/", "NPM_CONFIG_USERCONFIG": os.devnull, "NPM_CONFIG_GLOBALCONFIG": os.devnull, "NPM_CONFIG_IGNORE_SCRIPTS": "true", "npm_config_registry": "https://registry.npmjs.org/"}
+    result = subprocess.run(command, cwd=cwd, env=environment, text=True, capture_output=True, timeout=120, check=False)
     if result.returncode:
         fail(f"npm ci failed: {(result.stderr or result.stdout).strip()}")
 

@@ -9,6 +9,26 @@ from pathlib import Path
 
 
 PROFILES = frozenset({"cbm", "engram", "playwright", "context7", "final"})
+PLAYWRIGHT_PROFILES = frozenset({"playwright", "final"})
+PLAYWRIGHT_PACKAGES = {
+    "@playwright/mcp": {
+        "version": "0.0.79",
+        "resolved": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.79.tgz",
+        "integrity": "sha512-VpqD4a3vFyGQMY9sh3UJiO6wjcurggkljKfAyCHL0QWGY5m6Ehr3MNsAAHPDHO//n13g0PCjpHatAOiulrqdZQ==",
+    },
+    "playwright": {
+        "version": "1.63.0-alpha-2026-08-05",
+        "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.63.0-alpha-2026-08-05.tgz",
+        "integrity": "sha512-zbGZUK+JYkoDV3cUgfvh2czTBJL34Gmz5gHVI25xiIpvYSR17Q1M7TS8hnwECUe+IkKaeXbKrSyJTyogm2DVWw==",
+    },
+    "playwright-core": {
+        "version": "1.63.0-alpha-2026-08-05",
+        "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0-alpha-2026-08-05.tgz",
+        "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg==",
+    },
+}
+PLAYWRIGHT_REGISTRY = "https://registry.npmjs.org/"
+PLAYWRIGHT_INSTALL = {"argv": ["npm", "ci", "--ignore-scripts"], "result": "PASS"}
 SCHEMA = "pegasus-harness-rc-acceptance/v3"
 AGGREGATE_SCHEMA = "pegasus-harness-rc-acceptance-matrix/v3"
 AGGREGATE_NAME = "rc-acceptance-aggregate.json"
@@ -64,6 +84,30 @@ def expected_identity(archive: Path, checksum: Path, manifest: Path) -> dict[str
     }
 
 
+def verify_playwright_graph(record: dict) -> None:
+    graph = record.get("playwright_graph")
+    if not isinstance(graph, dict):
+        raise ValueError("Playwright graph evidence is missing")
+    if graph.get("version") != "0.0.79":
+        raise ValueError("Playwright graph version is invalid")
+    if graph.get("registry") != PLAYWRIGHT_REGISTRY:
+        raise ValueError("Playwright graph registry is invalid")
+    if graph.get("packages") != PLAYWRIGHT_PACKAGES:
+        raise ValueError("Playwright package graph is invalid")
+    if graph.get("install") != PLAYWRIGHT_INSTALL:
+        raise ValueError("Playwright install evidence is invalid")
+    entrypoint = graph.get("direct_entrypoint")
+    if not isinstance(entrypoint, dict):
+        raise ValueError("Playwright entrypoint evidence is missing")
+    argv = entrypoint.get("argv")
+    if (not isinstance(argv, list) or len(argv) != 3 or not all(isinstance(value, str) for value in argv)
+            or not Path(argv[0]).is_absolute() or not Path(argv[1]).is_absolute()
+            or not argv[1].endswith("/dependencies/playwright/@playwright/mcp/cli.js")
+            or argv[2] != "--version" or entrypoint.get("stdout") != "@playwright/mcp 0.0.79"
+            or entrypoint.get("exit_code") != 0):
+        raise ValueError("Playwright entrypoint evidence is invalid")
+
+
 def verify_records(records: list[dict], identity: dict[str, str]) -> dict[str, dict]:
     by_profile: dict[str, dict] = {}
     for record in records:
@@ -80,6 +124,10 @@ def verify_records(records: list[dict], identity: dict[str, str]) -> dict[str, d
             raise ValueError(f"profile did not pass: {profile}")
         if record.get("rc") != identity:
             raise ValueError(f"RC identity mismatch for profile: {profile}")
+        if profile in PLAYWRIGHT_PROFILES:
+            verify_playwright_graph(record)
+        elif "playwright_graph" in record:
+            raise ValueError(f"unexpected Playwright graph evidence for declined profile: {profile}")
     return by_profile
 
 
@@ -96,6 +144,7 @@ def aggregate(archive: Path, checksum: Path, manifest: Path, evidence_dir: Path)
         "rc": identity,
         "profiles": sorted(records),
         "profile_evidence": {profile: record["journal"] for profile, record in sorted(records.items())},
+        "playwright_graph": {profile: records[profile]["playwright_graph"] for profile in sorted(PLAYWRIGHT_PROFILES)},
         "purpose": "promotion-gate-input-only",
     }, indent=2) + "\n"
     with output.open("x", encoding="utf-8") as stream:
