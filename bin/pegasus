@@ -230,6 +230,34 @@ def regular_executable(value: object) -> Path | None:
     return path.resolve()
 
 
+def path_stat(path: Path) -> os.stat_result:
+    return path.stat()
+
+
+def trusted_external_browser(value: object, target_home: Path) -> Path:
+    """Accept only a root-controlled browser outside the target's control."""
+    if not isinstance(value, (str, Path)):
+        fail("external browser path is invalid")
+    browser = Path(value)
+    if not browser.is_absolute() or browser.is_symlink() or not browser.is_file() or not os.access(browser, os.X_OK):
+        fail("external browser must be an absolute regular non-symlink executable")
+    try:
+        browser.relative_to(target_home)
+    except ValueError:
+        pass
+    else:
+        fail("external browser must be outside the target home")
+    for item in (browser, *browser.parents):
+        if item.is_symlink() or not item.is_dir() and item != browser:
+            fail("external browser has an unsafe path")
+        metadata = path_stat(item)
+        if metadata.st_uid != 0:
+            fail("external browser and its ancestors must be root-owned")
+        if metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            fail("external browser and its ancestors must not be group/world-writable")
+    return browser
+
+
 def successful_probe(command: list[str], expected: str) -> bool:
     try:
         result = subprocess.run(command, text=True, capture_output=True, timeout=PROBE_TIMEOUT, check=False)
@@ -309,8 +337,15 @@ def plan(state: dict, catalog: dict, contract: dict) -> dict:
             "remote_mcps": [{**CONTEXT7, "action": "confirm-required" if "context7" not in config.get("mcp", {}) else "skip-collision"}]}
 
 
-def browser_preflight(plan_value: dict, target: dict[str, Path]) -> dict:
+def browser_preflight(plan_value: dict, target: dict[str, Path], browser_path: object = None) -> dict:
     playwright = next(item for item in plan_value["dependencies"] if item["id"] == "playwright")
+    if browser_path is not None:
+        try:
+            browser = trusted_external_browser(browser_path, target["home"])
+        except RuntimeError as error:
+            return {"ready": False, "browser": None, "reason": str(error)}
+        return {"ready": True, "browser": str(browser),
+                "reason": "using the supplied root-controlled external browser"}
     candidates = (target["home"] / ".cache" / "ms-playwright" / "chromium", target["home"] / ".local" / "bin" / "chromium")
     browser = next((item for item in candidates if item.exists() and not item.is_symlink()), None)
     return {"ready": browser is not None, "browser": str(browser) if browser else None,
@@ -715,6 +750,7 @@ def main() -> int:
     parser.add_argument("--home", type=Path, help="test-only target home; never use for another user")
     parser.add_argument("--release-root", type=Path, default=ROOT, help="verified extracted release root")
     parser.add_argument("--release-identity", help="validated RC archive identity from acceptance preflight")
+    parser.add_argument("--browser", type=Path, help="root-controlled external browser for Playwright preflight")
     parser.add_argument("--target-user", default=os.environ.get("USER", ""))
     parser.add_argument("--client", choices=(*CLIENTS, "all"), default="opencode")
     parser.add_argument("--confirm", action="append", default=[])
@@ -730,7 +766,7 @@ def main() -> int:
     value = plan(state, load_catalog(), load_contract())
     if args.command == "plan": print(json.dumps(value, indent=2)); return 0
     if args.command == "apply":
-        ready = browser_preflight(value, target)["ready"]
+        ready = browser_preflight(value, target, args.browser)["ready"]
         try:
             identity = json.loads(args.release_identity) if args.release_identity else None
         except json.JSONDecodeError:

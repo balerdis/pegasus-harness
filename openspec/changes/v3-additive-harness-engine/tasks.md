@@ -18,7 +18,7 @@ Chain strategy: size-exception
 
 ## Current Status
 
-Baseline engine, payload, five-profile acceptance laboratory, and its test-only aggregate promotion gate are implemented. **15/15 tasks are complete.** No runtime/local system changes were run as part of this update.
+Baseline engine, payload, five-profile acceptance laboratory, its test-only aggregate promotion gate, and trusted external-browser preflight are implemented. **16/16 tasks are complete.** No runtime/local system changes were run as part of this update.
 
 ### Suggested Work Units
 
@@ -56,3 +56,4 @@ Baseline engine, payload, five-profile acceptance laboratory, and its test-only 
 - [x] 4.5 Update `docs/aceptacion-rc-v3.1.md`, `docs/release-distribution.md`, and `docs/instalacion-aditiva-v3.md` with the orchestrator-only matrix commands, preflight/evidence boundaries, fixed-host behavior, non-product rule, and new-commit/new-RC rule after failure.
 - [x] 4.6 Add a test-only matrix verifier that requires exactly the five `PASS` profile records for one explicit RC archive/checksum/manifest identity, rejects unsafe or malformed evidence, and writes one aggregate promotion-gate input; cover it with offline fixtures.
 - [x] 4.7 Fix RC staging handoff: retain root-private verified extraction, copy only after verification into a root-owned payload below a root-controlled `/var/lib` ancestor, grant the target group read/execute only, reject unsafe archive permission bits/handoff paths, and cover offline access/ownership/refusal checks.
+- [x] 4.8 Add acceptance/provision `--browser <absolute-path>` propagation to Playwright preflight. Accept only a root-owned, non-symlink regular executable and root-controlled non-writable ancestors outside the target home; preserve target-home detection as fallback and cover offline acceptance/refusals.

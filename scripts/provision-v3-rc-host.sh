@@ -9,7 +9,7 @@ OPENCODE_SRI='sha512-WVB/FwFdG4NLqEdraW264/q5WFiUDTwU4hDN/6qSLamsCV+SUurZhDOrmXC
 
 usage() {
   cat <<'EOF'
-Usage: sudo scripts/provision-v3-rc-host.sh --profile <cbm|engram|playwright|context7|final> --rc-archive <pegasus-harness-v3.1.0-rc.N.tar.gz> --confirm-recreate-user <mapped-user>
+Usage: sudo scripts/provision-v3-rc-host.sh --profile <cbm|engram|playwright|context7|final> --rc-archive <pegasus-harness-v3.1.0-rc.N.tar.gz> --confirm-recreate-user <mapped-user> [--browser <absolute-path>]
 
 This is a test-only host emulator. It recreates exactly one mapped dedicated
 account and installs fixed Node/OpenCode only inside that new account.
@@ -17,12 +17,13 @@ EOF
 }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 2; }
 
-profile='' rc_archive='' recreate_user=''
+profile='' rc_archive='' recreate_user='' browser=''
 while (($#)); do
   case "$1" in
     --profile) (($# >= 2)) || fail '--profile requires a profile name'; profile=$2; shift 2 ;;
     --rc-archive) (($# >= 2)) || fail '--rc-archive requires an RC archive path'; rc_archive=$2; shift 2 ;;
     --confirm-recreate-user) (($# >= 2)) || fail '--confirm-recreate-user requires the mapped user'; recreate_user=$2; shift 2 ;;
+    --browser) (($# >= 2)) || fail '--browser requires an absolute browser path'; browser=$2; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) fail "unsupported argument: $1" ;;
   esac
@@ -42,6 +43,14 @@ esac
 [[ $(basename -- "$rc_archive") =~ ^pegasus-harness-v3\.1\.0-rc\.[1-9][0-9]*\.tar\.gz$ ]] || fail 'only v3.1.0-rc.N archives are accepted'
 target_home="/home/$target_user"
 [[ $target_user != serg && $target_user != root && $target_home != /home/serg && $target_home != / ]] || fail 'serg and unsafe homes are protected'
+if [[ -n $browser ]]; then
+  [[ $browser == /* && -f $browser && ! -L $browser && -x $browser && $browser != "$target_home"/* ]] || fail 'browser must be an absolute regular executable outside the target home'
+  while :; do
+    [[ ! -L $browser && $(stat -c %U -- "$browser") == root && $((8#$(stat -c %a -- "$browser") & 022)) -eq 0 ]] || fail 'browser path must be root-owned and not group/world-writable'
+    [[ $browser == / ]] && break
+    browser=$(dirname -- "$browser")
+  done
+fi
 
 # Refuse aliases or repurposed accounts before the one explicit destructive boundary.
 if getent passwd -- "$target_user" >/dev/null; then

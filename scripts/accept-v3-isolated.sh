@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: sudo scripts/accept-v3-isolated.sh --profile <cbm|engram|playwright|context7|final> --rc-archive <RC-archive.tar.gz> --rc-checksum <RC-archive.tar.gz.sha256> --release-manifest <RC-manifest.json> --staging-dir <new-absolute-directory> --evidence-file <new-absolute-file> --confirm-recreate-user <mapped-user>
+Usage: sudo scripts/accept-v3-isolated.sh --profile <cbm|engram|playwright|context7|final> --rc-archive <RC-archive.tar.gz> --rc-checksum <RC-archive.tar.gz.sha256> --release-manifest <RC-manifest.json> --staging-dir <new-absolute-directory> --evidence-file <new-absolute-file> --confirm-recreate-user <mapped-user> [--browser <absolute-path>]
 
 This test-only acceptance orchestrator validates the RC before recreating its
 single mapped account, provisions its fixed host, and applies the profile plan.
@@ -12,7 +12,7 @@ EOF
 }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 2; }
 
-profile='' archive='' rc_checksum='' release_manifest='' staging_dir='' evidence_file='' recreate_user=''
+profile='' archive='' rc_checksum='' release_manifest='' staging_dir='' evidence_file='' recreate_user='' browser=''
 while (($#)); do
   case "$1" in
     --profile) (($# >= 2)) || fail '--profile requires a profile name'; profile=$2; shift 2 ;;
@@ -22,6 +22,7 @@ while (($#)); do
     --staging-dir) (($# >= 2)) || fail '--staging-dir requires a new absolute directory'; staging_dir=$2; shift 2 ;;
     --evidence-file) (($# >= 2)) || fail '--evidence-file requires a new absolute file'; evidence_file=$2; shift 2 ;;
     --confirm-recreate-user) (($# >= 2)) || fail '--confirm-recreate-user requires the mapped user'; recreate_user=$2; shift 2 ;;
+    --browser) (($# >= 2)) || fail '--browser requires an absolute browser path'; browser=$2; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) fail "unsupported argument: $1" ;;
   esac
@@ -30,6 +31,7 @@ done
 [[ $(id -u) -eq 0 ]] || fail 'run this RC acceptance as root with sudo'
 [[ -n $profile && -n $archive && -n $rc_checksum && -n $release_manifest && -n $staging_dir && -n $evidence_file && -n $recreate_user ]] || fail 'profile, RC archive/checksum/manifest, paths, and recreation acknowledgement are required'
 [[ $staging_dir == /* && $evidence_file == /* ]] || fail 'staging directory and evidence file must be absolute paths'
+[[ -z $browser || $browser == /* ]] || fail 'browser path must be absolute'
 [[ $staging_dir != / && $staging_dir != /home/* && ! -e $staging_dir && ! -e $evidence_file ]] || fail 'staging/evidence paths must be new and outside /home'
 [[ -d $(dirname -- "$staging_dir") && -d $(dirname -- "$evidence_file") ]] || fail 'staging and evidence parents must already exist'
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
@@ -57,7 +59,9 @@ else
   : > "$snapshot"
 fi
 
-"$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user"
+browser_args=()
+[[ -z $browser ]] || browser_args=(--browser "$browser")
+"$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user" "${browser_args[@]}"
 target_home="/home/$target_user"
 host_path="$target_home/.local/pegasus-acceptance/node/bin:$target_home/.local/bin:/usr/local/bin:/usr/bin:/bin"
 # The contract tool creates and validates every ancestor under /var/lib before
@@ -71,7 +75,7 @@ IFS=, read -r -a declined <<< "$decline_csv"
 for mcp in "${confirmed[@]}"; do [[ -n $mcp ]] && confirm_args+=(--confirm "$mcp"); done
 for mcp in "${declined[@]}"; do [[ -n $mcp ]] && decline_args+=(--decline "$mcp"); done
 apply_result="$staging_dir/apply-result.json"
-sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --release-root "$release_root" --release-identity "$release_identity" --home "$target_home" --target-user "$target_user" --client opencode "${confirm_args[@]}" "${decline_args[@]}" apply > "$apply_result"
+sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --release-root "$release_root" --release-identity "$release_identity" --home "$target_home" --target-user "$target_user" --client opencode "${browser_args[@]}" "${confirm_args[@]}" "${decline_args[@]}" apply > "$apply_result"
 sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" python3 "$release_root/bin/pegasus" --release-root "$release_root" --home "$target_home" --target-user "$target_user" --client opencode validate
 sudo -n -u "$target_user" -H env "HOME=$target_home" "PATH=$host_path" npm --prefix "$target_home/.config/opencode/notifier" ci --ignore-scripts
 

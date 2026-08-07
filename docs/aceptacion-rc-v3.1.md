@@ -33,7 +33,7 @@ sudo ./scripts/accept-v3-isolated.sh \
   --confirm-recreate-user pegasus-harness
 ```
 
-Para Playwright, instalá el navegador externamente en la cuenta recreada antes del apply; Pegasus no lo descarga. Una prueba fallida requiere un commit y RC nuevos: nunca se muta un tag.
+Para Playwright, instalá el navegador externamente; Pegasus no lo descarga. Se puede pasar `--browser <ruta-absoluta>` al orquestador, que lo propaga al provisionador y al preflight. La ruta debe ser un ejecutable regular, no symlink, root-owned, sin escritura grupal/global y fuera del home objetivo; todos sus ancestros deben cumplir la misma propiedad y permisos. Si se omite, se conserva la detección existente en `~/.cache/ms-playwright/chromium` y `~/.local/bin/chromium`. Una prueba fallida requiere un commit y RC nuevos: nunca se muta un tag.
 
 ## Artefactos verificados
 

@@ -51,6 +51,11 @@ After per-dependency confirmation, Playwright MUST use fixed `package.json`/`pac
 - WHEN fixed dependency setup and preflight run
 - THEN `npm ci --ignore-scripts` is used, no orphan config/artifact exists after cancellation, and external installation enables retry
 
+#### Scenario: Trusted explicit external Chrome
+- GIVEN RC acceptance receives `--browser <absolute-path>`
+- WHEN Playwright preflight runs
+- THEN it accepts only a regular, non-symlink executable owned by root with no group/world write bits, whose ancestors are likewise root-controlled and which is outside the target home; otherwise it refuses before apply. Existing target-home browser detection remains the fallback and Pegasus never installs a browser.
+
 ### Requirement: Granular apply and conservative rollback
 
 Apply MUST materialize selected artifacts only at file/key granularity, preserve user content/unrelated keys, and journal identity, release, source/hash, target/key, and baseline. Update/removal/rollback MUST require unchanged Pegasus ownership.

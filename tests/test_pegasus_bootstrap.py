@@ -228,9 +228,11 @@ class AdditiveHarnessTests(unittest.TestCase):
     def test_acceptance_script_is_static_and_refuses_unsafe_defaults(self) -> None:
         script = ROOT / "scripts/accept-v3-isolated.sh"
         source = script.read_text(encoding="utf-8")
-        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "--release-identity", "release_identity", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "pegasus-harness-journal/v3", "mapped user", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root"):
+        for required in ("--profile", "--rc-archive", "--rc-checksum", "--release-manifest", "--staging-dir", "--evidence-file", "--confirm-recreate-user", "--browser", "browser_args", "--release-identity", "release_identity", "acceptance_v3_contract.py", "provision-v3-rc-host.sh", "serg", "declined_no_orphans", "pegasus-harness-journal/v3", "mapped user", '"rc"', "archive_name", "checksum_sha256", "manifest_sha256", "archive_root"):
             self.assertIn(required, source)
         self.assertIn('"$provisioner" --profile "$profile" --rc-archive "$archive" --confirm-recreate-user "$recreate_user"', source)
+        provisioner = (ROOT / "scripts/provision-v3-rc-host.sh").read_text(encoding="utf-8")
+        self.assertIn("--browser", provisioner)
         for forbidden in ("useradd", "userdel", "rm -rf", "--confirm-clean-home"):
             self.assertNotIn(forbidden, source)
         self.assertIn("Automated tests may inspect this file but must never run it", source)
@@ -1128,6 +1130,36 @@ class AdditiveHarnessTests(unittest.TestCase):
             browser.write_text("external browser", encoding="utf-8")
             self.assertTrue(self.engine.browser_preflight(plan, target)["ready"])
 
+    def test_external_playwright_browser_preflight_requires_root_control_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / "target-home"
+            target = self.temporary_target(home)
+            plan = self.engine.plan(self.engine.detect(target, "opencode"), self.engine.load_catalog(), self.engine.load_contract())
+            browser = Path(temporary) / "google-chrome"
+            self.fixture_command(browser, "Chrome")
+            root_mode = SimpleNamespace(st_uid=0, st_mode=0o755)
+            with patch.object(self.engine, "path_stat", return_value=root_mode):
+                result = self.engine.browser_preflight(plan, target, browser)
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["browser"], str(browser))
+            self.assertIn("external", result["reason"])
+
+            self.assertFalse(self.engine.browser_preflight(plan, target, Path(temporary) / "missing-chrome")["ready"])
+            linked = Path(temporary) / "linked-chrome"
+            linked.symlink_to(browser)
+            with patch.object(self.engine, "path_stat", return_value=root_mode):
+                self.assertFalse(self.engine.browser_preflight(plan, target, linked)["ready"])
+
+            unsafe_mode = SimpleNamespace(st_uid=0, st_mode=0o775)
+            with patch.object(self.engine, "path_stat", return_value=unsafe_mode):
+                self.assertFalse(self.engine.browser_preflight(plan, target, browser)["ready"])
+
+            controlled = home / "bin" / "google-chrome"
+            controlled.parent.mkdir(parents=True)
+            self.fixture_command(controlled, "Chrome")
+            with patch.object(self.engine, "path_stat", return_value=root_mode):
+                self.assertFalse(self.engine.browser_preflight(plan, target, controlled)["ready"])
+
     def test_granular_apply_and_rollback_preserve_user_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = self.temporary_target(Path(temporary))
@@ -1150,6 +1182,8 @@ class AdditiveHarnessTests(unittest.TestCase):
         subprocess.run([sys.executable, str(ROOT / "tools" / "validate_snapshot.py")], cwd=ROOT, check=True)
         subprocess.run([sys.executable, str(ROOT / "tools" / "check_docs_links.py")], cwd=ROOT, check=True)
         subprocess.run(["bash", "-n", str(ROOT / "install.sh")], check=True)
+        subprocess.run(["bash", "-n", str(ROOT / "scripts" / "accept-v3-isolated.sh")], check=True)
+        subprocess.run(["bash", "-n", str(ROOT / "scripts" / "provision-v3-rc-host.sh")], check=True)
 
 
 if __name__ == "__main__":
