@@ -1,59 +1,63 @@
-# Pegasus Harness v3.1.0
+# Pegasus Harness v3.1
 
-Pegasus suma artifacts seleccionados a una instalación existente de OpenCode o Claude Code. La línea de release es `3.1.0`: no reemplaza directorios, archivos ni claves de usuario, y no toma propiedad de lo que ya existía.
+Pegasus Harness es un conjunto open source con licencia MIT de prompts, agentes, skills, comandos e integraciones opcionales para trabajar con OpenCode de forma más ordenada. Sirve para distintos clientes y repositorios: el flujo queda en manos del equipo que lo usa, no de una configuración particular de cliente.
+
+Pegasus es aditivo. Revisa lo que ya existe, muestra un plan y crea solamente los artifacts seleccionados que faltan. No toma propiedad de una instalación existente de OpenCode, su configuración ni sus archivos.
+
+> Este repositorio documenta la línea v3.1. No afirma que se haya publicado un release final `v3.1.0`.
 
 ## Camino rápido
 
-1. Lea el plan: `sudo ./install.sh --target-user <linux-user> --client opencode`.
-2. Revise cada dependencia ausente y confirme o rechace individualmente con `--confirm` o `--decline`.
-3. Reinicie OpenCode después de una aplicación exitosa: su configuración se carga al inicio.
-
-La guía completa, migración y aceptación aislada están en [instalación aditiva v3](docs/instalacion-aditiva-v3.md).
-
-## Antes de instalar
-
-La frontera de confianza es simple: usted obtiene el archivo, checksum y manifest desde un canal autenticado; verifica su integridad; y prepara OpenCode/CBM por fuera de Pegasus, con el procedimiento que usted considere confiable. Recién después Pegasus copia solo sus assets locales verificados a la cuenta indicada.
-
-Para `--client opencode` o `--client all`, la cuenta destino necesita OpenCode instalado por fuera de Pegasus. Para Playwright también necesita un navegador compatible instalado externamente antes del apply.
-
-- OpenCode ejecutable en `~/.opencode/bin/opencode` o `~/.local/bin/opencode`.
-- CBM ejecutable en `~/.local/bin/codebase-memory-mcp`.
-- Que ambos respondan correctamente a `--version` y `--help`. Pegasus no impone una versión inventada: valida que el binario local sea ejecutable y responda sin mutar nada.
-
-El wrapper se ejecuta como root, exige Python `3.12+`, exige `--target-user` no root y luego opera dentro del home de esa persona con `sudo -u <linux-user> -H`. Los assets quedan bajo propiedad de la cuenta destino. Nunca toma el `PATH` de root para buscar OpenCode o CBM. Si falta un prerrequisito, una sonda falla o el directorio de cliente ya existe, se detiene antes de escribir assets. Si la validación final devuelve error, inspeccione el estado y use `uninstall` antes de reintentar; Pegasus nunca descarga dependencias ni continúa salteando la validación.
-
-## Instalación segura
+1. Lea [MANUAL.md](MANUAL.md) y prepare OpenCode por fuera de Pegasus.
+2. Verifique el archive, checksum y manifest obtenidos desde su canal confiable.
+3. Revise el plan, confirme solamente los MCPs que va a usar y reinicie OpenCode después de un apply exitoso.
 
 ```sh
-sha256sum -c pegasus-harness-v3.1.0.tar.gz.sha256
-tar -xzf pegasus-harness-v3.1.0.tar.gz
-cd pegasus-harness-v3.1.0
-sudo ./install.sh --target-user <linux-user> --client opencode --decline cbm --decline engram --decline playwright
+sha256sum -c pegasus-harness-v3.1.0-rc.N.tar.gz.sha256
+tar -xzf pegasus-harness-v3.1.0-rc.N.tar.gz
+cd pegasus-harness-v3.1.0-rc.N
+sudo ./install.sh --target-user <linux-user> --client opencode \
+  --decline cbm --decline engram --decline playwright --decline context7
 ```
 
-`--client` acepta `opencode`, `claude-code` o `all`. Para preparar un release seguro, primero valide el snapshot, cree un tag anotado sobre ese commit, genere un archivo nuevo y publique juntos archivo, checksum y manifest. El generador no crea tags ni publica assets:
+El último comando es un ejemplo sin MCPs opcionales. Revise el plan y reemplace cada `--decline` solo cuando haya decidido confirmar esa dependencia.
 
-```sh
-python3 tools/build_release_manifest.py --tag v3.1.0-rc.1 --archive dist/pegasus-harness-v3.1.0-rc.1.tar.gz --output dist/release-manifest.json
-```
+## Lo que sigue bajo su control
 
-## Migración desde v2
+| Tema | Cómo trabaja Pegasus |
+| --- | --- |
+| OpenCode | Usted instala, actualiza y configura el cliente anfitrión. Pegasus no lo hace por usted. |
+| Archivos y claves de configuración existentes | Se detectan y se preservan. Un collision se informa; no se sobreescribe. |
+| MCPs opcionales | Cada MCP faltante requiere su propia confirmación. Rechazarlo no deja descarga, clave de configuración ni huérfano. |
+| Credenciales y proveedores | Nunca se distribuyen acá. Configúrelos con el mecanismo seguro de la cuenta destino. |
+| Rollback | El comando `uninstall` elimina solamente artifacts sin cambios que Pegasus creó y registró en su journal. |
 
-El estado v2 es ambiguo. v3 lo informa, no lo adopta, no lo reescribe y no lo elimina. Los collisions se preservan y el journal v3 solo registra creaciones verificables.
+El límite completo de distribución está en [docs/contrato-inclusion-artifacts.md](docs/contrato-inclusion-artifacts.md). El procedimiento práctico de instalación aditiva y rollback está en [docs/instalacion-aditiva-v3.md](docs/instalacion-aditiva-v3.md).
 
-## Arquitectura
+## Qué incluye
 
-- `source/core/skills/`: skills canonicos y sus referencias.
-- `source/opencode/`: configuracion, agente y comando de verificacion.
-- `source/adapters/`: adaptador sin plugins para Claude Code.
-- `tools/`: validadores, generador de registro y herramienta de archivo de release.
-- `manifests/`: contrato e integridad del release.
+Pegasus distribuye un payload seleccionado para OpenCode, no un home directory de reemplazo:
 
-CBM es obligatorio para descubrir estructura de codigo, analizar callers y flujos, medir impacto y elegir tests cuando aplique. Es inteligencia de codigo, no prueba de comportamiento: las pruebas y los checks de ejecucion aportan esa evidencia. La busqueda directa queda reservada para literales, archivos no-codigo, configuracion, grafo sin indice o desactualizado, o falla de CBM.
+- commands para SDD, contexto, handoff, creación y registro de skills;
+- el orquestador de Pegasus y sus roles de implementación/verificación;
+- skills reutilizables y sus referencias;
+- plugins locales seleccionados y, solo si se confirman, las integraciones opcionales CBM, Engram, Playwright y Context7.
 
-Para cambios ejecutables o de configuracion, `sdd-verify` es la unica autoridad de readiness.
+El source queda a la vista: los prompts están en `source/opencode/prompts/`, las instrucciones del orquestador en `source/opencode/agents/`, las skills en `source/core/skills/` y las claves de OpenCode distribuidas en `source/opencode/opencode.json`. Puede revisar esos archivos antes de aplicar algo y adaptar las instrucciones de su proyecto sin volver Pegasus específico de un cliente.
 
-## Validacion local
+## Cómo encaja el flujo
+
+La versión corta es: primero entender, después especificar, implementar por unidades chicas y probar el resultado. [architecture.md](architecture.md) explica las responsabilidades de SDD, TDD, OpenSpec, Engram y ChainPR sin esconder los límites operativos.
+
+Para cambios ejecutables o de configuración, `sdd-verify` es la autoridad final de readiness. CBM ayuda a descubrir estructura y callers; no reemplaza una prueba de comportamiento que pasó.
+
+## Prerrequisitos de OpenCode
+
+Para `--client opencode`, la cuenta destino necesita tener OpenCode instalado antes de ejecutar Pegasus. El wrapper también requiere Python 3.12+, una cuenta destino no-root y acceso `sudo` para entrar en esa cuenta. Para CBM, el ejecutable local debe responder a `--version` y `--help`; Playwright necesita un navegador compatible instalado externamente antes del apply.
+
+[MANUAL.md](MANUAL.md) tiene los pre-chequeos, el uso diario y la configuración de modelo por agente que distribuye esta línea.
+
+## Validar un checkout
 
 ```sh
 python3 tools/validate_snapshot.py
@@ -62,6 +66,14 @@ python3 -m py_compile bin/pegasus tools/*.py
 bash -n install.sh
 ```
 
-La instalacion no incluye credenciales. Configure proveedores y servicios externos con el mecanismo seguro de la cuenta destino. Después, reinicie OpenCode: lee su configuración al iniciar.
+Estos checks validan este checkout. No instalan OpenCode, no cambian una cuenta destino y no ejecutan la aceptación RC aislada.
 
-Consulte [la guia de instalacion limpia](docs/instalacion-limpia-v2.md) y [la distribucion de releases](docs/release-distribution.md).
+## Notas de release y aceptación
+
+La promoción de release es una operación manual separada. Un archive inmutable `v3.1.0-rc.N`, su checksum y su manifest pasan por la matriz aislada de cinco perfiles antes de que pueda crearse un tag final inmutable. Un fallo exige commit nuevo y RC nuevo; los tags no se mueven.
+
+Consulte [docs/release-distribution.md](docs/release-distribution.md) y [docs/aceptacion-rc-v3.1.md](docs/aceptacion-rc-v3.1.md) si queda a cargo de ese trabajo.
+
+## Licencia
+
+Pegasus Harness se distribuye bajo la [licencia MIT](LICENSE).
