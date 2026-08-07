@@ -16,6 +16,11 @@ PLAYWRIGHT_PACKAGES = {
         "resolved": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.79.tgz",
         "integrity": "sha512-VpqD4a3vFyGQMY9sh3UJiO6wjcurggkljKfAyCHL0QWGY5m6Ehr3MNsAAHPDHO//n13g0PCjpHatAOiulrqdZQ==",
     },
+    "fsevents": {
+        "version": "2.3.2",
+        "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.2.tgz",
+        "integrity": "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==",
+    },
     "playwright": {
         "version": "1.63.0-alpha-2026-08-05",
         "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.63.0-alpha-2026-08-05.tgz",
@@ -103,7 +108,7 @@ def verify_playwright_graph(record: dict) -> None:
     argv = entrypoint.get("argv")
     if (not isinstance(argv, list) or len(argv) != 3 or not all(isinstance(value, str) for value in argv)
             or not Path(argv[0]).is_absolute() or not Path(argv[1]).is_absolute()
-            or not argv[1].endswith("/dependencies/playwright/@playwright/mcp/cli.js")
+            or not argv[1].endswith("/dependencies/playwright/node_modules/@playwright/mcp/cli.js")
             or argv[2] != "--version" or entrypoint.get("stdout") != PLAYWRIGHT_PROBE_OUTPUT
             or entrypoint.get("exit_code") != 0):
         raise ValueError("Playwright entrypoint evidence is invalid")

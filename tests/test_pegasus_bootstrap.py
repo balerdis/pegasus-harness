@@ -8,6 +8,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -137,7 +138,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             "install": {"argv": ["npm", "ci", "--ignore-scripts"], "result": "PASS"},
             "packages": matrix.PLAYWRIGHT_PACKAGES,
             "direct_entrypoint": {
-                "argv": ["/opt/node/bin/node", "/home/fixture/.local/share/pegasus-harness/dependencies/playwright/@playwright/mcp/cli.js", "--version"],
+                "argv": ["/opt/node/bin/node", "/home/fixture/.local/share/pegasus-harness/dependencies/playwright/node_modules/@playwright/mcp/cli.js", "--version"],
                 "stdout": "Version 0.0.79",
                 "exit_code": 0,
             },
@@ -176,11 +177,14 @@ class AdditiveHarnessTests(unittest.TestCase):
             "    cli = root / 'node_modules/@playwright/mcp/cli.js'\n"
             "    cli.parent.mkdir(parents=True)\n"
             "    version = '0.0.80' if mode == 'wrong-version' else '0.0.79'\n"
-            "    cli.write_text(f\"if (process.argv.includes('--version')) console.log('Version {version}');\\n\")\n"
+            "    cli.write_text(f\"require('playwright-core/lib/utilsBundle'); if (process.argv.includes('--version')) console.log('Version {version}');\\n\")\n"
             "    for package in ('playwright', 'playwright-core'):\n"
             "        target = root / 'node_modules' / package / 'cli.js'\n"
             "        target.parent.mkdir(parents=True, exist_ok=True)\n"
             "        target.write_text('console.log(\\\"bin\\\");\\n')\n"
+            "    utils_bundle = root / 'node_modules/playwright-core/lib/utilsBundle.js'\n"
+            "    utils_bundle.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    utils_bundle.write_text('module.exports = {};\\n')\n"
             "    bin_dir = root / 'node_modules/.bin'\n"
             "    bin_dir.mkdir()\n"
             "    links = {'playwright-mcp': '../@playwright/mcp/cli.js', 'playwright': '../playwright/cli.js', 'playwright-core': '../playwright-core/cli.js'}\n"
@@ -1002,8 +1006,8 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.fake_npm(npm)
             item = copy.deepcopy(next(item for item in self.engine.load_contract()["dependencies"] if item["id"] == "playwright"))
             self.engine.install_playwright(item, destination, str(npm))
-            self.assertEqual((destination / "@playwright/mcp/cli.js").is_file(), True)
-            self.assertTrue((destination / ".bin/playwright").is_symlink())
+            self.assertEqual((destination / "node_modules/@playwright/mcp/cli.js").is_file(), True)
+            self.assertTrue((destination / "node_modules/.bin/playwright").is_symlink())
             self.engine.directory_digest(destination, allow_playwright_npm_bins=True)
             self.assertFalse(any(destination.parent.glob(".playwright-npm-*")))
             self.assertEqual((destination.parent / "npm-argv.txt").read_text(), "ci --ignore-scripts")
@@ -1012,6 +1016,24 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertIn('"NPM_CONFIG_USERCONFIG": str(user_config)', source)
             self.assertIn('"NPM_CONFIG_GLOBALCONFIG": str(global_config)', source)
             self.assertIn('"NPM_CONFIG_IGNORE_SCRIPTS": "true"', source)
+
+    def test_playwright_runtime_fixture_requires_the_core_utils_bundle(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required to execute the realistic Playwright runtime fixture")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            npm, destination = root / "npm", root / "dependencies" / "playwright"
+            self.fake_npm(npm)
+            item = copy.deepcopy(next(item for item in self.engine.load_contract()["dependencies"] if item["id"] == "playwright"))
+            self.engine.install_playwright(item, destination, str(npm))
+            command = [str(Path(node).resolve()), str(destination / "node_modules/@playwright/mcp/cli.js"), "--version"]
+            probe = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertEqual((probe.returncode, (probe.stdout + probe.stderr).strip()), (0, "Version 0.0.79"))
+            (destination / "node_modules/playwright-core/lib/utilsBundle.js").unlink()
+            missing_core = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(missing_core.returncode, 0)
+            self.assertIn("playwright-core/lib/utilsBundle", missing_core.stderr)
 
     def test_playwright_npm_uses_distinct_disposable_configs_for_npm_24(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1046,15 +1068,15 @@ class AdditiveHarnessTests(unittest.TestCase):
 
     def test_directory_digest_accepts_only_expected_in_root_playwright_bins(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "node_modules"
+            root = Path(temporary)
             for relative in self.engine.PLAYWRIGHT_BIN_LINKS.values():
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("cli\n", encoding="utf-8")
-            bin_dir = root / ".bin"
+            bin_dir = root / "node_modules/.bin"
             bin_dir.mkdir()
             for link, target in self.engine.PLAYWRIGHT_BIN_LINKS.items():
-                (root / link).symlink_to(Path("..") / target)
+                (root / link).symlink_to(Path("..") / Path(target).relative_to("node_modules"))
             self.assertTrue(self.engine.directory_digest(root, allow_playwright_npm_bins=True))
             with self.assertRaisesRegex(RuntimeError, "unsafe artifact"):
                 self.engine.directory_digest(root)
@@ -1068,15 +1090,15 @@ class AdditiveHarnessTests(unittest.TestCase):
         }
         for name, (link, target, target_type) in cases.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary) / "node_modules"
+                root = Path(temporary)
                 if target_type == "file":
-                    destination = root / "playwright/cli.js"
+                    destination = root / "node_modules/playwright/cli.js"
                     destination.parent.mkdir(parents=True)
                     destination.write_text("cli\n", encoding="utf-8")
                 elif target_type == "directory":
-                    (root / "playwright").mkdir(parents=True)
-                (root / link).parent.mkdir(parents=True, exist_ok=True)
-                (root / link).symlink_to(target)
+                    (root / "node_modules/playwright").mkdir(parents=True)
+                (root / "node_modules" / link).parent.mkdir(parents=True, exist_ok=True)
+                (root / "node_modules" / link).symlink_to(target)
                 with self.assertRaisesRegex(RuntimeError, "unsafe artifact"):
                     self.engine.directory_digest(root, allow_playwright_npm_bins=True)
 
@@ -1135,7 +1157,7 @@ class AdditiveHarnessTests(unittest.TestCase):
                                   declined={"cbm", "engram", "context7"})
             command = json.loads(target["opencode_config"].read_text(encoding="utf-8"))["mcp"]["playwright"]["command"]
             self.assertEqual(command, [
-                str(node.resolve()), str(target["dependencies"] / "playwright" / "@playwright" / "mcp" / "cli.js")
+                str(node.resolve()), str(target["dependencies"] / "playwright" / "node_modules" / "@playwright" / "mcp" / "cli.js")
             ])
             self.assertNotIn("{env:PEGASUS_PLAYWRIGHT_MCP_BIN}", command)
             self.assertNotEqual(command[0], "node")
@@ -1235,7 +1257,7 @@ class AdditiveHarnessTests(unittest.TestCase):
         self.assertEqual(contract["dependencies"][1]["integrity"]["sha256"], "7dc3003318e303bee269a4772144f3ce01c8ec700bfd524aaec76770acd389ca")
         self.assertEqual(contract["dependencies"][1]["archive_layout"], {"members": ["CHANGELOG.md", "LICENSE", "README.md", "engram"], "executables": {"engram": "0755"}})
         packages = json.loads((ROOT / "manifests" / "playwright-mcp-package-lock.json").read_text())["packages"]
-        self.assertEqual(set(packages) - {""}, {"node_modules/@playwright/mcp", "node_modules/playwright", "node_modules/playwright-core"})
+        self.assertEqual(set(packages) - {""}, {"node_modules/@playwright/mcp", "node_modules/fsevents", "node_modules/playwright", "node_modules/playwright-core"})
         self.assertTrue(all(packages[name]["integrity"].startswith("sha512-") for name in packages if name))
 
     def test_tampered_playwright_lockfile_sri_is_rejected(self) -> None:
@@ -1246,6 +1268,23 @@ class AdditiveHarnessTests(unittest.TestCase):
             lockfile.write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "approved package graph"):
                 self.engine.validate_playwright_lockfile(lockfile)
+
+    def test_playwright_lockfile_rejects_missing_optional_closure_and_non_npmjs_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            lockfile = Path(temporary) / "package-lock.json"
+            value = json.loads((ROOT / "manifests" / "playwright-mcp-package-lock.json").read_text())
+            cases = {
+                "missing-fsevents": lambda lock: lock["packages"].pop("node_modules/fsevents"),
+                "missing-optional-edge": lambda lock: lock["packages"]["node_modules/playwright"].pop("optionalDependencies"),
+                "non-npmjs-fsevents": lambda lock: lock["packages"]["node_modules/fsevents"].__setitem__("resolved", "https://mirror.invalid/fsevents.tgz"),
+            }
+            for name, mutate in cases.items():
+                with self.subTest(name=name):
+                    candidate = copy.deepcopy(value)
+                    mutate(candidate)
+                    lockfile.write_text(json.dumps(candidate), encoding="utf-8")
+                    with self.assertRaisesRegex(RuntimeError, "approved package graph|fixed package graph"):
+                        self.engine.validate_playwright_lockfile(lockfile)
 
     def test_detect_and_plan_are_read_only_and_expose_collisions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1357,7 +1396,7 @@ class AdditiveHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             target = self.temporary_target(Path(temporary))
             target["opencode_config"].parent.mkdir(parents=True)
-            node, cli = target["home"] / "node", target["home"] / "node_modules" / "@playwright" / "mcp" / "cli.js"
+            node, cli = target["home"] / "node", target["home"] / "playwright" / "node_modules" / "@playwright" / "mcp" / "cli.js"
             cli.parent.mkdir(parents=True)
             cli.write_text("fixture", encoding="utf-8")
             node.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'v20.0.0\\n'; else printf 'Version 0.0.80\\n'; fi\n", encoding="utf-8")

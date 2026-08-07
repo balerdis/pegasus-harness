@@ -134,6 +134,7 @@ playwright_graph = None
 if "playwright" in confirmed:
     expected_packages = {
         "@playwright/mcp": {"version": "0.0.79", "resolved": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.79.tgz", "integrity": "sha512-VpqD4a3vFyGQMY9sh3UJiO6wjcurggkljKfAyCHL0QWGY5m6Ehr3MNsAAHPDHO//n13g0PCjpHatAOiulrqdZQ=="},
+        "fsevents": {"version": "2.3.2", "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.2.tgz", "integrity": "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA=="},
         "playwright": {"version": "1.63.0-alpha-2026-08-05", "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.63.0-alpha-2026-08-05.tgz", "integrity": "sha512-zbGZUK+JYkoDV3cUgfvh2czTBJL34Gmz5gHVI25xiIpvYSR17Q1M7TS8hnwECUe+IkKaeXbKrSyJTyogm2DVWw=="},
         "playwright-core": {"version": "1.63.0-alpha-2026-08-05", "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0-alpha-2026-08-05.tgz", "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg=="},
     }
@@ -142,7 +143,7 @@ if "playwright" in confirmed:
     playwright = next((item for item in contract.get("dependencies", []) if item.get("id") == "playwright"), {})
     expected_probe_output = playwright.get("probe_output")
     packages = lock.get("packages", {})
-    recorded_packages = {name.removeprefix("node_modules/"): {field: packages.get(name, {}).get(field) for field in ("version", "resolved", "integrity")} for name in ("node_modules/@playwright/mcp", "node_modules/playwright", "node_modules/playwright-core")}
+    recorded_packages = {name.removeprefix("node_modules/"): {field: packages.get(name, {}).get(field) for field in ("version", "resolved", "integrity")} for name in ("node_modules/@playwright/mcp", "node_modules/fsevents", "node_modules/playwright", "node_modules/playwright-core")}
     if recorded_packages != expected_packages:
         raise SystemExit("approved Playwright lock graph is missing from the accepted RC")
     command = config.get("mcp", {}).get("playwright", {}).get("command")

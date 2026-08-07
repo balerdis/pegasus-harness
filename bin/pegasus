@@ -50,6 +50,11 @@ PLAYWRIGHT_LOCK_PACKAGES = {
         "resolved": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.79.tgz",
         "integrity": "sha512-VpqD4a3vFyGQMY9sh3UJiO6wjcurggkljKfAyCHL0QWGY5m6Ehr3MNsAAHPDHO//n13g0PCjpHatAOiulrqdZQ==",
     },
+    "node_modules/fsevents": {
+        "version": "2.3.2",
+        "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.2.tgz",
+        "integrity": "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==",
+    },
     "node_modules/playwright": {
         "version": "1.63.0-alpha-2026-08-05",
         "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.63.0-alpha-2026-08-05.tgz",
@@ -61,10 +66,17 @@ PLAYWRIGHT_LOCK_PACKAGES = {
         "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg==",
     },
 }
+PLAYWRIGHT_LOCK_METADATA = {
+    "node_modules/@playwright/mcp": {"license": "Apache-2.0", "dependencies": {"playwright": "1.63.0-alpha-2026-08-05", "playwright-core": "1.63.0-alpha-2026-08-05"}, "bin": {"playwright-mcp": "cli.js"}, "engines": {"node": ">=18"}},
+    "node_modules/fsevents": {"hasInstallScript": True, "license": "MIT", "optional": True, "os": ["darwin"], "engines": {"node": "^8.16.0 || ^10.6.0 || >=11.0.0"}},
+    "node_modules/playwright": {"license": "Apache-2.0", "dependencies": {"playwright-core": "1.63.0-alpha-2026-08-05"}, "bin": {"playwright": "cli.js"}, "engines": {"node": ">=20"}, "optionalDependencies": {"fsevents": "2.3.2"}},
+    "node_modules/playwright-core": {"license": "Apache-2.0", "bin": {"playwright-core": "cli.js"}, "engines": {"node": ">=20"}},
+}
+PLAYWRIGHT_LOCK_EVIDENCE = {name.removeprefix("node_modules/"): value for name, value in PLAYWRIGHT_LOCK_PACKAGES.items()}
 PLAYWRIGHT_BIN_LINKS = {
-    ".bin/playwright-mcp": "@playwright/mcp/cli.js",
-    ".bin/playwright": "playwright/cli.js",
-    ".bin/playwright-core": "playwright-core/cli.js",
+    "node_modules/.bin/playwright-mcp": "node_modules/@playwright/mcp/cli.js",
+    "node_modules/.bin/playwright": "node_modules/playwright/cli.js",
+    "node_modules/.bin/playwright-core": "node_modules/playwright-core/cli.js",
 }
 FORBIDDEN_PAYLOAD_SOURCES = {
     "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
@@ -144,10 +156,13 @@ def validate_playwright_lockfile(path: Path, package_path: Path = PLAYWRIGHT_PAC
     expected = set(PLAYWRIGHT_LOCK_PACKAGES)
     if lockfile.get("name") != package["name"] or lockfile.get("lockfileVersion") != 3 or lockfile.get("requires") is not True:
         fail("Playwright lockfile metadata does not match the fixed package")
-    if not isinstance(packages, dict) or set(packages) - {""} != expected or packages.get("", {}).get("dependencies") != package["dependencies"]:
+    if (not isinstance(packages, dict) or set(packages) - {""} != expected
+            or packages.get("") != {"name": package["name"], "dependencies": package["dependencies"]}):
         fail("Playwright lockfile must contain the fixed package graph")
     for name, expected_package in PLAYWRIGHT_LOCK_PACKAGES.items():
-        if any(packages[name].get(field) != value for field, value in expected_package.items()):
+        if (any(packages[name].get(field) != value for field, value in expected_package.items())
+                or {field: value for field, value in packages[name].items() if field not in expected_package}
+                != PLAYWRIGHT_LOCK_METADATA[name]):
             fail("Playwright lockfile does not match the approved package graph")
     return True
 
@@ -198,6 +213,8 @@ def validate_contract(contract: dict) -> bool:
             fail("Engram requires a standalone version probe")
         if item["id"] == "playwright":
             if (not integrity.get("package") or not integrity.get("lockfile")
+                    or integrity.get("registry") != "https://registry.npmjs.org/"
+                    or integrity.get("packages") != PLAYWRIGHT_LOCK_EVIDENCE
                     or item.get("probe_output") != "Version 0.0.79"):
                 fail("Playwright requires committed package and lockfiles with the exact probe output")
             validate_playwright_lockfile(ROOT / integrity["lockfile"], ROOT / integrity["package"])
@@ -333,7 +350,7 @@ def compatible_mcp(item: dict, value: object) -> tuple[bool, str | None]:
         shape_valid = command[1:] == ["mcp", "--tools=agent"]
     else:
         entrypoint = Path(command[1]) if len(command) == 2 else None
-        shape_valid = entrypoint is not None and not entrypoint.is_symlink() and entrypoint.is_file() and entrypoint.parts[-4:] == ("node_modules", "@playwright", "mcp", "cli.js")
+        shape_valid = entrypoint is not None and not entrypoint.is_symlink() and entrypoint.is_file() and entrypoint.parts[-5:] == ("playwright", "node_modules", "@playwright", "mcp", "cli.js")
         if shape_valid and not successful_probe([str(executable), "--version"], "v20.0.0"):
             try:
                 version = subprocess.run([str(executable), "--version"], text=True, capture_output=True, timeout=PROBE_TIMEOUT, check=False).stdout.strip()
@@ -566,8 +583,11 @@ def install_playwright(item: dict, destination: Path, npm: str = "npm") -> str:
         cli = runtime / "@playwright" / "mcp" / "cli.js"
         if not runtime.is_dir() or cli.is_symlink() or not cli.is_file():
             fail("Playwright npm install did not create the expected CLI")
-        probe_dependency(item, runtime, node_executable)
-        runtime.replace(destination)
+        probe_dependency(item, staging, node_executable)
+        shutil.rmtree(staging / ".npm-cache", ignore_errors=True)
+        (staging / ".npmrc.userconfig").unlink(missing_ok=True)
+        (staging / ".npmrc.globalconfig").unlink(missing_ok=True)
+        staging.replace(destination)
         return node_executable
     except Exception:
         shutil.rmtree(destination, ignore_errors=True)

@@ -22,6 +22,11 @@ PLAYWRIGHT_LOCK_PACKAGES = {
         "resolved": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.79.tgz",
         "integrity": "sha512-VpqD4a3vFyGQMY9sh3UJiO6wjcurggkljKfAyCHL0QWGY5m6Ehr3MNsAAHPDHO//n13g0PCjpHatAOiulrqdZQ==",
     },
+    "node_modules/fsevents": {
+        "version": "2.3.2",
+        "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.2.tgz",
+        "integrity": "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==",
+    },
     "node_modules/playwright": {
         "version": "1.63.0-alpha-2026-08-05",
         "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.63.0-alpha-2026-08-05.tgz",
@@ -33,6 +38,13 @@ PLAYWRIGHT_LOCK_PACKAGES = {
         "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg==",
     },
 }
+PLAYWRIGHT_LOCK_METADATA = {
+    "node_modules/@playwright/mcp": {"license": "Apache-2.0", "dependencies": {"playwright": "1.63.0-alpha-2026-08-05", "playwright-core": "1.63.0-alpha-2026-08-05"}, "bin": {"playwright-mcp": "cli.js"}, "engines": {"node": ">=18"}},
+    "node_modules/fsevents": {"hasInstallScript": True, "license": "MIT", "optional": True, "os": ["darwin"], "engines": {"node": "^8.16.0 || ^10.6.0 || >=11.0.0"}},
+    "node_modules/playwright": {"license": "Apache-2.0", "dependencies": {"playwright-core": "1.63.0-alpha-2026-08-05"}, "bin": {"playwright": "cli.js"}, "engines": {"node": ">=20"}, "optionalDependencies": {"fsevents": "2.3.2"}},
+    "node_modules/playwright-core": {"license": "Apache-2.0", "bin": {"playwright-core": "cli.js"}, "engines": {"node": ">=20"}},
+}
+PLAYWRIGHT_LOCK_EVIDENCE = {name.removeprefix("node_modules/"): value for name, value in PLAYWRIGHT_LOCK_PACKAGES.items()}
 FORBIDDEN_PAYLOAD_SOURCES = {
     "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
     "source/opencode/tui.json",
@@ -116,12 +128,15 @@ def main() -> int:
         expected = set(PLAYWRIGHT_LOCK_PACKAGES)
         if (playwright_package != {"name": "pegasus-playwright-mcp", "private": True, "dependencies": {PLAYWRIGHT_PACKAGE: PLAYWRIGHT_VERSION}}
                 or playwright_lock.get("name") != playwright_package["name"]
-                or playwright_lock.get("lockfileVersion") != 3
-                or playwright_lock.get("requires") is not True
-                or set(packages) - {""} != expected
-                or packages.get("", {}).get("dependencies") != playwright_package["dependencies"]
-                or any(any(packages[name].get(field) != value for field, value in expected_package.items())
-                       for name, expected_package in PLAYWRIGHT_LOCK_PACKAGES.items())):
+                 or playwright_lock.get("lockfileVersion") != 3
+                 or playwright_lock.get("requires") is not True
+                 or set(packages) - {""} != expected
+                 or packages.get("") != {"name": playwright_package["name"], "dependencies": playwright_package["dependencies"]}
+                 or any(any(packages[name].get(field) != value for field, value in expected_package.items())
+                        or {field: value for field, value in packages[name].items() if field not in expected_package} != PLAYWRIGHT_LOCK_METADATA[name]
+                        for name, expected_package in PLAYWRIGHT_LOCK_PACKAGES.items())
+                 or next((item.get("integrity") for item in contract.get("dependencies", []) if item.get("id") == "playwright"), {})
+                 != {"package": "manifests/playwright-mcp-package.json", "lockfile": "manifests/playwright-mcp-package-lock.json", "registry": "https://registry.npmjs.org/", "packages": PLAYWRIGHT_LOCK_EVIDENCE}):
             errors.append("invalid Playwright package or production lock graph")
     except (OSError, json.JSONDecodeError):
         errors.append("missing Playwright package or lock metadata")
@@ -132,8 +147,8 @@ def main() -> int:
         if not (dependency.get("source_url", "").startswith("https://") or dependency.get("source_url", "").startswith("release-bundle:")):
             errors.append(f"unproven dependency source: {dependency.get('id')}")
         if dependency.get("id") == "playwright" and (dependency.get("install_argv") != ["npm", "ci", "--ignore-scripts"]
-                or dependency.get("runtime_argv") != ["{node}", "{dependency}/@playwright/mcp/cli.js"]
-                or dependency.get("probe_argv") != ["{node}", "{dependency}/@playwright/mcp/cli.js", "--version"]
+                 or dependency.get("runtime_argv") != ["{node}", "{dependency}/node_modules/@playwright/mcp/cli.js"]
+                 or dependency.get("probe_argv") != ["{node}", "{dependency}/node_modules/@playwright/mcp/cli.js", "--version"]
                 or dependency.get("probe_output") != "Version 0.0.79"):
             errors.append("unsafe Playwright install or runtime argv")
         if dependency.get("id") == "engram" and dependency.get("archive_layout") != {
