@@ -176,7 +176,15 @@ class AdditiveHarnessTests(unittest.TestCase):
             "    cli = root / 'node_modules/@playwright/mcp/cli.js'\n"
             "    cli.parent.mkdir(parents=True)\n"
             "    version = '0.0.80' if mode == 'wrong-version' else '0.0.79'\n"
-            "    cli.write_text(f\"if (process.argv.includes('--version')) console.log('Version {version}');\\n\")\n",
+            "    cli.write_text(f\"if (process.argv.includes('--version')) console.log('Version {version}');\\n\")\n"
+            "    for package in ('playwright', 'playwright-core'):\n"
+            "        target = root / 'node_modules' / package / 'cli.js'\n"
+            "        target.parent.mkdir(parents=True, exist_ok=True)\n"
+            "        target.write_text('console.log(\\\"bin\\\");\\n')\n"
+            "    bin_dir = root / 'node_modules/.bin'\n"
+            "    bin_dir.mkdir()\n"
+            "    links = {'playwright-mcp': '../@playwright/mcp/cli.js', 'playwright': '../playwright/cli.js', 'playwright-core': '../playwright-core/cli.js'}\n"
+            "    for name, target in links.items(): (bin_dir / name).symlink_to(target)\n",
             encoding="utf-8",
         )
         path.chmod(0o755)
@@ -966,6 +974,8 @@ class AdditiveHarnessTests(unittest.TestCase):
             item = copy.deepcopy(next(item for item in self.engine.load_contract()["dependencies"] if item["id"] == "playwright"))
             self.engine.install_playwright(item, destination, str(npm))
             self.assertEqual((destination / "@playwright/mcp/cli.js").is_file(), True)
+            self.assertTrue((destination / ".bin/playwright").is_symlink())
+            self.engine.directory_digest(destination, allow_playwright_npm_bins=True)
             self.assertFalse(any(destination.parent.glob(".playwright-npm-*")))
             self.assertEqual((destination.parent / "npm-argv.txt").read_text(), "ci --ignore-scripts")
             source = SCRIPT.read_text(encoding="utf-8")
@@ -1004,6 +1014,42 @@ class AdditiveHarnessTests(unittest.TestCase):
                 self.assertFalse(any(destination.parent.glob(".playwright-npm-*")))
                 self.assertFalse((root / ".config").exists())
                 self.assertFalse((root / ".local").exists())
+
+    def test_directory_digest_accepts_only_expected_in_root_playwright_bins(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "node_modules"
+            for relative in self.engine.PLAYWRIGHT_BIN_LINKS.values():
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("cli\n", encoding="utf-8")
+            bin_dir = root / ".bin"
+            bin_dir.mkdir()
+            for link, target in self.engine.PLAYWRIGHT_BIN_LINKS.items():
+                (root / link).symlink_to(Path("..") / target)
+            self.assertTrue(self.engine.directory_digest(root, allow_playwright_npm_bins=True))
+            with self.assertRaisesRegex(RuntimeError, "unsafe artifact"):
+                self.engine.directory_digest(root)
+
+    def test_directory_digest_rejects_unsafe_playwright_bin_links(self) -> None:
+        cases = {
+            "escaping": (".bin/playwright", "../../outside", "file"),
+            "dangling": (".bin/playwright", "../missing", None),
+            "directory": (".bin/playwright", "../playwright", "directory"),
+            "unexpected": (".bin/unexpected", "../playwright/cli.js", "file"),
+        }
+        for name, (link, target, target_type) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "node_modules"
+                if target_type == "file":
+                    destination = root / "playwright/cli.js"
+                    destination.parent.mkdir(parents=True)
+                    destination.write_text("cli\n", encoding="utf-8")
+                elif target_type == "directory":
+                    (root / "playwright").mkdir(parents=True)
+                (root / link).parent.mkdir(parents=True, exist_ok=True)
+                (root / link).symlink_to(target)
+                with self.assertRaisesRegex(RuntimeError, "unsafe artifact"):
+                    self.engine.directory_digest(root, allow_playwright_npm_bins=True)
 
     def test_playwright_lock_failures_leave_no_staging_destination_config_or_journal(self) -> None:
         for mode in ("wrong-registry", "wrong-sri"):

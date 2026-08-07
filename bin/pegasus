@@ -61,6 +61,11 @@ PLAYWRIGHT_LOCK_PACKAGES = {
         "integrity": "sha512-YussvUybTfBtyYbGXWh43f+5kNP03wg98M6mu4DphYET7PSbNVajsdLGjWE1xrsjqOw32i2wFlRP7U5mcOpMZg==",
     },
 }
+PLAYWRIGHT_BIN_LINKS = {
+    ".bin/playwright-mcp": "@playwright/mcp/cli.js",
+    ".bin/playwright": "playwright/cli.js",
+    ".bin/playwright-core": "playwright-core/cli.js",
+}
 FORBIDDEN_PAYLOAD_SOURCES = {
     "source/core/skills/lazy-load-prompt-audit/references/deployment-transport.md",
     "source/opencode/tui.json",
@@ -79,15 +84,33 @@ def digest(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
-def directory_digest(path: Path) -> str:
+def is_expected_playwright_bin_link(path: Path, item: Path) -> bool:
+    """Allow only fixed npm bin links to regular files in this dependency root."""
+    expected = PLAYWRIGHT_BIN_LINKS.get(item.relative_to(path).as_posix())
+    if expected is None:
+        return False
+    try:
+        root = path.resolve(strict=True)
+        target = root / expected
+        return item.resolve(strict=True) == target and target.is_file() and not target.is_symlink()
+    except OSError:
+        return False
+
+
+def directory_digest(path: Path, allow_playwright_npm_bins: bool = False) -> str:
     """Hash a dependency tree so rollback removes only an unchanged install."""
     if not path.is_dir() or path.is_symlink():
         fail(f"dependency is not a real directory: {path}")
     records = []
     for item in sorted(path.rglob("*")):
+        if item.is_symlink():
+            if allow_playwright_npm_bins and is_expected_playwright_bin_link(path, item):
+                records.append(f"{item.relative_to(path).as_posix()}:{digest(item.resolve(strict=True))}")
+                continue
+            fail(f"dependency contains an unsafe artifact: {item}")
         if item.is_dir():
             continue
-        if item.is_symlink() or not item.is_file():
+        if not item.is_file():
             fail(f"dependency contains an unsafe artifact: {item}")
         records.append(f"{item.relative_to(path).as_posix()}:{digest(item)}")
     return sha256_bytes("\n".join(records).encode())
@@ -664,7 +687,7 @@ def apply(plan_value: dict, target: dict[str, Path], confirmed: set[str], browse
                 journal["entries"].append({"id": f"dependency-{metadata['id']}", "release": RELEASE,
                                            "kind": "dependency", "target": str(destination), "key": None,
                                            "source_digest": metadata["integrity"].get("sha256"),
-                                           "baseline_digest": directory_digest(destination), "ownership": "owned",
+                                            "baseline_digest": directory_digest(destination, metadata["id"] == "playwright"), "ownership": "owned",
                                            "created_at": dt.datetime.now(dt.timezone.utc).isoformat()})
                 created.append(f"dependency-{metadata['id']}")
             elif dependency["action"] == "link-existing":
@@ -726,7 +749,8 @@ def rollback(target: dict[str, Path], journal: dict | None = None) -> dict:
     for entry in reversed(journal["entries"]):
         path = Path(entry["target"])
         if entry["kind"] == "dependency":
-            unchanged = path.is_dir() and not path.is_symlink() and directory_digest(path) == entry["baseline_digest"]
+            unchanged = (path.is_dir() and not path.is_symlink()
+                         and directory_digest(path, entry["id"] == "dependency-playwright") == entry["baseline_digest"])
             if unchanged:
                 shutil.rmtree(path); removed.append(entry["id"])
             else:
