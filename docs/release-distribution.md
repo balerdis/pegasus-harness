@@ -16,15 +16,15 @@ La herramienta acepta únicamente `v3.1.0-rc.N`, exige un tag anotado, `install.
 
 Después de publicar, el responsable ejecuta los cinco perfiles de la [aceptación aislada](aceptacion-rc-v3.1.md): `cbm`, `engram`, `playwright`, `context7` y `final`. Es una prueba operatoria manual: el orquestador valida archive/checksum/manifest, recrea sólo el usuario dedicado reconocido explícitamente y no forma parte de tests ni del pipeline de release. El verificador de matriz es una comprobación Python offline: requiere exactamente esas cinco evidencias `PASS` con la misma identidad RC y escribe una única prueba agregada antes de la promoción.
 
-## Promoción final v3.1.1
+## Promoción RC final v3.1.1
 
-La promoción final recibe manualmente la evidencia agregada aceptada de `v3.1.0-rc.26`. El dispatch requiere su contenido codificado en base64 mediante `accepted_rc26_aggregate_b64`; descarga los tres assets publicados de RC26 y rechaza el agregado si no es `PASS`, no contiene exactamente los cinco perfiles o no coincide byte a byte con esa identidad RC. Esa validación termina antes de construir o subir assets finales. El tag anotado e inmutable `v3.1.1` debe apuntar al mismo commit: el workflow vuelve a comprobar ambos objetos de tag y no sustituye la aceptación aislada. Desde el tag final genera exactamente estos assets:
+El commit que contendrá el release final (incluidos los cambios posteriores a RC26) primero recibe el tag anotado e inmutable `v3.1.1-rc.1`. El dispatch con `release_stage: rc` genera y publica sus tres assets y luego se ejecutan los cinco perfiles aislados para ese RC. La promoción final recibe manualmente su evidencia agregada aceptada mediante `accepted_v311_rc1_aggregate_b64`; el dispatch con `release_stage: final` descarga los tres assets publicados de `v3.1.1-rc.1` y rechaza el agregado si no es `PASS`, no contiene exactamente los cinco perfiles o no coincide byte a byte con esa identidad RC. Esa validación termina antes de crear el tag final o construir/subir assets finales. Sólo después crea el tag anotado e inmutable `v3.1.1` sobre el commit de `v3.1.1-rc.1`, vuelve a comparar ambos commits y no sustituye la aceptación aislada. La evidencia de RC26 no puede sustituir la aceptación de `v3.1.1-rc.1`. Desde el tag final genera exactamente estos assets:
 
 - `pegasus-harness-v3.1.1.tar.gz`;
 - `pegasus-harness-v3.1.1.tar.gz.sha256`;
 - `release-manifest.json`.
 
-El manifest final registra `release_kind: final`, `promotion_rc_tag: v3.1.0-rc.26`, tag object, commit, digest del archive, installer y evidencia de `README.md`, `INSTALL.md`, `INSTALL_BY_AGENT.md`, `MANUAL.md` y esta guía. El release de GitHub debe ser no-draft y `prerelease: false`; sólo así GitHub puede ofrecer el contrato `latest`.
+El manifest final registra `release_kind: final`, `promotion_rc_tag: v3.1.1-rc.1`, tag object, commit, digest del archive, installer y evidencia de `README.md`, `INSTALL.md`, `INSTALL_BY_AGENT.md`, `MANUAL.md` y esta guía. El release de GitHub debe ser no-draft y `prerelease: false`; sólo así GitHub puede ofrecer el contrato `latest`.
 
 Después de publicar, descargá cada asset por sus dos rutas y compará bytes antes de reportar distribución lista. No ejecutes esta verificación desde tests ni como parte de la aceptación:
 

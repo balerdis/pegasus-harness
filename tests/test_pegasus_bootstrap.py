@@ -182,7 +182,7 @@ class AdditiveHarnessTests(unittest.TestCase):
             "schema": "pegasus-harness-release/v3",
             "release_kind": "final",
             "tag": tag,
-            "promotion_rc_tag": "v3.1.0-rc.26",
+            "promotion_rc_tag": "v3.1.1-rc.1",
             "archive_root": archive_root,
             "assets": [{"name": archive.name, "sha256": archive_digest}],
             "published_assets": [archive.name, checksum.name, manifest.name],
@@ -899,12 +899,12 @@ class AdditiveHarnessTests(unittest.TestCase):
                 self.assertEqual(bundle.mode & 0o777, 0o644)
                 self.assertEqual(hashlib.sha256(contents.extractfile(bundle).read()).hexdigest(), curated_digest)
 
-    def test_release_gate_and_spanish_docs_require_rc_evidence_before_final_tag(self) -> None:
+    def test_release_gate_and_spanish_docs_require_same_commit_rc_evidence_before_final_tag(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         docs = (ROOT / "docs/release-distribution.md").read_text(encoding="utf-8") + (ROOT / "docs/instalacion-aditiva-v3.md").read_text(encoding="utf-8")
-        for required in ("v3.1.0-rc", "validate_snapshot.py", "rc-acceptance-evidence.json", "immutable v3.1.0"):
+        for required in ("v3.1.1-rc.1", "validate_snapshot.py", "rc-acceptance-evidence.json", "accepted_v311_rc1_aggregate_b64"):
             self.assertIn(required, workflow)
-        for required in ("v3.1.0-rc.N", "evidencia", "v3.1.0", "nunca mutar"):
+        for required in ("v3.1.1-rc.1", "evidencia", "mismo commit", "nunca mutar"):
             self.assertIn(required, docs)
 
     def test_final_release_builder_records_v311_identity_promotion_and_documentation(self) -> None:
@@ -926,17 +926,17 @@ class AdditiveHarnessTests(unittest.TestCase):
             (fixture / "manifests" / "cbm-linux-x64-provenance.json").write_text(json.dumps({"artifact_sha256": curated_digest, "build_command": "canonical", "build_command_sha256": hashlib.sha256(b"canonical").hexdigest()}), encoding="utf-8")
             for path in ("README.md", "INSTALL.md", "INSTALL_BY_AGENT.md", "MANUAL.md", "docs/release-distribution.md"):
                 (fixture / path).write_text(path + "\n", encoding="utf-8")
-            for command in (("git", "init", "-q"), ("git", "config", "user.email", "tests@example.invalid"), ("git", "config", "user.name", "Pegasus tests"), ("git", "add", "."), ("git", "commit", "-qm", "final fixture"), ("git", "tag", "-am", "accepted RC", "v3.1.0-rc.26"), ("git", "tag", "-am", "final", "v3.1.1")):
+            for command in (("git", "init", "-q"), ("git", "config", "user.email", "tests@example.invalid"), ("git", "config", "user.name", "Pegasus tests"), ("git", "add", "."), ("git", "commit", "-qm", "final fixture"), ("git", "tag", "-am", "accepted RC", "v3.1.1-rc.1"), ("git", "tag", "-am", "final", "v3.1.1")):
                 subprocess.run(command, cwd=fixture, check=True)
             archive = fixture / "dist" / "pegasus-harness-v3.1.1.tar.gz"
             output = fixture / "dist" / "release-manifest.json"
-            argv = ["build_release_manifest.py", "--tag", "v3.1.1", "--promotion-rc-tag", "v3.1.0-rc.26", "--archive", str(archive), "--output", str(output)]
+            argv = ["build_release_manifest.py", "--tag", "v3.1.1", "--promotion-rc-tag", "v3.1.1-rc.1", "--archive", str(archive), "--output", str(output)]
             with patch.object(builder, "ROOT", fixture), patch.object(sys, "argv", argv):
                 self.assertEqual(builder.main(), 0)
             manifest = json.loads(output.read_text(encoding="utf-8"))
             checksum = archive.with_name(archive.name + ".sha256")
             self.assertEqual(manifest["release_kind"], "final")
-            self.assertEqual(manifest["promotion_rc_tag"], "v3.1.0-rc.26")
+            self.assertEqual(manifest["promotion_rc_tag"], "v3.1.1-rc.1")
             self.assertEqual(manifest["published_assets"], [archive.name, checksum.name, "release-manifest.json"])
             self.assertEqual({item["path"] for item in manifest["documentation_evidence"]}, {"README.md", "INSTALL.md", "INSTALL_BY_AGENT.md", "MANUAL.md", "docs/release-distribution.md"})
             self.assertEqual(manifest["assets"], [{"name": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}])
@@ -964,12 +964,12 @@ class AdditiveHarnessTests(unittest.TestCase):
             with self.assertRaisesRegex(preflight.PreflightError, "regular"):
                 preflight.collect_preflight(archive, checksum, manifest, [])
 
-    def test_rc26_aggregate_validator_refuses_invalid_evidence_before_final_publish(self) -> None:
+    def test_v311_rc1_aggregate_validator_refuses_invalid_evidence_before_final_publish(self) -> None:
         validator = load_rc_acceptance_aggregate_validator()
         matrix = load_acceptance_matrix()
         with tempfile.TemporaryDirectory(dir="/var/tmp") as temporary:
             root = Path(temporary)
-            tag = "v3.1.0-rc.26"
+            tag = "v3.1.1-rc.1"
             archive = root / f"pegasus-harness-{tag}.tar.gz"
             prefix = f"pegasus-harness-{tag}/"
             payloads = {
@@ -1062,9 +1062,14 @@ class AdditiveHarnessTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
         release_docs = (ROOT / "docs/release-distribution.md").read_text(encoding="utf-8")
-        for required in ("v3.1.1", "prerelease: false", "pegasus-harness-v3.1.1.tar.gz", "release-manifest.json", "promotion_rc_tag", "accepted_rc26_aggregate_b64", "validate-v3-acceptance-aggregate.py", "gh release download"):
+        for required in ("v3.1.1", "v3.1.1-rc.1", "prerelease: false", "pegasus-harness-v3.1.1.tar.gz", "release-manifest.json", "promotion_rc_tag", "accepted_v311_rc1_aggregate_b64", "validate-v3-acceptance-aggregate.py", "gh release download"):
             self.assertIn(required, workflow)
-        self.assertLess(workflow.index("validate-v3-acceptance-aggregate.py"), workflow.index("softprops/action-gh-release@v2"))
+        self.assertLess(workflow.index("validate-v3-acceptance-aggregate.py"), workflow.rindex("softprops/action-gh-release@v2"))
+        self.assertLess(workflow.index("validate-v3-acceptance-aggregate.py"), workflow.index("git tag -a v3.1.1"))
+        self.assertIn("! git rev-parse -q --verify refs/tags/v3.1.1", workflow)
+        self.assertIn("git push origin refs/tags/v3.1.1", workflow)
+        self.assertIn('test "$(git rev-list -n 1 v3.1.1)" = "$rc_commit"', workflow)
+        self.assertNotIn("v3.1.0-rc.26", workflow)
         for required in ("releases/download/v3.1.1", "releases/latest/download", "agent_install_preflight.py", "cbm", "engram", "playwright", "context7", "/connect", "/models"):
             self.assertIn(required, agent)
         self.assertNotIn("opencode debug config", agent)

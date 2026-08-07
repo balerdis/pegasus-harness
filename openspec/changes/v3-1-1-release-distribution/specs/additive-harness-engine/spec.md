@@ -4,14 +4,22 @@
 
 ### Requirement: v3.1.1 final release assets
 
-The release process MUST publish an immutable `v3.1.1` release from the accepted RC26 commit and preserve the current authored installation documentation in its final archive. The release MUST expose the final archive, its SHA-256 checksum, and `release-manifest.json` as validated assets. Release execution, tag mutation, and publication remain outside the installer and acceptance behavior.
+The release process MUST build immutable `v3.1.1-rc.1` from the selected v3.1.1 commit, accept its own aggregate evidence, and only then publish immutable `v3.1.1` from that same commit while preserving current authored installation documentation in its final archive. The release MUST expose the final archive, its SHA-256 checksum, and `release-manifest.json` as validated assets. Release execution, tag mutation, and publication remain outside the installer and acceptance behavior.
 
 #### Scenario: Final asset set is complete
 
-- GIVEN the accepted RC26 commit and authored documentation are selected for promotion
+- GIVEN accepted aggregate evidence for `v3.1.1-rc.1` built from the selected final commit
 - WHEN the v3.1.1 release assets are prepared
 - THEN `pegasus-harness-v3.1.1.tar.gz`, its `.sha256` file, and `release-manifest.json` are present
 - AND the manifest records the release tag, archive identity, checksums, and included documentation
+
+#### Scenario: Final promotion requires accepted same-commit RC evidence
+
+- GIVEN an immutable `v3.1.1-rc.1` release with its own PASS aggregate evidence
+- WHEN final v3.1.1 publication is requested
+- THEN the workflow MUST validate that aggregate against downloaded v3.1.1-rc.1 assets before building final assets
+- AND the annotated `v3.1.1` and `v3.1.1-rc.1` tags MUST resolve to the same commit
+- AND RC26 evidence MUST NOT substitute for the v3.1.1-rc.1 aggregate
 
 #### Scenario: Invalid final identity is refused
 

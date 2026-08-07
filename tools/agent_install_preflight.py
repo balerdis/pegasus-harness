@@ -15,7 +15,7 @@ import tarfile
 from pathlib import Path
 
 FINAL_TAG = "v3.1.1"
-PROMOTION_RC_TAG = "v3.1.0-rc.26"
+PROMOTION_RC_TAG = "v3.1.1-rc.1"
 MCP_NAMES = ("cbm", "engram", "playwright", "context7")
 DOCUMENTS = ("README.md", "INSTALL.md", "INSTALL_BY_AGENT.md", "MANUAL.md", "docs/release-distribution.md")
 VERSION = re.compile(r"\b\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.-]+)?\b")

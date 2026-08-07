@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Estimated changed lines | 550–750 |
+| Estimated changed lines | 700–900 |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
 | Suggested split | PR 1 contracts/tests → PR 2 builder/preflight → PR 3 workflow/docs |
@@ -26,19 +26,19 @@ Chain strategy: pending
 
 ## Phase 1: Contract RED Tests
 
-- [x] 1.1 **RED** Extend `tests/test_pegasus_bootstrap.py` for annotated `v3.1.1`, `promotion_rc_tag: v3.1.0-rc.26`, archive/checksum/manifest congruence, preserved authored docs, and rejection of mismatched tag/hash/manifest.
+- [x] 1.1 **RED** Extend `tests/test_pegasus_bootstrap.py` for annotated same-commit `v3.1.1-rc.1` and `v3.1.1`, `promotion_rc_tag: v3.1.1-rc.1`, archive/checksum/manifest congruence, preserved authored docs, and rejection of mismatched tag/hash/manifest.
 - [x] 1.2 **RED** Add preflight tests for ready non-root JSON, root/missing-prerequisite refusal, malformed/tampered/symlink/unsafe archives, unknown/duplicate MCPs, fixed probe argv, and zero config/credential leakage.
-- [x] 1.3 **RED** Add workflow/document tests for exactly three final assets, non-prerelease/latest semantics, versioned/latest locator identity, RC26 evidence gates, and model fallback/user-document preservation.
+- [x] 1.3 **RED** Add workflow/document tests for exactly three final assets, non-prerelease/latest semantics, versioned/latest locator identity, v3.1.1-rc.1 aggregate gates, and model fallback/user-document preservation.
 
 ## Phase 2: Core Implementation
 
 - [x] 2.1 Modify `tools/build_release_manifest.py` to support final `v3.1.1` while retaining RC generation and recording tag object, commit, archive identity, installer digest, provenance, and documentation evidence.
 - [x] 2.2 Create `tools/agent_install_preflight.py` with required paired assets, read-only JSON output, fixed executable allowlist/probes, non-root/ownership checks, archive integrity validation, and explicit four-MCP readiness/decision boundaries.
-- [x] 2.3 Modify `.github/workflows/release.yml` to build/upload archive, `.sha256`, and `release-manifest.json` for non-draft/non-prerelease `v3.1.1`, retaining manual accepted-RC26 promotion gates.
+- [x] 2.3 Modify `.github/workflows/release.yml` to publish immutable `v3.1.1-rc.1` for acceptance, then validate its aggregate before creating and publishing non-draft/non-prerelease same-commit `v3.1.1` assets.
 
 ## Phase 3: Documentation and Release Gates
 
-- [x] 3.1 Update `docs/release-distribution.md` with RC26→v3.1.1 promotion, immutable correction path, exact assets, and post-publication versioned/latest checksum/manifest verification; do not execute it now.
+- [x] 3.1 Update `docs/release-distribution.md` with v3.1.1-rc.1→v3.1.1 same-commit promotion, immutable correction path, exact assets, and post-publication versioned/latest checksum/manifest verification; do not execute it now.
 - [x] 3.2 Update `INSTALL_BY_AGENT.md` with versioned/latest locators, preflight command, four independent MCP decisions, and `/connect`/`/models` deferral; add only minimal links to `INSTALL.md`, `README.md`, and `MANUAL.md`.
 - [x] 3.3 Preserve all current unstaged authored guidance, including `MANUAL.md` model fallback/user control and historical-doc safety in `docs/instalacion-*.md`; do not rewrite, stage, commit, tag, push, publish, or accept.
 
@@ -46,5 +46,6 @@ Chain strategy: pending
 
 - [x] 4.1 Run focused unit tests for final identity, preflight privacy/refusals, asset/latest contracts, release gates, and model fallback.
 - [x] 4.2 Run syntax, snapshot, and documentation-link checks; inspect the diff to confirm no unstaged user documentation was discarded.
-- [ ] 4.3 Leave operator-only acceptance/release execution pending: accepted RC26 aggregate, immutable tag, three assets, non-prerelease latest, and byte/checksum identity must be proven before publication.
-- [x] 4.4 Fix fresh verifier blocker: require and validate the accepted RC26 aggregate against downloaded RC26 assets before the final release upload; cover invalid aggregate refusal offline.
+- [ ] 4.3 Leave operator-only acceptance/release execution pending: accepted v3.1.1-rc.1 aggregate, same-commit immutable final tag, three assets, non-prerelease latest, and byte/checksum identity must be proven before publication.
+- [x] 4.4 Require and validate the accepted v3.1.1-rc.1 aggregate against downloaded RC assets before the final release upload; cover invalid aggregate refusal offline.
+- [x] 4.5 Fix the final-release provenance contradiction: require immutable `v3.1.1-rc.1` built from the v3.1.1 commit, validate its own aggregate against downloaded RC assets, and preserve same-commit final promotion.

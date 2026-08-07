@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 
-RC_TAG = re.compile(r"^v3\.1\.0-rc\.[1-9][0-9]*$")
+RC_TAG = re.compile(r"^v3\.1\.(?:0|1)-rc\.[1-9][0-9]*$")
 PROFILE_PLANS = {
     "cbm": {"user": "pegasus-harness", "confirm": ("cbm",), "decline": ("engram", "playwright", "context7")},
     "engram": {"user": "pegasus-harness-engram", "confirm": ("engram",), "decline": ("cbm", "playwright", "context7")},
@@ -67,7 +67,7 @@ def validate_rc_inputs(profile: str, archive: Path, checksum: Path, manifest_pat
         raise ValueError("RC release manifest is invalid JSON") from error
     tag = manifest.get("tag")
     if not isinstance(tag, str) or not RC_TAG.fullmatch(tag):
-        raise ValueError("release manifest must declare v3.1.0-rc.N")
+        raise ValueError("release manifest must declare v3.1.0-rc.N or v3.1.1-rc.N")
     expected_name = f"pegasus-harness-{tag}.tar.gz"
     root = f"pegasus-harness-{tag}"
     archive_digest = sha256(archive)

@@ -13,9 +13,9 @@ import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RC_TAG = re.compile(r"^v3\.1\.0-rc\.[1-9][0-9]*$")
+RC_TAG = re.compile(r"^v3\.1\.(?:0|1)-rc\.[1-9][0-9]*$")
 FINAL_TAG = "v3.1.1"
-FINAL_PROMOTION_RC_TAG = "v3.1.0-rc.26"
+FINAL_PROMOTION_RC_TAG = "v3.1.1-rc.1"
 RELEASE_VERSION = "3.1.0"
 FINAL_DOCUMENTS = (
     "README.md",
@@ -162,9 +162,9 @@ def main() -> int:
     args = parser.parse_args()
     is_final = args.tag == FINAL_TAG
     if not is_final and not RC_TAG.fullmatch(args.tag):
-        parser.error("--tag must be v3.1.1 or an RC tag matching v3.1.0-rc.N")
+        parser.error("--tag must be v3.1.1 or an RC tag matching v3.1.0-rc.N or v3.1.1-rc.N")
     if is_final and args.promotion_rc_tag != FINAL_PROMOTION_RC_TAG:
-        parser.error("v3.1.1 requires --promotion-rc-tag v3.1.0-rc.26")
+        parser.error("v3.1.1 requires --promotion-rc-tag v3.1.1-rc.1")
     if not is_final and args.promotion_rc_tag:
         parser.error("--promotion-rc-tag is valid only for v3.1.1")
     if git("cat-file", "-t", args.tag) != "tag":
@@ -176,7 +176,7 @@ def main() -> int:
     commit = git("rev-list", "-n", "1", args.tag)
     tag_object = git("rev-parse", f"{args.tag}^{{tag}}")
     if is_final and commit != git("rev-list", "-n", "1", args.promotion_rc_tag):
-        parser.error("v3.1.1 and its accepted RC26 promotion input must name the same commit")
+        parser.error("v3.1.1 and its accepted v3.1.1-rc.1 promotion input must name the same commit")
     try:
         curated = build_archive(args.tag, args.archive)
         installer = release_installer(args.tag, args.archive)
