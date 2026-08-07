@@ -32,6 +32,11 @@ CONTEXT7 = {
     "integrity": None,
 }
 PROBE_TIMEOUT = 10
+PROBE_DIAGNOSTIC_LIMIT = 512
+SENSITIVE_PROBE_VALUE = re.compile(
+    r"(?ix)(?P<key>\b(?:api[_-]?key|access[_-]?token|authorization|cookie|credential|password|passwd|secret|token)\b)(?P<quote>[\"']?)\s*(?P<separator>=|:)\s*(?P<value>(?:[\"'][^\"']*[\"']|(?:bearer\s+)?[^\s,;]+))"
+)
+SENSITIVE_BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 NOTIFIER_PACKAGE = "@mohak34/opencode-notifier"
 NOTIFIER_VERSION = "0.2.4"
 NOTIFIER_INTEGRITY = "sha512-xsfmqr6scB43pi+fZ0R74xD63ELM0MqMZnR/9AWWSescEObYyAcXvaSgiXG/9b2KrXxc8NvcLqTOLPiVJOhKaw=="
@@ -277,6 +282,17 @@ def successful_probe(command: list[str], expected: str) -> bool:
     return result.returncode == 0 and (result.stdout + result.stderr).strip() == expected
 
 
+def sanitized_probe_output(value: str) -> str:
+    """Keep probe failures actionable without exposing unbounded secret-bearing output."""
+    redacted = SENSITIVE_PROBE_VALUE.sub(
+        lambda match: f"{match.group('key')}{match.group('quote')}{match.group('separator')}<redacted>", value
+    )
+    redacted = SENSITIVE_BEARER_TOKEN.sub("Bearer <redacted>", redacted)
+    if len(redacted) > PROBE_DIAGNOSTIC_LIMIT:
+        redacted = redacted[:PROBE_DIAGNOSTIC_LIMIT] + "...<truncated>"
+    return repr(redacted)
+
+
 def compatible_mcp(item: dict, value: object) -> tuple[bool, str | None]:
     if not isinstance(value, dict) or value.get("type") != "local" or not isinstance(value.get("command"), list) or not value["command"]:
         return False, None
@@ -447,8 +463,19 @@ def safe_extract_archive(archive: Path, destination: Path, expected: set[str], e
 
 def probe_dependency(item: dict, destination: Path) -> None:
     command = [part.replace("{dependency}", str(destination)).replace("{node}", "node") for part in item["probe_argv"]]
-    if not successful_probe(command, expected_probe(item)):
-        fail(f"dependency probe failed for {item['id']}")
+    try:
+        result = subprocess.run(command, text=True, capture_output=True, timeout=PROBE_TIMEOUT, check=False)
+    except subprocess.TimeoutExpired:
+        fail(f"dependency probe failed for {item['id']}: timed out after {PROBE_TIMEOUT}s")
+    except OSError as error:
+        fail(f"dependency probe failed for {item['id']}: could not execute ({error.__class__.__name__})")
+    expected = expected_probe(item)
+    observed = (result.stdout + result.stderr).strip()
+    if result.returncode != 0 or observed != expected:
+        fail(
+            f"dependency probe failed for {item['id']}: exit_code={result.returncode}; "
+            f"stdout={sanitized_probe_output(result.stdout)}; stderr={sanitized_probe_output(result.stderr)}"
+        )
 
 
 def npm_isolation_environment(cwd: Path) -> dict[str, str]:

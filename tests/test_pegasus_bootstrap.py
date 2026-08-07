@@ -1074,6 +1074,39 @@ class AdditiveHarnessTests(unittest.TestCase):
             self.assertFalse(engram_destination.with_name(engram_destination.name + ".partial").exists())
             self.assertFalse(engram_destination.with_name(engram_destination.name + ".download.partial").exists())
 
+    def test_probe_failure_reports_sanitized_bounded_nonzero_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, archive = Path(temporary), Path(temporary) / "cbm.tar.gz"
+            stdout = "token=do-not-leak " + "x" * (self.engine.PROBE_DIAGNOSTIC_LIMIT + 1)
+            script = f"#!/bin/sh\nprintf '%s\\n' '{stdout}'\nprintf '%s\\n' 'Authorization: Bearer do-not-leak' >&2\nexit 7\n"
+            self.write_archive(archive, [(self.regular_member("bin/codebase-memory-mcp"), script.encode())])
+            item = self.fixture_dependency("cbm", archive)
+            destination = root / "cbm"
+            with self.assertRaisesRegex(RuntimeError, r"exit_code=7") as raised:
+                self.engine.install_dependency(item, destination, archive)
+            message = str(raised.exception)
+            self.assertIn("stdout=", message)
+            self.assertIn("stderr=", message)
+            self.assertIn("...<truncated>", message)
+            self.assertIn("token=<redacted>", message)
+            self.assertIn("Authorization:<redacted>", message)
+            self.assertNotIn("do-not-leak", message)
+            self.assertFalse(destination.exists())
+
+    def test_probe_failure_reports_wrong_output_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, archive = Path(temporary), Path(temporary) / "cbm.tar.gz"
+            self.write_archive(archive, [
+                (self.regular_member("bin/codebase-memory-mcp"), b"#!/bin/sh\nprintf 'codebase-memory-mcp unexpected\\n'\n")
+            ])
+            item = self.fixture_dependency("cbm", archive)
+            destination = root / "cbm"
+            with self.assertRaisesRegex(RuntimeError, r"exit_code=0") as raised:
+                self.engine.install_dependency(item, destination, archive)
+            self.assertIn("stdout='codebase-memory-mcp unexpected\\n'", str(raised.exception))
+            self.assertIn("stderr=''", str(raised.exception))
+            self.assertFalse(destination.exists())
+
     def test_release_integrity_records_are_real_and_complete(self) -> None:
         provenance = json.loads((ROOT / "manifests" / "cbm-linux-x64-provenance.json").read_text())
         self.assertEqual(provenance["commit"], "b637e3330c96cfe452da623db068c241aaa3ec01")
