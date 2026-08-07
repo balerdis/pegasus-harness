@@ -1,57 +1,57 @@
-# Instalar Pegasus en la cuenta Linux actual
+# Instalar Pegasus
 
-Este recorrido instala Pegasus para la persona que está usando la terminal. No uses `sudo` ni apuntes a otra cuenta: Pegasus agrega artifacts a tu `~/.config` y `~/.local` sin reemplazar lo que ya existe.
+Este es el recorrido corto que probamos con una cuenta Linux limpia. Pegasus se instala en el usuario que ejecuta `./install.sh`; no hace falta usar `sudo` para el apply.
 
-## 1. Prerrequisitos
+## 1. Elegir la cuenta
 
-Necesitás Python 3.12+ y OpenCode en esta cuenta. Si OpenCode todavía no está disponible, instalalo con el procedimiento oficial como tu usuario actual y verificá el binario:
+Si querés practicar sin tocar tu usuario normal, creá una cuenta separada y entrá en ella:
 
 ```sh
+sudo useradd -s /bin/bash -m pegasus-release
+sudo -iu pegasus-release
+```
+
+Si lo vas a instalar en tu cuenta actual, omití esas dos líneas.
+
+## 2. Descargar y aplicar
+
+Usá el tag final que quieras distribuir. El ejemplo usa `v3.1.1`:
+
+```sh
+RELEASE_TAG="v3.1.1"
+mkdir -p "$HOME/Downloads/pegasus-$RELEASE_TAG"
+cd "$HOME/Downloads/pegasus-$RELEASE_TAG"
+
+BASE_URL="https://github.com/balerdis/pegasus-harness/releases/download/$RELEASE_TAG"
+ARCHIVE="pegasus-harness-$RELEASE_TAG.tar.gz"
+
+curl -fL -O "$BASE_URL/$ARCHIVE"
+curl -fL -O "$BASE_URL/$ARCHIVE.sha256"
+curl -fL -O "$BASE_URL/release-manifest.json"
+
+sha256sum -c "$ARCHIVE.sha256"
+tar -xzf "$ARCHIVE"
+cd "pegasus-harness-$RELEASE_TAG"
+
 curl -fsSL https://opencode.ai/install | bash
-opencode --version
-```
+source ~/.bashrc
 
-Si la instalación oficial no deja `opencode` en `PATH`, abrí una shell nueva o seguí la indicación que muestra el instalador oficial antes de continuar.
+OPENCODE_BIN="$(command -v opencode)"
+printf '%s\n' "$OPENCODE_BIN"
 
-Si pensás confirmar CBM, verificá también su ejecutable local con `codebase-memory-mcp --version` y `codebase-memory-mcp --help`. Para Playwright, instalá un navegador compatible por separado antes de confirmarlo.
-
-## 2. Trabajar desde un checkout verificado
-
-Usá un checkout o archive que hayas verificado. Para un archive, comprobá su checksum antes de extraerlo; en ambos casos, validá el snapshot desde la raíz del checkout:
-
-```sh
-sha256sum -c pegasus-harness.tar.gz.sha256
-tar -xzf pegasus-harness.tar.gz
-cd pegasus-harness
-python3 tools/validate_snapshot.py
-```
-
-Continuá solamente si el checksum termina en `OK` y el validador termina en `PASS`.
-
-## 3. Ejecutar el instalador
-
-Desde ese checkout, ejecutá el wrapper como tu usuario actual. Primero muestra y valida el plan; solo después ejecuta el apply.
-
-Cada MCP faltante recibe una única decisión: `--confirm <mcp>` lo instala o configura, y `--decline <mcp>` no lo descarga, configura ni registra. No omitas decisiones para MCPs faltantes.
-
-Este ejemplo confirma Context7 y rechaza los otros MCPs opcionales:
-
-```sh
 ./install.sh --client opencode \
-  --confirm context7 \
-  --decline cbm --decline engram --decline playwright
-```
+  --confirm cbm \
+  --confirm engram \
+  --decline playwright \
+  --confirm context7
 
-## 4. Verificar y configurar OpenCode
-
-```sh
-opencode debug config
-opencode debug info
-test -f "$HOME/.local/share/pegasus-harness/journal-v3.json" && printf '%s\n' 'journal de Pegasus presente'
+cd
 opencode
 ```
 
-Dentro de OpenCode, ejecutá `/connect` para configurar las credenciales del proveedor y `/models` para elegir el modelo. Pegasus no maneja ninguno de los dos.
+El comando de instalación muestra el plan antes de aplicar. Si querés otras integraciones, cambiá solamente las decisiones `--confirm` y `--decline`. Para usar Playwright necesitás tener un navegador instalado por fuera de Pegasus.
+
+Dentro de OpenCode, `/connect` configura el proveedor y `/models` deja elegir el modelo. Pegasus no toca credenciales ni impone modelos.
 
 ## Lo que sigue bajo su control
 
