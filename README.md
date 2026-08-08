@@ -51,3 +51,19 @@ Estos checks validan este checkout; no instalan OpenCode ni cambian tu configura
 ## Licencia
 
 Pegasus Harness se distribuye bajo la [licencia MIT](LICENSE).
+
+## Capturas
+
+Las capturas muestran la validación de instalación sobre `v3.1.1-rc.3` y el resultado en OpenCode.
+
+### Instalación verificada
+
+![Descarga, validación e instalación de OpenCode para Pegasus](docs/images/install-harness-1.png)
+
+### Payload aplicado
+
+![Payload de Pegasus aplicado y OpenCode iniciado](docs/images/install-harness-2.png)
+
+### Pegasus en OpenCode
+
+![Pegasus Orchestrator y sus subagentes disponibles en OpenCode](docs/images/install-harness-3.jpeg)
