@@ -1,5 +1,9 @@
 # Design: V3.1.1 Release Distribution
 
+## Status Note (verified 2026-08-08)
+
+The design remains the target contract. It does not describe the published state: `v3.1.1` currently resolves to `8fbb4d6850408ad0ee6d53f924a8e4349060e2c5`, whereas `v3.1.1-rc.3` resolves to `07a39a001c31477819f35a168dbfb80e32e26e16`. Because the commits differ, the same-commit promotion path was not achieved. Do not mutate tags to force this design to match history; a future corrected immutable patch release would need fresh operator acceptance and publication evidence.
+
 ## Technical Approach
 
 Keep manual RC acceptance as a promotion input; do not alter the installer or acceptance laboratory. Build immutable `v3.1.1-rc.1` from the selected final commit, accept its own aggregate evidence, and promote only that same commit through final `v3.1.1` asset generation. Publish exactly archive/checksum/manifest assets and retain the read-only agent preflight that reports only allowlisted facts.

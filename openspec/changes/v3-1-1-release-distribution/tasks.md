@@ -1,5 +1,12 @@
 # Tasks: V3.1.1 Release Distribution
 
+## Current Release Reality (verified 2026-08-08)
+
+- `v3.1.1` is an existing annotated tag at `8fbb4d6850408ad0ee6d53f924a8e4349060e2c5` (`docs(install): simplify user setup flow`).
+- `v3.1.1-rc.3` is an annotated tag at `07a39a001c31477819f35a168dbfb80e32e26e16`; it is not the same commit as `v3.1.1`.
+- Therefore this change's same-commit RC promotion contract was not satisfied by the existing `v3.1.1` tag. Task 4.3 remains incomplete and cannot be completed retroactively without violating the immutable-tag policy.
+- GitHub release asset/latest resolution and operator acceptance evidence were not revalidated here. Treat them as unknown until an operator records fresh evidence.
+
 ## Review Workload Forecast
 
 | Field | Value |
@@ -46,6 +53,6 @@ Chain strategy: pending
 
 - [x] 4.1 Run focused unit tests for final identity, preflight privacy/refusals, asset/latest contracts, release gates, and model fallback.
 - [x] 4.2 Run syntax, snapshot, and documentation-link checks; inspect the diff to confirm no unstaged user documentation was discarded.
-- [ ] 4.3 Leave operator-only acceptance/release execution pending: accepted v3.1.1-rc.1 aggregate, same-commit immutable final tag, three assets, non-prerelease latest, and byte/checksum identity must be proven before publication.
+- [ ] 4.3 **Blocked by existing immutable tag.** The required accepted same-commit RC aggregate, final tag, three assets, non-prerelease latest status, and byte/checksum identity were not proven. The existing `v3.1.1` tag is at `8fbb4d6`, while `v3.1.1-rc.3` is at `07a39a0`; do not complete this task retroactively or mutate either tag.
 - [x] 4.4 Require and validate the accepted v3.1.1-rc.1 aggregate against downloaded RC assets before the final release upload; cover invalid aggregate refusal offline.
 - [x] 4.5 Fix the final-release provenance contradiction: require immutable `v3.1.1-rc.1` built from the v3.1.1 commit, validate its own aggregate against downloaded RC assets, and preserve same-commit final promotion.

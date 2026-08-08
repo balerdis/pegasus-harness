@@ -1,5 +1,9 @@
 # Proposal: V3.1.1 Release Distribution
 
+## Current Release Status (verified 2026-08-08)
+
+This proposal describes the intended release contract, not a completed release. The existing immutable `v3.1.1` tag is at `8fbb4d6850408ad0ee6d53f924a8e4349060e2c5`, while the later `v3.1.1-rc.3` tag is at `07a39a001c31477819f35a168dbfb80e32e26e16`. They are different commits, so the required same-commit promotion did not occur. Acceptance evidence and GitHub release asset/latest resolution were not revalidated and remain unknown.
+
 ## Intent
 
 Publish v3.1.1 as the final, immutable release from an accepted `v3.1.1-rc.1` built from the same commit, including the current user-authored installation documentation. Consumers must be able to fetch final assets through GitHub's `releases/latest/download/...` URLs. Agent-assisted installation must establish safe local readiness without disclosing a user's full OpenCode configuration.
