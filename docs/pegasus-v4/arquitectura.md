@@ -20,11 +20,17 @@ Este documento fija la arquitectura antes de escribir código. No es un plan de 
 | Lenguaje y dependencias | Python 3.12+, dependencias permitidas con versiones y hashes fijos. |
 | Punto de entrada | `~/.local/bin/pegasus` + venv privado. |
 
-### Regla que gobierna todo el diseño
+### Las dos reglas que gobiernan el diseño
 
-> **Ningún módulo fuera de `adapters/` puede mencionar el nombre de un CLI.**
+> **1. Ningún módulo fuera de `adapters/` puede mencionar el nombre de un CLI.**
 
 Si aparece un `if cli_id == "opencode"` en `core/`, `tui/` o `infra/`, es un defecto de arquitectura, no un detalle de implementación. Un test lo verifica automáticamente.
+
+> **2. El núcleo guarda la intención; el adapter guarda el deletreo.**
+
+El núcleo declara *qué se quiere que pase*. El adapter sabe *cómo se escribe eso en un CLI concreto*. Un campo que sirve para un solo CLI no pertenece al descriptor, aunque el contenido haya llegado con ese campo desde una versión anterior.
+
+La prueba para saber de qué lado va un campo: **¿tendría sentido en un CLI que todavía no soportamos?** Si la respuesta es no, es deletreo y va al adapter.
 
 ---
 
@@ -79,9 +85,12 @@ El contenido agnóstico se organiza por categoría. Cada ítem es un **descripto
 | `skills/` | `SKILL.md` + `references/` | Todo |
 | `agents/` | Rol, responsabilidad, límites, herramientas requeridas, modo primario o subagente | Todo el cuerpo; el formato de declaración no |
 | `prompts/` | Prompt de cada agente o fase | Todo |
-| `commands/` | Nombre, descripción, agente que invoca, si corre como subtarea | Todo el cuerpo; el frontmatter no |
+| `commands/` | Descripción, rol que lo ejecuta, contexto de ejecución | Todo el cuerpo; el frontmatter no |
+| `system-prompt/` | La instrucción global que el CLI carga en cada sesión | Todo el cuerpo; el nombre y la ubicación del archivo no |
 | `mcp/` | Servidores MCP: id, versión fija, integridad, argv de instalación y runtime, probe | Todo |
 | `policies/` | TDD estricto, ChainPR, gates de fase, backend de artefactos | Todo |
+
+`system-prompt/` es una categoría propia y no una política: es un artefacto único con su propio render. OpenCode lo instala como `AGENTS.md` en la raíz de su configuración; otro CLI puede darle otro nombre, otra ubicación, o cargarlo desde su archivo de settings.
 
 ### Ejemplo de descriptor
 
@@ -98,6 +107,32 @@ model_configurable: true
 ```
 
 Ese descriptor no dice nada sobre OpenCode. El adapter de OpenCode lo convierte en una entrada bajo `agent` de `opencode.json` más un archivo de prompt; un adapter de Claude Code lo convertiría en un `.claude/agents/sdd-apply.md` con frontmatter. Ninguno de los dos requiere tocar el descriptor.
+
+### Estado del contenido heredado
+
+El contenido llegó desde v3 sin cambios y todavía no está normalizado al formato de descriptor. Lo que falta se resuelve en las unidades de entrega correspondientes, no antes.
+
+| Categoría | Presente | Pendiente |
+|-----------|---------:|-----------|
+| `skills/` | 27 | Nada: todas traen frontmatter con `name` y `description` |
+| `commands/` | 16 | Normalizar el frontmatter heredado de OpenCode a campos agnósticos |
+| `prompts/` | 10 | `sdd-verify.md` es el único sin frontmatter |
+| `agents/` | 2 | Faltan los 10 descriptores de la línea SDD |
+| `system-prompt/` | 1 | Está mal ubicado bajo `agents/` |
+| `mcp/` | 0 | Sigue viviendo en `manifests/release-contract.json` |
+| `policies/` | 0 | Sin extraer |
+
+El frontmatter heredado de los comandos mezcla conceptos agnósticos con deletreos de OpenCode. `subtask: true` expresa el contexto de ejecución; `agent:` mezcla un agente propio de Pegasus con dos agentes nativos del CLI. En el descriptor esos campos se guardan como intención, y el adapter los traduce:
+
+```yaml
+# content/commands/sdd-apply.yaml
+id: sdd-apply
+description: Implementa las tareas del cambio siguiendo spec y diseño
+runs_as: orchestrator      # orchestrator | planner | builder | default
+execution: isolated        # isolated | inline
+```
+
+El adapter de OpenCode mapea `orchestrator` a `pegasus-orchestrator`, `planner` a su agente nativo `plan`, y `isolated` a `subtask: true`. Otro CLI usa sus propios nombres sin que el descriptor cambie.
 
 ### El pipeline de materialización
 
@@ -663,14 +698,18 @@ Seis unidades. Cada una tiene tests propios y límite de rollback. El detalle de
 
 | # | Unidad | Entrega verificable |
 |---|--------|---------------------|
-| 1 | Núcleo, puertos, registry y render del adapter OpenCode | Genera el catálogo completo en memoria, sin tocar disco |
+| 0 | Demolición y reubicación | El repositorio queda ordenado, sin motor v3 y sin lógica nueva |
+| 1a | Tipos, punteros, códecs, puerto y registry | El motor genérico existe y no conoce ningún CLI |
+| 1b | Carga de contenido, adapter OpenCode y catálogo | Genera en memoria el catálogo del contenido presente, con digests deterministas |
 | 2 | Motor de instalación, journal v4, rollback | Paridad funcional con v3.1.2 en modo desatendido |
-| 3 | Los 12 agentes cableados con sus prompts | Los 10 SDD existen como subagentes reales |
+| 3 | Los 12 agentes cableados con sus prompts, y el contenido normalizado | Los 10 SDD existen como subagentes reales |
 | 4 | Launcher, venv privado, empaquetado | `pegasus` disponible en el PATH tras instalar |
 | 5 | TUI: menú principal e instalación | Instalación completa sin escribir un flag |
 | 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con mutación registrada |
 
-El presupuesto de revisión es de **800 líneas cambiadas por PR**. Cada unidad se mide al planificar sus tareas; la que se pase se parte en una cadena, con la estrategia definida antes de empezar a escribir código. Las unidades 1 y 2 son las candidatas a requerirlo.
+La unidad 1b genera el catálogo **del contenido presente**, no del contenido final: los descriptores de los 10 agentes SDD y las categorías `mcp/` y `policies/` llegan en unidades posteriores.
+
+El presupuesto de revisión es de **800 líneas cambiadas por PR**. Cada unidad se mide al planificar sus tareas; la que se pase se parte en una cadena, con la estrategia definida antes de empezar a escribir código. La unidad 1 ya se midió y por eso está partida en 1a y 1b; la 2 es la próxima candidata.
 
 ---
 
