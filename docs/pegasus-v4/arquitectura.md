@@ -546,6 +546,25 @@ Se persiste como `provider/model`, más un campo de esfuerzo cuando el modelo de
 
 Ningún agente trae modelo asignado. La tabla arranca con todos en "sin modelo", y un agente sin configurar simplemente no tiene el campo. Esto preserva la política vigente de no fijar modelos por agente: configurar es una decisión explícita del usuario, y siempre reversible.
 
+### El prompt de un agente es corto
+
+Un prompt de agente lleva solo lo que ese agente no puede permitirse ignorar aunque nunca llegue a leer nada más: su identidad, sus innegociables y su contrato de salida. Todo lo procedimental — la secuencia de pasos, las plantillas de salida, los protocolos, los gates — vive en la skill de esa fase y el orquestador se la pasa como ruta al delegar.
+
+La razón es medible. En una instalación real de la línea v3, los nueve prompts de fase SDD eran copias completas de su skill y sumaban unos 21.000 tokens que entraban en contexto antes de que el agente hiciera nada. El único que estaba bien escrito, `sdd-verify`, gastaba 159 tokens para el mismo tipo de trabajo. Y como el orquestador además le pasa al subagente la ruta de su propia skill, un prompt que ya es esa skill hace que el agente lea otra vez lo que ya tiene.
+
+De ahí sale una regla de contenido: **un descriptor de agente cuyo cuerpo supere unos pocos párrafos indica que hay procedimiento donde debería haber identidad.**
+
+### Qué es el system prompt y qué es un agente
+
+El archivo de instrucción global que llegó desde v3 mezclaba dos cosas: reglas y protocolos que obligan a cualquier agente, y la personalidad y el rol de un agente en particular. En v4 se parte:
+
+| Parte | Va a | Alcance |
+|-------|------|---------|
+| Reglas de trabajo, protocolo de memoria persistente, cierre de sesión | `system-prompt/` | Todos los agentes, en toda sesión |
+| Personalidad, tono, rol y expertise | `agents/king-gentleman.md` | Ese agente |
+
+El criterio: una regla como no agregar atribución de herramientas a un commit tiene que obligar a cualquier agente, no solo al que casualmente cargaba ese archivo como prompt.
+
 ### Agentes configurables en 4.0.0
 
 Los 10 de la línea SDD, más los dos de coordinación:
