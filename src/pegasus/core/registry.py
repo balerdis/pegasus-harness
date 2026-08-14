@@ -21,7 +21,6 @@ RENDERERS: dict[Capability, tuple[str, ...]] = {
     Capability.SUB_AGENTS: ("render_agent",),
     Capability.PROMPTS: ("render_prompt",),
     Capability.MCP: ("render_mcp",),
-    Capability.PLUGINS: ("render_plugin",),
     Capability.PER_AGENT_MODEL: (
         "model_catalog",
         "read_model_assignments",
@@ -42,6 +41,10 @@ class ManifestMismatchError(RegistryError):
     """An adapter's manifest disagrees with what it implements."""
 
 
+class AdapterScopeError(RegistryError):
+    """An adapter would write outside the territory of its own CLI."""
+
+
 class Registry:
     """The set of adapters this installation can use."""
 
@@ -59,8 +62,10 @@ class Registry:
             raise DuplicateAdapterError(f"an adapter is already registered for {cli_id!r}")
 
         manifest = adapter.capabilities()
+        layout = adapter.layout(PROBE)
         _check_identity(adapter, cli_id, manifest)
-        _check_capabilities(adapter, cli_id, manifest, adapter.layout(PROBE))
+        _check_capabilities(adapter, cli_id, manifest, layout)
+        _check_own_artifacts(adapter, cli_id, layout)
 
         self._adapters[cli_id] = adapter
         self._manifests[cli_id] = manifest
@@ -83,6 +88,26 @@ class Registry:
 
     def __len__(self) -> int:
         return len(self._adapters)
+
+
+def _check_own_artifacts(adapter: object, cli_id: str, layout: Layout) -> None:
+    """Confirm the adapter's own artifacts stay inside its CLI's configuration root.
+
+    `own_artifacts` is the one place an adapter contributes files the content core
+    knows nothing about, so it is also the one place an adapter could reach into
+    somewhere it has no business writing. The check runs at registration against
+    the probe home: it reads the adapter's bundled assets, which are always
+    present, but never the user's home.
+    """
+    if not _implements(adapter, "own_artifacts"):
+        raise ManifestMismatchError(
+            f"adapter {cli_id!r} must implement own_artifacts; return an empty list when it ships nothing"
+        )
+    for artifact in adapter.own_artifacts(PROBE):
+        if not artifact.path.is_relative_to(layout.config_dir):
+            raise AdapterScopeError(
+                f"adapter {cli_id!r} would write {artifact.path} outside {layout.config_dir}"
+            )
 
 
 def _check_identity(adapter: object, cli_id: str, manifest: CapabilityManifest) -> None:

@@ -186,6 +186,9 @@ class CliAdapter(Protocol):
     def render_mcp(self, server: McpServer, resolved: ResolvedDependency) -> list[Artifact]: ...
     def render_policy(self, policy: PolicyDescriptor) -> list[Artifact]: ...
 
+    # --- Lo que el adapter aporta por su cuenta ---
+    def own_artifacts(self, env: Environment) -> list[Artifact]: ...
+
     # --- Modelos: solo si capabilities().per_agent_model es True ---
     def model_catalog(self, env: Environment) -> ModelCatalog: ...
     def read_model_assignments(self, env: Environment) -> dict[str, ModelAssignment]: ...
@@ -278,6 +281,29 @@ Cada códec debe garantizar dos cosas: **serialización canónica** (mismo valor
 
 Regla de higiene: si aparece un caso que no entra en ninguna de las dos formas, es señal de que el adapter está intentando delegar lógica propia al motor. La solución es resolverlo en el adapter, no agregar una tercera forma.
 
+### Artefactos propios del adapter
+
+Casi todo lo que un adapter escribe viene del núcleo: recibe un descriptor y lo materializa. Pero hay archivos que existen **solo porque un CLI funciona como funciona**, y para esos no hay descriptor posible.
+
+En OpenCode son once: cinco plugins escritos contra su API de plugins, el `package.json` y el lockfile de los que esos plugins dependen, la herramienta que uno de ellos invoca con su launcher, su plantilla de entorno, y un archivo de datos del propio adapter.
+
+```python
+def own_artifacts(self, environment: Environment) -> list[Artifact]: ...
+```
+
+Que un adapter tenga recursos propios de su tecnología es normal en puertos y adaptadores: un driver de base de datos lleva su gramática SQL, un adapter REST lleva sus serializadores, y el dominio no conoce ninguno de los dos. La invariante de la arquitectura es la **dirección de la dependencia** — el adapter conoce al núcleo, el núcleo no conoce al adapter — y no que todo lo que el adapter produce tenga que originarse en el núcleo.
+
+El detalle que mantiene la flecha en su lugar: `own_artifacts` devuelve `Artifact`, un tipo del núcleo. El adapter aporta cosas propias, pero las entrega hablando el vocabulario que define el puerto, y el motor las materializa sin saber que son TypeScript ni que existe OpenCode.
+
+**Es una puerta de escape, y las puertas de escape se abusan.** Dos candados la protegen:
+
+| Candado | Qué impide |
+|---------|------------|
+| Contención, verificada por el registry | Que un adapter escriba fuera del `config_dir` de su propio CLI |
+| La regla 2 como criterio de admisión | Que entre acá algo que podría tener forma agnóstica, vaciando el núcleo de a poco |
+
+Si un archivo tendría sentido en un CLI que todavía no soportamos, va al núcleo. Usar `own_artifacts` para evitar escribir un descriptor es exactamente cómo se degrada esta arquitectura.
+
 ### Puertos secundarios
 
 | Puerto | Responsabilidad | Por qué está separado |
@@ -303,7 +329,6 @@ class CapabilityManifest:
     sub_agents: bool = False
     prompts: bool = False          # el prompt del agente va en un archivo aparte
     mcp: bool = False
-    plugins: bool = False
     per_agent_model: bool = False
     schema: str = "pegasus/capability-manifest/v1"
 ```
@@ -320,6 +345,8 @@ Validaciones al registrar:
 Este es el mecanismo que evita que la abstracción se degrade cuando se agregue el cuarto o quinto CLI.
 
 **Las capacidades sin ancla dedicada se validan solo por su render.** `mcp` y `per_agent_model` escriben adentro del archivo de configuración compartido, que también guarda claves de otras capacidades y del propio usuario. Que ese archivo exista no prueba que ninguna capacidad en particular esté soportada, así que exigirlo como ancla rechazaría adapters correctos: un CLI con archivo de settings pero sin soporte MCP sería acusado de exponer una capacidad fantasma.
+
+**Los plugins no son una capacidad.** No hay categoría de contenido para ellos y no puede haberla: un plugin de OpenCode es TypeScript escrito contra su propia API, y no existe una forma agnóstica que sirva también para los hooks de Claude Code. Viajan por `own_artifacts`, y el manifiesto queda siendo lo que debe ser: un contrato sobre cómo sale el contenido del núcleo.
 
 **El layout se prueba contra un home inexistente.** Construir un `Layout` tiene que ser aritmética de rutas pura. Si un adapter consultara el disco, el resultado del registro dependería del estado de la máquina: pasaría en la del desarrollador, donde el directorio del CLI ya existe, y fallaría en la de un usuario que instaló el CLI pero nunca lo abrió. El registry lo prueba contra un home que no existe, así que ese error se cae en el primer test.
 

@@ -45,7 +45,6 @@ class Capability(str, Enum):
     SUB_AGENTS = "sub_agents"
     PROMPTS = "prompts"
     MCP = "mcp"
-    PLUGINS = "plugins"
     PER_AGENT_MODEL = "per_agent_model"
 
 
@@ -92,7 +91,6 @@ class CapabilityManifest:
     sub_agents: bool = False
     prompts: bool = False
     mcp: bool = False
-    plugins: bool = False
     per_agent_model: bool = False
     schema: str = CAPABILITY_MANIFEST_SCHEMA
 
@@ -123,7 +121,7 @@ class Layout:
     agents_dir: Path | None = None
     commands_dir: Path | None = None
     prompts_dir: Path | None = None
-    plugins_dir: Path | None = None
+    plugins_dir: Path | None = None  # uso interno del adapter, no es una capacidad
     system_prompt_file: Path | None = None
 
     def __post_init__(self) -> None:
@@ -144,7 +142,6 @@ _DEDICATED_ANCHORS: dict[Capability, str] = {
     Capability.SLASH_COMMANDS: "commands_dir",
     Capability.SUB_AGENTS: "agents_dir",
     Capability.PROMPTS: "prompts_dir",
-    Capability.PLUGINS: "plugins_dir",
 }
 
 
