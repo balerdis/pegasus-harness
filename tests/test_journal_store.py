@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fakes import FakeFileSystem
 from pegasus.core import journal as journal_module
 from pegasus.core.journal import Install, Record
 from pegasus.infra.fs_posix import PosixFileSystem
@@ -25,41 +26,6 @@ HOME = Path("/home/probe")
 CONFIG = HOME / ".config" / "some-cli"
 AT = "2026-08-14T00:00:00+00:00"
 VERSION = "4.0.0"
-
-
-class FakeFileSystem:
-    """An in-memory filesystem that answers the port and records what it was told."""
-
-    def __init__(self, *, files: dict[Path, bytes] | None = None, owner: bool = True, privileged: bool = False):
-        self.files: dict[Path, bytes] = dict(files or {})
-        self.modes: dict[Path, int] = {}
-        self.directories: set[Path] = set()
-        self.owner = owner
-        self.privileged = privileged
-
-    def exists(self, path: Path) -> bool:
-        return path in self.files or path in self.directories
-
-    def read_bytes(self, path: Path) -> bytes:
-        if path not in self.files:
-            raise FileSystemError(f"no such file: {path}")
-        return self.files[path]
-
-    def write_atomic(self, path: Path, content: bytes, *, mode: int = 0o644) -> None:
-        self.files[path] = content
-        self.modes[path] = mode
-
-    def remove(self, path: Path) -> None:
-        self.files.pop(path, None)
-
-    def make_dir(self, path: Path, *, mode: int = 0o755) -> None:
-        self.directories.add(path)
-
-    def owned_by_current_user(self, path: Path) -> bool:
-        return self.owner
-
-    def running_privileged(self) -> bool:
-        return self.privileged
 
 
 def install() -> Install:

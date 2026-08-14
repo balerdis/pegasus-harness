@@ -9,12 +9,11 @@ and asks that adapter to render each one.
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
-from pegasus.core import codecs
+from pegasus.core import ownership
 from pegasus.core.content import Content
 from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileArtifact
 
@@ -74,17 +73,22 @@ class Catalog:
     @property
     def digest(self) -> str:
         """One digest for the whole catalog, so a release can be compared as a unit."""
-        return _sha256(codecs.canonical_bytes(self.as_dict()))
+        return ownership.digest_of_value(self.as_dict())
 
     def __len__(self) -> int:
         return len(self.entries)
 
 
-def build(content: Content, adapter: Any, environment: Environment) -> Catalog:
-    """Render everything the adapter declares it supports, plus what it ships itself."""
+def render(content: Content, adapter: Any, environment: Environment) -> list[Any]:
+    """Everything the adapter declares it supports, plus what it ships itself.
+
+    This is the output of the adapt-and-decorate steps: finished artifacts,
+    addressed at real paths for this environment. The catalog turns them into a
+    portable manifest; an installation hands them to the planner instead.
+    """
     layout = adapter.layout(environment)
     manifest = adapter.capabilities()
-    artifacts = []
+    artifacts: list[Any] = []
 
     for capability in sorted(manifest.enabled - INTERACTIVE, key=lambda item: item.value):
         try:
@@ -97,7 +101,14 @@ def build(content: Content, adapter: Any, environment: Environment) -> Catalog:
             artifacts.extend(getattr(adapter, renderer)(layout, item))
 
     artifacts.extend(adapter.own_artifacts(layout))
-    return Catalog(cli=adapter.id, entries=_entries(artifacts, layout.config_dir, adapter.id))
+    return artifacts
+
+
+def build(content: Content, adapter: Any, environment: Environment) -> Catalog:
+    """The portable manifest of what one CLI would receive."""
+    artifacts = render(content, adapter, environment)
+    root = adapter.layout(environment).config_dir
+    return Catalog(cli=adapter.id, entries=_entries(artifacts, root, adapter.id))
 
 
 def _items(content: Content, attribute: str) -> tuple[Any, ...]:
@@ -138,7 +149,7 @@ def _entry(artifact: Any, root: Any) -> Entry:
             id=artifact.id,
             kind="file",
             target=target,
-            digest=_sha256(artifact.content),
+            digest=ownership.digest(artifact),
             mode=f"{artifact.mode:04o}",
         )
     if isinstance(artifact, ConfigKeyArtifact):
@@ -146,12 +157,8 @@ def _entry(artifact: Any, root: Any) -> Entry:
             id=artifact.id,
             kind="config-key",
             target=target,
-            digest=_sha256(codecs.canonical_bytes(artifact.value)),
+            digest=ownership.digest(artifact),
             pointer=artifact.pointer,
             codec=artifact.codec.value,
         )
     raise CatalogError(f"unsupported artifact shape: {type(artifact).__name__}")
-
-
-def _sha256(payload: bytes) -> str:
-    return f"sha256:{hashlib.sha256(payload).hexdigest()}"

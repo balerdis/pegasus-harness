@@ -18,6 +18,7 @@ is what a platform implementation should have to get right.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -40,6 +41,12 @@ class PosixFileSystem:
             return path.read_bytes()
         except OSError as error:
             raise FileSystemError(f"cannot read {path}: {error}") from error
+
+    def mode_of(self, path: Path) -> int | None:
+        try:
+            return stat.S_IMODE(path.stat().st_mode)
+        except OSError:
+            return None
 
     # --- Writing ---
 

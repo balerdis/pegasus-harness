@@ -255,6 +255,17 @@ Es todo lo que el motor sabe hacer con un artefacto. Cada operación tiene exact
 
 `set_at` y `unset_at` son dos funciones genéricas que navegan un árbol de diccionarios y listas creando lo que falte. No mencionan ningún CLI.
 
+#### La excepción: punteros que agregan a una lista
+
+Un puntero terminado en `/-` no direcciona un casillero sino el final de una lista. Hoy tres artefactos lo usan: `/instructions/-`, `/plugin/-` y `/skills/paths/-`. Eso rompe dos de las cuatro operaciones, y las dos se arreglan con la huella:
+
+| Operación | Por qué no sirve lo normal | Cómo se resuelve |
+|-----------|---------------------------|------------------|
+| Detectar colisión | En `/-` nunca resuelve nada, así que jamás habría colisión y reinstalar duplicaría la entrada | Hay colisión si algún ítem de la lista tiene la huella del valor que íbamos a agregar |
+| Revertir | Guardar el índice no sirve: el usuario puede reordenar la lista y el índice pasaría a apuntar a algo suyo | Se busca el ítem cuya huella coincide con `after_digest` y se quita ese |
+
+Por eso el ítem se identifica por **lo que es** y no por **dónde está**. Si no aparece ninguno con esa huella, el usuario ya lo sacó y retirarlo es un no-op.
+
 #### Códecs de configuración
 
 El puntero navega cualquier árbol, pero parsear y serializar el archivo depende de su formato. El adapter lo declara y el motor delega:
@@ -508,6 +519,12 @@ pegasus models set … --on-modified skip      # deja el artefacto como está y 
 ```
 
 Sin flag, el modo desatendido usa `skip` y lo informa en su salida JSON. Nunca adopta por omisión: adoptar es una decisión del usuario, y en desatendido no hay usuario presente.
+
+### Lo que el desinstalador deja atrás
+
+Retirar no reescribe un archivo de configuración si no cambió nada en él: la indentación del usuario es suya y no se gasta sin motivo.
+
+Queda un residuo conocido y aceptado: si el archivo de configuración del CLI **no existía** antes de instalar, Pegasus lo crea y al desinstalar lo deja vacío (`{}`). El journal registra claves, no la existencia del archivo, así que no hay forma de saber que fue nuestro sin agregar una entrada para el archivo mismo — y esa entrada chocaría con las claves que viven adentro. Un archivo de configuración vacío es inofensivo: el CLI lo lee como configuración por defecto. Si alguna vez molesta, la solución es registrar la creación del archivo como un hecho aparte del de sus claves.
 
 ### Reglas invariantes
 

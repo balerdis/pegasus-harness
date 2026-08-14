@@ -150,6 +150,23 @@ class PosixFileSystemTest(unittest.TestCase):
         with self.assertRaises(FileSystemError):
             self.fs.make_dir(target)
 
+    def test_mode_of_reports_the_permission_bits(self):
+        target = self.root / "note.txt"
+        target.write_bytes(b"")
+        target.chmod(0o640)
+        self.assertEqual(self.fs.mode_of(target), 0o640)
+
+    def test_mode_of_a_missing_path_is_none(self):
+        self.assertIsNone(self.fs.mode_of(self.root / "absent.txt"))
+
+    def test_a_users_file_keeps_its_permissions_when_rewritten_with_its_own_mode(self):
+        """Writing into a configuration file must not change who can read it."""
+        target = self.root / "settings.json"
+        target.write_bytes(b"{}")
+        target.chmod(0o600)
+        self.fs.write_atomic(target, b'{"a": 1}', mode=self.fs.mode_of(target))
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+
     # --- Who is running ---
 
     def test_a_directory_this_process_created_is_owned_by_this_user(self):
