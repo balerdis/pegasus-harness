@@ -9,7 +9,7 @@ description = "Additive harness of prompts, agents, skills and commands for AI c
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
-dependencies = []
+dependencies = ["PyYAML>=6.0.1,<7"]
 
 [project.scripts]
 pegasus = "pegasus.cli:main"
