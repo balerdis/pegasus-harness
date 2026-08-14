@@ -264,7 +264,16 @@ Un puntero terminado en `/-` no direcciona un casillero sino el final de una lis
 | Detectar colisión | En `/-` nunca resuelve nada, así que jamás habría colisión y reinstalar duplicaría la entrada | Hay colisión si algún ítem de la lista tiene la huella del valor que íbamos a agregar |
 | Revertir | Guardar el índice no sirve: el usuario puede reordenar la lista y el índice pasaría a apuntar a algo suyo | Se busca el ítem cuya huella coincide con `after_digest` y se quita ese |
 
-Por eso el ítem se identifica por **lo que es** y no por **dónde está**. Si no aparece ninguno con esa huella, el usuario ya lo sacó y retirarlo es un no-op.
+Por eso el ítem se identifica por **lo que es** y no por **dónde está**.
+
+Eso tiene una consecuencia que hay que decir en voz alta: **la invariante "un artefacto cuya huella no coincide se preserva y se reporta" no se puede aplicar a un append.** Si no aparece ningún ítem con la huella registrada, hay dos causas posibles y son indistinguibles:
+
+- el usuario borró nuestro ítem, o
+- el usuario lo editó en el lugar, y ahora es idéntico a un ítem que hubiera puesto él.
+
+No hay dato en el journal que las separe, y un ítem de lista no tiene dirección propia que inspeccionar. Ninguna de las dos es una remoción y ninguna es una preservación, así que el desinstalador las reporta como un cuarto resultado: **`unaccounted`**. Los otros tres —`removed`, `restored`, `preserved`— son afirmaciones sobre algo que Pegasus hizo, y ninguna sería cierta acá.
+
+Además, dos artefactos no pueden agregar **el mismo valor** al mismo puntero: la lista no podría distinguirlos y nada aguas abajo podría decir cuál de los dos tiene. Agregar valores distintos sí es legítimo y por eso los appends quedan exentos de la regla general de direcciones únicas.
 
 #### Códecs de configuración
 
@@ -531,7 +540,7 @@ Queda un residuo conocido y aceptado: si el archivo de configuración del CLI **
 - [ ] Todo `target` está contenido dentro del home del usuario
 - [ ] El journal lo escribe el usuario dueño del home, nunca root
 - [ ] Escritura atómica: archivo temporal, `fsync`, `rename`
-- [ ] Al desinstalar, un artefacto cuya huella no coincide se preserva y se reporta
+- [ ] Al desinstalar, un artefacto cuya huella no coincide se preserva y se reporta (salvo los appends, donde la huella no alcanza para decidirlo y el resultado es `unaccounted` — ver "La excepción: punteros que agregan a una lista")
 - [ ] Un `link` nunca se borra: Pegasus no es dueño de dependencias preexistentes
 
 ---

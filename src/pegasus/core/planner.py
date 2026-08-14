@@ -83,11 +83,18 @@ class Applied:
 
 @dataclass(frozen=True)
 class Retired:
-    """What an uninstall did, by artifact id."""
+    """What an uninstall did, by artifact id.
+
+    ``unaccounted`` is the honest answer for a list item that could not be
+    found. Every other outcome is a claim about something Pegasus did — removed
+    it, put a previous value back, or deliberately left it alone — and none of
+    those is true when the item is simply not there to judge.
+    """
 
     removed: tuple[str, ...] = ()
     restored: tuple[str, ...] = ()
     preserved: tuple[str, ...] = ()
+    unaccounted: tuple[str, ...] = ()
     kept_links: tuple[str, ...] = ()
 
 
@@ -242,6 +249,13 @@ def retire(filesystem: FileSystem, install: Install) -> Retired:
     removed: list[str] = []
     restored: list[str] = []
     preserved: list[str] = []
+    unaccounted: list[str] = []
+    outcomes = {
+        "removed": removed,
+        "restored": restored,
+        "preserved": preserved,
+        "unaccounted": unaccounted,
+    }
 
     files = [entry for entry in install.entries if entry.kind == "file"]
     keys = [entry for entry in install.entries if entry.kind == "config-key"]
@@ -262,13 +276,15 @@ def retire(filesystem: FileSystem, install: Install) -> Retired:
         codec = Codec(entries[0].codec or Codec.JSON.value)
         document = _read_document(filesystem, path, codec)
         if document is None:
-            removed.extend(entry.id for entry in entries)
+            # The file the user deleted takes every key in it with it.
+            for entry in entries:
+                outcomes["unaccounted" if _appends(entry.pointer or "") else "removed"].append(entry.id)
             continue
         mode = filesystem.mode_of(path)
         original = document
         for entry in entries:
             document, outcome = _retire_key(document, entry)
-            {"removed": removed, "restored": restored, "preserved": preserved}[outcome].append(entry.id)
+            outcomes[outcome].append(entry.id)
         if document != original:
             # Rewriting an unchanged file would reformat it for nothing. The
             # user's spacing is theirs, and we only spend it when we must.
@@ -278,16 +294,25 @@ def retire(filesystem: FileSystem, install: Install) -> Retired:
         removed=tuple(removed),
         restored=tuple(restored),
         preserved=tuple(preserved),
+        unaccounted=tuple(unaccounted),
         kept_links=tuple(link.id for link in install.links),
     )
 
 
 def _retire_key(document: Any, entry: Record) -> tuple[Any, str]:
-    """Undo one key, and say which of the three outcomes it was."""
+    """Undo one key, and say which outcome it was.
+
+    The invariant that a fingerprint mismatch is preserved and reported cannot
+    be enforced for a list item, and pretending otherwise would be the lie. A
+    list item has no address of its own: an item whose fingerprint matches
+    nothing may have been deleted by the user, or edited into something no
+    longer recognisable as ours, and the two are indistinguishable. Neither is a
+    removal and neither is a preservation, so they are reported as unaccounted.
+    """
     if _appends(entry.pointer or ""):
         index = _index_of(document, entry.pointer, entry.after_digest)
         if index is None:
-            return document, "removed"
+            return document, "unaccounted"
         return pointer.unset_at(document, f"{_parent(entry.pointer)}/{index}"), "removed"
 
     if not pointer.exists_at(document, entry.pointer):
@@ -372,6 +397,7 @@ def _refuse_duplicates(cli: str, artifacts: Sequence[Artifact]) -> None:
     """Two artifacts claiming one address means one of them is silently lost."""
     seen_ids: set[str] = set()
     seen_addresses: set[tuple[Path, str | None]] = set()
+    seen_appends: set[tuple[Path, str | None, str]] = set()
     for artifact in artifacts:
         if not isinstance(artifact, (FileArtifact, ConfigKeyArtifact)):
             raise PlannerError(f"unsupported artifact shape: {type(artifact).__name__}")
@@ -381,7 +407,14 @@ def _refuse_duplicates(cli: str, artifacts: Sequence[Artifact]) -> None:
 
         address = artifact.path, getattr(artifact, "pointer", None)
         if address[1] is not None and _appends(address[1]):
-            continue  # Appending to a list is legitimately repeatable.
+            # Appending to a list is repeatable, but only with different values.
+            # The same item twice is a duplicate the list cannot tell apart, and
+            # nothing downstream could ever say which of the two it holds.
+            item = (*address, ownership.digest(artifact))
+            if item in seen_appends:
+                raise PlannerError(f"{cli!r} would append the same value twice at {address[1]}")
+            seen_appends.add(item)
+            continue
         if address in seen_addresses:
             raise PlannerError(f"{cli!r} would place two artifacts at {address}")
         seen_addresses.add(address)

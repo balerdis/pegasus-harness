@@ -29,6 +29,7 @@ class FakeFileSystem:
         privileged: bool = False,
         fail_on: set[Path] | None = None,
         fail_always: set[Path] | None = None,
+        fail_remove: set[Path] | None = None,
     ):
         self.files: dict[Path, bytes] = dict(files or {})
         self.modes: dict[Path, int] = dict(modes or {})
@@ -37,6 +38,7 @@ class FakeFileSystem:
         self.privileged = privileged
         self.fail_on: set[Path] = set(fail_on or ())
         self.fail_always: set[Path] = set(fail_always or ())
+        self.fail_remove: set[Path] = set(fail_remove or ())
         self.writes: list[Path] = []
         self.removals: list[Path] = []
 
@@ -72,6 +74,8 @@ class FakeFileSystem:
         self.writes.append(path)
 
     def remove(self, path: Path) -> None:
+        if path in self.fail_remove:
+            raise FileSystemError(f"refusing to remove {path}: injected failure")
         self.files.pop(path, None)
         self.modes.pop(path, None)
         self.removals.append(path)

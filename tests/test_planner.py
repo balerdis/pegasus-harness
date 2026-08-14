@@ -125,6 +125,9 @@ class AppendTest(unittest.TestCase):
             id="system-prompt-instruction", path=SETTINGS, pointer="/instructions/-", value=value
         )
 
+    def append_as(self, identifier: str, value: str = "./pegasus-AGENTS.md"):
+        return ConfigKeyArtifact(id=identifier, path=SETTINGS, pointer="/instructions/-", value=value)
+
     def entry(self, value: str = "./pegasus-AGENTS.md") -> Record:
         return Record(
             id="system-prompt-instruction",
@@ -171,11 +174,48 @@ class AppendTest(unittest.TestCase):
         planner.retire(filesystem, self.install(self.entry()))
         self.assertEqual(json.loads(filesystem.files[SETTINGS])["instructions"], ["./theirs.md"])
 
-    def test_retiring_an_append_that_the_user_already_removed_counts_as_retired(self):
+    def test_an_append_we_cannot_find_is_reported_as_unaccounted_not_as_removed(self):
+        """Saying "removed" would claim we did something we did not do.
+
+        A list item has no address of its own, so a fingerprint that matches
+        nothing is genuinely ambiguous: the user may have deleted our item, or
+        edited it into something we can no longer recognise as ours. Both leave
+        the list correct and neither is a removal, so they get their own answer
+        instead of being flattened into one of the other three.
+        """
         filesystem = FakeFileSystem(files={SETTINGS: document({"instructions": ["./theirs.md"]})})
         retired = planner.retire(filesystem, self.install(self.entry()))
-        self.assertEqual(retired.removed, ("system-prompt-instruction",))
+        self.assertEqual(retired.unaccounted, ("system-prompt-instruction",))
+        self.assertEqual(retired.removed, ())
         self.assertEqual(json.loads(filesystem.files[SETTINGS])["instructions"], ["./theirs.md"])
+
+    def test_an_append_the_user_edited_in_place_is_left_alone_and_reported(self):
+        edited = {"instructions": ["./theirs.md", "./the-user-renamed-this.md"]}
+        filesystem = FakeFileSystem(files={SETTINGS: document(edited)})
+        retired = planner.retire(filesystem, self.install(self.entry()))
+        self.assertEqual(retired.unaccounted, ("system-prompt-instruction",))
+        self.assertEqual(json.loads(filesystem.files[SETTINGS]), edited)
+        self.assertEqual(filesystem.writes, [])
+
+    def test_an_append_whose_whole_list_is_gone_is_unaccounted_too(self):
+        filesystem = FakeFileSystem(files={SETTINGS: document({"theme": "dark"})})
+        retired = planner.retire(filesystem, self.install(self.entry()))
+        self.assertEqual(retired.unaccounted, ("system-prompt-instruction",))
+
+    def test_an_append_still_ours_is_removed_and_not_reported_as_unaccounted(self):
+        filesystem = FakeFileSystem(files={SETTINGS: document({"instructions": ["./pegasus-AGENTS.md"]})})
+        retired = planner.retire(filesystem, self.install(self.entry()))
+        self.assertEqual(retired.removed, ("system-prompt-instruction",))
+        self.assertEqual(retired.unaccounted, ())
+
+    def test_two_artifacts_appending_the_same_value_are_refused(self):
+        """They would place the same item twice, and nothing later could tell them apart."""
+        with self.assertRaises(planner.PlannerError):
+            plan_for(FakeFileSystem(), self.append(), self.append_as("other-id"))
+
+    def test_two_artifacts_appending_different_values_are_allowed(self):
+        result = plan_for(FakeFileSystem(), self.append(), self.append_as("other-id", "./another.md"))
+        self.assertEqual([step.action for step in result.steps], [planner.CREATE, planner.CREATE])
 
     def test_retiring_the_only_item_leaves_no_empty_list_behind(self):
         filesystem = FakeFileSystem(files={SETTINGS: document({"instructions": ["./pegasus-AGENTS.md"]})})
@@ -272,6 +312,16 @@ class ApplyTest(unittest.TestCase):
         with self.assertRaises(planner.PlannerError) as caught:
             planner.apply(filesystem, plan_for(filesystem, a_key()), at=AT)
         self.assertIn("partial state", str(caught.exception))
+
+    def test_a_file_that_cannot_be_taken_back_out_is_reported_too(self):
+        """The other half of the rollback: undoing a write can fail as easily as writing."""
+        doomed = CONFIG / "skills/beta/SKILL.md"
+        filesystem = FakeFileSystem(fail_on={doomed}, fail_remove={SKILL})
+        plan = plan_for(filesystem, a_file(), a_file(identifier="skill:beta", path=doomed))
+        with self.assertRaises(planner.PlannerError) as caught:
+            planner.apply(filesystem, plan, at=AT)
+        self.assertIn("partial state", str(caught.exception))
+        self.assertIn(str(SKILL), str(caught.exception))
 
     def test_the_original_cause_survives_a_failed_rollback(self):
         filesystem = FakeFileSystem(files={SETTINGS: document({})}, fail_always={SETTINGS})
