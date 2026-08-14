@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pegasus-harness"
+version = "4.0.0.dev0"
+description = "Additive harness of prompts, agents, skills and commands for AI coding CLIs"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+pegasus = "pegasus.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"pegasus.content" = ["**/*"]
+"pegasus.adapters" = ["**/assets/**/*"]
