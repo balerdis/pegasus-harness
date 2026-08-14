@@ -266,12 +266,21 @@ Un puntero terminado en `/-` no direcciona un casillero sino el final de una lis
 
 Por eso el ítem se identifica por **lo que es** y no por **dónde está**.
 
-Eso tiene una consecuencia que hay que decir en voz alta: **la invariante "un artefacto cuya huella no coincide se preserva y se reporta" no se puede aplicar a un append.** Si no aparece ningún ítem con la huella registrada, hay dos causas posibles y son indistinguibles:
+Eso tiene una consecuencia que hay que decir en voz alta: **la invariante "un artefacto cuya huella no coincide se preserva y se reporta" no se puede aplicar a un append.** Si la lista todavía tiene ítems y ninguno lleva la huella registrada, hay dos causas posibles y son indistinguibles:
 
 - el usuario borró nuestro ítem, o
 - el usuario lo editó en el lugar, y ahora es idéntico a un ítem que hubiera puesto él.
 
 No hay dato en el journal que las separe, y un ítem de lista no tiene dirección propia que inspeccionar. Ninguna de las dos es una remoción y ninguna es una preservación, así que el desinstalador las reporta como un cuarto resultado: **`unaccounted`**. Los otros tres —`removed`, `restored`, `preserved`— son afirmaciones sobre algo que Pegasus hizo, y ninguna sería cierta acá.
+
+**La ambigüedad necesita sobrevivientes**, y afirmarla donde no existe sería su propia imprecisión. Los cuatro estados posibles:
+
+| Estado al desinstalar | ¿Ambiguo? | Resultado |
+|-----------------------|-----------|-----------|
+| El archivo de configuración no existe | No: se fue con el archivo | `removed` |
+| El archivo existe pero la lista no | No: se fue con la lista | `removed` |
+| La lista existe y está vacía | No: no queda nada que pueda ser una versión cambiada del nuestro | `removed` |
+| La lista tiene ítems y ninguno es el nuestro | **Sí** | `unaccounted` |
 
 Además, dos artefactos no pueden agregar **el mismo valor** al mismo puntero: la lista no podría distinguirlos y nada aguas abajo podría decir cuál de los dos tiene. Agregar valores distintos sí es legítimo y por eso los appends quedan exentos de la regla general de direcciones únicas.
 

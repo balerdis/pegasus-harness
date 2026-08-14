@@ -276,9 +276,10 @@ def retire(filesystem: FileSystem, install: Install) -> Retired:
         codec = Codec(entries[0].codec or Codec.JSON.value)
         document = _read_document(filesystem, path, codec)
         if document is None:
-            # The file the user deleted takes every key in it with it.
-            for entry in entries:
-                outcomes["unaccounted" if _appends(entry.pointer or "") else "removed"].append(entry.id)
+            # The file the user deleted takes every key in it with it, appended
+            # items included: nothing survives that could be a changed version
+            # of ours, so there is nothing ambiguous to report.
+            removed.extend(entry.id for entry in entries)
             continue
         mode = filesystem.mode_of(path)
         original = document
@@ -304,12 +305,22 @@ def _retire_key(document: Any, entry: Record) -> tuple[Any, str]:
 
     The invariant that a fingerprint mismatch is preserved and reported cannot
     be enforced for a list item, and pretending otherwise would be the lie. A
-    list item has no address of its own: an item whose fingerprint matches
+    list item has no address of its own, so an item whose fingerprint matches
     nothing may have been deleted by the user, or edited into something no
-    longer recognisable as ours, and the two are indistinguishable. Neither is a
-    removal and neither is a preservation, so they are reported as unaccounted.
+    longer recognisable as ours — indistinguishable, and neither a removal nor a
+    preservation.
+
+    That ambiguity is narrower than it first looks, though, and claiming it
+    where it does not exist would be its own inaccuracy. It needs survivors: a
+    list that is absent, or present and empty, holds nothing that could be a
+    changed version of ours, so our item is unambiguously gone and that is a
+    plain removal. Only a list that still holds items, none of which are ours,
+    leaves the question open.
     """
     if _appends(entry.pointer or ""):
+        items = pointer.get_at(document, _parent(entry.pointer))
+        if not isinstance(items, list) or not items:
+            return document, "removed"
         index = _index_of(document, entry.pointer, entry.after_digest)
         if index is None:
             return document, "unaccounted"

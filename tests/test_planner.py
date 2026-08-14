@@ -197,10 +197,24 @@ class AppendTest(unittest.TestCase):
         self.assertEqual(json.loads(filesystem.files[SETTINGS]), edited)
         self.assertEqual(filesystem.writes, [])
 
-    def test_an_append_whose_whole_list_is_gone_is_unaccounted_too(self):
+    def test_an_append_is_removed_when_the_list_itself_is_gone(self):
+        """No ambiguity here: our item went with the list, it was not edited into something else."""
         filesystem = FakeFileSystem(files={SETTINGS: document({"theme": "dark"})})
         retired = planner.retire(filesystem, self.install(self.entry()))
-        self.assertEqual(retired.unaccounted, ("system-prompt-instruction",))
+        self.assertEqual(retired.removed, ("system-prompt-instruction",))
+        self.assertEqual(retired.unaccounted, ())
+
+    def test_an_append_is_removed_when_the_whole_configuration_file_is_gone(self):
+        retired = planner.retire(FakeFileSystem(), self.install(self.entry()))
+        self.assertEqual(retired.removed, ("system-prompt-instruction",))
+        self.assertEqual(retired.unaccounted, ())
+
+    def test_an_append_is_removed_when_the_list_is_empty(self):
+        """An empty list holds nothing that could be a disguised version of ours."""
+        filesystem = FakeFileSystem(files={SETTINGS: document({"instructions": []})})
+        retired = planner.retire(filesystem, self.install(self.entry()))
+        self.assertEqual(retired.removed, ("system-prompt-instruction",))
+        self.assertEqual(retired.unaccounted, ())
 
     def test_an_append_still_ours_is_removed_and_not_reported_as_unaccounted(self):
         filesystem = FakeFileSystem(files={SETTINGS: document({"instructions": ["./pegasus-AGENTS.md"]})})
