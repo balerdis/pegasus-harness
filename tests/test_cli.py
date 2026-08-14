@@ -86,6 +86,15 @@ class ArgumentTest(CommandTestCase):
         self.assertEqual(report["status"], "failed")
         self.assertIn("nonesuch", report["error"])
 
+    def test_json_is_honoured_on_either_side_of_the_subcommand(self):
+        """A flag that silently does nothing is worse than one that is rejected."""
+        self.present()
+        for argv in (["doctor", "--json"], ["--json", "doctor"]):
+            with self.subTest(argv=argv):
+                context = self.runtime()
+                cli.main(argv, runtime=context)
+                self.assertEqual(json.loads(context.out.getvalue())["command"], "doctor")
+
     def test_every_report_declares_its_schema_and_command(self):
         self.present()
         for argv in (("doctor",), ("install", "--cli", CLI), ("uninstall", "--cli", CLI)):

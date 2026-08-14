@@ -114,20 +114,22 @@ def main(argv: list[str] | None = None, *, runtime: Runtime | None = None) -> in
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pegasus", description=__doc__.splitlines()[0])
+    # Accepted on either side of the subcommand. The subparsers suppress their
+    # default so an absent flag there cannot overwrite one given here.
     parser.add_argument("--json", action="store_true", help="report as a machine-readable document")
     commands = parser.add_subparsers(dest="command")
 
     install = commands.add_parser("install", help="place Pegasus into one CLI's configuration")
     install.add_argument("--cli", required=True)
-    install.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    install.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     install.add_argument("--dry-run", action="store_true", help="report the plan without writing anything")
 
     uninstall = commands.add_parser("uninstall", help="take Pegasus back out of one CLI")
     uninstall.add_argument("--cli", required=True)
-    uninstall.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    uninstall.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
     doctor = commands.add_parser("doctor", help="what is supported, what is present, what has drifted")
-    doctor.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    doctor.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     return parser
 
 
