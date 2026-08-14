@@ -61,7 +61,18 @@ class FileSystem(Protocol):
         """
 
     def make_dir(self, path: Path, *, mode: int = 0o755) -> None:
-        """Create a directory and its parents. Idempotent."""
+        """Create a directory and its parents. Idempotent.
+
+        ``mode`` applies **only to directories this call creates**. A directory
+        that already exists keeps the permissions it has, and so do parents
+        created along the way. Asking for ``0o700`` is therefore a request about
+        a new directory, never a guarantee about the one you end up with.
+
+        That is the additive contract, not a shortcoming: tightening a directory
+        Pegasus did not create in this installation would mutate something it
+        does not own. Callers that need a guarantee must state it about the
+        files they write, where ``write_atomic`` does enforce the mode.
+        """
 
     # --- Who is running ---
 

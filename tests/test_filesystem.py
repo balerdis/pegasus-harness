@@ -135,6 +135,15 @@ class PosixFileSystemTest(unittest.TestCase):
         self.fs.make_dir(target)
         self.assertTrue(target.is_dir())
 
+    def test_make_dir_does_not_change_the_mode_of_a_directory_that_already_exists(self):
+        """The mode applies on creation only. A caller asking for 0700 on an
+        existing directory gets whatever it already had, and hardening it would
+        mean mutating something this installation did not create."""
+        target = self.root / "inherited"
+        target.mkdir(mode=0o755)
+        self.fs.make_dir(target, mode=0o700)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+
     def test_make_dir_over_a_file_raises_the_port_error(self):
         target = self.root / "note.txt"
         target.write_bytes(b"")
