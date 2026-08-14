@@ -1,0 +1,132 @@
+"""The gate that keeps the adapter abstraction from rotting.
+
+Registration validates an adapter's claims against what it actually implements.
+An adapter that disagrees with its own manifest never gets registered, so the
+failure surfaces at startup instead of halfway through writing a user's home
+directory.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from pegasus.core.types import Capability, CapabilityManifest, Environment, Layout
+
+PROBE = Environment(home=Path("/nonexistent/pegasus-registry-probe"))
+"""A home that does not exist, used to prove layouts are pure path arithmetic."""
+
+RENDERERS: dict[Capability, tuple[str, ...]] = {
+    Capability.SKILLS: ("render_skill",),
+    Capability.SYSTEM_PROMPT: ("render_system_prompt",),
+    Capability.SLASH_COMMANDS: ("render_command",),
+    Capability.SUB_AGENTS: ("render_agent",),
+    Capability.PROMPTS: ("render_prompt",),
+    Capability.MCP: ("render_mcp",),
+    Capability.PLUGINS: ("render_plugin",),
+    Capability.PER_AGENT_MODEL: (
+        "model_catalog",
+        "read_model_assignments",
+        "render_model_assignment",
+    ),
+}
+
+
+class RegistryError(Exception):
+    """An adapter cannot be registered."""
+
+
+class DuplicateAdapterError(RegistryError):
+    """Two adapters claim the same identifier."""
+
+
+class ManifestMismatchError(RegistryError):
+    """An adapter's manifest disagrees with what it implements."""
+
+
+class Registry:
+    """The set of adapters this installation can use."""
+
+    def __init__(self, *adapters: object) -> None:
+        self._adapters: dict[str, object] = {}
+        self._manifests: dict[str, CapabilityManifest] = {}
+        for adapter in adapters:
+            self.register(adapter)
+
+    def register(self, adapter: object) -> None:
+        cli_id = getattr(adapter, "id", "")
+        if not cli_id:
+            raise ManifestMismatchError("an adapter must expose a non-empty id")
+        if cli_id in self._adapters:
+            raise DuplicateAdapterError(f"an adapter is already registered for {cli_id!r}")
+
+        manifest = adapter.capabilities()
+        _check_identity(adapter, cli_id, manifest)
+        _check_capabilities(adapter, cli_id, manifest, adapter.layout(PROBE))
+
+        self._adapters[cli_id] = adapter
+        self._manifests[cli_id] = manifest
+
+    def get(self, cli_id: str) -> object:
+        try:
+            return self._adapters[cli_id]
+        except KeyError:
+            raise KeyError(f"no adapter registered for {cli_id!r}") from None
+
+    def manifest(self, cli_id: str) -> CapabilityManifest:
+        self.get(cli_id)
+        return self._manifests[cli_id]
+
+    def ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self._adapters))
+
+    def __contains__(self, cli_id: object) -> bool:
+        return cli_id in self._adapters
+
+    def __len__(self) -> int:
+        return len(self._adapters)
+
+
+def _check_identity(adapter: object, cli_id: str, manifest: CapabilityManifest) -> None:
+    if manifest.cli_id != cli_id:
+        raise ManifestMismatchError(
+            f"adapter {cli_id!r} returned a manifest for {manifest.cli_id!r}"
+        )
+
+
+def _check_capabilities(
+    adapter: object, cli_id: str, manifest: CapabilityManifest, layout: Layout
+) -> None:
+    for capability in Capability:
+        declared = manifest.declares(capability)
+        anchor = layout.anchor(capability)
+        implemented = [name for name in RENDERERS[capability] if _implements(adapter, name)]
+        missing = [name for name in RENDERERS[capability] if name not in implemented]
+
+        if declared:
+            if anchor is None and capability in _NEEDS_ANCHOR:
+                raise ManifestMismatchError(
+                    f"adapter {cli_id!r} declares {capability.value!r} but its layout has no path for it"
+                )
+            if missing:
+                raise ManifestMismatchError(
+                    f"adapter {cli_id!r} declares {capability.value!r} but does not implement "
+                    + ", ".join(missing)
+                )
+        else:
+            if anchor is not None:
+                raise ManifestMismatchError(
+                    f"adapter {cli_id!r} exposes a path for {capability.value!r} without declaring it"
+                )
+            if implemented:
+                raise ManifestMismatchError(
+                    f"adapter {cli_id!r} implements " + ", ".join(implemented)
+                    + f" without declaring {capability.value!r}"
+                )
+
+
+_NEEDS_ANCHOR = frozenset(
+    capability for capability in Capability if capability not in {Capability.MCP, Capability.PER_AGENT_MODEL}
+)
+
+
+def _implements(adapter: object, name: str) -> bool:
+    return callable(getattr(adapter, name, None))
