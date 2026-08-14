@@ -11,3 +11,10 @@ node_modules/
 *.sqlite
 __pycache__/
 *.py[cod]
+
+# Entorno y empaquetado de Python
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
