@@ -1,5 +1,11 @@
 # Pegasus Harness v3.1
 
+> **Rama de desarrollo de v4.0.0.** El motor de v3 fue retirado de esta rama; el de v4 todavía no existe. Esta rama no instala nada.
+>
+> - Versión usable: [`main`](https://github.com/balerdis/pegasus-harness/tree/main) y la [release v3.1.1](https://github.com/balerdis/pegasus-harness/releases/tag/v3.1.1).
+> - Arquitectura de v4: [docs/pegasus-v4/arquitectura.md](docs/pegasus-v4/arquitectura.md).
+> - El texto de abajo describe v3.1 y se reescribe antes de publicar v4.0.0.
+
 Pegasus Harness es un conjunto open source con licencia MIT de prompts, agentes, skills, comandos e integraciones opcionales para trabajar con OpenCode de forma más ordenada. Sirve para distintos clientes y repositorios: el flujo queda en manos del equipo que lo usa, no de una configuración particular de cliente.
 
 Pegasus es aditivo. Revisa lo que ya existe, muestra un plan y crea solamente los artifacts seleccionados que faltan. No toma propiedad de una instalación existente de OpenCode, su configuración ni sus archivos.
@@ -25,7 +31,7 @@ Pegasus distribuye un payload seleccionado para OpenCode, no un home directory d
 
 ## Cómo encaja el flujo
 
-La versión corta es: primero entender, después especificar, implementar por unidades chicas y probar el resultado. [architecture.md](architecture.md) explica las responsabilidades de SDD, TDD, OpenSpec, Engram y ChainPR sin esconder los límites operativos.
+La versión corta es: primero entender, después especificar, implementar por unidades chicas y probar el resultado. [docs/metodologia.md](docs/metodologia.md) explica las responsabilidades de SDD, TDD, OpenSpec, Engram y ChainPR sin esconder los límites operativos.
 
 Para cambios ejecutables o de configuración, `sdd-verify` es la autoridad final de readiness. CBM ayuda a descubrir estructura y callers; no reemplaza una prueba de comportamiento que pasó.
 
@@ -39,14 +45,9 @@ La ruta asistida por agente empieza en [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md
 
 ## Validar un checkout
 
-```sh
-python3 tools/validate_snapshot.py
-python3 -m unittest discover -s tests
-python3 -m py_compile bin/pegasus tools/*.py
-bash -n install.sh
-```
+Los checks de v3 se retiraron junto con su motor. Los de v4 llegan con el motor nuevo.
 
-Estos checks validan este checkout; no instalan OpenCode ni cambian tu configuración hasta que ejecutes el instalador.
+Para validar la versión usable, cambiá a `main`.
 
 ## Licencia
 
