@@ -47,10 +47,10 @@ class FakeAdapter:
     def layout(self, environment):
         return self._layout
 
-    def _render(self, item):
+    def _render(self, layout, item):
         return [FileArtifact(id="x", path=CONFIG / "x", content=b"")]
 
-    def own_artifacts(self, environment):
+    def own_artifacts(self, layout):
         return list(self._own)
 
 

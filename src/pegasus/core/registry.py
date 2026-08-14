@@ -103,7 +103,7 @@ def _check_own_artifacts(adapter: object, cli_id: str, layout: Layout) -> None:
         raise ManifestMismatchError(
             f"adapter {cli_id!r} must implement own_artifacts; return an empty list when it ships nothing"
         )
-    for artifact in adapter.own_artifacts(PROBE):
+    for artifact in adapter.own_artifacts(layout):
         if not artifact.path.is_relative_to(layout.config_dir):
             raise AdapterScopeError(
                 f"adapter {cli_id!r} would write {artifact.path} outside {layout.config_dir}"
@@ -148,8 +148,16 @@ def _check_capabilities(
                 )
 
 
+# A dedicated anchor can only be demanded of capabilities that materialize as
+# files in every CLI. The rest may live inside the settings file instead: one CLI
+# declares its subagents there while another writes them as files in a directory.
+# Demanding a directory from both would force one of them to declare a path it
+# never uses, which is exactly the fiction this check exists to prevent.
+_SETTINGS_BASED = frozenset(
+    {Capability.SUB_AGENTS, Capability.MCP, Capability.PER_AGENT_MODEL}
+)
 _NEEDS_ANCHOR = frozenset(
-    capability for capability in Capability if capability not in {Capability.MCP, Capability.PER_AGENT_MODEL}
+    capability for capability in Capability if capability not in _SETTINGS_BASED
 )
 
 

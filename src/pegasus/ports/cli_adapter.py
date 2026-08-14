@@ -57,23 +57,24 @@ class CliAdapter(Protocol):
     def layout(self, environment: Environment) -> Layout:
         """Resolve this CLI's paths. Pure path arithmetic: no filesystem access."""
 
-    # --- How: one method per capability ---
+    # --- How: one method per capability. Every render takes the resolved
+    # layout, so an adapter carries no per-machine state of its own. ---
 
-    def render_skill(self, skill: Any) -> list[Artifact]: ...
+    def render_skill(self, layout: Layout, skill: Any) -> list[Artifact]: ...
 
-    def render_agent(self, agent: Any) -> list[Artifact]: ...
+    def render_agent(self, layout: Layout, agent: Any) -> list[Artifact]: ...
 
-    def render_command(self, command: Any) -> list[Artifact]: ...
+    def render_command(self, layout: Layout, command: Any) -> list[Artifact]: ...
 
-    def render_prompt(self, prompt: Any) -> list[Artifact]: ...
+    def render_prompt(self, layout: Layout, prompt: Any) -> list[Artifact]: ...
 
-    def render_system_prompt(self, system_prompt: Any) -> list[Artifact]: ...
+    def render_system_prompt(self, layout: Layout, system_prompt: Any) -> list[Artifact]: ...
 
-    def render_mcp(self, server: Any, resolved: Any) -> list[Artifact]: ...
+    def render_mcp(self, layout: Layout, server: Any, resolved: Any) -> list[Artifact]: ...
 
     # --- What this adapter contributes on its own ---
 
-    def own_artifacts(self, environment: Environment) -> list[Artifact]:
+    def own_artifacts(self, layout: Layout) -> list[Artifact]:
         """Artifacts this adapter ships itself, not derived from the content core.
 
         Some files exist only because one CLI works the way it does: plugins
@@ -86,7 +87,7 @@ class CliAdapter(Protocol):
         the content core, not here. Reaching for this method to avoid writing a
         descriptor is how the core slowly empties out.
 
-        Every returned artifact must resolve inside `layout().config_dir`; the
+        Every returned artifact must resolve inside `layout.config_dir`; the
         registry rejects an adapter that writes outside its own territory. Return
         an empty list when the adapter ships nothing of its own.
         """
