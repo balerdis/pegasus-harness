@@ -57,19 +57,31 @@ class NoCliNamesOutsideAdaptersTest(unittest.TestCase):
 
 
 class AdapterIsolationTest(unittest.TestCase):
+    """One adapter must not depend on another, or the abstraction has no boundary.
+
+    Files sitting directly under `adapters/` are exempt: that is the composition
+    root, and knowing every adapter is its whole job.
+    """
+
     def test_no_adapter_imports_another_adapter(self):
         offenders = [
             f"{path.relative_to(SOURCE)}:{number}"
             for path in sorted(ADAPTERS.rglob("*.py"))
-            if "__pycache__" not in path.parts
+            if "__pycache__" not in path.parts and _owning_adapter(path)
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
             for other in cli_ids()
             if other != _owning_adapter(path) and f"adapters.{other}" in line
         ]
         self.assertEqual(offenders, [], "adapters must not depend on each other")
 
+    def test_the_composition_root_is_the_only_place_that_knows_every_adapter(self):
+        root = (ADAPTERS / "__init__.py").read_text(encoding="utf-8")
+        for cli_id in cli_ids():
+            self.assertIn(cli_id, root, f"{cli_id} is not registered in the composition root")
+
 
 def _owning_adapter(path: Path) -> str:
+    """The adapter a file belongs to, or empty for the composition root itself."""
     relative = path.relative_to(ADAPTERS).parts
     return relative[0] if len(relative) > 1 else ""
 
