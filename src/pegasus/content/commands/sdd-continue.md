@@ -1,6 +1,8 @@
 ---
+name: sdd-continue
 description: Continue the next SDD phase in the dependency chain
-agent: pegasus-orchestrator
+runs_as: orchestrator
+execution: inline
 ---
 
 Follow the SDD orchestrator workflow to continue the active change.

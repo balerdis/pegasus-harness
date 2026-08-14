@@ -1,6 +1,8 @@
 ---
+name: sdd-ff
 description: Fast-forward all SDD planning phases — proposal through tasks
-agent: pegasus-orchestrator
+runs_as: orchestrator
+execution: inline
 ---
 
 Follow the SDD orchestrator workflow to fast-forward all planning phases for change "$ARGUMENTS".

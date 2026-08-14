@@ -78,13 +78,12 @@ El núcleo no importa nada de `adapters/` ni de `infra/`. Recibe implementacione
 
 ## El núcleo de contenido
 
-El contenido agnóstico se organiza por categoría. Cada ítem es un **descriptor** (metadatos estructurados) más un **cuerpo** (markdown). El descriptor es lo que el adapter necesita para decidir; el cuerpo es lo que se entrega tal cual o envuelto.
+Todo el contenido tiene una sola forma: **un archivo markdown con frontmatter**. El frontmatter es el descriptor, y lo que sigue es el cuerpo. Un único formato para todas las categorías, y por lo tanto un único parser.
 
 | Categoría | Contiene | Qué es agnóstico |
 |-----------|----------|------------------|
 | `skills/` | `SKILL.md` + `references/` | Todo |
-| `agents/` | Rol, responsabilidad, límites, herramientas requeridas, modo primario o subagente | Todo el cuerpo; el formato de declaración no |
-| `prompts/` | Prompt de cada agente o fase | Todo |
+| `agents/` | Rol, modo, herramientas, delegación permitida, y el prompt como cuerpo | Todo el cuerpo; el formato de declaración no |
 | `commands/` | Descripción, rol que lo ejecuta, contexto de ejecución | Todo el cuerpo; el frontmatter no |
 | `system-prompt/` | La instrucción global que el CLI carga en cada sesión | Todo el cuerpo; el nombre y la ubicación del archivo no |
 | `mcp/` | Servidores MCP: id, versión fija, integridad, argv de instalación y runtime, probe | Todo |
@@ -92,47 +91,57 @@ El contenido agnóstico se organiza por categoría. Cada ítem es un **descripto
 
 `system-prompt/` es una categoría propia y no una política: es un artefacto único con su propio render. OpenCode lo instala como `AGENTS.md` en la raíz de su configuración; otro CLI puede darle otro nombre, otra ubicación, o cargarlo desde su archivo de settings.
 
+**No hay una categoría `prompts/`.** El prompt de un agente es el cuerpo del archivo del agente. Que ese prompt viaje después en un archivo separado o embebido en la declaración del agente es una decisión del CLI, no del contenido, y por eso existe la capacidad `prompts`: OpenCode la declara y recibe dos artefactos, un CLI que embebe el prompt la niega y recibe uno solo.
+
 ### Ejemplo de descriptor
 
-```yaml
-# content/agents/sdd-apply.yaml
-id: sdd-apply
-kind: subagent
-description: Implementa las tareas del cambio siguiendo spec y diseño
+```markdown
+---
+name: sdd-verify
+description: Sole readiness authority for executable and configuration changes
+mode: subagent
 hidden: true
-prompt: prompts/sdd-apply.md
-requires_tools: [read, write, edit, bash, grep, glob]
+requires_tools: [read, write, bash]
 optional_tools: [codebase-memory]
 model_configurable: true
+---
+
+# SDD Verify
+
+You are Pegasus's sole readiness authority for executable and configuration changes.
+...
 ```
 
-Ese descriptor no dice nada sobre OpenCode. El adapter de OpenCode lo convierte en una entrada bajo `agent` de `opencode.json` más un archivo de prompt; un adapter de Claude Code lo convertiría en un `.claude/agents/sdd-apply.md` con frontmatter. Ninguno de los dos requiere tocar el descriptor.
+Ese descriptor no dice nada sobre OpenCode. El adapter de OpenCode lo convierte en una entrada bajo `agent` de `opencode.json` más un archivo de prompt; un adapter de Claude Code lo convertiría en un `.claude/agents/sdd-verify.md` con frontmatter y el prompt embebido. Ninguno de los dos requiere tocar el descriptor.
 
-### Estado del contenido heredado
-
-El contenido llegó desde v3 sin cambios y todavía no está normalizado al formato de descriptor. Lo que falta se resuelve en las unidades de entrega correspondientes, no antes.
+### Estado del contenido
 
 | Categoría | Presente | Pendiente |
 |-----------|---------:|-----------|
-| `skills/` | 27 | Nada: todas traen frontmatter con `name` y `description` |
-| `commands/` | 16 | Normalizar el frontmatter heredado de OpenCode a campos agnósticos |
-| `prompts/` | 10 | `sdd-verify.md` es el único sin frontmatter |
-| `agents/` | 2 | Faltan los 10 descriptores de la línea SDD |
-| `system-prompt/` | 1 | Está mal ubicado bajo `agents/` |
+| `skills/` | 27 | Nada |
+| `commands/` | 16 | Nada |
+| `agents/` | 2 | Faltan los 10 de la línea SDD y `king-gentleman` |
+| `system-prompt/` | 1 | Nada |
 | `mcp/` | 0 | Sigue viviendo en `manifests/release-contract.json` |
 | `policies/` | 0 | Sin extraer |
 
-El frontmatter heredado de los comandos mezcla conceptos agnósticos con deletreos de OpenCode. `subtask: true` expresa el contexto de ejecución; `agent:` mezcla un agente propio de Pegasus con dos agentes nativos del CLI. En el descriptor esos campos se guardan como intención, y el adapter los traduce:
+### Qué salió del frontmatter heredado
 
-```yaml
-# content/commands/sdd-apply.yaml
-id: sdd-apply
-description: Implementa las tareas del cambio siguiendo spec y diseño
-runs_as: orchestrator      # orchestrator | planner | builder | default
-execution: isolated        # isolated | inline
-```
+El frontmatter que llegó desde v3 mezclaba conceptos agnósticos con deletreos de OpenCode. Cada uno se reemplazó por la intención que expresaba:
 
-El adapter de OpenCode mapea `orchestrator` a `pegasus-orchestrator`, `planner` a su agente nativo `plan`, y `isolated` a `subtask: true`. Otro CLI usa sus propios nombres sin que el descriptor cambie.
+| Campo heredado | Qué era en realidad | Campo agnóstico |
+|----------------|---------------------|-----------------|
+| `subtask: true` | Contexto de ejecución | `execution: isolated \| inline` |
+| `agent: pegasus-orchestrator` | Agente propio de Pegasus | `runs_as: orchestrator` |
+| `agent: plan` / `agent: build` | Agentes nativos de OpenCode | `runs_as: planner \| builder` |
+| `agent:` ausente | El agente por defecto del CLI | `runs_as: default` |
+| `permission.task` | A qué agentes puede delegar | `may_delegate_to: [...]` |
+
+El adapter de OpenCode mapea `orchestrator` a `pegasus-orchestrator`, `planner` a su agente nativo `plan`, `isolated` a `subtask: true`, y `may_delegate_to` a su bloque `permission`. Otro CLI usa sus propios nombres sin que el descriptor cambie.
+
+### Duplicación heredada, ya resuelta
+
+v3 embarcaba 92 artefactos con solo 78 digests únicos. Nueve skills de la línea SDD viajaban dos veces, byte a byte idénticas, bajo `skills/` y bajo `prompts/sdd/`. Como `opencode.json` declara `"skills": {"paths": ["./skills"]}`, las copias bajo `prompts/` nunca se cargaban: eran payload muerto en toda instalación de v3.1.1. El único archivo de `prompts/` que se usaba era `sdd-verify.md`, referenciado explícitamente como prompt de agente, y hoy es el cuerpo de `agents/sdd-verify.md`.
 
 ### El pipeline de materialización
 
@@ -197,7 +206,7 @@ class Layout:
     skills_dir: Path | None
     agents_dir: Path | None
     commands_dir: Path | None
-    prompts_dir: Path | None
+    prompts_dir: Path | None  # None si el CLI embebe el prompt en el agente
     plugins_dir: Path | None
     system_prompt_file: Path | None
 ```
@@ -287,15 +296,16 @@ Cada adapter declara qué soporta. El registry **rechaza registrar** un adapter 
 ```python
 @dataclass(frozen=True)
 class CapabilityManifest:
-    schema: str = "pegasus/capability-manifest/v1"
     cli_id: str
-    skills: bool
-    system_prompt: bool
-    slash_commands: bool
-    sub_agents: bool
-    mcp: bool
-    plugins: bool
-    per_agent_model: bool
+    skills: bool = False
+    system_prompt: bool = False
+    slash_commands: bool = False
+    sub_agents: bool = False
+    prompts: bool = False          # el prompt del agente va en un archivo aparte
+    mcp: bool = False
+    plugins: bool = False
+    per_agent_model: bool = False
+    schema: str = "pegasus/capability-manifest/v1"
 ```
 
 Validaciones al registrar:
@@ -308,6 +318,10 @@ Validaciones al registrar:
 - [ ] No hay dos adapters con el mismo `id`
 
 Este es el mecanismo que evita que la abstracción se degrade cuando se agregue el cuarto o quinto CLI.
+
+**Las capacidades sin ancla dedicada se validan solo por su render.** `mcp` y `per_agent_model` escriben adentro del archivo de configuración compartido, que también guarda claves de otras capacidades y del propio usuario. Que ese archivo exista no prueba que ninguna capacidad en particular esté soportada, así que exigirlo como ancla rechazaría adapters correctos: un CLI con archivo de settings pero sin soporte MCP sería acusado de exponer una capacidad fantasma.
+
+**El layout se prueba contra un home inexistente.** Construir un `Layout` tiene que ser aritmética de rutas pura. Si un adapter consultara el disco, el resultado del registro dependería del estado de la máquina: pasaría en la del desarrollador, donde el directorio del CLI ya existe, y fallaría en la de un usuario que instaló el CLI pero nunca lo abrió. El registry lo prueba contra un home que no existe, así que ese error se cae en el primer test.
 
 ---
 

@@ -1,6 +1,8 @@
 ---
+name: sdd-status
 description: Show structured SDD status for an active change
-agent: pegasus-orchestrator
+runs_as: orchestrator
+execution: inline
 ---
 
 You are the `pegasus-orchestrator`. This command is read-only. Do not launch SDD executors and do not edit files.

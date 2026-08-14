@@ -1,7 +1,8 @@
 ---
+name: skill-registry
 description: Rebuild the OpenCode skill registry for the current project and installed skills
-agent: pegasus-orchestrator
-subtask: true
+runs_as: orchestrator
+execution: isolated
 ---
 
 Load `skill-registry` first, then rebuild the skill registry for the current project and configured skill directories.

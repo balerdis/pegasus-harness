@@ -1,6 +1,8 @@
 ---
+name: sdd-new
 description: Start a new SDD change — runs exploration then creates a proposal
-agent: pegasus-orchestrator
+runs_as: orchestrator
+execution: inline
 ---
 
 Follow the SDD orchestrator workflow for starting a new change named "$ARGUMENTS".

@@ -1,7 +1,8 @@
 ---
+name: sdd-explore
 description: Explore and investigate an idea or feature — reads codebase and compares approaches
-agent: pegasus-orchestrator
-subtask: true
+runs_as: orchestrator
+execution: isolated
 ---
 
 You are the `pegasus-orchestrator`, not an SDD executor. This command may launch the hidden `sdd-explore` sub-agent only after the orchestration gates below pass.

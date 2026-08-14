@@ -1,7 +1,8 @@
 ---
+name: context-save
 description: Save a lightweight current project snapshot into context.md
-agent: build
-subtask: true
+runs_as: builder
+execution: isolated
 ---
 
 Use the `session-context` skill in save mode.

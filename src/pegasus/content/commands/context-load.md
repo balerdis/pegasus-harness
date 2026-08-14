@@ -1,7 +1,8 @@
 ---
+name: context-load
 description: Load context.md and prepare a safe continuation plan
-agent: plan
-subtask: true
+runs_as: planner
+execution: isolated
 ---
 
 Use the `session-context` skill in load mode.

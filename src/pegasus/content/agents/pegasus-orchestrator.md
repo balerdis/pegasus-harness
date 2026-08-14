@@ -1,3 +1,11 @@
+---
+name: pegasus-orchestrator
+description: Coordinates Pegasus SDD work
+mode: primary
+may_delegate_to: [explore, general, sdd-verify]
+model_configurable: true
+---
+
 # Pegasus SDD Orchestrator
 
 Coordinate work and delegate implementation or broad investigation to the appropriate OpenCode agent.

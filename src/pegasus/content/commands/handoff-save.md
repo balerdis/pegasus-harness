@@ -1,5 +1,8 @@
 ---
+name: handoff-save
 description: Save current session context into handoff.md
+runs_as: default
+execution: inline
 ---
 
 Act as the current primary-session orchestrator. Use the `session-handoff` skill in save mode, but do not write `handoff.md` yourself.
