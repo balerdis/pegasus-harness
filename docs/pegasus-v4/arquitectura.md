@@ -445,6 +445,18 @@ El journal es lo que hace a Pegasus aditivo: registra qué creó, para poder ret
 }
 ```
 
+### Dónde vive
+
+```
+~/.local/share/pegasus-harness/journal-v4.json     # 0600, en un directorio creado 0700
+```
+
+El nombre lleva la versión del esquema. v3 escribía `journal-v3.json` en el mismo directorio, y v4 es una instalación limpia al lado de v3, no una reescritura de su estado: nunca abre ni pisa el archivo de v3.
+
+El directorio se **crea** con permisos `0700`. Si ya existía —porque v3 lo creó con `0755`— conserva los suyos: endurecerlo sería mutar algo que esta instalación no creó, y el archivo en `0600` ya protege el contenido.
+
+Quien resuelve esa ruta es `FileJournalStore`, detrás del puerto `JournalStore`. Escribe a través del puerto `FileSystem`, así que la política del store —quién puede escribir, qué se puede escribir, qué significa un archivo dañado— se prueba sin un home real. Un journal ilegible **no** es un journal vacío: el store falla ruidosamente, porque tratarlo como vacío dejaría huérfano todo lo ya instalado.
+
 ### Semántica de `before`
 
 | Valor | Significa | Al desinstalar |
@@ -678,6 +690,7 @@ pegasus-harness/
 │   ├── infra/
 │   │   ├── fs_posix.py
 │   │   ├── fs_windows.py
+│   │   ├── journal_store_file.py  # el journal como archivo, sobre el puerto FileSystem
 │   │   └── deps_fetcher.py
 │   ├── tui/
 │   │   ├── app.py
