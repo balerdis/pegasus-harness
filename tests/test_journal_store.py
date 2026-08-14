@@ -154,6 +154,27 @@ class FileJournalStoreTest(unittest.TestCase):
             store(filesystem).save(journal_module.empty(VERSION))
         self.assertEqual(filesystem.files, {})
 
+    # --- Asking before doing ---
+
+    def test_ensure_writable_passes_when_saving_would_work(self):
+        store(FakeFileSystem()).ensure_writable()
+
+    def test_ensure_writable_refuses_root_before_anything_is_written(self):
+        """The refusal must arrive before an install, not after it."""
+        filesystem = FakeFileSystem(privileged=True)
+        with self.assertRaises(JournalStoreError):
+            store(filesystem).ensure_writable()
+        self.assertEqual(filesystem.files, {})
+
+    def test_ensure_writable_refuses_a_home_owned_by_someone_else(self):
+        with self.assertRaises(JournalStoreError):
+            store(FakeFileSystem(owner=False)).ensure_writable()
+
+    def test_ensure_writable_writes_nothing_of_its_own(self):
+        filesystem = FakeFileSystem()
+        store(filesystem).ensure_writable()
+        self.assertEqual(filesystem.writes, [])
+
     def test_a_filesystem_failure_while_writing_surfaces_as_a_store_error(self):
         class Unwritable(FakeFileSystem):
             def write_atomic(self, path: Path, content: bytes, *, mode: int = 0o644) -> None:

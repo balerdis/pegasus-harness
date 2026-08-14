@@ -35,3 +35,13 @@ class JournalStore(Protocol):
         Raises :class:`JournalStoreError` when writing is refused or fails. A
         refusal must leave the stored journal exactly as it was.
         """
+
+    def ensure_writable(self) -> None:
+        """Raise :class:`JournalStoreError` now if :meth:`save` would be refused.
+
+        Asked before an installation begins, not after. A refusal discovered on
+        the way out would arrive with the artifacts already on disk and no
+        record of them — an installation that exists and cannot be uninstalled,
+        which is the worst outcome this engine can produce. Checking first turns
+        it into a message and an untouched home.
+        """
