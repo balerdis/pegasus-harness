@@ -137,6 +137,12 @@ class EnvironmentTest(unittest.TestCase):
             Environment(home=Path("u"))
 
 
+class CapabilityTest(unittest.TestCase):
+    def test_plugins_is_not_a_capability(self):
+        """Plugins have no agnostic form, so they are adapter-owned, not a capability."""
+        self.assertNotIn("plugins", {item.value for item in Capability})
+
+
 class SupportTierTest(unittest.TestCase):
     def test_declares_the_three_levels(self):
         self.assertEqual(

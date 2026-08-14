@@ -71,7 +71,25 @@ class CliAdapter(Protocol):
 
     def render_mcp(self, server: Any, resolved: Any) -> list[Artifact]: ...
 
-    def render_plugin(self, plugin: Any) -> list[Artifact]: ...
+    # --- What this adapter contributes on its own ---
+
+    def own_artifacts(self, environment: Environment) -> list[Artifact]:
+        """Artifacts this adapter ships itself, not derived from the content core.
+
+        Some files exist only because one CLI works the way it does: plugins
+        written against its plugin API, the npm manifest those plugins depend on,
+        a helper the plugin invokes. There is no agnostic form of any of them, so
+        they cannot live in the content core.
+
+        **This is an escape hatch, and the admission test is rule 2: would this
+        make sense in a CLI we do not support yet?** If it would, it belongs in
+        the content core, not here. Reaching for this method to avoid writing a
+        descriptor is how the core slowly empties out.
+
+        Every returned artifact must resolve inside `layout().config_dir`; the
+        registry rejects an adapter that writes outside its own territory. Return
+        an empty list when the adapter ships nothing of its own.
+        """
 
     # --- Models: only when the manifest declares per_agent_model ---
 

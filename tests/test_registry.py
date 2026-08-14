@@ -4,7 +4,12 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from pegasus.core.registry import DuplicateAdapterError, ManifestMismatchError, Registry
+from pegasus.core.registry import (
+    AdapterScopeError,
+    DuplicateAdapterError,
+    ManifestMismatchError,
+    Registry,
+)
 from pegasus.core.types import (
     Capability,
     CapabilityManifest,
@@ -21,11 +26,12 @@ CONFIG = Path("/home/probe/.config/probe")
 class FakeAdapter:
     """Minimal adapter that declares exactly what the test asks it to declare."""
 
-    def __init__(self, cli_id="probe", *, manifest=None, layout=None, renders=("render_skill",)):
+    def __init__(self, cli_id="probe", *, manifest=None, layout=None, renders=("render_skill",), own=()):
         self.id = cli_id
         self.display_name = cli_id.title()
         self._manifest = manifest or CapabilityManifest(cli_id=cli_id, skills=True)
         self._layout = layout or Layout(config_dir=CONFIG, skills_dir=CONFIG / "skills")
+        self._own = own
         for name in renders:
             setattr(self, name, self._render)
 
@@ -43,6 +49,9 @@ class FakeAdapter:
 
     def _render(self, item):
         return [FileArtifact(id="x", path=CONFIG / "x", content=b"")]
+
+    def own_artifacts(self, environment):
+        return list(self._own)
 
 
 ENVIRONMENT = Environment(home=Path("/home/probe"))
@@ -146,3 +155,28 @@ class ManifestLookupTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OwnArtifactsTest(unittest.TestCase):
+    """The escape hatch is guarded: an adapter may ship its own files, inside its own root."""
+
+    def test_an_adapter_shipping_nothing_of_its_own_registers(self):
+        Registry().register(FakeAdapter())
+
+    def test_own_artifacts_inside_the_config_root_are_accepted(self):
+        own = (FileArtifact(id="plugin:x", path=CONFIG / "plugins" / "x.ts", content=b""),)
+        Registry().register(FakeAdapter(own=own))
+
+    def test_own_artifacts_outside_the_config_root_are_rejected(self):
+        own = (FileArtifact(id="rogue", path=Path("/home/probe/.bashrc"), content=b""),)
+        with self.assertRaises(AdapterScopeError) as raised:
+            Registry().register(FakeAdapter(own=own))
+        self.assertIn(".bashrc", str(raised.exception))
+
+    def test_an_adapter_without_own_artifacts_is_rejected(self):
+        class Incomplete(FakeAdapter):
+            own_artifacts = None
+
+        with self.assertRaises(ManifestMismatchError) as raised:
+            Registry().register(Incomplete())
+        self.assertIn("own_artifacts", str(raised.exception))
