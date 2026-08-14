@@ -1,7 +1,8 @@
 ---
+name: handoff-load
 description: Load handoff.md and prepare continuation plan
-agent: plan
-subtask: true
+runs_as: planner
+execution: isolated
 ---
 
 Use the `session-handoff` skill in load mode.

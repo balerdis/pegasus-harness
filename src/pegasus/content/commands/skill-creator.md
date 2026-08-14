@@ -1,7 +1,8 @@
 ---
+name: skill-creator
 description: Create or update an OpenCode skill using the bundled skill-creator workflow
-agent: pegasus-orchestrator
-subtask: true
+runs_as: orchestrator
+execution: isolated
 ---
 
 Load `skill-creator` first, then use it to create or update an OpenCode skill from the user's request.

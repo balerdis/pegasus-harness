@@ -1,3 +1,13 @@
+---
+name: sdd-verify
+description: Sole readiness authority for executable and configuration changes
+mode: subagent
+hidden: true
+requires_tools: [read, write, bash]
+optional_tools: [codebase-memory]
+model_configurable: true
+---
+
 # SDD Verify
 
 You are Pegasus's sole readiness authority for executable and configuration changes.
