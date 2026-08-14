@@ -41,6 +41,15 @@ class FileSystem(Protocol):
     def read_bytes(self, path: Path) -> bytes:
         """Read a file whole. Raises :class:`FileSystemError` if it cannot be read."""
 
+    def mode_of(self, path: Path) -> int | None:
+        """The permission bits of an existing path, or ``None`` when it is absent.
+
+        Pegasus writes into files the user already owns — a CLI's settings file
+        is theirs, not ours. Rewriting one means putting its own permissions
+        back, so this exists to make that possible instead of quietly widening
+        or narrowing who can read it.
+        """
+
     # --- Writing ---
 
     def write_atomic(self, path: Path, content: bytes, *, mode: int = 0o644) -> None:

@@ -255,6 +255,35 @@ Es todo lo que el motor sabe hacer con un artefacto. Cada operación tiene exact
 
 `set_at` y `unset_at` son dos funciones genéricas que navegan un árbol de diccionarios y listas creando lo que falte. No mencionan ningún CLI.
 
+#### La excepción: punteros que agregan a una lista
+
+Un puntero terminado en `/-` no direcciona un casillero sino el final de una lista. Hoy tres artefactos lo usan: `/instructions/-`, `/plugin/-` y `/skills/paths/-`. Eso rompe dos de las cuatro operaciones, y las dos se arreglan con la huella:
+
+| Operación | Por qué no sirve lo normal | Cómo se resuelve |
+|-----------|---------------------------|------------------|
+| Detectar colisión | En `/-` nunca resuelve nada, así que jamás habría colisión y reinstalar duplicaría la entrada | Hay colisión si algún ítem de la lista tiene la huella del valor que íbamos a agregar |
+| Revertir | Guardar el índice no sirve: el usuario puede reordenar la lista y el índice pasaría a apuntar a algo suyo | Se busca el ítem cuya huella coincide con `after_digest` y se quita ese |
+
+Por eso el ítem se identifica por **lo que es** y no por **dónde está**.
+
+Eso tiene una consecuencia que hay que decir en voz alta: **la invariante "un artefacto cuya huella no coincide se preserva y se reporta" no se puede aplicar a un append.** Si la lista todavía tiene ítems y ninguno lleva la huella registrada, hay dos causas posibles y son indistinguibles:
+
+- el usuario borró nuestro ítem, o
+- el usuario lo editó en el lugar, y ahora es idéntico a un ítem que hubiera puesto él.
+
+No hay dato en el journal que las separe, y un ítem de lista no tiene dirección propia que inspeccionar. Ninguna de las dos es una remoción y ninguna es una preservación, así que el desinstalador las reporta como un cuarto resultado: **`unaccounted`**. Los otros tres —`removed`, `restored`, `preserved`— son afirmaciones sobre algo que Pegasus hizo, y ninguna sería cierta acá.
+
+**La ambigüedad necesita sobrevivientes**, y afirmarla donde no existe sería su propia imprecisión. Los cuatro estados posibles:
+
+| Estado al desinstalar | ¿Ambiguo? | Resultado |
+|-----------------------|-----------|-----------|
+| El archivo de configuración no existe | No: se fue con el archivo | `removed` |
+| El archivo existe pero la lista no | No: se fue con la lista | `removed` |
+| La lista existe y está vacía | No: no queda nada que pueda ser una versión cambiada del nuestro | `removed` |
+| La lista tiene ítems y ninguno es el nuestro | **Sí** | `unaccounted` |
+
+Además, dos artefactos no pueden agregar **el mismo valor** al mismo puntero: la lista no podría distinguirlos y nada aguas abajo podría decir cuál de los dos tiene. Agregar valores distintos sí es legítimo y por eso los appends quedan exentos de la regla general de direcciones únicas.
+
 #### Códecs de configuración
 
 El puntero navega cualquier árbol, pero parsear y serializar el archivo depende de su formato. El adapter lo declara y el motor delega:
@@ -509,12 +538,18 @@ pegasus models set … --on-modified skip      # deja el artefacto como está y 
 
 Sin flag, el modo desatendido usa `skip` y lo informa en su salida JSON. Nunca adopta por omisión: adoptar es una decisión del usuario, y en desatendido no hay usuario presente.
 
+### Lo que el desinstalador deja atrás
+
+Retirar no reescribe un archivo de configuración si no cambió nada en él: la indentación del usuario es suya y no se gasta sin motivo.
+
+Queda un residuo conocido y aceptado: si el archivo de configuración del CLI **no existía** antes de instalar, Pegasus lo crea y al desinstalar lo deja vacío (`{}`). El journal registra claves, no la existencia del archivo, así que no hay forma de saber que fue nuestro sin agregar una entrada para el archivo mismo — y esa entrada chocaría con las claves que viven adentro. Un archivo de configuración vacío es inofensivo: el CLI lo lee como configuración por defecto. Si alguna vez molesta, la solución es registrar la creación del archivo como un hecho aparte del de sus claves.
+
 ### Reglas invariantes
 
 - [ ] Todo `target` está contenido dentro del home del usuario
 - [ ] El journal lo escribe el usuario dueño del home, nunca root
 - [ ] Escritura atómica: archivo temporal, `fsync`, `rename`
-- [ ] Al desinstalar, un artefacto cuya huella no coincide se preserva y se reporta
+- [ ] Al desinstalar, un artefacto cuya huella no coincide se preserva y se reporta (salvo los appends, donde la huella no alcanza para decidirlo y el resultado es `unaccounted` — ver "La excepción: punteros que agregan a una lista")
 - [ ] Un `link` nunca se borra: Pegasus no es dueño de dependencias preexistentes
 
 ---
