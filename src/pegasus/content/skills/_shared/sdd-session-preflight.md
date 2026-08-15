@@ -46,8 +46,11 @@ rest of the pipeline.
 
 ### 2. Artifact store
 
-One of `engram`, `openspec`, `hybrid` or `none`. `_shared/persistence-contract.md` defines
-what each one does and which is the default; do not restate it here or in a phase prompt.
+Values: `engram`, `openspec`, `hybrid`, `none`.
+
+`_shared/persistence-contract.md` defines what each one does and which is the default; do
+not define either here or in a phase prompt. Quoting the default while asking is fine --
+offering a choice without its default is what leaves a user stuck.
 
 Pass the resolved value to every sub-agent launch as `Artifact store mode`. Never hardcode
 a store in a phase prompt -- read it from the cached preflight.
@@ -65,9 +68,14 @@ a store in a phase prompt -- read it from the cached preflight.
 
 The **chain strategy** -- how the slices relate to each other -- is not a session decision
 and is not asked here. The tasks phase asks it, and only when its forecast recommends
-chaining, because it is the first point at which the shape of the work is known. Its
-values are `stacked-to-main`, `feature-branch-chain`, `size-exception` and `pending`; the
-tasks phase owns their meaning and records the answer in the tasks artifact.
+chaining, because it is the first point at which the shape of the work is known. It owns
+their meaning and records the answer in the tasks artifact.
+
+Values: `stacked-to-main`, `feature-branch-chain`, `size-exception`, `pending`.
+
+`pending` means the question was reached and left open. Apply must not run on it: a chain
+strategy that is present but undecided is not an answer, and treating it as one is how a
+slice gets built against a shape nobody chose.
 
 Pass the delivery strategy onward as `Delivery strategy`, and the chain strategy, once the
 tasks phase has recorded one, as `Chain strategy`. When the forecast signals risk and
@@ -95,7 +103,8 @@ the common case and a user who does not know the vocabulary still needs a way th
 > 1. **Execution mode** -- `interactive` (I show you each phase and ask before continuing)
 >    or `auto` (I run everything and show the final result). Default: `interactive`.
 > 2. **Artifact store** -- `engram` (no files, fast), `openspec` (versionable files),
->    `hybrid` (both) or `none` (inline only).
+>    `hybrid` (both) or `none` (inline only). Default: `engram` when Engram is available,
+>    otherwise `none`.
 > 3. **Delivery strategy** -- `ask-on-risk` (I ask if the change goes over budget),
 >    `auto-chain` (I split it into slices myself), `single-pr` (one PR) or `exception-ok`
 >    (proceed over budget). Default: `ask-on-risk`.

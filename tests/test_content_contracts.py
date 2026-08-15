@@ -35,8 +35,21 @@ AUTHORITY = f"Canonical owner of the term *{TERM}*"
 #: earlier "It must include ..." in the file would hijack the whole contract.
 REQUIREMENTS = re.compile(rf"{re.escape(TERM)} must already be complete[^.]*\.\s*It must include ([^.]+)\.")
 
-#: A markdown table row whose first cell is a single backticked value.
-OPTION = re.compile(r"^\s*\|\s*`([^`]+)`\s*\|", re.MULTILINE)
+#: The two forms in which the definition declares an option: a table row whose first
+#: cell is the value, and an explicit `Values:` line. Reading only tables is how eight
+#: literals silently left this set when their tables became prose.
+OPTION_ROW = re.compile(r"^\s*\|\s*`([^`]+)`\s*\|", re.MULTILINE)
+OPTION_LIST = re.compile(r"^Values:(.+)$", re.MULTILINE)
+BACKTICKED = re.compile(r"`([^`]+)`")
+
+#: How many the definition is expected to declare. A value that stops being seen would
+#: otherwise vanish from the checked set instead of failing.
+DECLARED = 14
+
+#: A default is declared where a backticked value shares a line with the word Default.
+#: Blockquote lines are what is said to the user, not a declaration -- quoting a default
+#: while asking is not owning it.
+DEFAULT = re.compile(r"^(?!>).*\bDefaults?\b.*$", re.MULTILINE | re.IGNORECASE)
 
 
 def documents() -> list[Path]:
@@ -61,12 +74,19 @@ def requirements_in(path: Path) -> tuple[str, ...]:
 
 def options() -> tuple[str, ...]:
     text = DEFINITION.read_text(encoding="utf-8") if DEFINITION.is_file() else ""
-    return tuple(dict.fromkeys(match.group(1) for match in OPTION.finditer(text)))
+    found = [match.group(1) for match in OPTION_ROW.finditer(text)]
+    for line in OPTION_LIST.finditer(text):
+        found.extend(BACKTICKED.findall(line.group(1)))
+    return tuple(dict.fromkeys(found))
+
+
+def declares_default(text: str, option: str) -> bool:
+    return any(f"`{option}`" in line for line in DEFAULT.findall(text))
 
 
 def uses(literal: str, text: str) -> bool:
     """A delimited use, so `size:exception` never vouches for `size-exception`."""
-    return re.search(rf"(?<![\w:.-]){re.escape(literal)}(?![\w:.-])", text) is not None
+    return re.search(rf"(?<![\w:-]){re.escape(literal)}(?![\w:-])", text) is not None
 
 
 class PreflightContractTest(unittest.TestCase):
@@ -106,14 +126,20 @@ class PreflightContractTest(unittest.TestCase):
         document proves nothing: somebody who reads it in the course of work has
         to be sent there.
         """
-        referrers = [
-            path.relative_to(CONTENT)
+        referrers = {
+            str(path.relative_to(CONTENT))
             for path in documents()
-            if path != DEFINITION
-            and path != SHARED / "SKILL.md"
+            if SHARED not in path.parents
             and DEFINITION.name in path.read_text(encoding="utf-8")
-        ]
-        self.assertTrue(referrers, f"only its own package index points at {DEFINITION.name}")
+        }
+        self.assertTrue(referrers, f"nothing outside its own package points at {DEFINITION.name}")
+
+        # The route that was actually installed, named. Without this the whole of it
+        # can be reverted and a sibling inside `_shared` still satisfies the test.
+        expected = {"agents/pegasus-orchestrator.md"} | {
+            str(path.relative_to(CONTENT)) for path in sdd_commands()
+        }
+        self.assertEqual(expected - referrers, set(), f"lost the route: {expected - referrers}")
 
     def test_exactly_one_file_claims_the_term(self):
         claiming = [
@@ -129,26 +155,39 @@ class PreflightContractTest(unittest.TestCase):
         Only defaults for values this definition declares are the business of this
         test; a skill saying it defaults to English is nobody's contradiction.
         """
-        clashing = {}
-        for option in options():
-            declaring = [
+        texts = {path: path.read_text(encoding="utf-8") for path in documents()}
+        declaring = {
+            option: [
                 str(path.relative_to(CONTENT))
-                for path in documents()
-                if re.search(
-                    rf"[Dd]efaults? (?:to|when|only when)[^.\n]*`{re.escape(option)}`",
-                    path.read_text(encoding="utf-8"),
-                )
+                for path, text in texts.items()
+                if declares_default(text, option)
             ]
-            if len(declaring) > 1:
-                clashing[option] = declaring
+            for option in options()
+        }
+        self.assertTrue(
+            any(declaring.values()), "no default is declared anywhere; the rule went silent"
+        )
+
+        # The Authority rule, executable: a command may describe how it behaves under a
+        # resolved value, it may not set one. Only the shared contract package may.
+        package = str(SHARED.relative_to(CONTENT))
+        outside = {
+            option: [name for name in files if not name.startswith(package)]
+            for option, files in declaring.items()
+        }
+        outside = {option: files for option, files in outside.items() if files}
+        self.assertEqual(outside, {}, f"a default set away from the shared contract: {outside}")
+
+        clashing = {option: files for option, files in declaring.items() if len(files) > 1}
         self.assertEqual(clashing, {}, f"a default declared in more than one file: {clashing}")
 
 
 class NoInventedLiteralsTest(unittest.TestCase):
     """An option nobody else recognises reads as correct until it runs."""
 
-    def test_options_were_found(self):
-        self.assertTrue(options(), "no option tables found in the definition")
+    def test_every_declared_option_is_still_seen(self):
+        """A value that stops matching would leave the checked set without failing."""
+        self.assertEqual(len(options()), DECLARED, f"seen: {options()}")
 
     def test_every_option_is_a_literal_something_else_uses(self):
         texts = [path.read_text(encoding="utf-8") for path in documents() if path != DEFINITION]
