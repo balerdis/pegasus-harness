@@ -41,12 +41,14 @@ because no command file was involved -- that path is how preflight gets silently
 | `interactive` | After each phase, show the result and ask before continuing. **Default.** |
 | `auto` | Run phases back to back; show the final result only. |
 
+Execution mode: `interactive`, `auto`.
+
 Interactive approval is phase-scoped: "go on" approves the immediate next phase, never the
 rest of the pipeline.
 
 ### 2. Artifact store
 
-Values: `engram`, `openspec`, `hybrid`, `none`.
+Artifact store mode: `engram`, `openspec`, `hybrid`, `none`.
 
 `_shared/persistence-contract.md` defines what each one does and which is the default; do
 not define either here or in a phase prompt. Quoting the default while asking is fine --
@@ -66,12 +68,14 @@ a store in a phase prompt -- read it from the cached preflight.
 | `single-pr` | Keep one PR. Above budget, requires recording `size:exception` before apply. |
 | `exception-ok` | Proceed over budget; apply runs under `size:exception`. |
 
+Delivery strategy: `ask-on-risk`, `auto-chain`, `single-pr`, `exception-ok`.
+
 The **chain strategy** -- how the slices relate to each other -- is not a session decision
 and is not asked here. The tasks phase asks it, and only when its forecast recommends
 chaining, because it is the first point at which the shape of the work is known. It owns
 what each one does, and records the answer in the tasks artifact.
 
-Values: `stacked-to-main`, `feature-branch-chain`, `size-exception`, `pending`.
+Chain strategy: `stacked-to-main`, `feature-branch-chain`, `size-exception`, `pending`.
 
 `pending` means the question was reached and left open. Apply must not run on it: a chain
 strategy that is present but undecided is not an answer, and treating it as one is how a

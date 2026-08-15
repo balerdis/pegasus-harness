@@ -71,7 +71,7 @@ The orchestrator persists DAG state after each phase transition to enable SDD re
 - `openspec` → write files ONLY to paths defined in `_shared/openspec-convention.md`
 - `hybrid` → persist to BOTH Engram AND filesystem; follow both conventions
 - NEVER force `openspec/` creation unless orchestrator explicitly passed `openspec` or `hybrid`
-- If unsure which mode to use, default to `none`
+- If the orchestrator passed no mode at all, persist nothing and return results inline; do not pick one
 
 ## Sub-Agent Context Rules
 

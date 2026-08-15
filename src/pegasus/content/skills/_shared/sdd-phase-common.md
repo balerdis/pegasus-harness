@@ -96,6 +96,7 @@ Example:
 
 SDD must protect reviewer cognitive load, not only generate tasks.
 
+- Execution mode: interactive|auto
 - The default PR review budget is **400 changed lines** (`additions + deletions`).
 - Count authored text additions plus deletions only for this threshold. Generated goldens are excluded from authored risk count and remain part of complete snapshot identity.
 - The orchestrator MUST cache a delivery strategy at session start. `_shared/sdd-session-preflight.md` defines the values and the default.

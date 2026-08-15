@@ -39,7 +39,7 @@ REQUIREMENTS = re.compile(rf"{re.escape(TERM)} must already be complete[^.]*\.\s
 #: cell is the value, and an explicit `Values:` line. Reading only tables is how eight
 #: literals silently left this set when their tables became prose.
 OPTION_ROW = re.compile(r"^\s*\|\s*`([^`]+)`\s*\|", re.MULTILINE)
-OPTION_LIST = re.compile(r"^Values:(.+)$", re.MULTILINE)
+OPTION_LIST = re.compile(r"^([A-Z][\w ]*):((?:\s*`[^`]+`,?)+)\.?\s*$", re.MULTILINE)
 BACKTICKED = re.compile(r"`([^`]+)`")
 
 #: One decision of the definition, so a rule can be scoped to a decision rather than to
@@ -52,17 +52,18 @@ SECTION = re.compile(r"^### \d+\.\s*(.+)$", re.MULTILINE)
 #: never restated here -- a swapped literal fails against the consumer that reads it.
 ENUMERATION = re.compile(
     r"[`{<(]([a-z][\w:. -]*(?:\|[\w:. -]+)+)[`}>)]"
-    r"|^[A-Z][\w ]*:\s*([a-z][\w:.-]*(?:\|[\w:.-]+)+)\s*$",
+    r"|^[-*]?\s*[A-Z][\w ]*:\s*([a-z][\w:.-]*(?:\|[\w:.-]+)+)\s*$",
     re.MULTILINE,
 )
 
-#: Which file already enumerates each decision. Structure, not values: the values stay
-#: derived. Without it a declared set can be validated against an unrelated enumeration
-#: that happens to overlap, which is how a chain strategy adopted a set of modes.
+#: Where each declaration is already enumerated, by LABEL rather than by file. Structure,
+#: not values: the values stay derived. Binding to a file alone is not enough -- one file
+#: enumerates both the delivery and the chain sets, so a group could adopt the other one.
 CONSUMERS = {
-    "Execution mode": "commands/sdd-ff.md",
-    "Artifact store": "skills/_shared/persistence-contract.md",
-    "Chained PR strategy": "skills/sdd-tasks/SKILL.md",
+    "Execution mode": "skills/_shared/sdd-phase-common.md",
+    "Artifact store mode": "skills/_shared/persistence-contract.md",
+    "Delivery strategy": "skills/sdd-tasks/SKILL.md",
+    "Chain strategy": "skills/sdd-tasks/SKILL.md",
 }
 
 #: A default is declared when the marker is bound to the value it marks, not when both
@@ -74,6 +75,7 @@ DECLARATION = "(?:[Dd]efaults?\\b[^`\\n]{{0,70}}?`{0}`|`{0}`[^`\\n]{{0,70}}?\\*\
 NEGATED = re.compile(
     r"\b(?:do not|don't|never|not)\s+(?:assume|use|set|hardcode|infer)\b"
     r"|\bno default\b|\bnot the default\b"
+    r"|\b(?:see|per|defined in|documented in|described in)\b"
 )
 
 #: A line said to the user, not a declaration. Quoting a default while asking is not
@@ -162,41 +164,41 @@ def declared_by_decision() -> dict[str, set[str]]:
     for title, body in zip(parts[1::2], parts[2::2]):
         values = [match.group(1) for match in OPTION_ROW.finditer(body)]
         for line in OPTION_LIST.finditer(body):
-            values.extend(BACKTICKED.findall(line.group(1)))
+            values.extend(BACKTICKED.findall(line.group(2)))
         if values:
             grouped[title.strip()] = set(values)
     return grouped
 
 
 def declared_groups() -> list[tuple[str, set[str]]]:
-    """Each declaration form on its own, because one decision may hold two sets.
+    """Each labelled declaration, keyed by the label its consumer also uses.
 
-    The chained-PR decision declares the delivery values and the chain values, and the
-    consumers enumerate them separately, which is the shape that has to be compared.
+    One decision may hold two sets -- the chained-PR decision declares the delivery
+    values and the chain values -- and the consumers enumerate them under their own
+    labels. The label is the binding: matching only on the file lets one group be
+    validated against the other's enumeration.
     """
     text = DEFINITION.read_text(encoding="utf-8") if DEFINITION.is_file() else ""
-    parts = SECTION.split(text)
-    groups = []
-    for title, body in zip(parts[1::2], parts[2::2]):
-        rows = {match.group(1) for match in OPTION_ROW.finditer(body)}
-        if rows:
-            groups.append((title.strip(), rows))
-        for line in OPTION_LIST.finditer(body):
-            groups.append((title.strip(), set(BACKTICKED.findall(line.group(1)))))
-    return groups
+    return [
+        (match.group(1).strip(), set(BACKTICKED.findall(match.group(2))))
+        for match in OPTION_LIST.finditer(text)
+    ]
 
 
-def enumerations(within: str | None = None) -> list[set[str]]:
-    """Every value set the tree spells out, optionally only in one consumer."""
+def enumerations(within: str | None = None, labelled: str | None = None) -> list[set[str]]:
+    """Every value set the tree spells out, narrowed to one consumer and one label."""
     found = []
     for path in documents():
         if path == DEFINITION:
             continue
         if within and str(path.relative_to(CONTENT)) != within:
             continue
-        for match in ENUMERATION.finditer(path.read_text(encoding="utf-8")):
-            spelled = match.group(1) or match.group(2)
-            found.append({item.strip() for item in spelled.split("|")})
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if labelled and labelled not in line:
+                continue
+            for match in ENUMERATION.finditer(line):
+                spelled = match.group(1) or match.group(2)
+                found.append({item.strip() for item in spelled.split("|")})
     return found
 
 
@@ -294,16 +296,22 @@ class PreflightContractTest(unittest.TestCase):
         outside = {option: files for option, files in outside.items() if files}
         self.assertEqual(outside, {}, f"a default set away from the shared contract: {outside}")
 
-        # Scoped to the decision and counted by FILE, not by literal. Naming a different
-        # value as the default for the same decision contradicts just as loudly, while one
-        # file expressing a conditional default -- `engram` when available, else `none` --
-        # is a single answer and not a clash.
+        # Counted by UNIT, which is the thing that actually answers the question. By file
+        # is too coarse -- one document may hold two rules that disagree, 65 lines apart,
+        # which is exactly what this found in `persistence-contract.md`. By literal is too
+        # fine, because a single sentence may name two values conditionally and still be
+        # one answer.
         for decision, values in declared_by_decision().items():
-            owners = sorted(
-                {name for option, files in declaring.items() if option in values for name in files}
+            answers = sorted(
+                {
+                    f"{path.relative_to(CONTENT)}: {unit.strip()[:70]}"
+                    for path in documents()
+                    for unit in sentences(path.read_text(encoding="utf-8"))
+                    if any(declares_default(unit, option) for option in values)
+                }
             )
             self.assertLessEqual(
-                len(owners), 1, f"{decision}: more than one file sets its default: {owners}"
+                len(answers), 1, f"{decision}: answered in more than one place: {answers}"
             )
 
 
@@ -323,9 +331,7 @@ class NoInventedLiteralsTest(unittest.TestCase):
             consumer = CONSUMERS.get(decision)
             self.assertIsNotNone(consumer, f"{decision} names no consumer to check against")
 
-            spelled = [
-                other for other in enumerations(within=consumer) if len(declared & other) >= 2
-            ]
+            spelled = enumerations(within=consumer, labelled=decision)
             # Counting how many decisions could be checked is how a decision goes
             # unchecked in silence, so every group must find its consumer.
             self.assertTrue(spelled, f"{decision}: {consumer} enumerates nothing like {declared}")
