@@ -10,7 +10,7 @@ and asks that adapter to render each one.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from pegasus.core import ownership
@@ -104,10 +104,27 @@ def render(content: Content, adapter: Any, environment: Environment) -> list[Any
     return artifacts
 
 
-def build(content: Content, adapter: Any, environment: Environment) -> Catalog:
-    """The portable manifest of what one CLI would receive."""
-    artifacts = render(content, adapter, environment)
-    root = adapter.layout(environment).config_dir
+#: The frame every catalog is built in. Not a real directory, and never written to.
+CANONICAL_HOME = PurePosixPath("/pegasus/catalog-build")
+
+
+def build(content: Content, adapter: Any) -> Catalog:
+    """The portable manifest of what one CLI would receive.
+
+    Built in a canonical frame on purpose, because this is release identity: two
+    machines must agree on it for the digest to mean anything. It used to be
+    home-independent by luck, since nothing an adapter rendered happened to
+    contain a path. A body that asks the installer for one -- the whole point of
+    `core.placeholders` -- would end that quietly, giving every user a different
+    digest for the same release. Taking the environment away makes the property
+    structural instead of accidental.
+
+    What a machine actually receives comes from `render` with its own
+    environment, and that is what the journal records.
+    """
+    canonical = Environment(home=Path(str(CANONICAL_HOME)))
+    artifacts = render(content, adapter, canonical)
+    root = adapter.layout(canonical).config_dir
     return Catalog(cli=adapter.id, entries=_entries(artifacts, root, adapter.id))
 
 

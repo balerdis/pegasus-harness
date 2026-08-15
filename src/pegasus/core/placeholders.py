@@ -22,7 +22,10 @@ from collections.abc import Mapping
 #: Every fact a body may ask for. Adding one obliges every adapter to answer it.
 NAMES = frozenset({"skills_root"})
 
-PATTERN = re.compile(r"\{\{\s*([^{}]*?)\s*\}\}")
+#: The lookarounds refuse a pair with another brace stuck to it. Without them
+#: `{{{skills_root}}}` matches the inner pair and fills into stray braces, which
+#: reads as a successful substitution and is not one.
+PATTERN = re.compile(r"(?<!\{)\{\{\s*([^{}]*?)\s*\}\}(?!\})")
 
 
 def names_in(body: str) -> tuple[str, ...]:
@@ -38,8 +41,36 @@ def unknown_in(body: str) -> tuple[str, ...]:
     return tuple(name for name in names_in(body) if name not in NAMES)
 
 
+def malformed_in(text: str) -> bool:
+    """Whether a brace pair survives that the pattern could not read.
+
+    `{{ oops` and `{{{name}}}` name nothing, so neither validation nor filling
+    sees them, and they ship as the literal braces this module exists to stop.
+    """
+    remainder = PATTERN.sub("", text)
+    return "{{" in remainder or "}}" in remainder
+
+
+def answerable_in(text: str) -> tuple[str, ...]:
+    """The facts this text asks for that somebody has actually promised to answer.
+
+    Narrower than `names_in` on purpose: it is for content that is installed
+    verbatim, where the question is not whether a name is spelled right but
+    whether the text is asking at all.
+    """
+    return tuple(name for name in names_in(text) if name in NAMES)
+
+
+class Unanswered(KeyError):
+    """Nobody could answer a placeholder. A `KeyError` so callers may still catch broadly."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name = name
+
+
 def fill(body: str, values: Mapping[str, str]) -> str:
-    """Answer every placeholder, or raise `KeyError` naming the first one that has none.
+    """Answer every placeholder, or raise `Unanswered` naming the first one that has none.
 
     The caller decides what an unanswered placeholder means. For an adapter it
     means its layout has no such concept, which is a refusal, not a blank.
@@ -48,7 +79,7 @@ def fill(body: str, values: Mapping[str, str]) -> str:
     def answer(match: re.Match[str]) -> str:
         name = match.group(1)
         if name not in values:
-            raise KeyError(name)
+            raise Unanswered(name)
         return values[name]
 
     return PATTERN.sub(answer, body)

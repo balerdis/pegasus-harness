@@ -52,18 +52,6 @@ class CliAdapter(Protocol):
     def detect(self, environment: Environment) -> Detection:
         """Look for the CLI using PATH and the filesystem only. Never execute it."""
 
-    def activation_steps(self) -> tuple[str, ...]:
-        """What the user must still do before an installation takes effect.
-
-        Writing the files is not the same as the CLI having read them. A product
-        that loads its configuration once, at startup, keeps running on what it
-        read before Pegasus touched the disk, so an install can be complete and
-        inert at the same time. Only the adapter knows whether that is true of
-        its CLI, which is why the engine cannot phrase this.
-
-        Return an empty tuple when the CLI picks changes up on its own.
-        """
-
     # --- Where ---
 
     def layout(self, environment: Environment) -> Layout:
@@ -83,6 +71,26 @@ class CliAdapter(Protocol):
     def render_system_prompt(self, layout: Layout, system_prompt: Any) -> list[Artifact]: ...
 
     def render_mcp(self, layout: Layout, server: Any, resolved: Any) -> list[Artifact]: ...
+
+    # --- What the user still has to do ---
+
+    def activation_steps(self) -> tuple[str, ...]:
+        """What the user must still do before a change to this CLI takes effect.
+
+        Writing the files is not the same as the CLI having read them. A product
+        that loads its configuration once, at startup, keeps running on what it
+        read before Pegasus touched the disk, so an installation can be complete
+        and inert at the same time — and an uninstall can be complete while the
+        running session still behaves as though nothing was removed. Only the
+        adapter knows whether that is true of its CLI, which is why the engine
+        cannot phrase this.
+
+        The engine asks while reporting, which is after the disk has changed, so
+        this is also checked at registration: an adapter that cannot answer must
+        fail before the first byte, not after the last.
+
+        Return an empty tuple when the CLI picks changes up on its own.
+        """
 
     # --- What this adapter contributes on its own ---
 

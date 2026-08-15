@@ -140,11 +140,13 @@ def _load_skills(directory: Path, root: Path) -> tuple[Skill, ...]:
             raise ContentError(f"{_relative(item, root)}: a skill directory needs a {SKILL_FILE}")
         fields, _ = split_frontmatter(descriptor.read_text(encoding="utf-8"), str(source))
         _require_name(fields, item.name, source)
+        assets = _assets(item)
+        _refuse_verbatim_placeholders(assets, source)
         skills.append(
             Skill(
                 name=item.name,
                 description=_text(fields, "description", source),
-                assets=_assets(item),
+                assets=assets,
                 source=source,
             )
         )
@@ -220,6 +222,30 @@ def _require_known_placeholders(body: str, source: PurePosixPath) -> None:
         named = ", ".join(repr(name) for name in unknown)
         allowed = ", ".join(sorted(placeholders.NAMES))
         raise ContentError(f"{source}: unknown placeholder {named}; expected one of {allowed}")
+    if placeholders.malformed_in(body):
+        raise ContentError(
+            f"{source}: an unclosed or nested '{{{{' names nothing, so it would ship as braces"
+        )
+
+
+def _refuse_verbatim_placeholders(assets: tuple[Asset, ...], source: PurePosixPath) -> None:
+    """A skill is copied byte for byte, so a fact it asks for is never answered.
+
+    The engine fills bodies, not assets, and a skill has no body it keeps. Asking
+    here anyway is not a typo the adapter would catch later — it is a request
+    nobody is listening to, and it lands in the user's home as literal braces.
+    """
+    for asset in assets:
+        try:
+            text = asset.content.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        asked = placeholders.answerable_in(text)
+        if asked:
+            raise ContentError(
+                f"{source.parent}/{asset.relative_path}: skills are installed verbatim, "
+                f"so {asked[0]!r} would ship as literal braces"
+            )
 
 
 def _subdirectories(directory: Path) -> list[Path]:

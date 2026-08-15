@@ -149,8 +149,11 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     store = journal_store(runtime)
     store.ensure_writable()
     journal = store.load()
+    # Asked before anything is written, so an adapter that cannot answer costs a
+    # message instead of a traceback over a finished installation.
+    activation = list(adapter.activation_steps())
 
-    catalog = catalog_module.build(content_module.load(), adapter, environment)
+    catalog = catalog_module.build(content_module.load(), adapter)
     artifacts = catalog_module.render(content_module.load(), adapter, environment)
     plan = planner.plan(runtime.filesystem, cli=adapter.id, artifacts=artifacts)
 
@@ -158,7 +161,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
         return {
             "cli": adapter.id,
             "status": "planned",
-            "activation": list(adapter.activation_steps()),
+            "activation": activation,
             "created": [_placed(step) for step in plan.creations],
             "skipped": [_left(step) for step in plan.collisions],
         }
@@ -191,7 +194,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     return {
         "cli": adapter.id,
         "status": "installed",
-        "activation": list(adapter.activation_steps()),
+        "activation": activation,
         "placed": len(applied.records),
         "created": [_recorded(record) for record in applied.records],
         "skipped": [_left(step) for step in applied.skipped],
@@ -230,6 +233,7 @@ def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
     store.ensure_writable()
 
     journal = store.load()
+    activation = list(adapter.activation_steps())
     install = journal_module.install_for(journal, adapter.id)
     if install is None:
         raise CommandError(f"Pegasus is not recorded as installed in {adapter.id!r}; there is nothing to take back")
@@ -239,7 +243,7 @@ def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
     return {
         "cli": adapter.id,
         "status": "uninstalled",
-        "activation": list(adapter.activation_steps()),
+        "activation": activation,
         "removed": list(retired.removed),
         "restored": list(retired.restored),
         "preserved": list(retired.preserved),
@@ -274,6 +278,11 @@ def _health(adapter, environment: Environment, journal, runtime: Runtime) -> dic
     }
     if install is None:
         return health
+
+    # `doctor` is what somebody runs precisely because the installation looks
+    # inert, which is exactly the state an unread configuration produces. Saying
+    # nothing here confirms the install while the running session ignores it.
+    health["activation"] = list(adapter.activation_steps())
 
     for entry in install.entries:
         current = _current_digest(runtime.filesystem, entry)
@@ -427,4 +436,10 @@ def _cli_prose(entry: dict[str, Any]) -> str:
     for label, key in (("changed by hand", "drifted"), ("missing", "missing")):
         if entry[key]:
             line += f" {len(entry[key])} {label}: {', '.join(entry[key])}."
+    # A condition rather than an order: whoever already restarted is done, and
+    # telling them again every time would turn the notice into noise.
+    steps = entry.get("activation") or []
+    if steps:
+        line += "\n  If it was already running when Pegasus was installed:"
+        line += "".join(f"\n    {step}" for step in steps)
     return line

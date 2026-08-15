@@ -97,5 +97,74 @@ class LoadTimeRefusalTest(unittest.TestCase):
         self.assertIn("skils_root", message)
 
 
+class MalformedDelimiterTest(unittest.TestCase):
+    """A brace pair the pattern cannot read is the very thing this module prevents."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        (self.root / "agents").mkdir()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def write(self, body: str) -> None:
+        (self.root / "agents" / "sdd-apply.md").write_text(AGENT.format(body=body), encoding="utf-8")
+
+    def test_an_unclosed_opener_is_refused(self):
+        self.write("{{ oops then {{skills_root}}/x")
+        with self.assertRaises(content_module.ContentError):
+            content_module.load(self.root)
+
+    def test_a_nested_brace_is_refused(self):
+        self.write("{{{skills_root}}}")
+        with self.assertRaises(content_module.ContentError):
+            content_module.load(self.root)
+
+    def test_a_well_formed_body_is_not_accused(self):
+        self.write("{{skills_root}}/a and {{skills_root}}/b")
+        self.assertTrue(content_module.load(self.root).agents)
+
+
+class SkillsAreVerbatimTest(unittest.TestCase):
+    """A skill is copied byte for byte, so a fact it asks for is never answered."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.skill = self.root / "skills" / "probe"
+        self.skill.mkdir(parents=True)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def write(self, name: str, text: str) -> None:
+        (self.skill / name).write_text(text, encoding="utf-8")
+
+    def descriptor(self, extra: str = "") -> None:
+        self.write("SKILL.md", f"---\nname: probe\ndescription: A probe\n---\n\n# Probe\n{extra}\n")
+
+    def test_a_skill_asking_for_a_fact_is_refused_with_the_file_named(self):
+        self.descriptor("Cross-reference: read {{skills_root}}/other/SKILL.md.")
+        with self.assertRaises(content_module.ContentError) as raised:
+            content_module.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("SKILL.md", message)
+        self.assertIn("skills_root", message)
+
+    def test_a_reference_file_is_checked_too(self):
+        self.descriptor()
+        self.write("notes.md", "read {{skills_root}}/other/SKILL.md")
+        with self.assertRaises(content_module.ContentError) as raised:
+            content_module.load(self.root)
+        self.assertIn("notes.md", str(raised.exception))
+
+    def test_braces_that_belong_to_another_language_are_left_alone(self):
+        """A shipped Laravel checklist uses `{{ }}` for Blade, and that is not ours."""
+        self.descriptor()
+        self.write("blade.md", "Escape output with {{ $value }} in Blade templates.")
+        self.assertTrue(content_module.load(self.root).skills)
+
+
 if __name__ == "__main__":
     unittest.main()

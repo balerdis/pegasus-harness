@@ -66,6 +66,7 @@ class Registry:
         _check_identity(adapter, cli_id, manifest)
         _check_capabilities(adapter, cli_id, manifest, layout)
         _check_own_artifacts(adapter, cli_id, layout)
+        _check_activation_steps(adapter, cli_id)
 
         self._adapters[cli_id] = adapter
         self._manifests[cli_id] = manifest
@@ -88,6 +89,21 @@ class Registry:
 
     def __len__(self) -> int:
         return len(self._adapters)
+
+
+def _check_activation_steps(adapter: object, cli_id: str) -> None:
+    """Confirm the adapter can say what is still left for the user to do.
+
+    The engine asks every adapter this while reporting, and reporting happens
+    after the artifacts are already on disk. An adapter that cannot answer would
+    turn a finished installation into a traceback, so the question is asked once
+    here, at registration, where nothing has been written yet.
+    """
+    if not _implements(adapter, "activation_steps"):
+        raise ManifestMismatchError(
+            f"adapter {cli_id!r} must implement activation_steps; "
+            "return an empty tuple when its CLI picks changes up on its own"
+        )
 
 
 def _check_own_artifacts(adapter: object, cli_id: str, layout: Layout) -> None:

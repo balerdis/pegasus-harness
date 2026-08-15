@@ -146,9 +146,9 @@ def _body(layout: Layout, body: str, owner: str) -> str:
     """
     try:
         return placeholders.fill(body, _facts(layout))
-    except KeyError as missing:
+    except placeholders.Unanswered as missing:
         raise RenderError(
-            f"{owner}: this layout has no {missing.args[0]}, so the body cannot be filled"
+            f"{owner}: this layout has no {missing.name}, so the body cannot be filled"
         ) from None
 
 

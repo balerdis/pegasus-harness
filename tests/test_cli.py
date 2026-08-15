@@ -442,6 +442,18 @@ class ActivationTest(CommandTestCase):
         _, report = self.run_cli("uninstall", "--cli", CLI)
         self.assertTrue(report["activation"])
 
+    def test_doctor_says_it_too_because_that_is_why_people_run_doctor(self):
+        """An unread configuration is exactly what makes an install look inert."""
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        _, report = self.run_cli("doctor")
+        self.assertTrue(report["clis"][0]["activation"])
+
+    def test_doctor_stays_quiet_when_pegasus_is_not_installed(self):
+        self.present()
+        _, report = self.run_cli("doctor")
+        self.assertNotIn("activation", report["clis"][0])
+
     def test_the_prose_carries_it_because_prose_is_never_a_subset(self):
         self.present()
         context = self.runtime()

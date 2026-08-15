@@ -53,11 +53,25 @@ class FakeAdapter:
     def own_artifacts(self, layout):
         return list(self._own)
 
+    def activation_steps(self):
+        return ()
+
 
 ENVIRONMENT = Environment(home=Path("/home/probe"))
 
 
 class RegistrationTest(unittest.TestCase):
+    def test_an_adapter_that_cannot_say_what_is_left_to_do_is_refused(self):
+        """The engine asks while reporting, and reporting happens after writing."""
+        adapter = FakeAdapter()
+        del adapter.__class__.activation_steps
+        try:
+            with self.assertRaises(ManifestMismatchError) as raised:
+                Registry().register(adapter)
+            self.assertIn("activation_steps", str(raised.exception))
+        finally:
+            FakeAdapter.activation_steps = lambda self: ()
+
     def test_accepts_a_coherent_adapter(self):
         registry = Registry()
         registry.register(FakeAdapter())
