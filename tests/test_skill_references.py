@@ -25,7 +25,14 @@ from pathlib import Path
 
 SKILLS = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content" / "skills"
 
-REFERENCE = re.compile(r"`([^`\n]+\.md)`")
+#: A reference is written either as inline code or as a markdown link target. Gating
+#: only one of the two certifies the form that was scanned rather than the tree.
+REFERENCE = re.compile(r"`([^`\n]+\.md)`|\]\(([^)\s]+\.md)\)")
+
+#: The dead convention. Nothing under the skills root has a `skills/` directory, so a
+#: surviving prefix is always the old config-root form, even inside an example. A path
+#: continues into a name or a `{placeholder}`; `skills/*` is a shell glob, not a path.
+DEAD_PREFIX = re.compile(r"(?<![\w/-])skills/[\w{]")
 
 #: A reference the reader is meant to resolve in the project, not under the skills root.
 PROJECT_ARTIFACTS = frozenset(
@@ -62,7 +69,7 @@ def skill_documents() -> list[Path]:
 
 def references(document: Path) -> list[tuple[int, str]]:
     return [
-        (number, match.group(1))
+        (number, match.group(1) or match.group(2))
         for number, line in enumerate(document.read_text(encoding="utf-8").splitlines(), start=1)
         for match in REFERENCE.finditer(line)
     ]
@@ -103,6 +110,27 @@ class SkillReferencesResolveTest(unittest.TestCase):
             found,
             [],
             "these references do not resolve against the skills root:\n" + "\n".join(found),
+        )
+
+    def test_no_document_keeps_the_dead_config_root_prefix(self):
+        """The resolution test cannot see prose or examples; this one can.
+
+        A `skills/` prefix always meant "relative to the CLI config root". It is the
+        convention this tree replaced, and it survives in places the reference scan
+        skips: plain prose, and examples holding a `{placeholder}`.
+        """
+        found = [
+            f"{document.relative_to(SKILLS)}:{number} -> {line.strip()}"
+            for document in skill_documents()
+            for number, line in enumerate(
+                document.read_text(encoding="utf-8").splitlines(), start=1
+            )
+            if DEAD_PREFIX.search(line)
+        ]
+        self.assertEqual(
+            found,
+            [],
+            "the config-root `skills/` prefix is the replaced convention:\n" + "\n".join(found),
         )
 
 

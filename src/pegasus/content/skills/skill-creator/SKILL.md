@@ -41,10 +41,10 @@ Do not create a skill when the pattern is trivial, one-off, or better served by 
 1. Check whether `docs/skill-style-guide.md` exists; if it does, apply it before the bundled local copy or inline fallback rules.
 2. If the repo guide is unavailable, read `skill-creator/references/skill-style-guide.md` and apply it before the inline fallback rules.
 3. Confirm the skill does not already exist and the pattern is reusable.
-4. Create or update `skills/{skill-name}/SKILL.md` using this required structure:
+4. Create or update `{skill-name}/SKILL.md` under the skills root, using this required structure:
 
 ```
-skills/{skill-name}/
+{skill-name}/
 ├── SKILL.md              # Required - main skill file
 ├── assets/               # Optional - templates, schemas, examples
 │   ├── template.py

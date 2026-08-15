@@ -71,6 +71,6 @@ Return `status`, `executive_summary`, `artifacts`, `next_recommended`, and `risk
 
 ## References
 
-- [references/init-details.md](references/init-details.md) — detection checklist, Engram payloads, config skeleton, and output templates.
+- [references/init-details.md](sdd-init/references/init-details.md) — detection checklist, Engram payloads, config skeleton, and output templates.
 - `_shared/engram-convention.md` — Engram artifact naming.
 - `_shared/openspec-convention.md` — openspec layout and rules.

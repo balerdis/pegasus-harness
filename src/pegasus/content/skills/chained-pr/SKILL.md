@@ -47,4 +47,4 @@ Return the chosen strategy, PR order, current PR boundary, dependency diagram, r
 
 ## References
 
-- [references/chaining-details.md](references/chaining-details.md) — strategy diagrams, PR body section, branch commands, and reviewer guidance.
+- [references/chaining-details.md](chained-pr/references/chaining-details.md) — strategy diagrams, PR body section, branch commands, and reviewer guidance.

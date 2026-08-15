@@ -123,8 +123,8 @@ Read testing capabilities from:
 
 Resolve mode:
 ├── IF strict_tdd: true AND test runner exists
-│   └── STRICT TDD MODE → Load and follow strict-tdd.md module
-│       (read the file: skills/sdd-apply/strict-tdd.md)
+│   └── STRICT TDD MODE → Load and follow the Strict TDD module
+│       (read the file: sdd-apply/strict-tdd.md)
 │
 ├── IF strict_tdd: false OR no test runner
 │   └── STANDARD MODE → use Step 4 below (no TDD module loaded)
@@ -224,7 +224,7 @@ Return to the orchestrator:
 | `path/to/file.ext` | Created | {brief description} |
 | `path/to/other.ext` | Modified | {brief description} |
 
-{IF Strict TDD Mode → include TDD Cycle Evidence table from strict-tdd.md}
+{IF Strict TDD Mode → include TDD Cycle Evidence table from sdd-apply/strict-tdd.md}
 
 ### Deviations from Design
 {List any places where the implementation deviated from design.md and why.
