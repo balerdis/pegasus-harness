@@ -17,12 +17,23 @@ change being worked on, never under the skills root, so they are named here and
 excluded. Anything that is neither a listed project artifact nor a resolvable
 skills-root path is an offender.
 
-Two gaps are known and deliberate. Only markdown targets are gated, so a broken
-reference to `assets/template.py` stays invisible. And `skills/` is banned on
-every line, which is right for a skill-to-skill reference but would also reject a
-shell example or a sentence about a project-local skills directory; no shipped
-document needs either today, and the ban is what caught the surviving prefix
-hiding inside a `{placeholder}`.
+What this gate does not see, all deliberate:
+
+- Only markdown targets, so a broken reference to `assets/template.py` is invisible.
+- Absolute paths and URLs are dropped whole. This is the only honest option -- a rule
+  anchored to our skills root cannot judge a path anchored somewhere else -- but it is
+  a real blind spot, and it falls on the form that matters most here:
+  `_shared/skill-resolver.md` prescribes injecting `/absolute/path/to/skills/<name>/
+  SKILL.md` into a sub-agent's prompt. Those are paths into a skills root; this test
+  simply cannot tell which one.
+- `skills/` is banned on every line. Right for a skill-to-skill reference, and it is
+  what caught the prefix hiding inside a `{placeholder}`, but it would also reject a
+  shell example or a sentence about a project-local skills directory.
+- Every bare filename a skill mentions in prose must now be a listed project artifact.
+  Mentioning `notes.md` in passing would fail until the name is added here, so the
+  list has to stay reasoned rather than padded to fit the tree.
+- A blockquote written `>text` without a space swallows the `>` into the token and
+  fails a reference that is otherwise correct. Nothing in the tree writes them that way.
 """
 from __future__ import annotations
 
@@ -36,9 +47,8 @@ SKILLS = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content" / "
 #: and link targets certifies the forms that were scanned rather than the tree: an
 #: agent follows a path written bare in prose, inside a fenced diagram, or as a link
 #: label just as readily.
-#: The lookbehind refuses to start mid-path, which also drops absolute paths whole: a
-#: reference that begins at `/` is an illustration of somebody else's filesystem, never
-#: a path from our skills root.
+#: The lookbehind refuses to start mid-path, which also drops absolute paths and URLs
+#: whole. See the blind spot that creates, above.
 REFERENCE = re.compile(r"(?<![\w/.{}<>-])[\w.{}<>-]+(?:/[\w.{}<>-]+)*\.md")
 
 #: The dead convention. Nothing under the skills root has a `skills/` directory, so a
@@ -113,9 +123,14 @@ class SkillReferencesResolveTest(unittest.TestCase):
         self.assertTrue(skill_documents(), "no markdown found under content/skills")
 
     def test_references_are_found(self):
-        """A regex that matches nothing would make every skill look compliant."""
+        """A canary against narrowing, not just against total breakage.
+
+        The threshold sits just under the current count on purpose. Gating by syntax
+        again -- inline code and link targets only -- yields about 206 matches, so a
+        floor of 100 would let that regression through silently.
+        """
         total = sum(len(references(document)) for document in skill_documents())
-        self.assertGreater(total, 100, "the reference pattern stopped matching")
+        self.assertGreater(total, 240, "the reference pattern narrowed")
 
     def test_every_skill_reference_resolves_from_the_skills_root(self):
         found = offenders()

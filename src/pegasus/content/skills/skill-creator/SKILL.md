@@ -50,7 +50,7 @@ Do not create a skill when the pattern is trivial, one-off, or better served by 
 │   ├── template.py
 │   └── schema.json
 └── references/           # Optional - links to local docs
-    └── {topic}.md        # Points to docs/developer-guide/*.mdx
+    └── <concern>.md      # Points to docs/developer-guide/*.mdx
 ```
 5. Use this frontmatter shape:
 
