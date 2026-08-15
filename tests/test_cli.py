@@ -418,5 +418,50 @@ class HumanOutputTest(CommandTestCase):
         self.assertNotIn("Nothing was changed", context.out.getvalue())
 
 
+class ActivationTest(CommandTestCase):
+    """Writing the files is not the same as the CLI having read them.
+
+    A CLI that loads its configuration once, at startup, keeps running on what it
+    read before the install. Reporting success without saying so leaves the user
+    looking at an installation that is on disk and inert.
+    """
+
+    def test_install_reports_what_is_left_for_the_user_to_do(self):
+        self.present()
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertTrue(report["activation"], "the adapter contributed no activation step")
+
+    def test_a_dry_run_says_it_too_because_it_is_the_same_installation(self):
+        self.present()
+        _, report = self.run_cli("install", "--cli", CLI, "--dry-run")
+        self.assertTrue(report["activation"])
+
+    def test_uninstall_says_it_as_well(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        _, report = self.run_cli("uninstall", "--cli", CLI)
+        self.assertTrue(report["activation"])
+
+    def test_doctor_says_it_too_because_that_is_why_people_run_doctor(self):
+        """An unread configuration is exactly what makes an install look inert."""
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        _, report = self.run_cli("doctor")
+        self.assertTrue(report["clis"][0]["activation"])
+
+    def test_doctor_stays_quiet_when_pegasus_is_not_installed(self):
+        self.present()
+        _, report = self.run_cli("doctor")
+        self.assertNotIn("activation", report["clis"][0])
+
+    def test_the_prose_carries_it_because_prose_is_never_a_subset(self):
+        self.present()
+        context = self.runtime()
+        cli.main(["install", "--cli", CLI], runtime=context)
+        written = context.out.getvalue()
+        for step in available().get(CLI).activation_steps():
+            self.assertIn(step, written)
+
+
 if __name__ == "__main__":
     unittest.main()

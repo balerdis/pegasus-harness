@@ -19,6 +19,7 @@ from pegasus.adapters import available
 from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
+from pegasus.core import ownership
 from pegasus.core import planner
 from pegasus.core.types import Environment
 from pegasus.infra.fs_posix import PosixFileSystem
@@ -76,12 +77,24 @@ class InstallAndRetireTest(unittest.TestCase):
         store.save(stored)
         self.assertEqual(store.load(), stored)
 
-    def test_the_fingerprints_recorded_are_the_ones_the_catalog_publishes(self):
-        """Catalog and journal must agree, or no uninstall ever recognises its own work."""
+    def test_the_fingerprints_recorded_are_taken_the_way_the_catalog_takes_them(self):
+        """One fingerprint function, or no uninstall ever recognises its own work.
+
+        Equality entry by entry is the wrong invariant to hold on to. The catalog
+        is release identity and is built in a canonical frame, while the journal
+        records what this machine actually received, and a body that asks the
+        installer for a path is deliberately different once filled. What must
+        never diverge is *how* the fingerprint is taken and *what* it covers:
+        every id the catalog publishes is an id the journal records, and every
+        recorded digest is the digest of the artifact this run rendered.
+        """
         applied = self.install()
-        catalog = catalog_module.build(content_module.load(), self.adapter, self.environment)
-        published = {entry.id: entry.digest for entry in catalog.entries}
-        self.assertEqual({record.id: record.after_digest for record in applied.records}, published)
+        catalog = catalog_module.build(content_module.load(), self.adapter)
+        rendered = catalog_module.render(content_module.load(), self.adapter, self.environment)
+
+        recorded = {record.id: record.after_digest for record in applied.records}
+        self.assertEqual(set(recorded), {entry.id for entry in catalog.entries})
+        self.assertEqual(recorded, {item.id: ownership.digest(item) for item in rendered})
 
     def test_installing_twice_changes_nothing_the_second_time(self):
         """Every artifact is a collision the second time, including the appends."""

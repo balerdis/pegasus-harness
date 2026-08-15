@@ -16,6 +16,8 @@ from typing import Any
 
 import yaml
 
+from pegasus.core import placeholders
+
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "content"
 MARKER = "---"
 SKILL_FILE = "SKILL.md"
@@ -138,11 +140,13 @@ def _load_skills(directory: Path, root: Path) -> tuple[Skill, ...]:
             raise ContentError(f"{_relative(item, root)}: a skill directory needs a {SKILL_FILE}")
         fields, _ = split_frontmatter(descriptor.read_text(encoding="utf-8"), str(source))
         _require_name(fields, item.name, source)
+        assets = _assets(item)
+        _refuse_verbatim_placeholders(assets, source)
         skills.append(
             Skill(
                 name=item.name,
                 description=_text(fields, "description", source),
-                assets=_assets(item),
+                assets=assets,
                 source=source,
             )
         )
@@ -197,6 +201,7 @@ def _load_system_prompt(directory: Path, root: Path) -> SystemPrompt | None:
         )
     source = _relative(files[0], root)
     _, body = split_frontmatter(files[0].read_text(encoding="utf-8"), str(source))
+    _require_known_placeholders(body, source)
     return SystemPrompt(body=body, source=source)
 
 
@@ -206,7 +211,45 @@ def _descriptor(path: Path, root: Path) -> tuple[dict[str, Any], str, PurePosixP
     if not fields:
         raise ContentError(f"{source}: a descriptor is required")
     _require_name(fields, path.stem, source)
+    _require_known_placeholders(body, source)
     return fields, body, source
+
+
+def _require_known_placeholders(body: str, source: PurePosixPath) -> None:
+    """A placeholder nobody promised to answer would ship as literal braces."""
+    unknown = placeholders.unknown_in(body)
+    if unknown:
+        named = ", ".join(repr(name) for name in unknown)
+        allowed = ", ".join(sorted(placeholders.NAMES))
+        raise ContentError(f"{source}: unknown placeholder {named}; expected one of {allowed}")
+    if placeholders.malformed_in(body):
+        raise ContentError(f"{source}: a '{{{{' that names nothing would ship as literal braces")
+
+
+def _refuse_verbatim_placeholders(assets: tuple[Asset, ...], source: PurePosixPath) -> None:
+    """A skill is copied byte for byte, so a fact it asks for is never answered.
+
+    The engine fills bodies, not assets, and a skill has no body it keeps. Asking
+    here anyway is not a typo the adapter would catch later — it is a request
+    nobody is listening to, and it lands in the user's home as literal braces.
+    """
+    for asset in assets:
+        try:
+            text = asset.content.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        where = f"{source.parent}/{asset.relative_path}"
+        asked = placeholders.answerable_in(text)
+        if asked:
+            raise ContentError(
+                f"{where}: skills are installed verbatim, "
+                f"so {asked[0]!r} would ship as literal braces"
+            )
+        # Held to the same standard as a body. A malformed opener is refused in
+        # an agent prompt, and the same typo reaching the user's home from a
+        # skill instead would be the same mistake with a kinder answer.
+        if placeholders.malformed_in(text):
+            raise ContentError(f"{where}: a '{{{{' that names nothing would ship as literal braces")
 
 
 def _subdirectories(directory: Path) -> list[Path]:

@@ -1,7 +1,11 @@
 """Building the catalog: deterministic, addressed portably, and self-checking."""
 from __future__ import annotations
 
+import inspect
+import json
+import os
 import unittest
+from unittest import mock
 from pathlib import Path, PurePosixPath
 
 from pegasus.adapters.opencode import Adapter
@@ -65,42 +69,42 @@ def one_skill():
 class BuildTest(unittest.TestCase):
     def test_renders_the_declared_capability(self):
         artifact = FileArtifact(id="skill:alpha", path=CONFIG / "skills/alpha/SKILL.md", content=b"body")
-        catalog = catalog_module.build(one_skill(), StubAdapter(artifacts=(artifact,)), ENVIRONMENT)
+        catalog = catalog_module.build(one_skill(), StubAdapter(artifacts=(artifact,)))
         self.assertEqual([entry.id for entry in catalog.entries], ["skill:alpha"])
 
     def test_includes_what_the_adapter_ships_itself(self):
         own = (FileArtifact(id="own:plugin", path=CONFIG / "plugins/x.ts", content=b"x"),)
-        catalog = catalog_module.build(Content(), StubAdapter(own=own), ENVIRONMENT)
+        catalog = catalog_module.build(Content(), StubAdapter(own=own))
         self.assertEqual([entry.id for entry in catalog.entries], ["own:plugin"])
 
     def test_targets_are_relative_to_the_configuration_root(self):
         artifact = FileArtifact(id="a", path=CONFIG / "skills/alpha/SKILL.md", content=b"body")
-        catalog = catalog_module.build(one_skill(), StubAdapter(artifacts=(artifact,)), ENVIRONMENT)
+        catalog = catalog_module.build(one_skill(), StubAdapter(artifacts=(artifact,)))
         self.assertEqual(catalog.entries[0].target, PurePosixPath("skills/alpha/SKILL.md"))
 
     def test_entries_are_sorted_by_id(self):
         artifacts = tuple(
             FileArtifact(id=name, path=CONFIG / name, content=b"x") for name in ("zeta", "alpha", "mu")
         )
-        catalog = catalog_module.build(one_skill(), StubAdapter(artifacts=artifacts), ENVIRONMENT)
+        catalog = catalog_module.build(one_skill(), StubAdapter(artifacts=artifacts))
         self.assertEqual([entry.id for entry in catalog.entries], ["alpha", "mu", "zeta"])
 
     def test_a_capability_configured_after_installing_contributes_nothing(self):
         manifest = CapabilityManifest(cli_id="probe", skills=True, per_agent_model=True)
         adapter = StubAdapter(manifest=manifest)
-        self.assertEqual(len(catalog_module.build(Content(), adapter, ENVIRONMENT)), 0)
+        self.assertEqual(len(catalog_module.build(Content(), adapter)), 0)
 
     def test_a_declared_capability_with_no_content_source_is_refused(self):
         manifest = CapabilityManifest(cli_id="probe", skills=True, mcp=True)
         with self.assertRaises(CatalogError) as raised:
-            catalog_module.build(Content(), StubAdapter(manifest=manifest), ENVIRONMENT)
+            catalog_module.build(Content(), StubAdapter(manifest=manifest))
         self.assertIn("mcp", str(raised.exception))
 
 
 class DigestTest(unittest.TestCase):
     def file_catalog(self, content_bytes):
         artifact = FileArtifact(id="a", path=CONFIG / "a", content=content_bytes)
-        return catalog_module.build(one_skill(), StubAdapter(artifacts=(artifact,)), ENVIRONMENT)
+        return catalog_module.build(one_skill(), StubAdapter(artifacts=(artifact,)))
 
     def test_a_file_digest_covers_its_bytes(self):
         self.assertTrue(self.file_catalog(b"body").entries[0].digest.startswith("sha256:"))
@@ -113,7 +117,7 @@ class DigestTest(unittest.TestCase):
     def test_a_configuration_digest_ignores_key_order(self):
         def digest(value):
             artifact = ConfigKeyArtifact(id="k", path=CONFIG / "settings.json", pointer="/a", value=value)
-            return catalog_module.build(Content(), StubAdapter(own=(artifact,)), ENVIRONMENT).entries[0].digest
+            return catalog_module.build(Content(), StubAdapter(own=(artifact,))).entries[0].digest
 
         self.assertEqual(digest({"a": 1, "b": 2}), digest({"b": 2, "a": 1}))
 
@@ -126,7 +130,7 @@ class DigestTest(unittest.TestCase):
 
 class CollisionTest(unittest.TestCase):
     def build(self, artifacts):
-        return catalog_module.build(one_skill(), StubAdapter(artifacts=artifacts), ENVIRONMENT)
+        return catalog_module.build(one_skill(), StubAdapter(artifacts=artifacts))
 
     def test_two_files_at_one_path_are_refused(self):
         artifacts = (
@@ -188,7 +192,7 @@ class ShippedCatalogTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.content = content_module.load()
-        cls.catalog = catalog_module.build(cls.content, Adapter(), ENVIRONMENT)
+        cls.catalog = catalog_module.build(cls.content, Adapter())
 
     def test_produces_the_whole_payload(self):
         files = [entry for entry in self.catalog.entries if entry.kind == "file"]
@@ -204,13 +208,48 @@ class ShippedCatalogTest(unittest.TestCase):
             self.assertTrue(entry.digest.startswith("sha256:"), entry.id)
 
     def test_building_twice_produces_the_same_digest(self):
-        again = catalog_module.build(content_module.load(), Adapter(), ENVIRONMENT)
+        again = catalog_module.build(content_module.load(), Adapter())
         self.assertEqual(again.digest, self.catalog.digest)
 
     def test_the_catalog_does_not_depend_on_the_home_directory(self):
         """Targets are relative to the config root, so the same content travels anywhere."""
-        elsewhere = catalog_module.build(self.content, Adapter(), Environment(home=Path("/home/other")))
+        elsewhere = catalog_module.build(self.content, Adapter())
         self.assertEqual(elsewhere.digest, self.catalog.digest)
+
+    def test_no_entry_carries_an_absolute_home(self):
+        """Release identity must not describe bytes that exist on one machine only."""
+        document = json.dumps(self.catalog.as_dict())
+        self.assertNotIn(str(HOME), document)
+        self.assertNotIn(str(catalog_module.CANONICAL_HOME), document)
+
+    def test_the_machine_that_builds_the_catalog_never_reaches_the_digest(self):
+        """The tripwire for the canonical frame, and it needs teeth to be one.
+
+        A catalog with nothing to fill is home-independent whatever `build` does,
+        so this content carries a placeholder on purpose: only then does an
+        ambient home reach the rendered bytes, and only then can a `build` that
+        quietly reads the environment again be told apart from one that does not.
+        """
+        content = Content(
+            agents=(
+                content_module.Agent(
+                    name="probe",
+                    description="A probe",
+                    body="Read {{skills_root}}/probe/SKILL.md.\n",
+                    mode=content_module.AgentMode.SUBAGENT,
+                    source=PurePosixPath("agents/probe.md"),
+                ),
+            )
+        )
+        digests = set()
+        for home in ("/home/one", "/home/two"):
+            with mock.patch.dict(os.environ, {"HOME": home, "XDG_CONFIG_HOME": f"{home}/cfg"}):
+                digests.add(catalog_module.build(content, Adapter()).digest)
+        self.assertEqual(len(digests), 1, "the build home reached release identity")
+
+        # Varying two variables only catches a build that reads those two. Refusing
+        # the parameter outright is the property itself, so it is asserted directly.
+        self.assertNotIn("environment", inspect.signature(catalog_module.build).parameters)
 
     def test_the_system_prompt_is_wired_through_the_instructions_list(self):
         pointers = {entry.pointer for entry in self.catalog.entries if entry.pointer}

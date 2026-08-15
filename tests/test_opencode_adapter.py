@@ -10,7 +10,7 @@ from pegasus.core import content as content_module
 from pegasus.core.content import Agent, AgentMode, Asset, Command, Execution, RunsAs, Skill, SystemPrompt
 from pegasus.core import registry as registry_module
 from pegasus.core.registry import Registry
-from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileArtifact
+from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileArtifact, Layout
 
 HOME = Path("/home/probe")
 ENVIRONMENT = Environment(home=HOME)
@@ -306,6 +306,87 @@ class ShippedContentRenderTest(unittest.TestCase):
 
     def test_the_whole_payload_is_produced(self):
         self.assertGreater(len(self.artifacts), 70)
+
+
+class PlaceholderRenderTest(unittest.TestCase):
+    """The adapter answers what the body could not know.
+
+    A body ships one text to every CLI, so it names a fact and this adapter turns
+    it into its own path. An adapter whose layout has no such concept must say so
+    rather than write a blank into an agent's loading gate.
+    """
+
+    def setUp(self):
+        self.adapter = Adapter()
+        self.layout = self.adapter.layout(ENVIRONMENT)
+        self.skills = str(CONFIG / "skills")
+
+    def test_a_prompt_file_gets_the_installed_skills_root(self):
+        agent = Agent(
+            name="sdd-apply",
+            description="Implementation executor",
+            body="Read {{skills_root}}/sdd-apply/SKILL.md first.\n",
+            mode=AgentMode.SUBAGENT,
+            source=PurePosixPath("agents/sdd-apply.md"),
+        )
+        content = self.adapter.render_prompt(self.layout, agent)[0].content.decode("utf-8")
+        self.assertIn(f"{self.skills}/sdd-apply/SKILL.md", content)
+        self.assertNotIn("{{", content)
+
+    def test_an_inlined_agent_body_gets_it_too(self):
+        agent = Agent(
+            name="sdd-apply",
+            description="Implementation executor",
+            body="Read {{skills_root}}/sdd-apply/SKILL.md first.\n",
+            mode=AgentMode.SUBAGENT,
+            source=PurePosixPath("agents/sdd-apply.md"),
+        )
+        value = render_module.agent(self.layout, agent, separate_prompt=False)[0].value
+        self.assertIn(self.skills, value["prompt"])
+
+    def test_a_command_body_gets_it(self):
+        item = Command(
+            name="sdd-apply",
+            description="Implement tasks",
+            body="Load {{skills_root}}/sdd-apply/SKILL.md.\n",
+            runs_as=RunsAs.BUILDER,
+            execution=Execution.ISOLATED,
+            source=PurePosixPath("commands/sdd-apply.md"),
+        )
+        content = self.adapter.render_command(self.layout, item)[0].content.decode("utf-8")
+        self.assertIn(self.skills, content)
+
+    def test_a_system_prompt_body_gets_it(self):
+        item = SystemPrompt(
+            body="Skills live in {{skills_root}}.\n",
+            source=PurePosixPath("system-prompt/AGENTS.md"),
+        )
+        artifact = only(self.adapter.render_system_prompt(self.layout, item), FileArtifact)[0]
+        self.assertIn(self.skills, artifact.content.decode("utf-8"))
+
+    def test_a_layout_without_skills_refuses_instead_of_writing_a_blank(self):
+        layout = Layout(config_dir=CONFIG, prompts_dir=CONFIG / "prompts")
+        agent = Agent(
+            name="sdd-apply",
+            description="Implementation executor",
+            body="Read {{skills_root}}/sdd-apply/SKILL.md first.\n",
+            mode=AgentMode.SUBAGENT,
+            source=PurePosixPath("agents/sdd-apply.md"),
+        )
+        with self.assertRaises(render_module.RenderError) as raised:
+            render_module.prompt(layout, agent)
+        self.assertIn("skills_root", str(raised.exception))
+
+    def test_a_body_with_nothing_to_fill_is_untouched(self):
+        agent = Agent(
+            name="sdd-verify",
+            description="Readiness authority",
+            body="# Verify\n\nProve it.\n",
+            mode=AgentMode.SUBAGENT,
+            source=PurePosixPath("agents/sdd-verify.md"),
+        )
+        content = self.adapter.render_prompt(self.layout, agent)[0].content.decode("utf-8")
+        self.assertEqual(content, "# Verify\n\nProve it.\n")
 
 
 if __name__ == "__main__":

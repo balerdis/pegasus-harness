@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from pegasus.core import pointer
@@ -52,7 +52,9 @@ class Capability(str, Enum):
 class Environment:
     """The user's machine as the engine sees it. Pure data, no I/O."""
 
-    home: Path
+    # PurePath, not Path: the catalog builds in a canonical frame that names no
+    # real directory, and a type that cannot read a disk is what keeps it honest.
+    home: PurePath
     variables: dict[str, str] = field(default_factory=dict)
     platform: str = "linux"
 

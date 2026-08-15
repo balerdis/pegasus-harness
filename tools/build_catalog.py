@@ -20,11 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from pegasus.adapters import available  # noqa: E402
 from pegasus.core import catalog as catalog_module  # noqa: E402
 from pegasus.core import content as content_module  # noqa: E402
-from pegasus.core.types import Environment  # noqa: E402
 
-# Targets are recorded relative to each CLI's configuration root, so the home
-# used to build the catalog never reaches the output.
-PLACEHOLDER_HOME = Path("/pegasus/catalog-build")
+# The catalog carries its own canonical frame, so this tool has no home to pick:
+# targets stay relative to each CLI's configuration root and nothing about the
+# machine that ran the build reaches the output.
 
 
 def main() -> int:
@@ -35,9 +34,7 @@ def main() -> int:
     parser.add_argument("--summary", action="store_true", help="print counts and digest only")
     arguments = parser.parse_args()
 
-    catalog = catalog_module.build(
-        content_module.load(), registry.get(arguments.cli), Environment(home=PLACEHOLDER_HOME)
-    )
+    catalog = catalog_module.build(content_module.load(), registry.get(arguments.cli))
 
     if arguments.summary:
         files = sum(1 for entry in catalog.entries if entry.kind == "file")
