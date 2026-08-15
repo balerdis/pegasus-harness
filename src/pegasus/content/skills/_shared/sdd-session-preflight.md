@@ -69,7 +69,7 @@ a store in a phase prompt -- read it from the cached preflight.
 The **chain strategy** -- how the slices relate to each other -- is not a session decision
 and is not asked here. The tasks phase asks it, and only when its forecast recommends
 chaining, because it is the first point at which the shape of the work is known. It owns
-their meaning and records the answer in the tasks artifact.
+what each one does, and records the answer in the tasks artifact.
 
 Values: `stacked-to-main`, `feature-branch-chain`, `size-exception`, `pending`.
 

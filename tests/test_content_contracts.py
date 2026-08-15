@@ -42,14 +42,26 @@ OPTION_ROW = re.compile(r"^\s*\|\s*`([^`]+)`\s*\|", re.MULTILINE)
 OPTION_LIST = re.compile(r"^Values:(.+)$", re.MULTILINE)
 BACKTICKED = re.compile(r"`([^`]+)`")
 
-#: How many the definition is expected to declare. A value that stops being seen would
-#: otherwise vanish from the checked set instead of failing.
-DECLARED = 14
+#: One decision of the definition, so a rule can be scoped to a decision rather than to
+#: a literal: two files naming different defaults for the same decision contradict each
+#: other just as loudly as two naming the same one.
+SECTION = re.compile(r"^### \d+\.\s*(.+)$", re.MULTILINE)
 
-#: A default is declared where a backticked value shares a line with the word Default.
-#: Blockquote lines are what is said to the user, not a declaration -- quoting a default
-#: while asking is not owning it.
-DEFAULT = re.compile(r"^(?!>).*\bDefaults?\b.*$", re.MULTILINE | re.IGNORECASE)
+#: How the rest of the tree enumerates a decision's values: pipe separated, in prose or
+#: in a template. This is what the definition is checked against, so the values are never
+#: restated here -- a swapped literal fails against the consumer that reads it.
+ENUMERATION = re.compile(r"[`{<(]([a-z][\w:. -]*(?:\|[\w:. -]+){2,})[`}>)]")
+
+#: A default is declared, not merely mentioned. `Never assume a default …` is not a
+#: declaration; `defaults to X`, `Default: X` and a bold **Default.** in a table row are.
+DECLARATION = re.compile(r"(?:[Dd]efaults?\s+(?:to|when|is)\b|[Dd]efault[:.]|\*\*Default)")
+
+#: A line said to the user, not a declaration. Quoting a default while asking is not
+#: owning it, and indentation must not change that.
+QUOTED = re.compile(r"^[ \t]*>", re.MULTILINE)
+
+#: A list item or heading begins its own unit; a line under it is its continuation.
+ITEM = re.compile(r"^(?:[-*+]\s|\d+\.\s|#)")
 
 
 def documents() -> list[Path]:
@@ -80,8 +92,88 @@ def options() -> tuple[str, ...]:
     return tuple(dict.fromkeys(found))
 
 
+def sentences(text: str) -> list[str]:
+    """The units a declaration can occupy, so neither wrapping nor a table fools it.
+
+    Prose wraps, so a paragraph is joined before being split on sentences -- otherwise
+    a default stated across a line break is invisible. A table row is its own unit for
+    the opposite reason: joined, one `**Default.**` in a table would mark every value
+    in it as defaulted.
+    """
+    units, buffer = [], []
+
+    def flush():
+        if buffer:
+            units.extend(re.split(r"(?<=\.)\s", " ".join(buffer)))
+            buffer.clear()
+
+    for line in text.splitlines():
+        if QUOTED.match(line):
+            continue
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            # Whole, and never sentence-split: a row reads "... risk. **Default.** |",
+            # and splitting it strands the marker away from the value it marks.
+            flush()
+            units.append(stripped)
+        elif not stripped or ITEM.match(stripped):
+            flush()
+            if stripped:
+                buffer.append(stripped)
+        else:
+            buffer.append(stripped)
+    flush()
+    return units
+
+
 def declares_default(text: str, option: str) -> bool:
-    return any(f"`{option}`" in line for line in DEFAULT.findall(text))
+    return any(
+        f"`{option}`" in sentence and DECLARATION.search(sentence)
+        for sentence in sentences(text)
+    )
+
+
+def declared_by_decision() -> dict[str, set[str]]:
+    """Every value the definition declares, grouped by the decision it belongs to."""
+    text = DEFINITION.read_text(encoding="utf-8") if DEFINITION.is_file() else ""
+    parts = SECTION.split(text)
+    grouped = {}
+    for title, body in zip(parts[1::2], parts[2::2]):
+        values = [match.group(1) for match in OPTION_ROW.finditer(body)]
+        for line in OPTION_LIST.finditer(body):
+            values.extend(BACKTICKED.findall(line.group(1)))
+        if values:
+            grouped[title.strip()] = set(values)
+    return grouped
+
+
+def declared_groups() -> list[tuple[str, set[str]]]:
+    """Each declaration form on its own, because one decision may hold two sets.
+
+    The chained-PR decision declares the delivery values and the chain values, and the
+    consumers enumerate them separately, which is the shape that has to be compared.
+    """
+    text = DEFINITION.read_text(encoding="utf-8") if DEFINITION.is_file() else ""
+    parts = SECTION.split(text)
+    groups = []
+    for title, body in zip(parts[1::2], parts[2::2]):
+        rows = {match.group(1) for match in OPTION_ROW.finditer(body)}
+        if rows:
+            groups.append((title.strip(), rows))
+        for line in OPTION_LIST.finditer(body):
+            groups.append((title.strip(), set(BACKTICKED.findall(line.group(1)))))
+    return groups
+
+
+def enumerations() -> list[set[str]]:
+    """Every value set the rest of the tree spells out, to check the definition against."""
+    found = []
+    for path in documents():
+        if path == DEFINITION:
+            continue
+        for match in ENUMERATION.finditer(path.read_text(encoding="utf-8")):
+            found.append({item.strip() for item in match.group(1).split("|")})
+    return found
 
 
 def uses(literal: str, text: str) -> bool:
@@ -130,7 +222,7 @@ class PreflightContractTest(unittest.TestCase):
             str(path.relative_to(CONTENT))
             for path in documents()
             if SHARED not in path.parents
-            and DEFINITION.name in path.read_text(encoding="utf-8")
+            and f"_shared/{DEFINITION.name}" in path.read_text(encoding="utf-8")
         }
         self.assertTrue(referrers, f"nothing outside its own package points at {DEFINITION.name}")
 
@@ -178,16 +270,41 @@ class PreflightContractTest(unittest.TestCase):
         outside = {option: files for option, files in outside.items() if files}
         self.assertEqual(outside, {}, f"a default set away from the shared contract: {outside}")
 
-        clashing = {option: files for option, files in declaring.items() if len(files) > 1}
-        self.assertEqual(clashing, {}, f"a default declared in more than one file: {clashing}")
+        # Scoped to the decision, not the literal: naming a different value as the
+        # default for the same decision contradicts just as loudly.
+        for decision, values in declared_by_decision().items():
+            defaults = {
+                option: files for option, files in declaring.items()
+                if option in values and files
+            }
+            self.assertLessEqual(
+                len(defaults), 1, f"{decision} has more than one default: {defaults}"
+            )
+            for option, files in defaults.items():
+                self.assertEqual(len(files), 1, f"{option} default declared twice: {files}")
 
 
 class NoInventedLiteralsTest(unittest.TestCase):
     """An option nobody else recognises reads as correct until it runs."""
 
-    def test_every_declared_option_is_still_seen(self):
-        """A value that stops matching would leave the checked set without failing."""
-        self.assertEqual(len(options()), DECLARED, f"seen: {options()}")
+    def test_every_decision_matches_the_set_its_consumers_read(self):
+        """Counting the values only proves how many there are, not which.
+
+        Swapping one literal for another that exists elsewhere keeps every count and
+        every use valid, which is how `size:exception` shipped as a chain strategy
+        through three rounds of this test. So the values are never restated here:
+        each decision is compared against the enumeration a consumer already spells
+        out, and a decision whose set overlaps one must equal it.
+        """
+        spelled = enumerations()
+        checked = 0
+        for decision, declared in declared_groups():
+            near = [other for other in spelled if len(declared & other) >= 2]
+            if not near:
+                continue
+            checked += 1
+            self.assertIn(declared, near, f"{decision}: consumers read {near}, not {declared}")
+        self.assertGreaterEqual(checked, 2, "no decision could be checked against a consumer")
 
     def test_every_option_is_a_literal_something_else_uses(self):
         texts = [path.read_text(encoding="utf-8") for path in documents() if path != DEFINITION]

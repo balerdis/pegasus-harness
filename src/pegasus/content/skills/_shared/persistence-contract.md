@@ -2,7 +2,7 @@
 
 ## Mode Resolution
 
-The orchestrator passes `artifact_store.mode` with one of: `engram | openspec | hybrid | none`.
+The orchestrator passes `Artifact store mode` with one of: `engram | openspec | hybrid | none`.
 
 The orchestrator ASKs the user which mode they want as part of SDD Session Preflight, on the first SDD command of a session or an equivalent natural-language request. The choice is cached for the session. `_shared/sdd-session-preflight.md` defines when preflight runs and what else it resolves.
 

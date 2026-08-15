@@ -93,7 +93,7 @@ Then you MUST confirm the orchestrator/user provided a resolved delivery path:
 2. **`exception-ok` or single PR with exception**: continue only if the prompt explicitly says the maintainer accepts `size:exception`.
 3. **`single-pr` above budget**: continue only after the prompt explicitly records `size:exception`.
 
-Also check for `Chain strategy` in the tasks artifact. If present and not `pending`, follow it consistently:
+Also check for `Chain strategy` in the tasks artifact. If it is `pending` the question was reached and left open, which is not an answer: STOP and return `blocked`. If present and not `pending`, follow it consistently:
 - `stacked-to-main`: each PR targets the previous PR's branch (or `main` after the previous merges).
 - `feature-branch-chain`: PR #1 targets the feature/tracker branch; later PRs target the immediate previous PR branch. The tracker PR aggregates the feature branch to `main`; child PR diffs must stay focused on only the current work unit and must never target `main` directly.
 
