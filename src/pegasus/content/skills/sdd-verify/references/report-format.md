@@ -84,4 +84,4 @@ The YAML envelope MUST be the first non-empty content and contains every field e
 
 
 
-When Strict TDD is active, insert the TDD compliance, test layer distribution, changed-file coverage, and quality metrics sections from `strict-tdd-verify.md`.
+When Strict TDD is active, insert the TDD compliance, test layer distribution, changed-file coverage, and quality metrics sections from `sdd-verify/strict-tdd-verify.md`.

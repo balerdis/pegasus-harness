@@ -41,17 +41,17 @@ From the orchestrator:
 
 ## Execution and Persistence Contract
 
-> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
+> Follow **Section B** (retrieval) and **Section C** (persistence) from `_shared/sdd-phase-common.md`.
 
 - **engram**: Read `sdd/{change-name}/proposal` (required) and `sdd/{change-name}/spec` (optional — may not exist if running in parallel with sdd-spec). Save as `sdd/{change-name}/design`.
-- **openspec**: Read and follow `skills/_shared/openspec-convention.md`.
+- **openspec**: Read and follow `_shared/openspec-convention.md`.
 - **hybrid**: Follow BOTH conventions — persist to Engram AND write `design.md` to filesystem. Retrieve dependencies from Engram (primary) with filesystem fallback.
 - **none**: Return result only. Never create or modify project files.
 
 ## What to Do
 
 ### Step 1: Load Skills
-Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
+Follow **Section A** from `_shared/sdd-phase-common.md`.
 
 ### Step 2: Read the Codebase
 
@@ -63,7 +63,7 @@ Before designing, read the actual code that will be affected:
 
 ### Step 2a: Applicability-Driven Threat Matrix
 
-If the design changes routing, shell commands, subprocesses, VCS/PR automation, executable-file classification, or process integration, read `references/threat-matrix.md` and include its matrix in the design. Mark every row `Applicable` or explicit `N/A` with a reason. Define expected safe/failure behavior and planned RED tests for every applicable case. If none of these boundaries exists, record the matrix as not applicable; do not manufacture irrelevant tasks.
+If the design changes routing, shell commands, subprocesses, VCS/PR automation, executable-file classification, or process integration, read `sdd-design/references/threat-matrix.md` and include its matrix in the design. Mark every row `Applicable` or explicit `N/A` with a reason. Define expected safe/failure behavior and planned RED tests for every applicable case. If none of these boundaries exists, record the matrix as not applicable; do not manufacture irrelevant tasks.
 
 ### Step 3: Write design.md
 
@@ -134,7 +134,7 @@ Use code blocks with the project's language.}
 
 ## Threat Matrix
 
-{For routing/shell/process integration, include the applicability matrix from `references/threat-matrix.md`. Otherwise: `N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary.`}
+{For routing/shell/process integration, include the applicability matrix from `sdd-design/references/threat-matrix.md`. Otherwise: `N/A — no routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration boundary.`}
 
 ## Migration / Rollout
 
@@ -151,7 +151,7 @@ If not applicable, state "No migration required."}
 
 **This step is MANDATORY — do NOT skip it.**
 
-Follow **Section C** from `skills/_shared/sdd-phase-common.md`.
+Follow **Section C** from `_shared/sdd-phase-common.md`.
 - artifact: `design`
 - topic_key: `sdd/{change-name}/design`
 - type: `architecture`
@@ -191,7 +191,7 @@ Ready for tasks (sdd-tasks).
 - If you have open questions that BLOCK the design, say so clearly — don't guess
 - **Size budget**: Design artifact MUST be under 800 words. Architecture decisions as tables (option | tradeoff | decision). Code snippets only for non-obvious patterns.
 - Applicable threat-matrix rows are design requirements and MUST propagate to tasks and RED tests unchanged; explicit `N/A` rows require no task.
-- Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+- Return envelope per **Section D** from `_shared/sdd-phase-common.md`.
 
 ## References
 

@@ -20,7 +20,7 @@ Do not create a skill when the pattern is trivial, one-off, or better served by 
 ## Hard Rules
 
 - When working in this repo, first follow `docs/skill-style-guide.md` as the normative source before creating or updating skills.
-- For installed global skills, use `references/skill-style-guide.md` as the bundled local copy of that guide when `docs/skill-style-guide.md` is unavailable.
+- For installed global skills, use `skill-creator/references/skill-style-guide.md` as the bundled local copy of that guide when `docs/skill-style-guide.md` is unavailable.
 - If neither guide is available, use the compact inline rules below.
 - A skill is a runtime instruction contract for an LLM, not human documentation.
 - Do not add a `Keywords` section; preserve essential trigger words in `description`.
@@ -39,7 +39,7 @@ Do not create a skill when the pattern is trivial, one-off, or better served by 
 ## Execution Steps
 
 1. Check whether `docs/skill-style-guide.md` exists; if it does, apply it before the bundled local copy or inline fallback rules.
-2. If the repo guide is unavailable, read `references/skill-style-guide.md` and apply it before the inline fallback rules.
+2. If the repo guide is unavailable, read `skill-creator/references/skill-style-guide.md` and apply it before the inline fallback rules.
 3. Confirm the skill does not already exist and the pattern is reusable.
 4. Create or update `skills/{skill-name}/SKILL.md` using this required structure:
 
@@ -101,4 +101,4 @@ Return:
 ## References
 
 - `docs/skill-style-guide.md` — normative LLM-first skill style guide for this repo.
-- `references/skill-style-guide.md` — bundled local copy for installed global skills when the repo doc is unavailable.
+- `skill-creator/references/skill-style-guide.md` — bundled local copy for installed global skills when the repo doc is unavailable.

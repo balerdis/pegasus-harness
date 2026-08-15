@@ -13,7 +13,7 @@ Load this organization-private policy skill only when authorized work uses, sele
 
 ## Hard Rules
 
-- Read `references/version-matrix.md` before changing dependencies, runtime/build/test/tool configuration, framework scaffolding, or commands.
+- Read `skill-versiones-estandar-asi/references/version-matrix.md` before changing dependencies, runtime/build/test/tool configuration, framework scaffolding, or commands.
 - Use only a listed homologated branch and its stated minimum patch. Do not select deprecated or obsolete versions for new work.
 - Never infer a version from upstream releases, lockfiles, templates, or general knowledge.
 - Stop and ask for clarification if a technology is absent, its version is not explicit, sources conflict, or an exception needs approval.
@@ -41,5 +41,5 @@ Report each selected technology, approved version branch/minimum patch, source p
 
 ## References
 
-- `references/version-matrix.md` - authoritative extracted ASI v6.4 matrix and document/page provenance.
-- `references/provenance.md` - package-local provenance and distribution boundary.
+- `skill-versiones-estandar-asi/references/version-matrix.md` - authoritative extracted ASI v6.4 matrix and document/page provenance.
+- `skill-versiones-estandar-asi/references/provenance.md` - package-local provenance and distribution boundary.

@@ -29,7 +29,7 @@ Load after modifying agent or command prompts, eager/global instructions, result
 
 ## Execution Steps
 
-1. Read `references/lazy-load-framework.md` before inspection or edits; fail closed if unavailable.
+1. Read `lazy-load-prompt-audit/references/lazy-load-framework.md` before inspection or edits; fail closed if unavailable.
 2. Establish canonical paths, ownership, project policy, generation pipelines, and available audit tooling.
 3. Measure and audit using the framework. Prefer project tooling; for Pegasus use its instruction audit when present.
 4. In Correct mode, extract coherent detail to canonical focused references, update source pipelines/tests, and rerun fresh verification after the last change.
@@ -39,4 +39,4 @@ Load after modifying agent or command prompts, eager/global instructions, result
 
 ## References
 
-- `references/lazy-load-framework.md` - authoritative audit, correction, extraction, evidence, and probe framework.
+- `lazy-load-prompt-audit/references/lazy-load-framework.md` - authoritative audit, correction, extraction, evidence, and probe framework.
