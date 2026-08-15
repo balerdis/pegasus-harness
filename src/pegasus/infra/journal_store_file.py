@@ -70,6 +70,9 @@ class FileJournalStore:
         except JournalError as error:
             raise JournalStoreError(f"the journal at {self._path} is malformed: {error}") from error
 
+    def ensure_writable(self) -> None:
+        self._refuse_wrong_writer()
+
     def save(self, journal: Journal) -> None:
         self._refuse_wrong_writer()
         content = self._serialize(journal)

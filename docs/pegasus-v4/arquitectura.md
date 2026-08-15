@@ -551,6 +551,8 @@ Queda un residuo conocido y aceptado: si el archivo de configuración del CLI **
 - [ ] Escritura atómica: archivo temporal, `fsync`, `rename`
 - [ ] Al desinstalar, un artefacto cuya huella no coincide se preserva y se reporta (salvo los appends, donde la huella no alcanza para decidirlo y el resultado es `unaccounted` — ver "La excepción: punteros que agregan a una lista")
 - [ ] Un `link` nunca se borra: Pegasus no es dueño de dependencias preexistentes
+- [ ] Reinstalar nunca reduce lo que el journal ya poseía
+- [ ] El journal se consulta antes de escribir el primer artefacto, no después del último
 
 ---
 
@@ -690,6 +692,34 @@ pegasus doctor --json
 
 Un test de contrato verifica que cada acción de la TUI tenga su comando equivalente.
 
+#### Qué existe hoy
+
+`install`, `uninstall` y `doctor`, los tres con `--json`, más `--dry-run` en install. Cada reporte declara su esquema `pegasus/cli-report/v1`.
+
+Todavía no existen `--confirm`/`--decline` —no hay descriptores MCP en el núcleo ni `DependencyFetcher`, así que no hay dependencias que confirmar— ni `models set`/`unset`, que llegan con la configuración de modelos.
+
+Tres cosas que la CLI hace y conviene no perder:
+
+- **Pregunta antes de hacer.** El journal se consulta con `ensure_writable()` **antes** del primer artefacto. Una negativa descubierta al final llegaría con los artefactos ya en disco y sin registro: una instalación que existe y no se puede desinstalar, el peor resultado que este motor puede producir. Preguntar primero lo convierte en un mensaje y un home intacto.
+- **El preflight pregunta las dos cosas: si se puede escribir y si se puede leer lo que ya hay.** Un journal que no se puede leer es uno que no se puede extender, y descubrirlo después de colocar los artefactos los dejaría en disco sin nada que los registre — con `doctor` fallando contra ese mismo journal ilegible, así que no quedaría forma de enterarse de que están.
+- **`ensure_writable()` es un preflight, no una garantía.** Rechaza root y homes ajenos, que son las causas previsibles. No puede prometer que el guardado posterior funcione: el disco se puede llenar, los permisos pueden cambiar entre medio, puede haber cuota. Por eso el camino de falla al registrar tiene que ser correcto igual, y no solo improbable.
+- **Si igual no se puede registrar, se retira lo instalado.** Y se informa lo que no pudo volver atrás: Pegasus posee claves dentro de un archivo de configuración, nunca el archivo, así que uno que tuvo que crear sobrevive vacío. Inofensivo, pero afirmar un deshecho limpio sería una mentira chica en el único reporte que alguien lee cuando algo ya salió mal.
+- **El rollback deshace esta corrida, nunca lo que corridas anteriores ya poseían.** Hay dos vistas de la misma instalación y confundirlas sale caro: la **acumulada** es la que se registra —todo lo que ese CLI posee, viejo y nuevo— y la **colocada** es solo lo que esta corrida escribió. Solo la segunda puede tocarse al deshacer. Una reinstalación no crea nada, así que no hay nada que deshacer; retirar la vista acumulada borraría una instalación que funciona mientras el journal —que no se llegó a escribir, porque escribirlo es lo que falló— sigue afirmando que está entera. Es la misma mentira que los artefactos huérfanos, apuntando para el otro lado.
+- **Reinstalar no reduce lo que el journal ya poseía.** La segunda corrida no crea nada, porque todo lo que quiere ya está: su propio trabajo de la primera. Reemplazar el registro con ese resultado vacío dejaría los 84 artefactos huérfanos para siempre, sin nada que pruebe que fueron nuestros. Las entradas previas se conservan y las nuevas se suman.
+
+#### Actualizar todavía no está definido
+
+En 4.0.0 no hay comando de actualización, y las dos preguntas que traería no tienen respuesta escrita todavía:
+
+- Si un release futuro **deja de embarcar** un artefacto que el anterior instaló, su entrada sigue en el journal y nadie la retira. Queda poseído para siempre hasta que se desinstale entero.
+- Si un artefacto **cambia de contenido** bajo el mismo id, reinstalar no lo actualiza: el planner ve que la ruta existe, lo trata como colisión y lo saltea, y la huella del journal nunca se refresca.
+
+Las dos son consecuencias coherentes de una instalación aditiva sin actualización, no defectos. Pero cuando se diseñe `update` hay que decidirlas explícitamente, porque el journal es lo único que sabe qué había antes.
+
+#### Una inconsistencia conocida
+
+`detect()` es la única operación de disco que **no pasa por el puerto `FileSystem`**: el adapter resuelve con `shutil.which` contra el PATH y un `is_dir()` real. Eso hace que la detección mire la máquina donde corre, sin importar lo que se le diga al puerto, y que no se pueda probar sin tocar el disco de verdad. Arreglarlo cambia la firma de `CliAdapter.detect` y el puerto necesitaría saber buscar en el PATH, así que es una unidad de trabajo aparte.
+
 ---
 
 ## Estructura del repositorio
@@ -759,6 +789,7 @@ Cada contrato tiene esquema propio y versión. Un cambio incompatible sube la ve
 | Catálogo de artefactos | `pegasus/artifact-catalog/v4` | Salida generada del render, con huellas |
 | Journal de ownership | `pegasus/journal/v4` | Estado de instalación |
 | Asignación de modelo | `pegasus/model-assignment/v1` | Proveedor, modelo y esfuerzo por agente |
+| Reporte de la CLI | `pegasus/cli-report/v1` | Salida JSON de `install`, `uninstall` y `doctor` |
 
 ---
 
