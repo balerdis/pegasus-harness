@@ -26,7 +26,7 @@ metadata:
 - Reconcile contradictions in goal/work, branch/HEAD, remote/target baseline, deploy/sync, tests, PR/MR, blockers, and next step. Prefer authoritative fresh evidence; otherwise record unknown. History never replaces newer live facts.
 - Never expose secrets, credentials, tokens, cookies, database URLs, environment values, or credential-bearing output; redact/summarize them.
 - Preserve uncertainty. Unresolved gaps prohibit broad completion/validation claims. Reference, never copy, detailed OpenSpec or Engram content.
-- Save MUST write, reread, and audit. During audit read `references/anti-stale-checklist.md`. The parent may request one corrective rewrite; a second failed gate MUST stop without save success.
+- Save MUST write, reread, and audit. During audit read `session-handoff/references/anti-stale-checklist.md`. The parent may request one corrective rewrite; a second failed gate MUST stop without save success.
 - Call Engram `mem_session_summary` only after audit pass. Accurately report `unavailable` or `failed`; never imply sync. Use `mem_save` only when proactive-memory rules require it.
 - Load mode is read-only: do not edit files, overwrite handoff, continue implementation, or run destructive commands without explicit user confirmation.
 
@@ -69,4 +69,4 @@ Load sections: `# Loaded Context`, `## Verified State`, `## Possible Staleness`,
 
 ## References
 
-- `references/anti-stale-checklist.md` - mandatory save audit checks and contradiction examples.
+- `session-handoff/references/anti-stale-checklist.md` - mandatory save audit checks and contradiction examples.

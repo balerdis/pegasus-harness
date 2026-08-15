@@ -45,7 +45,7 @@ Persists every artifact to BOTH Engram and OpenSpec simultaneously:
 - Engram: cross-session recovery, compaction survival, deterministic search
 - OpenSpec: human-readable files, version-controllable artifacts
 
-Write to Engram (per `engram-convention.md`) AND to filesystem (per `openspec-convention.md`) for every artifact.
+Write to Engram (per `_shared/engram-convention.md`) AND to filesystem (per `_shared/openspec-convention.md`) for every artifact.
 
 Read priority: Engram first; fall back to filesystem if Engram returns no results.
 Write behavior: both writes MUST succeed for the operation to be complete.
@@ -68,7 +68,7 @@ The orchestrator persists DAG state after each phase transition to enable SDD re
 
 - `none` → do NOT create or modify any project files; return results inline only
 - `engram` → do NOT write any project files; persist to Engram and return observation IDs
-- `openspec` → write files ONLY to paths defined in `openspec-convention.md`
+- `openspec` → write files ONLY to paths defined in `_shared/openspec-convention.md`
 - `hybrid` → persist to BOTH Engram AND filesystem; follow both conventions
 - NEVER force `openspec/` creation unless orchestrator explicitly passed `openspec` or `hybrid`
 - If unsure which mode to use, default to `none`

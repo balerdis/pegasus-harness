@@ -30,7 +30,7 @@ Load for Laravel or PHP/Laravel work involving authentication, authorization, re
 ## Execution Steps
 
 1. Identify Laravel version, auth model, request boundary, trust boundary, and production configuration.
-2. Load and apply [the local checklist](references/laravel-security-checklist.md) for the affected scope.
+2. Load and apply [the local checklist](laravel-security/references/laravel-security-checklist.md) for the affected scope.
 3. Implement the smallest secure change, or trace input, authorization, side effects, storage, and output paths during an audit.
 4. Add or run focused feature tests for validation, authorization/IDOR, abuse controls, and sensitive output where applicable.
 5. Review Composer lockfile and production-safe configuration when dependencies or deployment are in scope.
@@ -41,4 +41,4 @@ For implementation, state controls added, tests run, and residual assumptions. F
 
 ## References
 
-- [Laravel security checklist](references/laravel-security-checklist.md)
+- [Laravel security checklist](laravel-security/references/laravel-security-checklist.md)

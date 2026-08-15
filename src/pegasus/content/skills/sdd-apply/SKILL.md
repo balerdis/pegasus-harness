@@ -39,15 +39,15 @@ From the orchestrator:
 - Change name
 - The specific task(s) to implement (e.g., "Phase 1, tasks 1.1-1.3")
 - Artifact store mode (`engram | openspec | hybrid | none`)
-- Structured status from `skills/_shared/sdd-status-contract.md`: `schemaName`, `planningHome`, `changeRoot`, `artifactPaths`, `contextFiles`, `applyState`, task progress, dependency states, and `actionContext`
+- Structured status from `_shared/sdd-status-contract.md`: `schemaName`, `planningHome`, `changeRoot`, `artifactPaths`, `contextFiles`, `applyState`, task progress, dependency states, and `actionContext`
 - Delivery strategy and resolved workload decision (`ask-on-risk | auto-chain | single-pr | exception-ok`, plus PR slice or `size:exception` when applicable)
 
 ## Execution and Persistence Contract
 
-> Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
+> Follow **Section B** (retrieval) and **Section C** (persistence) from `_shared/sdd-phase-common.md`.
 
 - **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks` (all required — keep tasks ID for updates). Mark tasks complete via `mem_update(id: {tasks-observation-id}, content: "...")`. Save progress as `sdd/{change-name}/apply-progress`.
-- **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Update `tasks.md` with `[x]` marks.
+- **openspec**: Read and follow `_shared/openspec-convention.md`. Update `tasks.md` with `[x]` marks.
 - **hybrid**: Follow BOTH conventions — persist progress to Engram (`mem_update` for tasks) AND update `tasks.md` with `[x]` marks on filesystem.
 - **none**: Return progress only. Do not update project artifacts.
 
@@ -65,7 +65,7 @@ Before reading implementation files or writing code, consume the structured stat
 ## What to Do
 
 ### Step 1: Load Skills
-Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
+Follow **Section A** from `_shared/sdd-phase-common.md`.
 
 ### Step 2: Read Context
 
@@ -123,8 +123,8 @@ Read testing capabilities from:
 
 Resolve mode:
 ├── IF strict_tdd: true AND test runner exists
-│   └── STRICT TDD MODE → Load and follow strict-tdd.md module
-│       (read the file: skills/sdd-apply/strict-tdd.md)
+│   └── STRICT TDD MODE → Load and follow the Strict TDD module
+│       (read the file: sdd-apply/strict-tdd.md)
 │
 ├── IF strict_tdd: false OR no test runner
 │   └── STANDARD MODE → use Step 4 below (no TDD module loaded)
@@ -132,7 +132,7 @@ Resolve mode:
 └── Cache the resolved mode for the return summary
 ```
 
-**Key principle**: If Strict TDD Mode is not active, ZERO TDD instructions are loaded. The `strict-tdd.md` module is never read, never processed, never consumes tokens.
+**Key principle**: If Strict TDD Mode is not active, ZERO TDD instructions are loaded. The `sdd-apply/strict-tdd.md` module is never read, never processed, never consumes tokens.
 
 #### Hard Gate (Strict TDD Only)
 
@@ -189,7 +189,7 @@ Update `tasks.md` — change `- [ ]` to `- [x]` for completed tasks:
 
 **This step is MANDATORY — do NOT skip it.**
 
-Follow **Section C** from `skills/_shared/sdd-phase-common.md`.
+Follow **Section C** from `_shared/sdd-phase-common.md`.
 - artifact: `apply-progress`
 - topic_key: `sdd/{change-name}/apply-progress`
 - type: `architecture`
@@ -224,7 +224,7 @@ Return to the orchestrator:
 | `path/to/file.ext` | Created | {brief description} |
 | `path/to/other.ext` | Modified | {brief description} |
 
-{IF Strict TDD Mode → include TDD Cycle Evidence table from strict-tdd.md}
+{IF Strict TDD Mode → include TDD Cycle Evidence table from sdd-apply/strict-tdd.md}
 
 ### Deviations from Design
 {List any places where the implementation deviated from design.md and why.
@@ -265,9 +265,9 @@ If none, say "None."}
 - NEVER implement tasks that weren't assigned to you
 - Skill loading is handled in Step 1 — follow any loaded skills strictly when writing code
 - Apply any `rules.apply` from `openspec/config.yaml`
-- If Strict TDD Mode is active (Step 3), load `strict-tdd.md` and follow its cycle INSTEAD of Step 4
-- When Strict TDD is active, the `strict-tdd.md` module's rules OVERRIDE Step 4 entirely
-- Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+- If Strict TDD Mode is active (Step 3), load `sdd-apply/strict-tdd.md` and follow its cycle INSTEAD of Step 4
+- When Strict TDD is active, the `sdd-apply/strict-tdd.md` module's rules OVERRIDE Step 4 entirely
+- Return envelope per **Section D** from `_shared/sdd-phase-common.md`.
 
 <!-- pegasus-local:cbm-protocol -->
 ## Local Codebase Memory Protocol for Implementation

@@ -48,4 +48,4 @@ Return:
 ## References
 
 - `docs/skill-style-guide.md` — how skills should be authored before indexing.
-- `skills/_shared/skill-resolver.md` — how delegators use the index.
+- `_shared/skill-resolver.md` — how delegators use the index.

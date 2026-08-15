@@ -12,7 +12,7 @@ metadata:
 ## Purpose
 
 This directory stores shared reference documents consumed by real SDD skills
-(for example: `sdd-phase-common.md`, `persistence-contract.md`).
+(for example: `_shared/sdd-phase-common.md`, `_shared/persistence-contract.md`).
 
 ## Not Invokable
 

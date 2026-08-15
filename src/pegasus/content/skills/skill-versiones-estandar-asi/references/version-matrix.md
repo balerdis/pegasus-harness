@@ -182,7 +182,7 @@ If a technology has no exact version, a source conflict, or an approval requirem
 
 ## Source and Conflict Rules
 
-- Primary source: organization-controlled ASI v6.4 standard, Annex II, pp. 48-58. The tables on pp. 50-58 define the homologated values. See `provenance.md` for the package-local distribution boundary.
+- Primary source: organization-controlled ASI v6.4 standard, Annex II, pp. 48-58. The tables on pp. 50-58 define the homologated values. See `skill-versiones-estandar-asi/references/provenance.md` for the package-local distribution boundary.
 - Change evidence: organization-controlled ASI v6.4 changelog, pp. 3-8. It states that it complements ES0901 and identifies v6.4 updates.
 - The ASI standard requires approved frameworks rather than vanilla languages (ES0901 p.22), and toolchains are not individually homologated when compatible with approved platforms and ASI criteria (ES0901 p.19).
 - If a source table, source note, or the two PDFs appears to contradict the value needed for a decision, do not resolve precedence by assumption. Stop and ask for an ASI decision.
