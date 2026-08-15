@@ -1,6 +1,7 @@
 """Building the catalog: deterministic, addressed portably, and self-checking."""
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import unittest
@@ -245,6 +246,10 @@ class ShippedCatalogTest(unittest.TestCase):
             with mock.patch.dict(os.environ, {"HOME": home, "XDG_CONFIG_HOME": f"{home}/cfg"}):
                 digests.add(catalog_module.build(content, Adapter()).digest)
         self.assertEqual(len(digests), 1, "the build home reached release identity")
+
+        # Varying two variables only catches a build that reads those two. Refusing
+        # the parameter outright is the property itself, so it is asserted directly.
+        self.assertNotIn("environment", inspect.signature(catalog_module.build).parameters)
 
     def test_the_system_prompt_is_wired_through_the_instructions_list(self):
         pointers = {entry.pointer for entry in self.catalog.entries if entry.pointer}

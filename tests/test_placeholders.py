@@ -34,6 +34,15 @@ class VocabularyTest(unittest.TestCase):
         """Without this, every test below would pass by having nothing to know."""
         self.assertTrue(placeholders.NAMES)
 
+    def test_no_two_facts_differ_only_by_case(self):
+        """Verbatim content is gated case-insensitively and bodies are not.
+
+        Two names that fold together would be one fact to a skill and two to an
+        agent, which is a contradiction nobody would find by reading either rule.
+        """
+        folded = {name.casefold() for name in placeholders.NAMES}
+        self.assertEqual(len(folded), len(placeholders.NAMES))
+
     def test_finds_each_placeholder_once_in_order(self):
         body = "read {{skills_root}}/a then {{skills_root}}/b"
         self.assertEqual(placeholders.names_in(body), ("skills_root",))
