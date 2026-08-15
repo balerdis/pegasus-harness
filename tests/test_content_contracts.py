@@ -47,14 +47,34 @@ BACKTICKED = re.compile(r"`([^`]+)`")
 #: other just as loudly as two naming the same one.
 SECTION = re.compile(r"^### \d+\.\s*(.+)$", re.MULTILINE)
 
-#: How the rest of the tree enumerates a decision's values: pipe separated, in prose or
-#: in a template. This is what the definition is checked against, so the values are never
-#: restated here -- a swapped literal fails against the consumer that reads it.
-ENUMERATION = re.compile(r"[`{<(]([a-z][\w:. -]*(?:\|[\w:. -]+){2,})[`}>)]")
+#: How the rest of the tree enumerates a decision's values: pipe separated, delimited or
+#: bare after a label. This is what the definition is checked against, so the values are
+#: never restated here -- a swapped literal fails against the consumer that reads it.
+ENUMERATION = re.compile(
+    r"[`{<(]([a-z][\w:. -]*(?:\|[\w:. -]+)+)[`}>)]"
+    r"|^[A-Z][\w ]*:\s*([a-z][\w:.-]*(?:\|[\w:.-]+)+)\s*$",
+    re.MULTILINE,
+)
 
-#: A default is declared, not merely mentioned. `Never assume a default …` is not a
-#: declaration; `defaults to X`, `Default: X` and a bold **Default.** in a table row are.
-DECLARATION = re.compile(r"(?:[Dd]efaults?\s+(?:to|when|is)\b|[Dd]efault[:.]|\*\*Default)")
+#: Which file already enumerates each decision. Structure, not values: the values stay
+#: derived. Without it a declared set can be validated against an unrelated enumeration
+#: that happens to overlap, which is how a chain strategy adopted a set of modes.
+CONSUMERS = {
+    "Execution mode": "commands/sdd-ff.md",
+    "Artifact store": "skills/_shared/persistence-contract.md",
+    "Chained PR strategy": "skills/sdd-tasks/SKILL.md",
+}
+
+#: A default is declared when the marker is bound to the value it marks, not when both
+#: merely appear. Co-occurrence reads "the default value ... is `auto`" as prose and
+#: "do not assume `engram` is the default" as a declaration; both are wrong.
+DECLARATION = "(?:[Dd]efaults?\\b[^`\\n]{{0,70}}?`{0}`|`{0}`[^`\\n]{{0,70}}?\\*\\*Default)"
+
+#: A sentence that forbids a default is not one. It is the shape a careful author uses.
+NEGATED = re.compile(
+    r"\b(?:do not|don't|never|not)\s+(?:assume|use|set|hardcode|infer)\b"
+    r"|\bno default\b|\bnot the default\b"
+)
 
 #: A line said to the user, not a declaration. Quoting a default while asking is not
 #: owning it, and indentation must not change that.
@@ -127,8 +147,9 @@ def sentences(text: str) -> list[str]:
 
 
 def declares_default(text: str, option: str) -> bool:
+    bound = re.compile(DECLARATION.format(re.escape(option)))
     return any(
-        f"`{option}`" in sentence and DECLARATION.search(sentence)
+        bound.search(sentence) and not NEGATED.search(sentence)
         for sentence in sentences(text)
     )
 
@@ -165,14 +186,17 @@ def declared_groups() -> list[tuple[str, set[str]]]:
     return groups
 
 
-def enumerations() -> list[set[str]]:
-    """Every value set the rest of the tree spells out, to check the definition against."""
+def enumerations(within: str | None = None) -> list[set[str]]:
+    """Every value set the tree spells out, optionally only in one consumer."""
     found = []
     for path in documents():
         if path == DEFINITION:
             continue
+        if within and str(path.relative_to(CONTENT)) != within:
+            continue
         for match in ENUMERATION.finditer(path.read_text(encoding="utf-8")):
-            found.append({item.strip() for item in match.group(1).split("|")})
+            spelled = match.group(1) or match.group(2)
+            found.append({item.strip() for item in spelled.split("|")})
     return found
 
 
@@ -270,18 +294,17 @@ class PreflightContractTest(unittest.TestCase):
         outside = {option: files for option, files in outside.items() if files}
         self.assertEqual(outside, {}, f"a default set away from the shared contract: {outside}")
 
-        # Scoped to the decision, not the literal: naming a different value as the
-        # default for the same decision contradicts just as loudly.
+        # Scoped to the decision and counted by FILE, not by literal. Naming a different
+        # value as the default for the same decision contradicts just as loudly, while one
+        # file expressing a conditional default -- `engram` when available, else `none` --
+        # is a single answer and not a clash.
         for decision, values in declared_by_decision().items():
-            defaults = {
-                option: files for option, files in declaring.items()
-                if option in values and files
-            }
-            self.assertLessEqual(
-                len(defaults), 1, f"{decision} has more than one default: {defaults}"
+            owners = sorted(
+                {name for option, files in declaring.items() if option in values for name in files}
             )
-            for option, files in defaults.items():
-                self.assertEqual(len(files), 1, f"{option} default declared twice: {files}")
+            self.assertLessEqual(
+                len(owners), 1, f"{decision}: more than one file sets its default: {owners}"
+            )
 
 
 class NoInventedLiteralsTest(unittest.TestCase):
@@ -296,15 +319,27 @@ class NoInventedLiteralsTest(unittest.TestCase):
         each decision is compared against the enumeration a consumer already spells
         out, and a decision whose set overlaps one must equal it.
         """
-        spelled = enumerations()
-        checked = 0
         for decision, declared in declared_groups():
-            near = [other for other in spelled if len(declared & other) >= 2]
-            if not near:
-                continue
-            checked += 1
-            self.assertIn(declared, near, f"{decision}: consumers read {near}, not {declared}")
-        self.assertGreaterEqual(checked, 2, "no decision could be checked against a consumer")
+            consumer = CONSUMERS.get(decision)
+            self.assertIsNotNone(consumer, f"{decision} names no consumer to check against")
+
+            spelled = [
+                other for other in enumerations(within=consumer) if len(declared & other) >= 2
+            ]
+            # Counting how many decisions could be checked is how a decision goes
+            # unchecked in silence, so every group must find its consumer.
+            self.assertTrue(spelled, f"{decision}: {consumer} enumerates nothing like {declared}")
+
+            # The consumer must also agree with itself. One place spelling a value one way
+            # and another spelling it differently is the contradiction, wherever it lands.
+            self.assertEqual(
+                [other for other in spelled if other != spelled[0]],
+                [],
+                f"{decision}: {consumer} spells it more than one way: {spelled}",
+            )
+            self.assertEqual(
+                declared, spelled[0], f"{decision}: {consumer} reads {spelled[0]}, not {declared}"
+            )
 
     def test_every_option_is_a_literal_something_else_uses(self):
         texts = [path.read_text(encoding="utf-8") for path in documents() if path != DEFINITION]

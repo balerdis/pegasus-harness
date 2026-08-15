@@ -20,6 +20,8 @@ Planning phases:
 3. sdd-design — create technical design
 4. sdd-tasks — break down into implementation tasks
 
+Execution mode: interactive|auto
+
 - In `interactive` mode: run only the next planning phase, present its summary and artifact path(s), ask whether to adjust or continue, then STOP. Do not launch the following phase until the user confirms.
 - In `auto` mode: run all planning phases back-to-back and present a combined summary after all phases complete.
 
