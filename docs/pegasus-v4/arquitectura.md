@@ -701,8 +701,19 @@ Todavía no existen `--confirm`/`--decline` —no hay descriptores MCP en el nú
 Tres cosas que la CLI hace y conviene no perder:
 
 - **Pregunta antes de hacer.** El journal se consulta con `ensure_writable()` **antes** del primer artefacto. Una negativa descubierta al final llegaría con los artefactos ya en disco y sin registro: una instalación que existe y no se puede desinstalar, el peor resultado que este motor puede producir. Preguntar primero lo convierte en un mensaje y un home intacto.
+- **`ensure_writable()` es un preflight, no una garantía.** Rechaza root y homes ajenos, que son las causas previsibles. No puede prometer que el guardado posterior funcione: el disco se puede llenar, los permisos pueden cambiar entre medio, puede haber cuota. Por eso el camino de falla al registrar tiene que ser correcto igual, y no solo improbable.
 - **Si igual no se puede registrar, se retira lo instalado.** Y se informa lo que no pudo volver atrás: Pegasus posee claves dentro de un archivo de configuración, nunca el archivo, así que uno que tuvo que crear sobrevive vacío. Inofensivo, pero afirmar un deshecho limpio sería una mentira chica en el único reporte que alguien lee cuando algo ya salió mal.
+- **El rollback deshace esta corrida, nunca lo que corridas anteriores ya poseían.** Hay dos vistas de la misma instalación y confundirlas sale caro: la **acumulada** es la que se registra —todo lo que ese CLI posee, viejo y nuevo— y la **colocada** es solo lo que esta corrida escribió. Solo la segunda puede tocarse al deshacer. Una reinstalación no crea nada, así que no hay nada que deshacer; retirar la vista acumulada borraría una instalación que funciona mientras el journal —que no se llegó a escribir, porque escribirlo es lo que falló— sigue afirmando que está entera. Es la misma mentira que los artefactos huérfanos, apuntando para el otro lado.
 - **Reinstalar no reduce lo que el journal ya poseía.** La segunda corrida no crea nada, porque todo lo que quiere ya está: su propio trabajo de la primera. Reemplazar el registro con ese resultado vacío dejaría los 84 artefactos huérfanos para siempre, sin nada que pruebe que fueron nuestros. Las entradas previas se conservan y las nuevas se suman.
+
+#### Actualizar todavía no está definido
+
+En 4.0.0 no hay comando de actualización, y las dos preguntas que traería no tienen respuesta escrita todavía:
+
+- Si un release futuro **deja de embarcar** un artefacto que el anterior instaló, su entrada sigue en el journal y nadie la retira. Queda poseído para siempre hasta que se desinstale entero.
+- Si un artefacto **cambia de contenido** bajo el mismo id, reinstalar no lo actualiza: el planner ve que la ruta existe, lo trata como colisión y lo saltea, y la huella del journal nunca se refresca.
+
+Las dos son consecuencias coherentes de una instalación aditiva sin actualización, no defectos. Pero cuando se diseñe `update` hay que decidirlas explícitamente, porque el journal es lo único que sabe qué había antes.
 
 #### Una inconsistencia conocida
 

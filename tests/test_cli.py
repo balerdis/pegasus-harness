@@ -208,6 +208,39 @@ class InstallTest(CommandTestCase):
         left = [path for path in self.filesystem.files if path.is_relative_to(self.layout().config_dir)]
         self.assertEqual(left, [self.layout().settings_file])
 
+    def test_a_failed_reinstall_does_not_take_the_working_install_with_it(self):
+        """The rollback undoes this run, never what earlier runs already owned.
+
+        A second install creates nothing, so there is nothing to undo. Rolling
+        back the accumulated view instead would delete a working installation
+        while the journal — never written, because saving is what failed — goes
+        on claiming all of it is there. That is worse than the orphaned files
+        this command was fixed to prevent: the same lie, pointing the other way.
+        """
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        placed = dict(self.filesystem.files)
+        owned = {entry.id for entry in self.installed_entries()}
+
+        self.filesystem.fail_always.add(self.store().path)
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.filesystem.files, placed)
+        self.assertEqual({entry.id for entry in self.installed_entries()}, owned)
+        self.assertFalse(report["rolled_back"], "nothing was placed, so nothing was rolled back")
+
+    def test_a_failed_reinstall_leaves_the_installation_usable(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.filesystem.fail_always.add(self.store().path)
+        self.run_cli("install", "--cli", CLI)
+
+        self.filesystem.fail_always.clear()
+        _, report = self.run_cli("doctor")
+        self.assertEqual(report["clis"][0]["missing"], [])
+        self.assertEqual(report["clis"][0]["drifted"], [])
+
     def test_the_rollback_admits_the_settings_file_it_could_not_take_back(self):
         """The documented residue, said out loud instead of reported as a clean undo."""
         self.present()

@@ -165,13 +165,23 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
 
     applied = planner.apply(runtime.filesystem, plan, at=runtime.now)
     journal = store.load()
-    install = _merged(journal, adapter, environment, catalog, applied.records, runtime.now)
+    config_dir = adapter.layout(environment).config_dir
+
+    # Two views of the same install, and confusing them is expensive. The merged
+    # one is what gets recorded: everything this CLI owns, old and new. The
+    # placed one is only what this run wrote, and it is the only thing a rollback
+    # may touch — undoing the merged view would delete a working installation
+    # that this run never even created.
+    placed = Install(
+        cli=adapter.id, installed_at=runtime.now, config_dir=config_dir, release={}, entries=applied.records
+    )
+    merged = _merged(journal, adapter, environment, catalog, applied.records, runtime.now)
     try:
-        store.save(journal_module.with_install(journal, install))
+        store.save(journal_module.with_install(journal, merged))
     except JournalStoreError as error:
-        planner.retire(runtime.filesystem, install)
+        planner.retire(runtime.filesystem, placed)
         left = sorted(str(path) for path in documents - existing if runtime.filesystem.exists(path))
-        raise _unrecordable(error, left) from error
+        raise _unrecordable(error, left, undone=bool(applied.records)) from error
 
     return {
         "cli": adapter.id,
@@ -322,22 +332,28 @@ def _is_key(step: planner.Step) -> bool:
     return getattr(step.artifact, "pointer", None) is not None
 
 
-def _unrecordable(error: JournalStoreError, left_behind: list[str]) -> CommandError:
+def _unrecordable(error: JournalStoreError, left_behind: list[str], *, undone: bool) -> CommandError:
     """The install came back out. Say so, and say what did not come with it.
 
-    Pegasus owns keys inside a configuration file, never the file itself, so a
-    file it had to create to hold them survives the rollback as an empty
-    document. Harmless, but claiming a clean undo would be a small lie in the
-    one report a user reads when something already went wrong.
+    ``undone`` is false when this run placed nothing — a reinstall where
+    everything already existed — because then there was nothing to take back and
+    saying otherwise would invent an event. Pegasus owns keys inside a
+    configuration file, never the file itself, so a file it had to create to hold
+    them survives the rollback as an empty document. Harmless, but claiming a
+    clean undo would be a small lie in the one report a user reads when something
+    already went wrong.
     """
-    message = (
-        f"the artifacts were placed but the journal could not be written, so they were taken back out "
-        f"rather than left unrecorded: {error}"
-    )
+    if undone:
+        message = (
+            f"the artifacts were placed but the journal could not be written, so they were taken back out "
+            f"rather than left unrecorded: {error}"
+        )
+    else:
+        message = f"nothing needed placing, and the journal could not be written anyway: {error}"
     if left_behind:
         message += f". Left behind, empty: {', '.join(left_behind)}"
     failure = CommandError(message)
-    failure.report = {"rolled_back": True, "left_behind": left_behind}
+    failure.report = {"rolled_back": undone, "left_behind": left_behind}
     return failure
 
 
