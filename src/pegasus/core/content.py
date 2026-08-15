@@ -223,9 +223,7 @@ def _require_known_placeholders(body: str, source: PurePosixPath) -> None:
         allowed = ", ".join(sorted(placeholders.NAMES))
         raise ContentError(f"{source}: unknown placeholder {named}; expected one of {allowed}")
     if placeholders.malformed_in(body):
-        raise ContentError(
-            f"{source}: an unclosed or nested '{{{{' names nothing, so it would ship as braces"
-        )
+        raise ContentError(f"{source}: a '{{{{' that names nothing would ship as literal braces")
 
 
 def _refuse_verbatim_placeholders(assets: tuple[Asset, ...], source: PurePosixPath) -> None:
@@ -240,12 +238,18 @@ def _refuse_verbatim_placeholders(assets: tuple[Asset, ...], source: PurePosixPa
             text = asset.content.decode("utf-8")
         except UnicodeDecodeError:
             continue
+        where = f"{source.parent}/{asset.relative_path}"
         asked = placeholders.answerable_in(text)
         if asked:
             raise ContentError(
-                f"{source.parent}/{asset.relative_path}: skills are installed verbatim, "
+                f"{where}: skills are installed verbatim, "
                 f"so {asked[0]!r} would ship as literal braces"
             )
+        # Held to the same standard as a body. A malformed opener is refused in
+        # an agent prompt, and the same typo reaching the user's home from a
+        # skill instead would be the same mistake with a kinder answer.
+        if placeholders.malformed_in(text):
+            raise ContentError(f"{where}: a '{{{{' that names nothing would ship as literal braces")
 
 
 def _subdirectories(directory: Path) -> list[Path]:

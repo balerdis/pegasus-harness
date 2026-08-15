@@ -10,7 +10,7 @@ and asks that adapter to render each one.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any
 
 from pegasus.core import ownership
@@ -122,7 +122,10 @@ def build(content: Content, adapter: Any) -> Catalog:
     What a machine actually receives comes from `render` with its own
     environment, and that is what the journal records.
     """
-    canonical = Environment(home=Path(str(CANONICAL_HOME)))
+    # PurePosixPath end to end: `Path` takes the flavour of whatever machine runs
+    # the build, and a canonical frame that spells itself differently on Windows
+    # is not canonical.
+    canonical = Environment(home=CANONICAL_HOME)
     artifacts = render(content, adapter, canonical)
     root = adapter.layout(canonical).config_dir
     return Catalog(cli=adapter.id, entries=_entries(artifacts, root, adapter.id))

@@ -42,13 +42,17 @@ def unknown_in(body: str) -> tuple[str, ...]:
 
 
 def malformed_in(text: str) -> bool:
-    """Whether a brace pair survives that the pattern could not read.
+    """Whether an opener survives that the pattern could not read.
 
     `{{ oops` and `{{{name}}}` name nothing, so neither validation nor filling
     sees them, and they ship as the literal braces this module exists to stop.
+
+    Only an opener counts. A stray `}}` is how ordinary nested prose ends -- a
+    JSON object, a dict, a jq filter -- and this content is prompts about a
+    JSON-configured CLI, so flagging it would refuse the most obvious thing an
+    author writes. Nothing can be a placeholder without an opener anyway.
     """
-    remainder = PATTERN.sub("", text)
-    return "{{" in remainder or "}}" in remainder
+    return "{{" in PATTERN.sub("", text)
 
 
 def answerable_in(text: str) -> tuple[str, ...]:
@@ -58,7 +62,8 @@ def answerable_in(text: str) -> tuple[str, ...]:
     verbatim, where the question is not whether a name is spelled right but
     whether the text is asking at all.
     """
-    return tuple(name for name in names_in(text) if name in NAMES)
+    folded = {name.casefold() for name in NAMES}
+    return tuple(name for name in names_in(text) if name.casefold() in folded)
 
 
 class Unanswered(KeyError):

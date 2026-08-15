@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from pegasus.adapters import available  # noqa: E402
 from pegasus.core import catalog as catalog_module  # noqa: E402
 from pegasus.core import content as content_module  # noqa: E402
-from pegasus.core.types import Environment  # noqa: E402
 
 # The catalog carries its own canonical frame, so this tool has no home to pick:
 # targets stay relative to each CLI's configuration root and nothing about the

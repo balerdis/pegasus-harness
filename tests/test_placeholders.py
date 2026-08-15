@@ -125,6 +125,13 @@ class MalformedDelimiterTest(unittest.TestCase):
         self.write("{{skills_root}}/a and {{skills_root}}/b")
         self.assertTrue(content_module.load(self.root).agents)
 
+    def test_ordinary_nested_prose_is_left_alone(self):
+        """This content is prompts about a JSON-configured CLI. `}}` is how prose ends."""
+        for body in ('{"agent": {"mode": "subagent"}}', "x = {'a': {'b': 1}}", "jq '.a|{b:{c:1}}'"):
+            with self.subTest(body=body):
+                self.write(body)
+                self.assertTrue(content_module.load(self.root).agents)
+
 
 class SkillsAreVerbatimTest(unittest.TestCase):
     """A skill is copied byte for byte, so a fact it asks for is never answered."""
@@ -158,6 +165,16 @@ class SkillsAreVerbatimTest(unittest.TestCase):
         with self.assertRaises(content_module.ContentError) as raised:
             content_module.load(self.root)
         self.assertIn("notes.md", str(raised.exception))
+
+    def test_a_fact_cannot_be_smuggled_by_changing_its_case(self):
+        self.descriptor("read {{SKILLS_ROOT}}/other/SKILL.md")
+        with self.assertRaises(content_module.ContentError):
+            content_module.load(self.root)
+
+    def test_a_skill_is_held_to_the_same_delimiters_as_a_body(self):
+        self.descriptor("read {{{skills_root}}}/other/SKILL.md")
+        with self.assertRaises(content_module.ContentError):
+            content_module.load(self.root)
 
     def test_braces_that_belong_to_another_language_are_left_alone(self):
         """A shipped Laravel checklist uses `{{ }}` for Blade, and that is not ours."""

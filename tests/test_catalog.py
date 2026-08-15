@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
+from unittest import mock
 from pathlib import Path, PurePosixPath
 
 from pegasus.adapters.opencode import Adapter
@@ -218,6 +220,31 @@ class ShippedCatalogTest(unittest.TestCase):
         document = json.dumps(self.catalog.as_dict())
         self.assertNotIn(str(HOME), document)
         self.assertNotIn(str(catalog_module.CANONICAL_HOME), document)
+
+    def test_the_machine_that_builds_the_catalog_never_reaches_the_digest(self):
+        """The tripwire for the canonical frame, and it needs teeth to be one.
+
+        A catalog with nothing to fill is home-independent whatever `build` does,
+        so this content carries a placeholder on purpose: only then does an
+        ambient home reach the rendered bytes, and only then can a `build` that
+        quietly reads the environment again be told apart from one that does not.
+        """
+        content = Content(
+            agents=(
+                content_module.Agent(
+                    name="probe",
+                    description="A probe",
+                    body="Read {{skills_root}}/probe/SKILL.md.\n",
+                    mode=content_module.AgentMode.SUBAGENT,
+                    source=PurePosixPath("agents/probe.md"),
+                ),
+            )
+        )
+        digests = set()
+        for home in ("/home/one", "/home/two"):
+            with mock.patch.dict(os.environ, {"HOME": home, "XDG_CONFIG_HOME": f"{home}/cfg"}):
+                digests.add(catalog_module.build(content, Adapter()).digest)
+        self.assertEqual(len(digests), 1, "the build home reached release identity")
 
     def test_the_system_prompt_is_wired_through_the_instructions_list(self):
         pointers = {entry.pointer for entry in self.catalog.entries if entry.pointer}
