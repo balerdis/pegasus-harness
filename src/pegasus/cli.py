@@ -141,9 +141,14 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     environment = runtime.environment
     _require_present(adapter, environment)
 
+    # The whole preflight, before the first artifact rather than after the last.
+    # Writable is only half of it: a journal that cannot be read is one that
+    # cannot be extended, and finding that out after placing the artifacts would
+    # leave them on disk with nothing recording them — and `doctor` failing
+    # against the same unreadable journal, so no way left to find out they exist.
     store = journal_store(runtime)
-    # Before the first artifact, not after the last one.
     store.ensure_writable()
+    journal = store.load()
 
     catalog = catalog_module.build(content_module.load(), adapter, environment)
     artifacts = catalog_module.render(content_module.load(), adapter, environment)
@@ -164,7 +169,6 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     existing = {path for path in documents if runtime.filesystem.exists(path)}
 
     applied = planner.apply(runtime.filesystem, plan, at=runtime.now)
-    journal = store.load()
     config_dir = adapter.layout(environment).config_dir
 
     # Two views of the same install, and confusing them is expensive. The merged
@@ -181,11 +185,12 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     except JournalStoreError as error:
         planner.retire(runtime.filesystem, placed)
         left = sorted(str(path) for path in documents - existing if runtime.filesystem.exists(path))
-        raise _unrecordable(error, left, undone=bool(applied.records)) from error
+        raise _unrecordable(error, left, placed=len(applied.records)) from error
 
     return {
         "cli": adapter.id,
         "status": "installed",
+        "placed": len(applied.records),
         "created": [_recorded(record) for record in applied.records],
         "skipped": [_left(step) for step in applied.skipped],
         "journal": str(store.path),
@@ -332,7 +337,7 @@ def _is_key(step: planner.Step) -> bool:
     return getattr(step.artifact, "pointer", None) is not None
 
 
-def _unrecordable(error: JournalStoreError, left_behind: list[str], *, undone: bool) -> CommandError:
+def _unrecordable(error: JournalStoreError, left_behind: list[str], *, placed: int) -> CommandError:
     """The install came back out. Say so, and say what did not come with it.
 
     ``undone`` is false when this run placed nothing — a reinstall where
@@ -343,6 +348,7 @@ def _unrecordable(error: JournalStoreError, left_behind: list[str], *, undone: b
     clean undo would be a small lie in the one report a user reads when something
     already went wrong.
     """
+    undone = placed > 0
     if undone:
         message = (
             f"the artifacts were placed but the journal could not be written, so they were taken back out "
@@ -353,7 +359,7 @@ def _unrecordable(error: JournalStoreError, left_behind: list[str], *, undone: b
     if left_behind:
         message += f". Left behind, empty: {', '.join(left_behind)}"
     failure = CommandError(message)
-    failure.report = {"rolled_back": undone, "left_behind": left_behind}
+    failure.report = {"placed": placed, "rolled_back": undone, "left_behind": left_behind}
     return failure
 
 

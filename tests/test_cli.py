@@ -208,6 +208,43 @@ class InstallTest(CommandTestCase):
         left = [path for path in self.filesystem.files if path.is_relative_to(self.layout().config_dir)]
         self.assertEqual(left, [self.layout().settings_file])
 
+    def test_a_journal_that_cannot_be_read_stops_the_install_before_it_writes(self):
+        """A journal we cannot read is one we cannot extend.
+
+        Discovering that after placing the artifacts would leave them on disk
+        with nothing recording them, and `doctor` would fail against the same
+        unreadable journal — so there would be no way left to find out they are
+        there. Reading is part of the preflight, not an afterthought.
+        """
+        self.present()
+        self.filesystem.files[self.store().path] = b"{ not json at all"
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(self.filesystem.writes, [])
+
+    def test_a_dry_run_also_refuses_an_unreadable_journal(self):
+        self.present()
+        self.filesystem.files[self.store().path] = b"{ not json at all"
+        code, _ = self.run_cli("install", "--cli", CLI, "--dry-run")
+        self.assertNotEqual(code, 0)
+
+    def test_a_report_says_how_much_this_run_placed(self):
+        """`rolled_back: false` alone reads as "the rollback failed" to something
+        that only checks the flag. The count says which it was."""
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["placed"], len(report["created"]))
+
+    def test_a_failed_reinstall_reports_that_it_placed_nothing(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.filesystem.fail_always.add(self.store().path)
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(report["placed"], 0)
+        self.assertFalse(report["rolled_back"])
+
     def test_a_failed_reinstall_does_not_take_the_working_install_with_it(self):
         """The rollback undoes this run, never what earlier runs already owned.
 
