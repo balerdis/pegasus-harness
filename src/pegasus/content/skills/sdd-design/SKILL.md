@@ -195,7 +195,7 @@ Ready for tasks (sdd-tasks).
 
 ## References
 
-- [references/threat-matrix.md](sdd-design/references/threat-matrix.md) — load only for routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration designs.
+- [sdd-design/references/threat-matrix.md](sdd-design/references/threat-matrix.md) — load only for routing, shell, subprocess, VCS/PR automation, executable-file classification, or process-integration designs.
 
 <!-- pegasus-local:cbm-protocol -->
 ## Local Codebase Memory Protocol for Design

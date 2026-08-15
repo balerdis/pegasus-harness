@@ -41,7 +41,7 @@ Do not create a skill when the pattern is trivial, one-off, or better served by 
 1. Check whether `docs/skill-style-guide.md` exists; if it does, apply it before the bundled local copy or inline fallback rules.
 2. If the repo guide is unavailable, read `skill-creator/references/skill-style-guide.md` and apply it before the inline fallback rules.
 3. Confirm the skill does not already exist and the pattern is reusable.
-4. Create or update `{skill-name}/SKILL.md` under the skills root, using this required structure:
+4. Create or update `{skill-name}/SKILL.md` in the target skill root (project-level or user-level), using this required structure:
 
 ```
 {skill-name}/
@@ -50,7 +50,7 @@ Do not create a skill when the pattern is trivial, one-off, or better served by 
 │   ├── template.py
 │   └── schema.json
 └── references/           # Optional - links to local docs
-    └── docs.md           # Points to docs/developer-guide/*.mdx
+    └── {topic}.md        # Points to docs/developer-guide/*.mdx
 ```
 5. Use this frontmatter shape:
 

@@ -80,8 +80,8 @@ Return `## Verification Report` with change, mode, completeness table, build/tes
 
 ## References
 
-- [references/report-format.md](sdd-verify/references/report-format.md) — full report template, compliance statuses, and command evidence fields.
-- [strict-tdd-verify.md](sdd-verify/strict-tdd-verify.md) — load only when Strict TDD is active.
+- [sdd-verify/references/report-format.md](sdd-verify/references/report-format.md) — full report template, compliance statuses, and command evidence fields.
+- [sdd-verify/strict-tdd-verify.md](sdd-verify/strict-tdd-verify.md) — load only when Strict TDD is active.
 - `_shared/sdd-phase-common.md` — skill loading, retrieval, persistence, and return envelope.
 
 <!-- pegasus-local:sdd-verify-executor-boundary -->

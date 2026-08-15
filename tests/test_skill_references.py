@@ -16,6 +16,13 @@ Project artifacts are not skill files. `tasks.md` and `design.md` live in the
 change being worked on, never under the skills root, so they are named here and
 excluded. Anything that is neither a listed project artifact nor a resolvable
 skills-root path is an offender.
+
+Two gaps are known and deliberate. Only markdown targets are gated, so a broken
+reference to `assets/template.py` stays invisible. And `skills/` is banned on
+every line, which is right for a skill-to-skill reference but would also reject a
+shell example or a sentence about a project-local skills directory; no shipped
+document needs either today, and the ban is what caught the surviving prefix
+hiding inside a `{placeholder}`.
 """
 from __future__ import annotations
 
@@ -25,14 +32,19 @@ from pathlib import Path
 
 SKILLS = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content" / "skills"
 
-#: A reference is written either as inline code or as a markdown link target. Gating
-#: only one of the two certifies the form that was scanned rather than the tree.
-REFERENCE = re.compile(r"`([^`\n]+\.md)`|\]\(([^)\s]+\.md)\)")
+#: Any path that names a markdown file, in whatever syntax. Gating only inline code
+#: and link targets certifies the forms that were scanned rather than the tree: an
+#: agent follows a path written bare in prose, inside a fenced diagram, or as a link
+#: label just as readily.
+#: The lookbehind refuses to start mid-path, which also drops absolute paths whole: a
+#: reference that begins at `/` is an illustration of somebody else's filesystem, never
+#: a path from our skills root.
+REFERENCE = re.compile(r"(?<![\w/.{}<>-])[\w.{}<>-]+(?:/[\w.{}<>-]+)*\.md")
 
 #: The dead convention. Nothing under the skills root has a `skills/` directory, so a
-#: surviving prefix is always the old config-root form, even inside an example. A path
-#: continues into a name or a `{placeholder}`; `skills/*` is a shell glob, not a path.
-DEAD_PREFIX = re.compile(r"(?<![\w/-])skills/[\w{]")
+#: surviving prefix is always the old config-root form, even where no filename follows
+#: it. A path continues into a name or a placeholder; `skills/*` is a shell glob.
+DEAD_PREFIX = re.compile(r"(?<![\w/-])skills/[\w{<]")
 
 #: A reference the reader is meant to resolve in the project, not under the skills root.
 PROJECT_ARTIFACTS = frozenset(
@@ -46,6 +58,7 @@ PROJECT_ARTIFACTS = frozenset(
         "copilot-instructions.md",
         "context.md",
         "handoff.md",
+        "pr-body.md",
         "exploration.md",
         "proposal.md",
         "design.md",
@@ -69,7 +82,7 @@ def skill_documents() -> list[Path]:
 
 def references(document: Path) -> list[tuple[int, str]]:
     return [
-        (number, match.group(1) or match.group(2))
+        (number, match.group(0))
         for number, line in enumerate(document.read_text(encoding="utf-8").splitlines(), start=1)
         for match in REFERENCE.finditer(line)
     ]
