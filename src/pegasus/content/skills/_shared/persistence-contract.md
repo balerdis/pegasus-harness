@@ -4,7 +4,7 @@
 
 The orchestrator passes `artifact_store.mode` with one of: `engram | openspec | hybrid | none`.
 
-The orchestrator ASKs the user which mode they want when `/sdd-new`, `/sdd-ff`, or `/sdd-continue` is invoked for the first time in a session. The choice is cached for the session.
+The orchestrator ASKs the user which mode they want as part of SDD Session Preflight, on the first SDD command of a session or an equivalent natural-language request. The choice is cached for the session. `_shared/sdd-session-preflight.md` defines when preflight runs and what else it resolves.
 
 Default (if user doesn't specify): if Engram is available → `engram`. Otherwise → `none`.
 

@@ -8,7 +8,7 @@ execution: inline
 Follow the SDD orchestrator workflow to continue the active change.
 
 HARD GATE:
-SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not launch the next phase in the same turn.
+SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the preflight prompt defined in `_shared/sdd-session-preflight.md` and STOP. Do not launch the next phase in the same turn.
 
 WORKFLOW:
 
