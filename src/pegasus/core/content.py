@@ -16,6 +16,8 @@ from typing import Any
 
 import yaml
 
+from pegasus.core import placeholders
+
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "content"
 MARKER = "---"
 SKILL_FILE = "SKILL.md"
@@ -197,6 +199,7 @@ def _load_system_prompt(directory: Path, root: Path) -> SystemPrompt | None:
         )
     source = _relative(files[0], root)
     _, body = split_frontmatter(files[0].read_text(encoding="utf-8"), str(source))
+    _require_known_placeholders(body, source)
     return SystemPrompt(body=body, source=source)
 
 
@@ -206,7 +209,17 @@ def _descriptor(path: Path, root: Path) -> tuple[dict[str, Any], str, PurePosixP
     if not fields:
         raise ContentError(f"{source}: a descriptor is required")
     _require_name(fields, path.stem, source)
+    _require_known_placeholders(body, source)
     return fields, body, source
+
+
+def _require_known_placeholders(body: str, source: PurePosixPath) -> None:
+    """A placeholder nobody promised to answer would ship as literal braces."""
+    unknown = placeholders.unknown_in(body)
+    if unknown:
+        named = ", ".join(repr(name) for name in unknown)
+        allowed = ", ".join(sorted(placeholders.NAMES))
+        raise ContentError(f"{source}: unknown placeholder {named}; expected one of {allowed}")
 
 
 def _subdirectories(directory: Path) -> list[Path]:

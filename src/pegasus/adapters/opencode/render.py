@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pegasus.core import placeholders
 from pegasus.core.content import Agent, AgentMode, Command, Execution, RunsAs, Skill, SystemPrompt
 from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout
 
@@ -56,7 +57,7 @@ def prompt(layout: Layout, item: Agent) -> list[Artifact]:
         FileArtifact(
             id=f"prompt:{item.name}",
             path=_prompt_path(layout, item),
-            content=item.body.encode("utf-8"),
+            content=_body(layout, item.body, item.name).encode("utf-8"),
         )
     ]
 
@@ -70,7 +71,7 @@ def agent(layout: Layout, item: Agent, separate_prompt: bool = True) -> list[Art
         value["prompt"] = (
             "{file:./%s}" % _prompt_path(layout, item).relative_to(layout.config_dir).as_posix()
             if separate_prompt
-            else item.body
+            else _body(layout, item.body, item.name)
         )
     tools = _tools(item)
     if tools:
@@ -110,7 +111,7 @@ def command(layout: Layout, item: Command) -> list[Artifact]:
         FileArtifact(
             id=f"command:{item.name}",
             path=layout.commands_dir / f"{item.name}.md",
-            content=(_frontmatter(fields) + "\n" + item.body).encode("utf-8"),
+            content=(_frontmatter(fields) + "\n" + _body(layout, item.body, item.name)).encode("utf-8"),
         )
     ]
 
@@ -123,7 +124,11 @@ def system_prompt(layout: Layout, item: SystemPrompt) -> list[Artifact]:
     """
     path = layout.system_prompt_file
     return [
-        FileArtifact(id="system-prompt", path=path, content=item.body.encode("utf-8")),
+        FileArtifact(
+            id="system-prompt",
+            path=path,
+            content=_body(layout, item.body, "system-prompt").encode("utf-8"),
+        ),
         ConfigKeyArtifact(
             id="system-prompt-instruction",
             path=layout.settings_file,
@@ -131,6 +136,28 @@ def system_prompt(layout: Layout, item: SystemPrompt) -> list[Artifact]:
             value=f"./{path.relative_to(layout.config_dir).as_posix()}",
         ),
     ]
+
+
+def _body(layout: Layout, body: str, owner: str) -> str:
+    """Answer the placeholders a body left for its installer.
+
+    A body names facts, not paths, so that one text installs under every CLI.
+    This is where those facts become this layout's directories.
+    """
+    try:
+        return placeholders.fill(body, _facts(layout))
+    except KeyError as missing:
+        raise RenderError(
+            f"{owner}: this layout has no {missing.args[0]}, so the body cannot be filled"
+        ) from None
+
+
+def _facts(layout: Layout) -> dict[str, str]:
+    """What this layout can answer. An absent anchor answers nothing, never a blank."""
+    facts: dict[str, str] = {}
+    if layout.skills_dir is not None:
+        facts["skills_root"] = str(layout.skills_dir)
+    return facts
 
 
 def _prompt_path(layout: Layout, item: Agent):
