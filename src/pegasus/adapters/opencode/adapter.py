@@ -52,6 +52,20 @@ class Adapter:
     def capabilities(self) -> CapabilityManifest:
         return manifest_module.MANIFEST
 
+    def activation_steps(self) -> tuple[str, ...]:
+        """OpenCode reads an agent's prompt file once, when the process starts.
+
+        Editing that file changes nothing in a session that is already open: the
+        agent keeps answering from the text loaded at startup. That was measured
+        -- an executor denied twice that a rule existed in its own prompt, then
+        quoted it verbatim after a restart -- so an install that does not say this
+        looks successful and behaves as if it never happened.
+        """
+        return (
+            "Restart OpenCode. It reads agent prompts once at startup, "
+            "so an open session keeps using the previous ones.",
+        )
+
     # --- Detection: PATH and the filesystem only, never execution ---
 
     def detect(self, environment: Environment) -> Detection:

@@ -52,6 +52,18 @@ class CliAdapter(Protocol):
     def detect(self, environment: Environment) -> Detection:
         """Look for the CLI using PATH and the filesystem only. Never execute it."""
 
+    def activation_steps(self) -> tuple[str, ...]:
+        """What the user must still do before an installation takes effect.
+
+        Writing the files is not the same as the CLI having read them. A product
+        that loads its configuration once, at startup, keeps running on what it
+        read before Pegasus touched the disk, so an install can be complete and
+        inert at the same time. Only the adapter knows whether that is true of
+        its CLI, which is why the engine cannot phrase this.
+
+        Return an empty tuple when the CLI picks changes up on its own.
+        """
+
     # --- Where ---
 
     def layout(self, environment: Environment) -> Layout:

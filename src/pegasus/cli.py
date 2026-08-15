@@ -158,6 +158,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
         return {
             "cli": adapter.id,
             "status": "planned",
+            "activation": list(adapter.activation_steps()),
             "created": [_placed(step) for step in plan.creations],
             "skipped": [_left(step) for step in plan.collisions],
         }
@@ -190,6 +191,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     return {
         "cli": adapter.id,
         "status": "installed",
+        "activation": list(adapter.activation_steps()),
         "placed": len(applied.records),
         "created": [_recorded(record) for record in applied.records],
         "skipped": [_left(step) for step in applied.skipped],
@@ -237,6 +239,7 @@ def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
     return {
         "cli": adapter.id,
         "status": "uninstalled",
+        "activation": list(adapter.activation_steps()),
         "removed": list(retired.removed),
         "restored": list(retired.restored),
         "preserved": list(retired.preserved),
@@ -391,7 +394,7 @@ def _prose(report: dict[str, Any]) -> str:
         if report["skipped"]:
             lines.append("Left alone because something was already there:")
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["skipped"])
-        return "\n".join(lines)
+        return "\n".join(_and_activation(lines, report))
 
     lines = [f"{report['cli']}: removed {len(report['removed'])}, restored {len(report['restored'])}."]
     for label, key in (
@@ -400,7 +403,19 @@ def _prose(report: dict[str, Any]) -> str:
     ):
         if report[key]:
             lines.append(f"{label}: {', '.join(report[key])}")
-    return "\n".join(lines)
+    return "\n".join(_and_activation(lines, report))
+
+
+def _and_activation(lines: list[str], report: dict[str, Any]) -> list[str]:
+    """The part a person still has to act on, so prose never hides it.
+
+    An installation that is complete on disk can still be doing nothing, and the
+    document says so under `activation`. Prose is never a subset of it.
+    """
+    steps = report.get("activation") or []
+    if not steps:
+        return lines
+    return [*lines, "Before this takes effect:", *(f"  {step}" for step in steps)]
 
 
 def _cli_prose(entry: dict[str, Any]) -> str:
