@@ -14,7 +14,7 @@ CONTEXT:
 
 HARD GATES:
 
-1. SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not run apply in the same turn.
+1. SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the preflight prompt defined in `_shared/sdd-session-preflight.md` and STOP. Do not run apply in the same turn.
 2. `sdd-init` must already exist or be run after preflight, per the orchestrator init guard.
 3. Resolve the active change using the status contract. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess.
 4. Produce structured status before acting and use it to confirm the active change has spec, design, and tasks artifacts in the selected artifact store.

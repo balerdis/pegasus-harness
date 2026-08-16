@@ -154,9 +154,9 @@ If the estimate is **High** or likely above 400 lines:
 2. Split tasks into **work units** that can become chained or stacked PRs.
 3. Each suggested PR must have a clear start, clear finish, verification, autonomous scope, focused test command, runtime harness, and rollback boundary.
 4. **Ask the user which chain strategy to use** (this is a team decision):
-   - **Stacked PRs to main** — each PR merges to main in order. Fast iteration, fix on the go. Best for speed-first teams and independent slices.
-   - **Feature Branch Chain** — the feature/tracker branch accumulates the final integration; PR #1 targets the tracker branch, later PRs target the immediate previous PR branch so each child diff stays focused. Only the tracker merges to main. Best for rollback control and coordinated releases.
-   - **size:exception** — keep it as a single PR with maintainer approval. Best for generated code, migrations, or vendor diffs.
+   - `stacked-to-main` — each PR merges to main in order. Fast iteration, fix on the go. Best for speed-first teams and independent slices.
+   - `feature-branch-chain` — the feature/tracker branch accumulates the final integration; PR #1 targets the tracker branch, later PRs target the immediate previous PR branch so each child diff stays focused. Only the tracker merges to main. Best for rollback control and coordinated releases.
+   - `size-exception` — keep it as a single PR with maintainer approval. Best for generated code, migrations, or vendor diffs.
 5. Cache the user's choice and set `Decision needed before apply` from delivery strategy:
    - `ask-on-risk`: `Yes` — orchestrator asks before apply.
    - `auto-chain`: `No` — orchestrator proceeds with the first slice using the chosen chain strategy.

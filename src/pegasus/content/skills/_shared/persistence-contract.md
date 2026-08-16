@@ -2,9 +2,9 @@
 
 ## Mode Resolution
 
-The orchestrator passes `artifact_store.mode` with one of: `engram | openspec | hybrid | none`.
+The orchestrator passes `Artifact store mode` with one of: `engram | openspec | hybrid | none`.
 
-The orchestrator ASKs the user which mode they want when `/sdd-new`, `/sdd-ff`, or `/sdd-continue` is invoked for the first time in a session. The choice is cached for the session.
+The orchestrator ASKs the user which mode they want as part of SDD Session Preflight, on the first SDD command of a session or an equivalent natural-language request. The choice is cached for the session. `_shared/sdd-session-preflight.md` defines when preflight runs and what else it resolves.
 
 Default (if user doesn't specify): if Engram is available → `engram`. Otherwise → `none`.
 
@@ -71,7 +71,7 @@ The orchestrator persists DAG state after each phase transition to enable SDD re
 - `openspec` → write files ONLY to paths defined in `_shared/openspec-convention.md`
 - `hybrid` → persist to BOTH Engram AND filesystem; follow both conventions
 - NEVER force `openspec/` creation unless orchestrator explicitly passed `openspec` or `hybrid`
-- If unsure which mode to use, default to `none`
+- If the orchestrator passed no mode at all, persist nothing and return results inline; do not pick one
 
 ## Sub-Agent Context Rules
 

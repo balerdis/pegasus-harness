@@ -96,10 +96,11 @@ Example:
 
 SDD must protect reviewer cognitive load, not only generate tasks.
 
+- Execution mode: interactive|auto
 - The default PR review budget is **400 changed lines** (`additions + deletions`).
 - Count authored text additions plus deletions only for this threshold. Generated goldens are excluded from authored risk count and remain part of complete snapshot identity.
-- The orchestrator MUST cache a delivery strategy at session start: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`.
-- The orchestrator MUST pass `delivery_strategy` to `sdd-tasks` and the resolved decision to `sdd-apply`.
+- The orchestrator MUST cache a delivery strategy at session start. `_shared/sdd-session-preflight.md` defines the values and the default.
+- The orchestrator MUST pass `Delivery strategy` to `sdd-tasks` and the resolved decision to `sdd-apply`.
 - `sdd-tasks` MUST forecast whether the planned work may exceed that budget.
 - The forecast MUST include exact plain-text guard lines: `Decision needed before apply: Yes|No`, `Chained PRs recommended: Yes|No`, and `400-line budget risk: Low|Medium|High`.
 - If the forecast is high, `sdd-tasks` MUST recommend chained or stacked PRs using deliverable work units.
