@@ -47,7 +47,6 @@ When you detect any of these contexts, IMMEDIATELY load the corresponding skill 
 | ------- | ------------- |
 | Go tests, Bubbletea TUI testing | go-testing |
 | Creating new AI skills | skill-creator |
-| Terse/direct output mode | caveman |
 
 Load skills BEFORE writing code. Apply ALL patterns. Multiple skills can apply simultaneously.
 
