@@ -45,7 +45,7 @@ metadata:
 | Engram unavailable, not searched, or no match | Continue and report the exact condition; for no match, report queries. |
 | Snapshot conflicts with external evidence | Correct stale operational state explicitly; preserve live decisions/incidents and name unresolved contradictions. |
 | Writer is tempted to open `handoff.md` | Refuse. It is not an input in save mode. Ask the parent for anything the snapshot lacks. |
-| Old handoff holds durable content that names no store | Parent persists it before replacing, or states plainly that it is being dropped. Never copy it into the draft. |
+| Old handoff holds durable content that names no store | Parent persists it, then appends to the draft a one-line reference naming that store -- never the migrated content itself -- or states plainly that it is being dropped. Appending after the gate is not a violation: the gate passed on the draft's substance, and a reference is not the restatement it guards against. |
 | Parent gate fails twice | Delete the draft; leave `handoff.md` exactly as it was; report no save success. |
 
 ## Execution Steps
@@ -57,7 +57,7 @@ metadata:
 3. Writer searches Engram with task anchors and reconciles the snapshot against live evidence. It never opens `handoff.md`.
 4. Writer writes its draft to the OS temp directory, rereads it, applies the reference checklist, and returns the delegated coverage contract and the draft path. It does not touch `handoff.md`.
 5. Parent reads the draft; require readable file, exact next action, critical constraints/incidents/identifiers, no fabrication/secrets, and passed snapshot coverage. Request one corrective rewrite on failure; after the second failure delete the draft, leave `handoff.md` untouched, and report no save success -- nothing was lost, because nothing was replaced.
-6. Gate passed: parent compares the existing `handoff.md` against the draft. The only candidates are items present in the old and absent from the draft -- that is exactly what the replacement is about to destroy. For each, ask whether it outlives the session: judge it by its nature first (branch, HEAD, counts, open PRs and pending steps are state that ends; debts, decisions with a rationale, measured facts about a tool, and user constraints are not), then read its named store. Persist anything durable that names no store, and let the rest go explicitly. Items present in both need nothing: the parent already carried them.
+6. Gate passed: parent compares the existing `handoff.md` against the draft. The only candidates are items present in the old and absent from the draft -- that is exactly what the replacement is about to destroy. For each, ask whether it outlives the session: judge it by its nature first (branch, HEAD, counts, open PRs and pending steps are state that ends; debts, decisions with a rationale, measured facts about a tool, and user constraints are not), then read its named store. Persist anything durable that names no store: call `mem_save` for history, or write decisions and debts directly into project documentation. Then append to the draft the one-line reference naming that store -- never the migrated content itself -- and let the rest go explicitly. Items present in both need nothing: the parent already carried them.
 7. Migration first, replacement second, never the reverse: parent replaces `handoff.md` with the draft and deletes the draft.
 8. After the replacement only, call `mem_session_summary` with a matching secret-safe summary.
 
@@ -73,7 +73,7 @@ Save handoff sections: `# Goal`, `## OpenSpec Context`, `## Session Snapshot`, `
 
 Every durable reference NAMES its store, so a later gate reads a label instead of hunting: a documentation path, `Engram #NNNN`, or an explicit `not stored anywhere`.
 
-`Next Step` MUST contain exactly one action. `Session Snapshot` is required unless no useful work exists; report omission. Save response MUST report path, `Anti-stale audit: pass|fail`, `Engram sync: saved|unavailable|failed`, `Draft cleanup: deleted|failed`, one next-step status, and -- from the parent's own comparison -- `Durable content migrated: none|<list with the store each went to>` and `Dropped with the session: none|<list>`.
+`Next Step` MUST contain exactly one action. `Session Snapshot` is required unless no useful work exists; report omission. Save response MUST report path, `Anti-stale audit: pass|fail`, `Engram sync: saved|unavailable|failed`, `Documentation sync: saved|unavailable|failed|not applicable`, `Draft cleanup: deleted|failed`, one next-step status, and -- from the parent's own comparison -- `Durable content migrated: none|<list with the store each went to>` and `Dropped with the session: none|<list>`.
 
 Delegated writer MUST return exactly these coverage fields: `Parent snapshot received: yes`; `Parent snapshot coverage: passed|blocked`; `Repository verification: passed|partial|not applicable`; `OpenSpec verification: passed|partial|not applicable`; `Engram verification: passed|partial|unavailable|not applicable`; `Critical facts omitted: none|<list>`; `Old handoff read: no`; `Draft path: <absolute path>`; `Handoff write: draft only`. A blocked coverage result prohibits success, and any value other than `no` for the old handoff is a failed gate.
 
