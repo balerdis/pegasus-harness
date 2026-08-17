@@ -68,7 +68,7 @@ When `sdd-tasks` produces a Review Workload Forecast:
 
 - Low risk: keep work-unit commits inside one PR.
 - Medium risk: commit by work unit and monitor changed lines before PR creation.
-- High risk: follow SDD `delivery_strategy` — ask on `ask-on-risk`, auto-slice on `auto-chain`, require `size:exception` on over-budget `single-pr`, or record accepted `size:exception` on `exception-ok`.
+- High risk: follow SDD `Delivery strategy` — ask on `ask-on-risk`, auto-slice on `auto-chain`, require `size:exception` on over-budget `single-pr`, or record accepted `size:exception` on `exception-ok`.
 - Count authored additions plus deletions for the `>400` threshold. Exclude generated goldens from that authored count, but include every generated file in complete snapshot identity.
 
 Each SDD work unit should map cleanly to a commit or PR with:
