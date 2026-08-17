@@ -48,11 +48,12 @@ rest of the pipeline.
 
 ### 2. Artifact store
 
-Artifact store mode: `engram`, `openspec`, `hybrid`, `none`.
+Artifact store mode: `engram`, `openspec`, `hybrid`, `none`. Default: `engram` when Engram
+is available, otherwise `none`.
 
-`_shared/persistence-contract.md` defines what each one does and which is the default; do
-not define either here or in a phase prompt. Quoting the default while asking is fine --
-offering a choice without its default is what leaves a user stuck.
+`_shared/persistence-contract.md` owns what each mode does; do not restate that here or in
+a phase prompt. The default is defined above and nowhere else. Quoting it while asking is
+fine -- offering a choice without its default is what leaves a user stuck.
 
 Pass the resolved value to every sub-agent launch as `Artifact store mode`. Never hardcode
 a store in a phase prompt -- read it from the cached preflight.

@@ -6,7 +6,7 @@ The orchestrator passes `Artifact store mode` with one of: `engram | openspec | 
 
 The orchestrator ASKs the user which mode they want as part of SDD Session Preflight, on the first SDD command of a session or an equivalent natural-language request. The choice is cached for the session. `_shared/sdd-session-preflight.md` defines when preflight runs and what else it resolves.
 
-Default (if user doesn't specify): if Engram is available → `engram`. Otherwise → `none`.
+`_shared/sdd-session-preflight.md` defines the default; do not restate it here.
 
 ## Mode Roles
 
