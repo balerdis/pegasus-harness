@@ -109,3 +109,7 @@ SDD must protect reviewer cognitive load, not only generate tasks.
 - In a Feature Branch Chain, PR #1 targets the feature/tracker branch and later child PRs target the immediate previous PR branch; if GitHub shows previous slices in a child diff, retarget/rebase until the diff is clean.
 
 This guard exists to reduce reviewer burnout and keep implementation delivery safe. Do not treat it as optional process noise.
+
+## F. Path Resolution
+
+Every reference to a file inside the skills tree is written relative to the skills root, so `_shared/sdd-phase-common.md` and `sdd-apply/references/cbm-index-coherence.md` mean the same thing no matter which skill wrote them.
