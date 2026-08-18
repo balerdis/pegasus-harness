@@ -255,7 +255,38 @@ class ShippedContentTest(unittest.TestCase):
     def test_the_orchestrator_declares_its_delegation(self):
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         self.assertEqual(orchestrator.mode, AgentMode.PRIMARY)
-        self.assertEqual(orchestrator.may_delegate_to, ("explore", "general", "sdd-verify"))
+        self.assertIn("explore", orchestrator.may_delegate_to)
+        self.assertIn("general", orchestrator.may_delegate_to)
+        # Named on purpose: it is the sole readiness authority, so losing the right to
+        # launch it would disable verification rather than one phase.
+        self.assertIn("sdd-verify", orchestrator.may_delegate_to)
+
+    #: Agents the runtime supplies, which Pegasus may delegate to without shipping them.
+    RUNTIME_BUILT_INS = frozenset({"explore", "general"})
+
+    def test_the_orchestrator_may_delegate_to_every_subagent_it_ships_with(self):
+        # render.py turns may_delegate_to into {"*": "deny", <named>: "allow"}, so an agent
+        # missing from the list is not merely undeclared: it is denied. Comparing against a
+        # hardcoded list would go stale the moment an agent is added, which is exactly how
+        # the nine phase macros shipped denied.
+        #
+        # This asserts that every shipped subagent is delegable, which assumes shipped
+        # subagents are all orchestrator-callable. That is true today and is an assumption,
+        # not something the schema states: there is no "delegable" field. If a subagent is
+        # ever shipped that the orchestrator must NOT launch directly, this test would force
+        # it into the list and widen the permission surface instead of failing. Give the
+        # schema a way to say so before that happens.
+        orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
+        shipped = {a.name for a in self.content.agents if a.mode is AgentMode.SUBAGENT}
+        self.assertEqual(shipped - set(orchestrator.may_delegate_to), set())
+
+    def test_the_orchestrator_delegates_to_nothing_that_does_not_exist(self):
+        # The other direction. A name nobody answers to is a permission entry that grants
+        # access to nothing: a typo or a removed agent survives as a silent no-op, and the
+        # one-directional check above stays green through both.
+        orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
+        shipped = {a.name for a in self.content.agents}
+        self.assertEqual(set(orchestrator.may_delegate_to) - shipped - self.RUNTIME_BUILT_INS, set())
 
     def test_system_prompt_loads(self):
         self.assertIn("Co-Authored-By", self.content.system_prompt.body)
