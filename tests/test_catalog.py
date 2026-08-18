@@ -197,7 +197,7 @@ class ShippedCatalogTest(unittest.TestCase):
     def test_produces_the_whole_payload(self):
         files = [entry for entry in self.catalog.entries if entry.kind == "file"]
         keys = [entry for entry in self.catalog.entries if entry.kind == "config-key"]
-        self.assertEqual((len(files), len(keys)), (78, 7))
+        self.assertEqual((len(files), len(keys)), (87, 16))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:

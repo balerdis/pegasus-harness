@@ -235,7 +235,22 @@ class ShippedContentTest(unittest.TestCase):
             self.assertIsInstance(command.execution, Execution, command.name)
 
     def test_agents_load(self):
-        self.assertEqual({a.name for a in self.content.agents}, {"pegasus-orchestrator", "sdd-verify"})
+        self.assertEqual(
+            {a.name for a in self.content.agents},
+            {
+                "pegasus-orchestrator",
+                "sdd-apply",
+                "sdd-archive",
+                "sdd-design",
+                "sdd-explore",
+                "sdd-init",
+                "sdd-onboard",
+                "sdd-propose",
+                "sdd-spec",
+                "sdd-tasks",
+                "sdd-verify",
+            },
+        )
 
     def test_the_orchestrator_declares_its_delegation(self):
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
