@@ -238,6 +238,7 @@ class ShippedContentTest(unittest.TestCase):
         self.assertEqual(
             {a.name for a in self.content.agents},
             {
+                "king-pegasus",
                 "pegasus-orchestrator",
                 "sdd-apply",
                 "sdd-archive",

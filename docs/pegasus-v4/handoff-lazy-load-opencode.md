@@ -4,6 +4,18 @@
 **Source:** field work on the live install at `~/.config/opencode`, not on this repo
 **Status:** complete and runtime-validated (13 probes)
 
+> **Later note (C3a, 2026-08-18).** The agent measured here as `king-gentleman` ships in v4
+> as `king-pegasus`, and its prompt moved from `agents/pegasus-AGENTS.md` to
+> `agents/king-pegasus.md`. The old name is kept throughout this document on purpose: it is
+> what the probes actually addressed, and renaming it would turn a measurement into a claim
+> about an agent that did not exist on the date above.
+>
+> Section 6's resolution — keep the restrained wording global and re-state the persona's as a
+> labelled override — is superseded. C3a moves Personality, Language, Tone, Philosophy,
+> Expertise and Behavior out of the baseline entirely, so nothing remains for the persona to
+> override; those two rules now live in the persona's own `## Behavior`, in their expansive
+> direction. See Engram #9482.
+
 ## How to use this document
 
 This is field evidence for v4 planning. Everything here was measured or probe-verified

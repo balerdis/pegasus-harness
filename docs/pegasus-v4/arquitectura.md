@@ -120,7 +120,7 @@ Ese descriptor no dice nada sobre OpenCode. El adapter de OpenCode lo convierte 
 |-----------|---------:|-----------|
 | `skills/` | 27 | Nada |
 | `commands/` | 16 | Nada |
-| `agents/` | 2 | Faltan los 10 de la línea SDD y `king-gentleman` |
+| `agents/` | 12 | Nada |
 | `system-prompt/` | 1 | Nada |
 | `mcp/` | 0 | Sigue viviendo en `manifests/release-contract.json` |
 | `policies/` | 0 | Sin extraer |
@@ -609,10 +609,13 @@ El archivo de instrucción global que llegó desde v3 mezclaba dos cosas: reglas
 
 | Parte | Va a | Alcance |
 |-------|------|---------|
-| Reglas de trabajo, protocolo de memoria persistente, cierre de sesión | `system-prompt/` | Todos los agentes, en toda sesión |
-| Personalidad, tono, rol y expertise | `agents/king-gentleman.md` | Ese agente |
+| Reglas de trabajo, alcance de persona, carga contextual de skills, protocolo de memoria persistente, cierre de sesión | `system-prompt/` | Todos los agentes, en toda sesión |
+| Idioma de la respuesta: cuál usar y cuándo no cambiarlo | `system-prompt/` | Todos los agentes, en toda sesión |
+| La voz, en sus ocho secciones: `Rules`, `Personality`, `Language`, `Speech patterns`, `Tone`, `Philosophy`, `Expertise`, `Behavior` | `agents/king-pegasus.md` | Ese agente |
 
-El criterio: una regla como no agregar atribución de herramientas a un commit tiene que obligar a cualquier agente, no solo al que casualmente cargaba ese archivo como prompt.
+El criterio no es "reglas arriba, estilo abajo": es a quién obliga cada cosa. La mayoría de las reglas de trabajo — no agregar atribución de herramientas a un commit, verificar antes de afirmar — tienen que obligar a cualquier agente, no solo al que casualmente cargaba ese archivo como prompt. Pero una regla sobre cómo trabaja una voz en particular es de esa voz: `Never build after changes` vive en `king-pegasus.md` a propósito, porque la skill `sdd-verify` exige correr el build y registrar su hash, y una prohibición global de compilar contradiría a algo que embarcamos.
+
+`Language` se parte por esa misma razón. La mitad neutral — en qué idioma responder, cuándo no cambiarlo, que una respuesta en inglés sea inglés hasta en el saludo — obliga a todos los agentes y vive en `system-prompt/`; el color — Rioplatense con voseo, la misma calidez en inglés — es de esa voz y se queda en su archivo.
 
 ### Agentes configurables en 4.0.0
 
@@ -621,7 +624,7 @@ Los 10 de la línea SDD, más los dos de coordinación:
 ```
 sdd-init      sdd-explore    sdd-propose    sdd-spec      sdd-design
 sdd-tasks     sdd-apply      sdd-verify     sdd-archive   sdd-onboard
-pegasus-orchestrator         king-gentleman
+pegasus-orchestrator         king-pegasus
 ```
 
 En v3.1.2 se embarcan los 10 prompts SDD pero solo uno está cableado como agente. v4 corrige eso: cada fase existe como subagente real, con su prompt y su modelo configurable.
