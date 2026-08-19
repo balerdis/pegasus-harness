@@ -2,7 +2,6 @@
 name: sdd-apply
 description: Implementation executor for one change; writes code following spec, design and tasks
 mode: subagent
-hidden: true
 requires_tools: [read, write, edit, bash, grep, glob]
 optional_tools: [codebase-memory]
 model_configurable: true

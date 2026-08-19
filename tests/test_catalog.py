@@ -186,6 +186,43 @@ class SerializationTest(unittest.TestCase):
         self.assertEqual(catalog.as_dict()["schema"], "pegasus/artifact-catalog/v4")
 
 
+class TwoTopLevelAgentsTest(unittest.TestCase):
+    """Two selectable top-level agents, one of which is where a session opens.
+
+    While the mode decided the default, this content could not be expressed: both
+    primaries rendered a `/default_agent` artifact under one hardcoded id and the
+    catalog refused the pair. Only the agent the core names starts a session now,
+    so a second primary is nothing but another entry in the agent map.
+    """
+
+    STARTS = content_module.SESSION_STARTS_IN
+
+    @classmethod
+    def agent(cls, name):
+        return content_module.Agent(
+            name=name,
+            description="A top-level agent",
+            body="Body.\n",
+            mode=content_module.AgentMode.PRIMARY,
+            source=PurePosixPath(f"agents/{name}.md"),
+        )
+
+    def build(self):
+        content = Content(agents=(self.agent(self.STARTS), self.agent("beta")))
+        return catalog_module.build(content, Adapter())
+
+    def test_two_primary_agents_build_a_catalog(self):
+        """Membership, not equality: a future per-agent artifact is not this test's business."""
+        rendered = [entry.id for entry in self.build().entries]
+        for expected in (f"agent:{self.STARTS}", "agent:beta", "default-agent"):
+            self.assertIn(expected, rendered)
+        self.assertEqual(len(rendered), len(set(rendered)))
+
+    def test_only_one_of_them_writes_the_default(self):
+        pointers = [entry.pointer for entry in self.build().entries]
+        self.assertEqual(pointers.count("/default_agent"), 1)
+
+
 class ShippedCatalogTest(unittest.TestCase):
     """The real content, through the real adapter, must produce a usable catalog."""
 

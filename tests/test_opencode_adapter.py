@@ -135,9 +135,9 @@ class AgentRenderTest(unittest.TestCase):
     def test_references_the_prompt_file_instead_of_inlining_it(self):
         self.assertEqual(self.value(self.agent())["prompt"], "{file:./prompts/sdd-verify.md}")
 
-    def test_hidden_is_only_written_when_true(self):
-        self.assertTrue(self.value(self.agent(hidden=True))["hidden"])
-        self.assertNotIn("hidden", self.value(self.agent()))
+    def test_hidden_is_written_for_a_subagent_and_for_nobody_else(self):
+        self.assertTrue(self.value(self.agent(mode=AgentMode.SUBAGENT))["hidden"])
+        self.assertNotIn("hidden", self.value(self.agent(mode=AgentMode.PRIMARY)))
 
     def test_tools_are_translated_to_opencode_names(self):
         agent = self.agent(requires_tools=("read", "bash"), optional_tools=("codebase-memory",))
@@ -157,10 +157,27 @@ class AgentRenderTest(unittest.TestCase):
             {"task": {"*": "deny", "explore": "allow", "sdd-verify": "allow"}},
         )
 
-    def test_a_primary_agent_also_becomes_the_default(self):
-        artifacts = self.adapter.render_agent(self.layout, self.agent(mode=AgentMode.PRIMARY))
+    def test_the_agent_a_session_starts_in_becomes_the_default(self):
+        starts = content_module.SESSION_STARTS_IN
+        artifacts = self.adapter.render_agent(
+            self.layout,
+            self.agent(
+                name=starts,
+                mode=AgentMode.PRIMARY,
+                source=PurePosixPath(f"agents/{starts}.md"),
+            ),
+        )
         default = [item for item in artifacts if item.pointer == "/default_agent"]
-        self.assertEqual([item.value for item in default], ["sdd-verify"])
+        self.assertEqual([item.value for item in default], [starts])
+
+    def test_another_primary_agent_does_not_touch_the_default(self):
+        """Being selectable at top level is one thing; being where a session opens is another."""
+        artifacts = self.adapter.render_agent(self.layout, self.agent(mode=AgentMode.PRIMARY))
+        self.assertEqual([item for item in artifacts if item.pointer == "/default_agent"], [])
+
+    def test_the_real_mode_still_reaches_the_agent_entry(self):
+        self.assertEqual(self.value(self.agent(mode=AgentMode.PRIMARY))["mode"], "primary")
+        self.assertEqual(self.value(self.agent())["mode"], "subagent")
 
     def test_a_subagent_does_not_touch_the_default(self):
         artifacts = self.adapter.render_agent(self.layout, self.agent())

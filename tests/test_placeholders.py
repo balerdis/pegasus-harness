@@ -18,14 +18,25 @@ from pegasus.core import content as content_module
 from pegasus.core import placeholders
 
 AGENT = """---
-name: sdd-apply
-description: Implementation executor
-mode: subagent
+name: probe-agent
+description: Probes placeholder resolution
+mode: primary
 ---
 
-# SDD Apply
+# Probe Agent
 
 Your first tool call must read {body}.
+"""
+
+#: A tree with agents must carry the one a session starts in. These trees are about
+#: placeholders, so they ship it and probe something else.
+SESSION_START = f"""---
+name: {content_module.SESSION_STARTS_IN}
+description: Where a session starts
+mode: primary
+---
+
+Nothing to fill.
 """
 
 
@@ -90,11 +101,14 @@ class LoadTimeRefusalTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def write(self, body: str) -> None:
-        (self.root / "agents" / "sdd-apply.md").write_text(AGENT.format(body=body), encoding="utf-8")
+        start = self.root / "agents" / f"{content_module.SESSION_STARTS_IN}.md"
+        start.write_text(SESSION_START, encoding="utf-8")
+        (self.root / "agents" / "probe-agent.md").write_text(AGENT.format(body=body), encoding="utf-8")
 
     def test_a_known_placeholder_loads(self):
         self.write("{{skills_root}}/sdd-apply/SKILL.md")
-        agent = content_module.load(self.root).agents[0]
+        loaded = content_module.load(self.root).agents
+        agent = next(a for a in loaded if a.name == "probe-agent")
         self.assertIn("{{skills_root}}", agent.body)
 
     def test_an_unknown_placeholder_is_refused_with_the_file_named(self):
@@ -102,7 +116,7 @@ class LoadTimeRefusalTest(unittest.TestCase):
         with self.assertRaises(content_module.ContentError) as raised:
             content_module.load(self.root)
         message = str(raised.exception)
-        self.assertIn("agents/sdd-apply.md", message)
+        self.assertIn("agents/probe-agent.md", message)
         self.assertIn("skils_root", message)
 
 
@@ -118,7 +132,9 @@ class MalformedDelimiterTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def write(self, body: str) -> None:
-        (self.root / "agents" / "sdd-apply.md").write_text(AGENT.format(body=body), encoding="utf-8")
+        start = self.root / "agents" / f"{content_module.SESSION_STARTS_IN}.md"
+        start.write_text(SESSION_START, encoding="utf-8")
+        (self.root / "agents" / "probe-agent.md").write_text(AGENT.format(body=body), encoding="utf-8")
 
     def test_an_unclosed_opener_is_refused(self):
         self.write("{{ oops then {{skills_root}}/x")

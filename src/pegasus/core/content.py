@@ -23,6 +23,17 @@ MARKER = "---"
 SKILL_FILE = "SKILL.md"
 SYSTEM_PROMPT_DIR = "system-prompt"
 
+SESSION_STARTS_IN = "pegasus-orchestrator"
+"""The agent a session opens in.
+
+Which agent that is, is a fact about the set of agents rather than about any one
+of them: a CLI names it in a single-valued setting. A per-agent frontmatter flag
+could not hold it, because no file can see whether another already claimed it --
+two claims and no claim at all are both writable, and neither is refusable
+without a validator that reads the whole directory back. Naming it once, here,
+makes both unrepresentable.
+"""
+
 
 class ContentError(ValueError):
     """The content on disk would mislead an adapter, so it is refused."""
@@ -76,11 +87,24 @@ class Agent:
     body: str
     mode: AgentMode
     source: PurePosixPath
-    hidden: bool = False
     requires_tools: tuple[str, ...] = ()
     optional_tools: tuple[str, ...] = ()
     may_delegate_to: tuple[str, ...] = ()
     model_configurable: bool = False
+
+    @property
+    def default(self) -> bool:
+        """Whether a session starts in this agent. Read off the name, so only one can."""
+        return self.name == SESSION_STARTS_IN
+
+    @property
+    def hidden(self) -> bool:
+        """Whether the runtime keeps this agent out of the chooser.
+
+        That is exactly what being a subagent means, with no exception, so it is
+        read off `mode` rather than declared beside it where the two could drift.
+        """
+        return self.mode is AgentMode.SUBAGENT
 
 
 @dataclass(frozen=True)
@@ -157,6 +181,7 @@ def _load_agents(directory: Path, root: Path) -> tuple[Agent, ...]:
     agents = []
     for path in _markdown_files(directory):
         fields, body, source = _descriptor(path, root)
+        _refuse_derived_fields(fields, source)
         agents.append(
             Agent(
                 name=path.stem,
@@ -164,14 +189,38 @@ def _load_agents(directory: Path, root: Path) -> tuple[Agent, ...]:
                 body=body,
                 mode=_choice(fields, "mode", AgentMode, source),
                 source=source,
-                hidden=bool(fields.get("hidden", False)),
                 requires_tools=_names(fields, "requires_tools", source),
                 optional_tools=_names(fields, "optional_tools", source),
                 may_delegate_to=_names(fields, "may_delegate_to", source),
-                model_configurable=bool(fields.get("model_configurable", False)),
+                model_configurable=_flag(fields, "model_configurable", source),
             )
         )
+    _require_the_session_start(tuple(agents), directory, root)
     return tuple(agents)
+
+
+def _require_the_session_start(agents: tuple[Agent, ...], directory: Path, root: Path) -> None:
+    """The agent a session opens in has to be here, and has to be able to open one.
+
+    `SESSION_STARTS_IN` decides who that is, so nothing on disk can claim it twice
+    or leave it unclaimed. What disk still decides is whether that agent exists and
+    what mode it is in, and a session opens in a primary agent.
+
+    A tree with no agents chooses between nothing and is left alone.
+    """
+    if not agents:
+        return
+    starts = next((agent for agent in agents if agent.name == SESSION_STARTS_IN), None)
+    if starts is None:
+        raise ContentError(
+            f"{_relative(directory, root)}: no agent is named {SESSION_STARTS_IN!r}, "
+            f"which is where a session starts"
+        )
+    if starts.mode is not AgentMode.PRIMARY:
+        raise ContentError(
+            f"{starts.source}: {SESSION_STARTS_IN!r} is where a session starts, so its "
+            f"'mode' must be {AgentMode.PRIMARY.value!r}, not {starts.mode.value!r}"
+        )
 
 
 def _load_commands(directory: Path, root: Path) -> tuple[Command, ...]:
@@ -213,6 +262,20 @@ def _descriptor(path: Path, root: Path) -> tuple[dict[str, Any], str, PurePosixP
     _require_name(fields, path.stem, source)
     _require_known_placeholders(body, source)
     return fields, body, source
+
+
+def _refuse_derived_fields(fields: dict[str, Any], source: PurePosixPath) -> None:
+    """A field the loader derives is not the file's to declare.
+
+    Reading the line and dropping it would leave a descriptor stating a fact it has
+    no say in, and an author who wrote the opposite of what happens would be told
+    nothing -- the same silence `_flag` exists to prevent.
+    """
+    for key in ("default", "hidden"):
+        if key in fields:
+            raise ContentError(
+                f"{source}: {key!r} is derived, not declared, and declaring it decides nothing"
+            )
 
 
 def _require_known_placeholders(body: str, source: PurePosixPath) -> None:
@@ -301,6 +364,18 @@ def _choice(fields: dict[str, Any], key: str, options: type[Enum], source: PureP
     except ValueError:
         allowed = ", ".join(item.value for item in options)
         raise ContentError(f"{source}: {key!r} is {value!r}; expected one of {allowed}") from None
+
+
+def _flag(fields: dict[str, Any], key: str, source: PurePosixPath) -> bool:
+    """A flag is a YAML boolean or nothing at all.
+
+    `bool()` would read the string 'false', the string '0' and a misspelling as true,
+    and turn an author saying "not this one" into the opposite claim with no diagnostic.
+    """
+    value = fields.get(key, False)
+    if not isinstance(value, bool):
+        raise ContentError(f"{source}: {key!r} is {value!r}; expected true or false")
+    return value
 
 
 def _names(fields: dict[str, Any], key: str, source: PurePosixPath) -> tuple[str, ...]:

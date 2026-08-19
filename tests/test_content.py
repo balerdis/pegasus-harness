@@ -24,13 +24,25 @@ Body of alpha.
 AGENT = """---
 name: probe-agent
 description: Probes things
-mode: subagent
-hidden: true
+mode: primary
 requires_tools: [read, bash]
 model_configurable: true
 ---
 
 # Probe
+
+Prompt body.
+"""
+
+#: A tree that has agents must carry the one a session starts in, so tests whose
+#: subject is anything else ship it alongside whatever they are really probing.
+SESSION_START = f"""---
+name: {content.SESSION_STARTS_IN}
+description: Where a session starts
+mode: primary
+---
+
+# Session start
 
 Prompt body.
 """
@@ -53,6 +65,10 @@ def write(root: Path, relative: str, text: str) -> Path:
     return path
 
 
+def write_session_start(root: Path) -> Path:
+    return write(root, f"agents/{content.SESSION_STARTS_IN}.md", SESSION_START)
+
+
 class TemporaryContent(unittest.TestCase):
     """Builds a content tree on disk so error paths can be exercised."""
 
@@ -63,7 +79,7 @@ class TemporaryContent(unittest.TestCase):
 
     def complete(self):
         write(self.root, "skills/alpha/SKILL.md", SKILL)
-        write(self.root, "agents/probe-agent.md", AGENT)
+        write_session_start(self.root)
         write(self.root, "commands/probe-command.md", COMMAND)
         write(self.root, "system-prompt/AGENTS.md", "# Rules\n\nBe careful.\n")
 
@@ -97,7 +113,7 @@ class LoadTest(TemporaryContent):
         self.complete()
         loaded = content.load(self.root)
         self.assertEqual([s.name for s in loaded.skills], ["alpha"])
-        self.assertEqual([a.name for a in loaded.agents], ["probe-agent"])
+        self.assertEqual([a.name for a in loaded.agents], [content.SESSION_STARTS_IN])
         self.assertEqual([c.name for c in loaded.commands], ["probe-command"])
         self.assertIsNotNone(loaded.system_prompt)
 
@@ -148,13 +164,13 @@ class SkillTest(TemporaryContent):
 
 class AgentTest(TemporaryContent):
     def load_agent(self, text):
+        write_session_start(self.root)
         write(self.root, "agents/probe-agent.md", text)
-        return content.load(self.root).agents[0]
+        return next(a for a in content.load(self.root).agents if a.name == "probe-agent")
 
     def test_reads_the_descriptor(self):
         agent = self.load_agent(AGENT)
-        self.assertEqual(agent.mode, AgentMode.SUBAGENT)
-        self.assertTrue(agent.hidden)
+        self.assertEqual(agent.mode, AgentMode.PRIMARY)
         self.assertEqual(agent.requires_tools, ("read", "bash"))
         self.assertTrue(agent.model_configurable)
 
@@ -162,8 +178,9 @@ class AgentTest(TemporaryContent):
         self.assertIn("Prompt body.", self.load_agent(AGENT).body)
 
     def test_optional_fields_default_conservatively(self):
-        agent = self.load_agent("---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n")
-        self.assertFalse(agent.hidden)
+        agent = self.load_agent(
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n"
+        )
         self.assertFalse(agent.model_configurable)
         self.assertEqual((agent.requires_tools, agent.may_delegate_to), ((), ()))
 
@@ -181,6 +198,102 @@ class AgentTest(TemporaryContent):
     def test_missing_mode_is_rejected(self):
         with self.assertRaises(ContentError):
             self.load_agent("---\nname: probe-agent\ndescription: d\n---\n\nx\n")
+
+
+class SessionStartTest(TemporaryContent):
+    """Which agent a session opens in is a fact about the set, and code names it once.
+
+    No file can claim it, so no file can claim it twice and no tree can leave it
+    unclaimed. What a tree still decides is whether the named agent is there at all
+    and what mode it is in, and a session opens in a primary agent.
+    """
+
+    def agent(self, name: str, mode: str = "primary") -> None:
+        write(
+            self.root,
+            f"agents/{name}.md",
+            f"---\nname: {name}\ndescription: d\nmode: {mode}\n---\n\nx\n",
+        )
+
+    def test_a_tree_of_agents_without_the_named_one_is_refused(self):
+        self.agent("alpha")
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn(content.SESSION_STARTS_IN, message)
+        self.assertIn("agents", message)
+
+    def test_the_named_agent_present_but_not_primary_is_refused(self):
+        self.agent(content.SESSION_STARTS_IN, mode="subagent")
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn(f"agents/{content.SESSION_STARTS_IN}.md", message)
+        self.assertIn(AgentMode.PRIMARY.value, message)
+
+    def test_the_named_agent_is_the_only_one_a_session_starts_in(self):
+        self.agent(content.SESSION_STARTS_IN)
+        self.agent("beta")
+        self.agent("gamma", mode="subagent")
+        loaded = {agent.name: agent.default for agent in content.load(self.root).agents}
+        self.assertEqual(
+            loaded, {content.SESSION_STARTS_IN: True, "beta": False, "gamma": False}
+        )
+
+    def test_being_hidden_is_exactly_being_a_subagent(self):
+        self.agent(content.SESSION_STARTS_IN)
+        self.agent("beta", mode="subagent")
+        loaded = {agent.name: agent.hidden for agent in content.load(self.root).agents}
+        self.assertEqual(loaded, {content.SESSION_STARTS_IN: False, "beta": True})
+
+    def test_a_derived_field_written_in_frontmatter_is_refused_not_obeyed(self):
+        """Ignoring the line would leave a file stating a fact it does not decide."""
+        for line in ("default: true", "default: false", "hidden: true", "hidden: false"):
+            with self.subTest(line=line):
+                write(
+                    self.root,
+                    f"agents/{content.SESSION_STARTS_IN}.md",
+                    f"---\nname: {content.SESSION_STARTS_IN}\ndescription: d\n"
+                    f"mode: primary\n{line}\n---\n\nx\n",
+                )
+                with self.assertRaises(ContentError) as raised:
+                    content.load(self.root)
+                message = str(raised.exception)
+                self.assertIn(f"agents/{content.SESSION_STARTS_IN}.md", message)
+                self.assertIn(line.split(":")[0], message)
+
+
+class FlagTest(TemporaryContent):
+    """A flag is a YAML boolean or nothing, and anything else is a refusal.
+
+    `bool()` reads the string 'false' as true, so an author saying "not this one"
+    would have said the opposite and been told nothing.
+    """
+
+    def load(self, line: str):
+        write(
+            self.root,
+            f"agents/{content.SESSION_STARTS_IN}.md",
+            f"---\nname: {content.SESSION_STARTS_IN}\ndescription: d\nmode: primary\n"
+            f"{line}\n---\n\nx\n",
+        )
+        return content.load(self.root).agents[0]
+
+    def test_a_real_boolean_is_read(self):
+        self.assertTrue(self.load("model_configurable: true").model_configurable)
+
+    def test_a_quoted_false_is_refused_rather_than_read_as_true(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load('model_configurable: "false"')
+        self.assertIn(f"agents/{content.SESSION_STARTS_IN}.md", str(raised.exception))
+
+    def test_a_number_is_refused(self):
+        with self.assertRaises(ContentError):
+            self.load("model_configurable: 1")
+
+    def test_a_list_is_refused(self):
+        with self.assertRaises(ContentError):
+            self.load("model_configurable: [yes]")
 
 
 class CommandTest(TemporaryContent):
@@ -209,7 +322,7 @@ class CommandTest(TemporaryContent):
 
 
 class ErrorReportingTest(TemporaryContent):
-    def test_every_error_names_the_offending_file(self):
+    def test_a_malformed_command_names_its_file(self):
         write(self.root, "commands/broken.md", "---\nname: broken\ndescription: d\n---\n\nx\n")
         with self.assertRaises(ContentError) as raised:
             content.load(self.root)
@@ -262,6 +375,31 @@ class ShippedContentTest(unittest.TestCase):
         # launch it would disable verification rather than one phase.
         self.assertIn("sdd-verify", orchestrator.may_delegate_to)
 
+    def test_the_orchestrator_is_the_agent_a_session_starts_in(self):
+        starting = [agent.name for agent in self.content.agents if agent.default]
+        self.assertEqual(starting, [content.SESSION_STARTS_IN])
+
+    def test_being_hidden_is_exactly_being_a_subagent_across_the_whole_tree(self):
+        """One assertion for every agent, instead of a per-agent claim per file.
+
+        The persona must stay out of nobody's chooser and the ten phase executors
+        must stay out of everybody's, and both used to be a frontmatter line that
+        could be edited away from the mode beside it. Reading it off `mode` is what
+        makes the two unable to disagree; this is where that is checked to hold for
+        the content actually shipped.
+        """
+        self.assertEqual(
+            {agent.name for agent in self.content.agents if agent.hidden},
+            {agent.name for agent in self.content.agents if agent.mode is AgentMode.SUBAGENT},
+        )
+
+    def test_the_orchestrator_does_not_delegate_to_the_voice(self):
+        # king-pegasus answers the user, it does not take work handed to it. It was in
+        # this list only because it shipped as a subagent, and the rule below required
+        # every shipped subagent to be delegable.
+        orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
+        self.assertNotIn("king-pegasus", orchestrator.may_delegate_to)
+
     #: Agents the runtime supplies, which Pegasus may delegate to without shipping them.
     RUNTIME_BUILT_INS = frozenset({"explore", "general"})
 
@@ -272,11 +410,12 @@ class ShippedContentTest(unittest.TestCase):
         # the nine phase macros shipped denied.
         #
         # This asserts that every shipped subagent is delegable, which assumes shipped
-        # subagents are all orchestrator-callable. That is true today and is an assumption,
-        # not something the schema states: there is no "delegable" field. If a subagent is
-        # ever shipped that the orchestrator must NOT launch directly, this test would force
-        # it into the list and widen the permission surface instead of failing. Give the
-        # schema a way to say so before that happens.
+        # subagents are all orchestrator-callable. That assumption held once the one agent
+        # it was wrong about stopped being a subagent: king-pegasus is the voice the user
+        # selects, and it is primary, so it is outside this set rather than forced into the
+        # permission list. An agent that must not be launched directly and still has to be
+        # a subagent would put the pressure back here, and the schema still has no
+        # "delegable" field to answer it with.
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         shipped = {a.name for a in self.content.agents if a.mode is AgentMode.SUBAGENT}
         self.assertEqual(shipped - set(orchestrator.may_delegate_to), set())

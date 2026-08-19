@@ -2,7 +2,6 @@
 name: sdd-archive
 description: Archiving executor for one change; merges delta specs into main specs and moves the change to archive
 mode: subagent
-hidden: true
 requires_tools: [read, write, edit, glob]
 model_configurable: true
 ---
