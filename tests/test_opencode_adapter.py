@@ -142,8 +142,13 @@ class AgentRenderTest(unittest.TestCase):
     def test_tools_are_translated_to_opencode_names(self):
         agent = self.agent(requires_tools=("read", "bash"), optional_tools=("codebase-memory",))
         self.assertEqual(
-            self.value(agent)["tools"], {"read": True, "bash": True, "codebase-memory-mcp*": True}
+            self.value(agent)["tools"],
+            {"*": False, "read": True, "bash": True, "codebase-memory-mcp*": True},
         )
+
+    def test_no_declared_tools_still_renders_the_deny_baseline(self):
+        """Declaring nothing must mean nothing, not the runtime's full default toolset."""
+        self.assertEqual(self.value(self.agent())["tools"], {"*": False})
 
     def test_a_tool_with_no_opencode_name_is_refused(self):
         with self.assertRaises(render_module.RenderError) as raised:
@@ -156,6 +161,10 @@ class AgentRenderTest(unittest.TestCase):
             self.value(agent)["permission"],
             {"task": {"*": "deny", "explore": "allow", "sdd-verify": "allow"}},
         )
+
+    def test_the_deny_baseline_is_emitted_even_with_no_declared_delegation(self):
+        """An agent that names nobody must still ship a permission.task block."""
+        self.assertEqual(self.value(self.agent())["permission"], {"task": {"*": "deny"}})
 
     def test_the_agent_a_session_starts_in_becomes_the_default(self):
         starts = content_module.SESSION_STARTS_IN
@@ -299,7 +308,7 @@ class ShippedContentRenderTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         adapter, cls.layout = Adapter(), Adapter().layout(ENVIRONMENT)
-        loaded = content_module.load()
+        loaded = cls.loaded = content_module.load()
         cls.artifacts = [
             *(item for skill in loaded.skills for item in adapter.render_skill(cls.layout, skill)),
             *(item for agent in loaded.agents for item in adapter.render_agent(cls.layout, agent)),
@@ -323,6 +332,29 @@ class ShippedContentRenderTest(unittest.TestCase):
 
     def test_the_whole_payload_is_produced(self):
         self.assertGreater(len(self.artifacts), 70)
+
+    def test_no_shipped_agent_renders_a_tools_map_lacking_the_deny_baseline(self):
+        for agent in self.loaded.agents:
+            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            self.assertIs(value["tools"]["*"], False, agent.name)
+
+    def test_no_shipped_agent_renders_a_permission_block_lacking_the_deny_baseline(self):
+        for agent in self.loaded.agents:
+            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            self.assertEqual(value["permission"]["task"]["*"], "deny", agent.name)
+
+    def test_the_persona_renders_its_single_tool_as_a_real_restriction(self):
+        """The voice declares `read` alone; only this side can prove that denies the rest."""
+        persona = next(a for a in self.loaded.agents if a.name == "king-pegasus")
+        value = only(render_module.agent(self.layout, persona), ConfigKeyArtifact)[0].value
+        self.assertEqual(value["tools"], {"*": False, "read": True})
+
+    def test_the_orchestrator_renders_its_declared_allows_on_top_of_the_deny_baseline(self):
+        orchestrator = next(a for a in self.loaded.agents if a.name == "pegasus-orchestrator")
+        value = only(render_module.agent(self.layout, orchestrator), ConfigKeyArtifact)[0].value
+        self.assertEqual(value["permission"]["task"]["*"], "deny")
+        for name in orchestrator.may_delegate_to:
+            self.assertEqual(value["permission"]["task"][name], "allow")
 
 
 class PlaceholderRenderTest(unittest.TestCase):

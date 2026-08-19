@@ -375,6 +375,19 @@ class ShippedContentTest(unittest.TestCase):
         # launch it would disable verification rather than one phase.
         self.assertIn("sdd-verify", orchestrator.may_delegate_to)
 
+    def test_the_orchestrator_declares_tools(self):
+        # The one agent among the twelve that declares no delegation-adjacent
+        # tool need used to fall back on the runtime's defaults. Now that the
+        # renderer's deny baseline covers every agent, this is the one whose
+        # tools this repository must declare on purpose rather than by omission.
+        # `codebase-memory` is required rather than optional because the body
+        # calls it mandatory for structural discovery.
+        orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
+        self.assertEqual(
+            set(orchestrator.requires_tools),
+            {"read", "bash", "grep", "glob", "codebase-memory"},
+        )
+
     def test_the_orchestrator_is_the_agent_a_session_starts_in(self):
         starting = [agent.name for agent in self.content.agents if agent.default]
         self.assertEqual(starting, [content.SESSION_STARTS_IN])
