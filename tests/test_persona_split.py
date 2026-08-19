@@ -287,7 +287,7 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
         self.assertEqual(self.agent.mode, content_module.AgentMode.PRIMARY)
 
     def test_the_persona_asks_for_no_more_than_it_needs(self):
-        """Declaring nothing hands a talking agent the runtime's full default toolset."""
+        """What the voice declares. That the declaration binds is the adapter's to prove."""
         self.assertEqual(list(self.agent.requires_tools), ["read"])
 
     def test_the_persona_carries_the_voice_sections(self):

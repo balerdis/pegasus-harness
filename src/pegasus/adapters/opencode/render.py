@@ -77,11 +77,8 @@ def agent(layout: Layout, item: Agent, separate_prompt: bool = True) -> list[Art
             if separate_prompt
             else _body(layout, item.body, item.name)
         )
-    tools = _tools(item)
-    if tools:
-        value["tools"] = tools
-    if item.may_delegate_to:
-        value["permission"] = {"task": {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}}
+    value["tools"] = _tools(item)
+    value["permission"] = {"task": {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}}
 
     artifacts: list[Artifact] = [
         ConfigKeyArtifact(
@@ -171,11 +168,18 @@ def _prompt_path(layout: Layout, item: Agent):
 
 
 def _tools(item: Agent) -> dict[str, bool]:
+    """A deny baseline, then exactly the declared tools turned back on.
+
+    Without the baseline, naming a tool only ever adds to the runtime's own
+    defaults: it can grant, never restrict. Starting from `{"*": False}` is what
+    makes "declare nothing" mean "nothing", instead of "whatever the runtime
+    would have given anyway".
+    """
     names = (*item.requires_tools, *item.optional_tools)
     unknown = [name for name in names if name not in TOOL_NAME]
     if unknown:
         raise RenderError(f"{item.name}: no OpenCode name for tools {', '.join(sorted(unknown))}")
-    return {TOOL_NAME[name]: True for name in names}
+    return {"*": False, **{TOOL_NAME[name]: True for name in names}}
 
 
 def _frontmatter(fields: dict[str, Any]) -> str:
