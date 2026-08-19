@@ -2,7 +2,6 @@
 name: sdd-propose
 description: Proposal executor for one change; turns exploration or direct input into a structured proposal
 mode: subagent
-hidden: true
 requires_tools: [read, write, edit, grep, glob]
 model_configurable: true
 ---

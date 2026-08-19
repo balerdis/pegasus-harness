@@ -2,7 +2,6 @@
 name: sdd-design
 description: Technical design executor for one change; captures architecture decisions and the implementation approach
 mode: subagent
-hidden: true
 requires_tools: [read, write, edit, grep, glob]
 optional_tools: [codebase-memory]
 model_configurable: true

@@ -63,7 +63,11 @@ def prompt(layout: Layout, item: Agent) -> list[Artifact]:
 
 
 def agent(layout: Layout, item: Agent, separate_prompt: bool = True) -> list[Artifact]:
-    """One entry under the settings file's agent map, plus the default when primary."""
+    """One entry under the settings file's agent map, plus the default when it is one.
+
+    `mode` and `default` say different things: `primary` says the agent can run at top
+    level, `default_agent` says which single one a session opens in.
+    """
     value: dict[str, Any] = {"description": item.description, "mode": MODE_NAME[item.mode]}
     if item.hidden:
         value["hidden"] = True
@@ -87,7 +91,7 @@ def agent(layout: Layout, item: Agent, separate_prompt: bool = True) -> list[Art
             value=value,
         )
     ]
-    if item.mode is AgentMode.PRIMARY:
+    if item.default:
         artifacts.append(
             ConfigKeyArtifact(
                 id="default-agent",

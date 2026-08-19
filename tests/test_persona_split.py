@@ -274,9 +274,17 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
         """Not "the file exists": the loader has to have picked it up as an agent."""
         self.assertIsNotNone(self.agent, "king-pegasus is not among the loaded agents")
         self.assertEqual(self.agent.source.as_posix(), "agents/king-pegasus.md")
-        self.assertEqual(self.agent.mode, content_module.AgentMode.SUBAGENT)
         self.assertTrue(self.agent.description.strip())
         self.assertTrue(self.agent.model_configurable)
+
+    def test_the_voice_is_a_top_level_agent_the_user_selects(self):
+        """It answers the user, so it is selectable at top level rather than delegated to.
+
+        Being primary is the whole of it now: whether the runtime offers an agent is
+        read off the mode rather than declared beside it, so a primary agent cannot
+        also be taken out of the switcher. `test_content.py` guards that seam.
+        """
+        self.assertEqual(self.agent.mode, content_module.AgentMode.PRIMARY)
 
     def test_the_persona_asks_for_no_more_than_it_needs(self):
         """Declaring nothing hands a talking agent the runtime's full default toolset."""

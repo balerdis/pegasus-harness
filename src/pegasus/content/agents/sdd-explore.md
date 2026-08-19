@@ -2,7 +2,6 @@
 name: sdd-explore
 description: Exploration executor for one topic; investigates the codebase and returns a structured analysis
 mode: subagent
-hidden: true
 requires_tools: [read, bash, grep, glob]
 optional_tools: [write, codebase-memory]
 model_configurable: true

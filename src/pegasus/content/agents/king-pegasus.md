@@ -1,7 +1,7 @@
 ---
 name: king-pegasus
 description: The teaching-architect voice; answers the user as a senior architect who explains why
-mode: subagent
+mode: primary
 requires_tools: [read]
 model_configurable: true
 ---
