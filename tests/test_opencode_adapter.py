@@ -1,6 +1,7 @@
 """The OpenCode adapter: the only place OpenCode's own names are allowed."""
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path, PurePosixPath
 
@@ -298,8 +299,82 @@ class OwnArtifactsTest(unittest.TestCase):
         for item in self.artifacts:
             self.assertTrue(item.path.is_relative_to(self.layout.config_dir), item.path)
 
+
+    def test_only_the_assets_the_tree_marks_executable_become_executable(self):
+        """The tree already records which file is a program; nothing else earns the bit."""
+        executable = {
+            item.path.name for item in only(self.artifacts, FileArtifact) if item.mode & 0o111
+        }
+        self.assertEqual(executable, {"pegasus-skill-registry"})
+
     def test_the_result_is_deterministic(self):
         self.assertEqual(Adapter().own_artifacts(self.layout), Adapter().own_artifacts(self.layout))
+
+
+class SkillRegistryContractTest(unittest.TestCase):
+    """The one contract that spans a TypeScript plugin and a Python install plan.
+
+    Nothing else crosses this seam, so nothing else can catch it drifting: the
+    plugin reads a file the installer writes, and neither side imports the other.
+    """
+
+    PLUGIN = (
+        Path(__file__).resolve().parent.parent
+        / "src/pegasus/adapters/opencode/assets/plugins/pegasus-skill-registry.ts"
+    )
+
+    def setUp(self):
+        self.layout = Adapter().layout(ENVIRONMENT)
+        self.artifacts = Adapter().own_artifacts(self.layout)
+        self.files = {item.path: item for item in only(self.artifacts, FileArtifact)}
+
+    def contract_path(self):
+        """The target the plugin reads, taken from the plugin instead of restated."""
+        source = self.PLUGIN.read_text(encoding="utf-8")
+        match = re.search(
+            r'join\(\s*configDirectory\s*,\s*"opencode"\s*,\s*"([^"]+)"\s*\)', source
+        )
+        self.assertIsNotNone(match, "the plugin no longer builds its contract path this way")
+        return self.layout.config_dir / match.group(1)
+
+    def test_the_installer_writes_the_file_the_plugin_reads(self):
+        self.assertIn(self.contract_path(), self.files)
+
+    def test_the_contract_carries_resolved_paths_not_placeholders(self):
+        declared = dict(
+            line.split("=", 1)
+            for line in self.files[self.contract_path()].content.decode("utf-8").splitlines()
+            if "=" in line and not line.lstrip().startswith("#")
+        )
+        self.assertEqual(
+            declared,
+            {
+                "PEGASUS_SKILL_REGISTRY_BIN": str(
+                    self.layout.config_dir / "pegasus/skill-registry/pegasus-skill-registry"
+                ),
+                "PEGASUS_SKILL_ROOTS": str(self.layout.skills_dir),
+            },
+        )
+
+    def test_every_declared_path_is_an_artifact_this_install_creates(self):
+        binary = self.layout.config_dir / "pegasus/skill-registry/pegasus-skill-registry"
+        self.assertIn(binary, self.files)
+        self.assertEqual(self.layout.skills_dir, self.layout.config_dir / "skills")
+
+    def test_the_binary_the_plugin_executes_is_installed_executable(self):
+        """A wrapper the plugin hands to execFile is useless at 0644.
+
+        The contract can name the right path and the plugin still fail: the
+        permission travels with the artifact, not with the asset it was read from.
+        """
+        binary = self.files[
+            self.layout.config_dir / "pegasus/skill-registry/pegasus-skill-registry"
+        ]
+        self.assertTrue(binary.mode & 0o111, f"mode is {binary.mode:o}")
+
+    def test_no_placeholder_example_is_shipped_any_more(self):
+        stray = [path for path in self.files if path.name.endswith(".example")]
+        self.assertEqual(stray, [])
 
 
 class ShippedContentRenderTest(unittest.TestCase):

@@ -1,4 +1,3 @@
-<!-- pegasus:baseline-rules -->
 ## Rules
 
 - Never add "Co-Authored-By" or AI attribution to commits. Use conventional commits only.
@@ -43,9 +42,7 @@ Your runtime lists the skills installed for this session somewhere in your syste
 **Self-check BEFORE every response**: does this request match any skill in that inventory? If it does, read the matching `SKILL.md` with your file-read tool BEFORE generating your reply. This is a blocking requirement, not optional context. Skipping it is a discipline failure.
 
 Multiple skills can apply at once. Match by file context (extensions, paths) and by task context (what the user is asking for).
-<!-- /pegasus:baseline-rules -->
 
-<!-- pegasus:engram-protocol -->
 ## Engram Persistent Memory — Protocol
 
 You have access to Engram, a persistent memory system that survives across sessions and compactions.
@@ -143,4 +140,3 @@ If you see a compaction message or "FIRST ACTION REQUIRED":
 3. Only THEN continue working
 
 Do not skip step 1. Without it, everything done before compaction is lost from memory.
-<!-- /pegasus:engram-protocol -->
