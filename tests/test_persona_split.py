@@ -182,8 +182,8 @@ class BaselineContentTest(SharedContentRules, unittest.TestCase):
         self.assertNotIn("Never build after changes", self.text)
 
 
-class MarkerConventionTest(unittest.TestCase):
-    """Markers are how a re-install finds a block it already wrote. One spelling."""
+class MarkerAbsenceTest(unittest.TestCase):
+    """The shipped baseline carries no marked block, and nothing reads one."""
 
     @classmethod
     def setUpClass(cls):
@@ -204,39 +204,17 @@ class MarkerConventionTest(unittest.TestCase):
                 found.append((token, "open"))
         return found
 
-    def test_every_marker_is_balanced_ordered_and_disjoint(self):
-        """A block that never closes, or closes around another, breaks re-install."""
-        stack: list[str] = []
-        for name, kind in self.events(self.text):
-            if kind == "open":
-                self.assertEqual(stack, [], f"{name} opens inside {stack}; blocks must not nest")
-                stack.append(name)
-            else:
-                self.assertTrue(stack, f"{name} closes without opening")
-                self.assertEqual(stack.pop(), name, f"{name} closes the wrong block")
-        self.assertEqual(stack, [], f"never closed: {stack}")
+    def test_the_baseline_carries_no_marked_block(self):
+        """Nothing reads a marker, and nothing needs to.
 
-    def test_the_baseline_rules_block_encloses_its_sections(self):
-        """Unmarked or half-marked, a re-install cannot find these to replace them."""
-        opened = "<!-- pegasus:baseline-rules -->"
-        closed = "<!-- /pegasus:baseline-rules -->"
-        self.assertEqual(self.text.count(opened), 1)
-        self.assertEqual(self.text.count(closed), 1)
-        block = self.text[self.text.index(opened) : self.text.index(closed)]
-        for level, prefix in (
-            ("##", "Rules"),
-            ("##", "Persona Scope"),
-            ("##", "Language"),
-            ("##", "Contextual Skill Loading"),
-        ):
-            self.assertTrue(
-                declares(headings(block), level, prefix),
-                f"{prefix} sits outside the marked block",
-            )
-
-    def test_the_engram_block_uses_the_lowercase_pegasus_prefix(self):
-        self.assertEqual(self.text.count("<!-- pegasus:engram-protocol -->"), 1)
-        self.assertEqual(self.text.count("<!-- /pegasus:engram-protocol -->"), 1)
+        Markers were the mechanism for merging Pegasus's block into a file the
+        user also owns: without them a re-install cannot rewrite one block
+        without touching what surrounds it. That is not how the prompt ships.
+        Pegasus writes its own file and points the CLI at it, so the file is
+        created, replaced and removed whole. A marker no reader looks for is
+        inert text in the always-on context of every agent.
+        """
+        self.assertEqual(self.events(self.text), [])
 
     def test_no_marker_carries_the_old_capitalised_spelling(self):
         self.assertNotIn("Pegasus baseline:", self.text)
@@ -248,15 +226,6 @@ class MarkerConventionTest(unittest.TestCase):
             if "gentle-ai:" in path.read_text(encoding="utf-8")
         ]
         self.assertEqual(offenders, [])
-
-    def test_the_codebase_memory_block_left_the_baseline_for_good(self):
-        """CBM protocol centralized to `_shared/cbm-convention.md`; the baseline
-        no longer carries its own copy, so its marker pair leaves with it.
-        """
-        self.assertNotIn("<!-- codebase-memory-mcp:start -->", self.text)
-        self.assertNotIn("<!-- codebase-memory-mcp:end -->", self.text)
-        self.assertNotIn("pegasus:codebase-memory-mcp", self.text)
-
 
 class PersonaTest(SharedContentRules, unittest.TestCase):
     @classmethod

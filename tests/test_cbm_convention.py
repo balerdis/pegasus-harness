@@ -180,22 +180,5 @@ class KingPegasusToolsTest(unittest.TestCase):
             self.assertNotIn(forbidden, self.agent.optional_tools)
 
 
-class BaselineMarkerTest(unittest.TestCase):
-    """The CBM block leaves the always-on baseline; its marker pair leaves with it."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.text = (CONTENT / "system-prompt" / "AGENTS.md").read_text(encoding="utf-8")
-
-    def test_the_codebase_memory_marker_pair_is_gone(self):
-        self.assertNotIn("<!-- codebase-memory-mcp:start -->", self.text)
-        self.assertNotIn("<!-- codebase-memory-mcp:end -->", self.text)
-
-    def test_the_other_marker_pairs_remain_balanced(self):
-        for name in ("pegasus:baseline-rules", "pegasus:engram-protocol"):
-            self.assertEqual(self.text.count(f"<!-- {name} -->"), 1, name)
-            self.assertEqual(self.text.count(f"<!-- /{name} -->"), 1, name)
-
-
 if __name__ == "__main__":
     unittest.main()
