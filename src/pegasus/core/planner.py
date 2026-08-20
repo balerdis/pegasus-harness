@@ -102,6 +102,12 @@ class Applied:
     records: tuple[Record, ...]
     skipped: tuple[Step, ...]
     unchanged: tuple[Step, ...] = ()
+    replaced: tuple[tuple[Path, bytes, int | None], ...] = ()
+    """What each updated file held before this run, for a caller that has to undo it.
+
+    ``retire`` cannot answer this: it removes what the journal records, and an
+    updated artifact existed before the run, so removing it would take away a
+    working file instead of putting the previous version back."""
 
 
 @dataclass(frozen=True)
@@ -295,7 +301,16 @@ def apply(filesystem: FileSystem, plan: Plan, *, at: str) -> Applied:
             records.extend(_key_record(step, at) for step in steps)
     except (FileSystemError, codecs.CodecError, pointer.PointerError) as error:
         raise PlannerError(_undone(filesystem, created, restorable, error)) from error
-    return Applied(records=tuple(records), skipped=plan.collisions, unchanged=plan.unchanged)
+    return Applied(
+        records=tuple(records),
+        skipped=plan.collisions,
+        unchanged=plan.unchanged,
+        replaced=tuple(
+            (step.artifact.path, *restorable[step.artifact.path])
+            for step in plan.updates
+            if isinstance(step.artifact, FileArtifact) and step.artifact.path in restorable
+        ),
+    )
 
 
 def _undone(
@@ -336,6 +351,24 @@ def _undo(
     for path in reversed(created):
         try:
             filesystem.remove(path)
+        except FileSystemError as failure:
+            failures.append(str(failure))
+    return failures
+
+
+def put_back(filesystem: FileSystem, applied: Applied) -> list[str]:
+    """Restore the previous version of every file this run replaced.
+
+    For the caller that placed everything and only then found it could not
+    record it. Retiring is the wrong tool for an update: it takes the artifact
+    away, and the artifact was already there. Restoring first also settles what
+    retiring does next — the fingerprint no longer matches, so it leaves the file
+    alone instead of removing it.
+    """
+    failures: list[str] = []
+    for path, content, mode in applied.replaced:
+        try:
+            filesystem.write_atomic(path, content, mode=mode if mode is not None else 0o644)
         except FileSystemError as failure:
             failures.append(str(failure))
     return failures
