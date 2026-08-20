@@ -151,13 +151,7 @@ Return EXACTLY this format to the orchestrator (and write the same content to `e
 <!-- pegasus-local:cbm-protocol -->
 ## Local Codebase Memory Protocol for Exploration
 
-Use CBM when exploration needs semantic code understanding: architecture, request/data flows, symbols, routes, dependency relationships, callers/callees, or impact mapping.
-
-Preferred flow:
-1. Check the index with `index_status` or `list_projects`; run `index_repository` when the project is missing or stale enough to block useful discovery.
-2. Start broad structural discovery with `get_architecture`, `search_graph`, and `trace_path` before a grep/read fan-out.
-3. Use `search_code` for code text patterns when graph search is not enough.
-4. Use raw grep/read for exact literals, config/non-code files, or live edited files that may not be indexed.
+Use CBM when exploration needs semantic code understanding: architecture, request/data flows, symbols, routes, dependency relationships, callers/callees, or impact mapping. Follow the tool priority order and the index-repair rule in `_shared/cbm-convention.md`.
 
 Do NOT use CBM for tiny tasks where the relevant file is already known.
 <!-- /pegasus-local:cbm-protocol -->

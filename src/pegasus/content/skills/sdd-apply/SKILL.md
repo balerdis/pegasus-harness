@@ -272,13 +272,7 @@ If none, say "None."}
 <!-- pegasus-local:cbm-protocol -->
 ## Local Codebase Memory Protocol for Implementation
 
-Use CBM before writing code when the task changes central/shared symbols, public APIs, controllers/handlers, service methods, routing, persistence flows, or anything likely to have non-obvious callers.
-
-Implementation gate:
-- Before modifying central/shared symbols, use `search_graph` and `trace_path` to inspect the affected surface.
-- Use `get_code_snippet` only after `search_graph` finds the exact qualified name.
-- Use `search_code` for text patterns that are not represented well as graph symbols.
-- Use raw reads for active edits, live files, exact literals, config, and non-code files.
+Use CBM before writing code when the task changes central/shared symbols, public APIs, controllers/handlers, service methods, routing, persistence flows, or anything likely to have non-obvious callers. Follow the tool priority order and the index-repair rule in `_shared/cbm-convention.md`.
 
 Do NOT call CBM for simple one-file mechanical edits where the affected surface is obvious.
 

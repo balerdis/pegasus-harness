@@ -234,7 +234,9 @@ class ShippedCatalogTest(unittest.TestCase):
     def test_produces_the_whole_payload(self):
         files = [entry for entry in self.catalog.entries if entry.kind == "file"]
         keys = [entry for entry in self.catalog.entries if entry.kind == "config-key"]
-        self.assertEqual((len(files), len(keys)), (88, 17))
+        # 89, not 88: `_shared/cbm-convention.md` is the one new shipped file,
+        # centralizing CBM protocol prose that used to be restated per phase.
+        self.assertEqual((len(files), len(keys)), (89, 17))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:

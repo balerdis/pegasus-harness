@@ -343,11 +343,15 @@ class ShippedContentRenderTest(unittest.TestCase):
             value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
             self.assertEqual(value["permission"]["task"]["*"], "deny", agent.name)
 
-    def test_the_persona_renders_its_single_tool_as_a_real_restriction(self):
-        """The voice declares `read` alone; only this side can prove that denies the rest."""
+    def test_the_persona_renders_its_declared_tools_as_a_real_restriction(self):
+        """The voice declares `read` and `codebase-memory`; only this side proves that
+        denies everything else, including write, edit, and bash.
+        """
         persona = next(a for a in self.loaded.agents if a.name == "king-pegasus")
         value = only(render_module.agent(self.layout, persona), ConfigKeyArtifact)[0].value
-        self.assertEqual(value["tools"], {"*": False, "read": True})
+        self.assertEqual(
+            value["tools"], {"*": False, "read": True, "codebase-memory-mcp*": True}
+        )
 
     def test_the_orchestrator_renders_its_declared_allows_on_top_of_the_deny_baseline(self):
         orchestrator = next(a for a in self.loaded.agents if a.name == "pegasus-orchestrator")

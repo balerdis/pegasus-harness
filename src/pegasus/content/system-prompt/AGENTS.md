@@ -144,25 +144,3 @@ If you see a compaction message or "FIRST ACTION REQUIRED":
 
 Do not skip step 1. Without it, everything done before compaction is lost from memory.
 <!-- /pegasus:engram-protocol -->
-
-<!-- codebase-memory-mcp:start -->
-## Codebase Knowledge Graph (codebase-memory-mcp)
-
-This project uses codebase-memory-mcp to maintain a knowledge graph of the codebase.
-ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery.
-
-### Priority Order
-1. `search_graph` — find functions, classes, routes, variables by pattern
-2. `trace_path` — trace who calls a function or what it calls
-3. `get_code_snippet` — read specific function/class source code
-4. `query_graph` — run Cypher queries for complex patterns
-5. `get_architecture` — high-level project summary
-
-### Index freshness
-Check `index_status` before relying on graph evidence. If the project is missing or stale enough to block useful discovery, run `index_repository` or treat graph results as provisional and say so. Never invoke CBM through a shell command or a hard-coded binary path — use the MCP tools only.
-
-### When to fall back to grep/glob
-- Searching for string literals, error messages, config values
-- Searching non-code files (Dockerfiles, shell scripts, configs)
-- When MCP tools return insufficient results
-<!-- codebase-memory-mcp:end -->
