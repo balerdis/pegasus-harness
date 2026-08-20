@@ -36,8 +36,11 @@ from pegasus.core.types import Artifact, Codec, ConfigKeyArtifact, FileArtifact
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 
 CREATE = "create"
+UPDATE = "update"
+UNCHANGED = "unchanged"
 SKIP = "skip"
 COLLISION = "collision"
+MUTATED = "mutated"
 APPEND = "/-"
 """A pointer ending here addresses the end of a list, which is not a slot."""
 
@@ -57,6 +60,11 @@ class Step:
     action: str
     digest: str
     reason: str | None = None
+    entry: Record | None = None
+    """What the journal already held for this artifact, when it held anything.
+
+    Carried on the step rather than looked up again while applying: the decision
+    and the record that justified it cannot then disagree."""
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,20 @@ class Plan:
         return tuple(step for step in self.steps if step.action == CREATE)
 
     @property
+    def updates(self) -> tuple[Step, ...]:
+        return tuple(step for step in self.steps if step.action == UPDATE)
+
+    @property
+    def unchanged(self) -> tuple[Step, ...]:
+        return tuple(step for step in self.steps if step.action == UNCHANGED)
+
+    @property
+    def placements(self) -> tuple[Step, ...]:
+        """Everything this run writes. A creation and an update differ in what
+        they leave behind, not in the writing."""
+        return (*self.creations, *self.updates)
+
+    @property
     def collisions(self) -> tuple[Step, ...]:
         return tuple(step for step in self.steps if step.action == SKIP)
 
@@ -79,6 +101,7 @@ class Applied:
 
     records: tuple[Record, ...]
     skipped: tuple[Step, ...]
+    unchanged: tuple[Step, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -98,21 +121,112 @@ class Retired:
     kept_links: tuple[str, ...] = ()
 
 
-def plan(filesystem: FileSystem, *, cli: str, artifacts: Sequence[Artifact]) -> Plan:
-    """Decide the fate of every artifact without touching anything."""
+def plan(
+    filesystem: FileSystem,
+    *,
+    cli: str,
+    artifacts: Sequence[Artifact],
+    installed: Install | None = None,
+) -> Plan:
+    """Decide the fate of every artifact without touching anything.
+
+    ``installed`` is what the journal says this CLI already received, and it is
+    what turns an occupied address from a dead end into a question: an address
+    holding bytes Pegasus recorded writing is an update, and the same address
+    holding anything else is still the user's. Without it every occupied address
+    is a collision, which is the honest answer for a caller that cannot tell the
+    two apart.
+    """
     _refuse_duplicates(cli, artifacts)
     documents = _load_documents(filesystem, artifacts)
-    steps = tuple(_step(filesystem, artifact, documents) for artifact in artifacts)
+    owned = {entry.id: entry for entry in (installed.entries if installed else ())}
+    steps = tuple(_step(filesystem, artifact, documents, owned) for artifact in artifacts)
     return Plan(cli=cli, steps=steps)
 
 
-def _step(filesystem: FileSystem, artifact: Artifact, documents: dict[Path, Any]) -> Step:
+def _step(
+    filesystem: FileSystem, artifact: Artifact, documents: dict[Path, Any], owned: dict[str, Record]
+) -> Step:
     digest = ownership.digest(artifact)
     if isinstance(artifact, FileArtifact):
-        occupied = filesystem.exists(artifact.path)
-    else:
-        occupied = _occupied(artifact, documents.get(artifact.path), digest)
-    if occupied:
+        return _file_step(filesystem, artifact, digest, owned.get(artifact.id))
+    return _key_step(artifact, documents.get(artifact.path), digest, owned.get(artifact.id))
+
+
+def _file_step(
+    filesystem: FileSystem, artifact: FileArtifact, digest: str, entry: Record | None
+) -> Step:
+    """A file's fate, once the journal can be consulted about it.
+
+    The order of the questions is the whole design. Does anything hold this
+    address; does the journal claim it; was it deliberately changed since;
+    are the bytes there still the ones recorded. Only an address that survives
+    all four may be written over, and only if the new bytes differ from it.
+    """
+    if not filesystem.exists(artifact.path):
+        return Step(artifact=artifact, action=CREATE, digest=digest)
+    if entry is None or entry.kind != "file" or entry.target != artifact.path:
+        return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
+    if entry.mutations:
+        # A mutation rebaselines the digest to keep ownership intact, so a
+        # deliberately changed artifact still looks like ours. Ours to retire,
+        # not to overwrite: the change is the user's, made through Pegasus.
+        return Step(artifact=artifact, action=SKIP, digest=digest, reason=MUTATED)
+    try:
+        current = ownership.digest_of_bytes(filesystem.read_bytes(artifact.path))
+    except FileSystemError:
+        # Unreadable is not the same as absent: what cannot be fingerprinted
+        # cannot be proved ours, and an unprovable claim is left alone.
+        return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
+    if not ownership.still_ours(entry, current):
+        return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
+    if current == digest:
+        return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
+    return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
+
+
+def _key_step(artifact: ConfigKeyArtifact, document: Any, digest: str, entry: Record | None) -> Step:
+    """A configuration key's fate, asked of the document rather than of the disk.
+
+    The two shapes ask it differently. An addressable key is ours when the value
+    sitting at its pointer is the one recorded. An append has no address, so its
+    item is found by fingerprint, and a value the list no longer holds is a
+    creation — the same answer as before this module could consult a journal.
+    """
+    if not _claimable(artifact, entry):
+        return _plain_step(artifact, document, digest)
+    if entry.mutations:
+        if _occupied(artifact, document, digest):
+            return Step(artifact=artifact, action=SKIP, digest=digest, reason=MUTATED)
+        return _plain_step(artifact, document, digest)
+    if _appends(artifact.pointer):
+        if _index_of(document, artifact.pointer, digest) is not None:
+            return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
+        if _index_of(document, artifact.pointer, entry.after_digest) is None:
+            return Step(artifact=artifact, action=CREATE, digest=digest)
+        return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
+    if not ownership.occupies(artifact, document):
+        return Step(artifact=artifact, action=CREATE, digest=digest)
+    if ownership.digest_of_value(pointer.get_at(document, artifact.pointer)) != entry.after_digest:
+        return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
+    if entry.after_digest == digest:
+        return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
+    return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
+
+
+def _claimable(artifact: ConfigKeyArtifact, entry: Record | None) -> bool:
+    """Whether this record is about this exact key, and not merely about its id."""
+    return (
+        entry is not None
+        and entry.kind == "config-key"
+        and entry.target == artifact.path
+        and entry.pointer == artifact.pointer
+    )
+
+
+def _plain_step(artifact: ConfigKeyArtifact, document: Any, digest: str) -> Step:
+    """The answer with no journal to consult: occupied is as far as it goes."""
+    if _occupied(artifact, document, digest):
         return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
     return Step(artifact=artifact, action=CREATE, digest=digest)
 
@@ -138,32 +252,50 @@ def apply(filesystem: FileSystem, plan: Plan, *, at: str) -> Applied:
     Files go first and configuration documents second, so a failure has one
     kind of thing to undo at a time. Every configuration file is written once,
     which is what makes a half-applied document impossible.
+
+    An update inherits from the record the plan judged it against, because a
+    record is not only a fingerprint: it also carries what the user had before
+    Pegasus took the address over, and that debt outlives every version written
+    since.
     """
     created: list[Path] = []
     restorable: dict[Path, tuple[bytes | None, int | None]] = {}
     records: list[Record] = []
     try:
-        for step in plan.creations:
+        for step in plan.placements:
             if isinstance(step.artifact, FileArtifact):
+                if step.action == UPDATE:
+                    # Captured before the write, because an update is the one
+                    # placement whose rollback is a restore and not a removal.
+                    restorable.setdefault(
+                        step.artifact.path,
+                        (filesystem.read_bytes(step.artifact.path), filesystem.mode_of(step.artifact.path)),
+                    )
                 filesystem.write_atomic(step.artifact.path, step.artifact.content, mode=step.artifact.mode)
-                created.append(step.artifact.path)
+                if step.action == CREATE:
+                    created.append(step.artifact.path)
                 records.append(_file_record(step, at))
-        for path, steps in _by_file(plan.creations).items():
+        for path, steps in _by_file(plan.placements).items():
             codec = _codec(steps)
             document = _read_document(filesystem, path, codec)
-            restorable[path] = (
-                filesystem.read_bytes(path) if document is not None else None,
-                filesystem.mode_of(path),
+            restorable.setdefault(
+                path,
+                (
+                    filesystem.read_bytes(path) if document is not None else None,
+                    filesystem.mode_of(path),
+                ),
             )
             for step in steps:
                 document = pointer.set_at(
-                    document if document is not None else {}, step.artifact.pointer, step.artifact.value
+                    document if document is not None else {},
+                    _address_for(step, document),
+                    step.artifact.value,
                 )
             _write_document(filesystem, path, document, codec, restorable[path][1])
             records.extend(_key_record(step, at) for step in steps)
     except (FileSystemError, codecs.CodecError, pointer.PointerError) as error:
         raise PlannerError(_undone(filesystem, created, restorable, error)) from error
-    return Applied(records=tuple(records), skipped=plan.collisions)
+    return Applied(records=tuple(records), skipped=plan.collisions, unchanged=plan.unchanged)
 
 
 def _undone(
@@ -210,25 +342,53 @@ def _undo(
 
 
 def _file_record(step: Step, at: str) -> Record:
+    """The record for what was just written, keeping what only the old one knew.
+
+    ``before`` and ``adopted`` are a promise to the user about their own content,
+    made when Pegasus first took the address over. Rewriting the file does not
+    discharge that promise, so a fresh record would quietly drop it.
+    """
+    entry = step.entry
     return Record(
         id=step.artifact.id,
         kind="file",
         target=step.artifact.path,
         after_digest=step.digest,
-        created_at=at,
+        created_at=entry.created_at if entry else at,
+        before=entry.before if entry else None,
         mode=f"{step.artifact.mode:04o}",
+        adopted=entry.adopted if entry else False,
     )
 
 
+def _address_for(step: Step, document: Any) -> str:
+    """Where to write this key, which for a replaced append is not its pointer.
+
+    An append addresses the end of the list, so writing there a second time
+    would leave two of ours. The item is located by the fingerprint recorded for
+    it — never by an index remembered from last time, because the user reorders
+    lists — and replaced exactly where it already sits.
+    """
+    address = step.artifact.pointer
+    if step.action != UPDATE or not _appends(address) or step.entry is None:
+        return address
+    index = _index_of(document, address, step.entry.after_digest)
+    return address if index is None else f"{_parent(address)}/{index}"
+
+
 def _key_record(step: Step, at: str) -> Record:
+    """Like a file's record, and carrying the same debt forward. See ``_file_record``."""
+    entry = step.entry
     return Record(
         id=step.artifact.id,
         kind="config-key",
         target=step.artifact.path,
         after_digest=step.digest,
-        created_at=at,
+        created_at=entry.created_at if entry else at,
+        before=entry.before if entry else None,
         pointer=step.artifact.pointer,
         codec=step.artifact.codec.value,
+        adopted=entry.adopted if entry else False,
     )
 
 
