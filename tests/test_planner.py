@@ -461,6 +461,25 @@ class KeyUpdateTest(unittest.TestCase):
         step = self.plan_with(self.an_append("./pegasus-AGENTS.md"), entry).steps[0]
         self.assertEqual(step.action, planner.UNCHANGED)
 
+    def test_the_document_goes_back_byte_for_byte_when_a_key_was_updated(self):
+        """Same debt as an updated file, and it was half paid.
+
+        Retiring an updated key removes it: the record has no ``before``, so
+        removal is what retiring means — and the key was there, with the previous
+        value, before this run.
+        """
+        old = {"model": "vendor/old"}
+        self.given({"agent": {"alpha": old}, "theirs": 1})
+        before = self.filesystem.files[SETTINGS]
+        applied = planner.apply(self.filesystem, self.plan_with(a_key(), self.entry(old)), at=AT)
+        self.assertEqual(planner.put_back(self.filesystem, applied), [])
+        self.assertEqual(self.filesystem.files[SETTINGS], before)
+
+    def test_a_document_this_run_created_is_not_something_to_put_back(self):
+        """Pegasus owns keys inside a configuration file, never the file itself."""
+        applied = planner.apply(self.filesystem, self.plan_with(a_key()), at=AT)
+        self.assertEqual(applied.replaced, ())
+
     def test_an_append_the_user_removed_is_placed_again(self):
         """Today's answer, kept on purpose: absence is a creation, not a verdict."""
         self.given({"instructions": ["./theirs.md"]})

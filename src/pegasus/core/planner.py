@@ -107,7 +107,7 @@ class Applied:
 
     ``retire`` cannot answer this: it removes what the journal records, and an
     updated artifact existed before the run, so removing it would take away a
-    working file instead of putting the previous version back."""
+    working file, or a key whose previous value nothing else remembers."""
 
 
 @dataclass(frozen=True)
@@ -305,10 +305,15 @@ def apply(filesystem: FileSystem, plan: Plan, *, at: str) -> Applied:
         records=tuple(records),
         skipped=plan.collisions,
         unchanged=plan.unchanged,
+        # Files and configuration documents alike: an update's address is one
+        # that already held something, and putting that back is the same act
+        # whichever shape lives there. A path this run brought into existence is
+        # not here, because restoring it would mean removing it, and Pegasus does
+        # not remove a configuration file it merely put keys into.
         replaced=tuple(
-            (step.artifact.path, *restorable[step.artifact.path])
-            for step in plan.updates
-            if isinstance(step.artifact, FileArtifact) and step.artifact.path in restorable
+            (path, content, mode)
+            for path, (content, mode) in restorable.items()
+            if content is not None and path in {step.artifact.path for step in plan.updates}
         ),
     )
 
@@ -357,7 +362,7 @@ def _undo(
 
 
 def put_back(filesystem: FileSystem, applied: Applied) -> list[str]:
-    """Restore the previous version of every file this run replaced.
+    """Restore the previous version of everything this run replaced.
 
     For the caller that placed everything and only then found it could not
     record it. Retiring is the wrong tool for an update: it takes the artifact
