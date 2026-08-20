@@ -200,13 +200,7 @@ Ready for tasks (sdd-tasks).
 <!-- pegasus-local:cbm-protocol -->
 ## Local Codebase Memory Protocol for Design
 
-Use CBM to validate design decisions when the change touches non-trivial coupling, shared abstractions, public APIs, routes, persistence flows, or cross-module behavior.
-
-Before finalizing design, prefer:
-- `get_architecture` to map the relevant area.
-- `trace_path` to inspect callers, callees, and flow boundaries.
-- `query_graph` for complex coupling or dependency questions.
-- `detect_changes` when comparing current work against a base branch or previous ref.
+Use CBM to validate design decisions when the change touches non-trivial coupling, shared abstractions, public APIs, routes, persistence flows, or cross-module behavior. Follow the tool priority order and the index-repair rule in `_shared/cbm-convention.md`.
 
 Skip CBM for isolated UI/copy/docs/config-only design where graph relationships do not matter.
 <!-- /pegasus-local:cbm-protocol -->

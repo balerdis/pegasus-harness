@@ -58,10 +58,6 @@ BASELINE_HEADINGS = (
     ("###", "DELIVERY GUARANTEE"),
     ("###", "SESSION CLOSE PROTOCOL"),
     ("###", "AFTER COMPACTION"),
-    ("##", "Codebase Knowledge Graph"),
-    ("###", "Priority Order"),
-    ("###", "Index freshness"),
-    ("###", "When to fall back to grep/glob"),
 )
 
 #: The voice sections. `## Persona Scope` in the baseline promises a persona has
@@ -167,15 +163,13 @@ class BaselineContentTest(SharedContentRules, unittest.TestCase):
         self.assertNotIn("Skills (Auto-load based on context)", self.text)
         self.assertNotIn("| Context | Skill to load |", self.text)
 
-    def test_the_codebase_block_nests_under_the_document(self):
-        """It is a section of this file, not a second document pasted at the end."""
+    def test_no_section_claims_a_top_level_title(self):
+        """It is a section of the runtime's own prompt, not a second document pasted in."""
         self.assertEqual(
             [head for head in self.headings if head.startswith("# ")],
             [],
             "the baseline has no title of its own; nothing in it may claim `#`",
         )
-        for child in ("Priority Order", "Index freshness", "When to fall back to grep/glob"):
-            self.assertTrue(declares(self.headings, "###", child), f"{child} is not a `###` child")
 
     def test_the_session_summary_template_is_a_fenced_payload(self):
         """Written with `##`, so unfenced it reads as six top-level document sections."""
@@ -255,10 +249,12 @@ class MarkerConventionTest(unittest.TestCase):
         ]
         self.assertEqual(offenders, [])
 
-    def test_the_codebase_memory_block_keeps_its_own_unprefixed_markers(self):
-        """It describes that plugin's behaviour, so the plugin's name is the right owner."""
-        self.assertIn("<!-- codebase-memory-mcp:start -->", self.text)
-        self.assertIn("<!-- codebase-memory-mcp:end -->", self.text)
+    def test_the_codebase_memory_block_left_the_baseline_for_good(self):
+        """CBM protocol centralized to `_shared/cbm-convention.md`; the baseline
+        no longer carries its own copy, so its marker pair leaves with it.
+        """
+        self.assertNotIn("<!-- codebase-memory-mcp:start -->", self.text)
+        self.assertNotIn("<!-- codebase-memory-mcp:end -->", self.text)
         self.assertNotIn("pegasus:codebase-memory-mcp", self.text)
 
 
@@ -287,8 +283,13 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
         self.assertEqual(self.agent.mode, content_module.AgentMode.PRIMARY)
 
     def test_the_persona_asks_for_no_more_than_it_needs(self):
-        """What the voice declares. That the declaration binds is the adapter's to prove."""
-        self.assertEqual(list(self.agent.requires_tools), ["read"])
+        """What the voice declares. That the declaration binds is the adapter's to prove.
+
+        `codebase-memory` joined `read` because king-pegasus acts rather than
+        delegates: it does structural discovery too, so it needs CBM. It must
+        never gain write, edit, or bash.
+        """
+        self.assertEqual(list(self.agent.requires_tools), ["read", "codebase-memory"])
 
     def test_the_persona_carries_the_voice_sections(self):
         """A set, not a sequence: `## Persona Scope` promises these exist."""
