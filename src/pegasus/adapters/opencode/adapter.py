@@ -119,6 +119,7 @@ class Adapter:
                 id=f"own:{group}/{relative}",
                 path=layout.config_dir / target / relative,
                 content=path.read_bytes(),
+                mode=_mode_of(path),
             )
             for group, target in sorted(ASSET_TARGETS.items())
             for path, relative in _asset_files(ASSETS / group)
@@ -147,6 +148,17 @@ class Adapter:
             ),
         ]
         return artifacts
+
+
+def _mode_of(source: Path) -> int:
+    """Carry the executable bit across, because the tree already knows.
+
+    One of these assets is a program the skill registry plugin hands to
+    ``execFile``, and the rest are text somebody reads. The difference is already
+    recorded, in the mode of the file itself, so reading it here is what keeps a
+    single special case from being spelled out twice.
+    """
+    return 0o755 if source.stat().st_mode & 0o111 else 0o644
 
 
 def _skill_registry_contract(layout: Layout) -> FileArtifact:

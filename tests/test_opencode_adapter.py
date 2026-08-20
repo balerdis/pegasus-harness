@@ -300,6 +300,13 @@ class OwnArtifactsTest(unittest.TestCase):
             self.assertTrue(item.path.is_relative_to(self.layout.config_dir), item.path)
 
 
+    def test_only_the_assets_the_tree_marks_executable_become_executable(self):
+        """The tree already records which file is a program; nothing else earns the bit."""
+        executable = {
+            item.path.name for item in only(self.artifacts, FileArtifact) if item.mode & 0o111
+        }
+        self.assertEqual(executable, {"pegasus-skill-registry"})
+
     def test_the_result_is_deterministic(self):
         self.assertEqual(Adapter().own_artifacts(self.layout), Adapter().own_artifacts(self.layout))
 
@@ -353,6 +360,17 @@ class SkillRegistryContractTest(unittest.TestCase):
         binary = self.layout.config_dir / "pegasus/skill-registry/pegasus-skill-registry"
         self.assertIn(binary, self.files)
         self.assertEqual(self.layout.skills_dir, self.layout.config_dir / "skills")
+
+    def test_the_binary_the_plugin_executes_is_installed_executable(self):
+        """A wrapper the plugin hands to execFile is useless at 0644.
+
+        The contract can name the right path and the plugin still fail: the
+        permission travels with the artifact, not with the asset it was read from.
+        """
+        binary = self.files[
+            self.layout.config_dir / "pegasus/skill-registry/pegasus-skill-registry"
+        ]
+        self.assertTrue(binary.mode & 0o111, f"mode is {binary.mode:o}")
 
     def test_no_placeholder_example_is_shipped_any_more(self):
         stray = [path for path in self.files if path.name.endswith(".example")]
