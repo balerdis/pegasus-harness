@@ -64,6 +64,11 @@ class CommandTestCase(unittest.TestCase):
         code = cli.main([*argv, "--json"], runtime=context)
         return code, json.loads(context.out.getvalue())
 
+    def run_prose(self, *argv) -> tuple[int, str]:
+        context = self.runtime()
+        code = cli.main(list(argv), runtime=context)
+        return code, context.out.getvalue()
+
     def installed_entries(self):
         return journal_module.install_for(self.store().load(), CLI).entries
 
@@ -126,15 +131,6 @@ class InstallTest(CommandTestCase):
         self.assertTrue(install.release["catalog_digest"].startswith("sha256:"))
         self.assertEqual(install.installed_at, AT)
 
-    def test_installing_twice_reports_every_artifact_as_skipped(self):
-        self.present()
-        self.run_cli("install", "--cli", CLI)
-        code, report = self.run_cli("install", "--cli", CLI)
-        self.assertEqual(code, 0)
-        self.assertEqual(report["created"], [])
-        self.assertTrue(report["skipped"])
-        self.assertTrue(all(item["reason"] == "collision" for item in report["skipped"]))
-
     def test_reinstalling_does_not_erase_what_the_journal_already_owned(self):
         """The second run creates nothing — everything it wants is its own work
         from the first run. Writing that empty result over the journal would
@@ -164,6 +160,33 @@ class InstallTest(CommandTestCase):
         )
         cli.main(["install", "--cli", CLI, "--json"], runtime=later)
         self.assertEqual(journal_module.install_for(self.store().load(), CLI).installed_at, AT)
+
+    def test_reinstalling_the_same_payload_reports_no_work(self):
+        """The second run is not a wall of collisions any more; it is a no-op."""
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(report["created"], [])
+        self.assertEqual(report["updated"], [])
+        self.assertEqual(report["skipped"], [])
+        self.assertTrue(report["unchanged"])
+
+    def test_a_file_the_user_edited_is_still_reported_as_left_alone(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        target = self.layout().system_prompt_file
+        self.filesystem.files[target] = b"the user's own words\n"
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual([item["id"] for item in report["skipped"]], ["system-prompt"])
+        self.assertEqual(self.filesystem.files[target], b"the user's own words\n")
+
+    def test_the_prose_names_what_it_updated(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        code, out = self.run_prose("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertIn("updated 0", out)
+        self.assertIn("already current", out)
 
     def test_a_dry_run_reports_the_plan_and_touches_nothing(self):
         self.present()

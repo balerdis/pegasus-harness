@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from pegasus.adapters import available
@@ -21,7 +22,7 @@ from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
 from pegasus.core import ownership
 from pegasus.core import planner
-from pegasus.core.types import Environment
+from pegasus.core.types import Environment, FileArtifact
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import FileJournalStore
 
@@ -105,6 +106,60 @@ class InstallAndRetireTest(unittest.TestCase):
         applied = planner.apply(self.fs, second, at=AT)
         self.assertEqual(applied.records, ())
         self.assertEqual({path: path.read_bytes() for path in self.files_under(self.layout.config_dir)}, before)
+
+    # --- Reinstalling ---
+
+    def installed_record(self, applied: planner.Applied) -> journal_module.Install:
+        return journal_module.Install(
+            cli=self.cli, installed_at=AT, config_dir=self.layout.config_dir, release={}, entries=applied.records
+        )
+
+    def replan(self, applied: planner.Applied, artifacts=None) -> planner.Plan:
+        return planner.plan(
+            self.fs,
+            cli=self.cli,
+            artifacts=artifacts if artifacts is not None else self.artifacts,
+            installed=self.installed_record(applied),
+        )
+
+    def test_a_second_run_over_our_own_work_has_nothing_to_collide_with(self):
+        """The payload is not a collision with itself once the journal is consulted."""
+        second = self.replan(self.install())
+        self.assertEqual(len(second.collisions), 0)
+        self.assertEqual(len(second.unchanged), len(self.artifacts))
+
+    def test_a_second_run_with_identical_content_writes_nothing(self):
+        applied = self.install()
+        before = {path: path.read_bytes() for path in self.files_under(self.layout.config_dir)}
+        second = planner.apply(self.fs, self.replan(applied), at=AT)
+        self.assertEqual(second.records, ())
+        self.assertEqual({path: path.read_bytes() for path in self.files_under(self.layout.config_dir)}, before)
+
+    def test_a_shipped_file_that_changed_is_rewritten(self):
+        """The whole point of the unit: a new version of the payload lands."""
+        applied = self.install()
+        target = next(item for item in self.artifacts if isinstance(item, FileArtifact))
+        newer = [
+            replace(item, content=b"a newer shipped version\n") if item is target else item
+            for item in self.artifacts
+        ]
+        plan = self.replan(applied, newer)
+        self.assertEqual([step.artifact.id for step in plan.updates], [target.id])
+        planner.apply(self.fs, plan, at=AT)
+        self.assertEqual(target.path.read_bytes(), b"a newer shipped version\n")
+
+    def test_a_file_the_user_edited_is_not_overwritten_by_a_reinstall(self):
+        applied = self.install()
+        target = next(item for item in self.artifacts if isinstance(item, FileArtifact))
+        target.path.write_bytes(b"the user's own words\n")
+        newer = [
+            replace(item, content=b"a newer shipped version\n") if item is target else item
+            for item in self.artifacts
+        ]
+        plan = self.replan(applied, newer)
+        self.assertEqual([step.artifact.id for step in plan.collisions], [target.id])
+        planner.apply(self.fs, plan, at=AT)
+        self.assertEqual(target.path.read_bytes(), b"the user's own words\n")
 
     # --- Retiring ---
 

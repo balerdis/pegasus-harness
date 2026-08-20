@@ -155,7 +155,15 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
 
     catalog = catalog_module.build(content_module.load(), adapter)
     artifacts = catalog_module.render(content_module.load(), adapter, environment)
-    plan = planner.plan(runtime.filesystem, cli=adapter.id, artifacts=artifacts)
+    plan = planner.plan(
+        runtime.filesystem,
+        cli=adapter.id,
+        artifacts=artifacts,
+        # Already loaded for the preflight. It is what separates an address
+        # Pegasus wrote from one the user did, so a reinstall can update its own
+        # work instead of colliding with it.
+        installed=journal_module.install_for(journal, adapter.id),
+    )
 
     if arguments.dry_run:
         return {
@@ -163,13 +171,15 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
             "status": "planned",
             "activation": activation,
             "created": [_placed(step) for step in plan.creations],
+            "updated": [_placed(step) for step in plan.updates],
+            "unchanged": [_placed(step) for step in plan.unchanged],
             "skipped": [_left(step) for step in plan.collisions],
         }
 
     # Which configuration files were already there. Retiring gives back the keys
     # Pegasus owns, never the file itself, so this is how a rollback can tell the
     # user what it could not take back.
-    documents = {step.artifact.path for step in plan.creations if step.artifact.id and _is_key(step)}
+    documents = {step.artifact.path for step in plan.placements if step.artifact.id and _is_key(step)}
     existing = {path for path in documents if runtime.filesystem.exists(path)}
 
     applied = planner.apply(runtime.filesystem, plan, at=runtime.now)
@@ -187,16 +197,26 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     try:
         store.save(journal_module.with_install(journal, merged))
     except JournalStoreError as error:
-        planner.retire(runtime.filesystem, placed)
+        retired, failures = planner.unplace(runtime.filesystem, applied, placed)
         left = sorted(str(path) for path in documents - existing if runtime.filesystem.exists(path))
-        raise _unrecordable(error, left, placed=len(applied.records)) from error
+        raise _unrecordable(
+            error,
+            left,
+            placed=len(applied.records),
+            replaced=len(applied.replaced),
+            failures=[reason for _, reason in failures],
+            removed=len(retired.removed),
+        ) from error
 
+    created_ids = {step.artifact.id for step in plan.creations}
     return {
         "cli": adapter.id,
         "status": "installed",
         "activation": activation,
         "placed": len(applied.records),
-        "created": [_recorded(record) for record in applied.records],
+        "created": [_recorded(record) for record in applied.records if record.id in created_ids],
+        "updated": [_recorded(record) for record in applied.records if record.id not in created_ids],
+        "unchanged": [_placed(step) for step in applied.unchanged],
         "skipped": [_left(step) for step in applied.skipped],
         "journal": str(store.path),
     }
@@ -349,7 +369,15 @@ def _is_key(step: planner.Step) -> bool:
     return getattr(step.artifact, "pointer", None) is not None
 
 
-def _unrecordable(error: JournalStoreError, left_behind: list[str], *, placed: int) -> CommandError:
+def _unrecordable(
+    error: JournalStoreError,
+    left_behind: list[str],
+    *,
+    placed: int,
+    replaced: int = 0,
+    failures: list[str] | None = None,
+    removed: int = 0,
+) -> CommandError:
     """The install came back out. Say so, and say what did not come with it.
 
     ``undone`` is false when this run placed nothing — a reinstall where
@@ -368,10 +396,23 @@ def _unrecordable(error: JournalStoreError, left_behind: list[str], *, placed: i
         )
     else:
         message = f"nothing needed placing, and the journal could not be written anyway: {error}"
+    if replaced:
+        message += f". {replaced} already there went back to the version they held"
+    if failures:
+        message += (
+            f". Some could not be put back, and were left as this run wrote them rather than "
+            f"removed: {'; '.join(failures)}"
+        )
     if left_behind:
         message += f". Left behind, empty: {', '.join(left_behind)}"
     failure = CommandError(message)
-    failure.report = {"placed": placed, "rolled_back": undone, "left_behind": left_behind}
+    failure.report = {
+        "placed": placed,
+        "rolled_back": undone,
+        "left_behind": left_behind,
+        "restored": replaced,
+        "removed": removed,
+    }
     return failure
 
 
@@ -398,8 +439,12 @@ def _prose(report: dict[str, Any]) -> str:
     if command == "doctor":
         return "\n".join(_cli_prose(entry) for entry in report["clis"])
     if command == "install":
-        verb = "would create" if report["status"] == "planned" else "created"
-        lines = [f"{report['cli']}: {verb} {len(report['created'])} artifacts, skipped {len(report['skipped'])}."]
+        planned = report["status"] == "planned"
+        lines = [
+            f"{report['cli']}: {'would create' if planned else 'created'} {len(report['created'])} artifacts, "
+            f"{'would update' if planned else 'updated'} {len(report['updated'])}, "
+            f"{len(report['unchanged'])} already current, skipped {len(report['skipped'])}."
+        ]
         if report["skipped"]:
             lines.append("Left alone because something was already there:")
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["skipped"])

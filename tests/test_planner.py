@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fakes import FakeFileSystem
 from pegasus.core import ownership, planner
-from pegasus.core.journal import Install, Link, Record
+from pegasus.core.journal import Install, Link, Mutation, Record
 from pegasus.core.types import Codec, ConfigKeyArtifact, FileArtifact
 
 HOME = Path("/home/probe")
@@ -235,6 +235,307 @@ class AppendTest(unittest.TestCase):
         filesystem = FakeFileSystem(files={SETTINGS: document({"instructions": ["./pegasus-AGENTS.md"]})})
         planner.retire(filesystem, self.install(self.entry()))
         self.assertEqual(json.loads(filesystem.files[SETTINGS]), {})
+
+
+class UpdateTest(unittest.TestCase):
+    """Reinstalling over Pegasus's own work updates it; over the user's, it does not.
+
+    The journal is what separates the two. A path that exists says nothing on its
+    own: the question is whether the bytes there are still the ones Pegasus
+    recorded writing.
+    """
+
+    def setUp(self):
+        self.previous = b"the shipped version"
+        self.filesystem = FakeFileSystem(files={SKILL: self.previous})
+        self.artifact = a_file(content=b"a newer shipped version")
+
+    def installed(self, *entries: Record) -> Install:
+        return Install(cli=CLI, installed_at=AT, config_dir=CONFIG, release={}, entries=entries)
+
+    def record(self, **overrides) -> Record:
+        fields = {
+            "id": self.artifact.id,
+            "kind": "file",
+            "target": SKILL,
+            "after_digest": ownership.digest_of_bytes(self.previous),
+            "created_at": AT,
+            "mode": "0644",
+        }
+        return Record(**{**fields, **overrides})
+
+    def plan_with(self, *entries: Record, artifact=None):
+        return planner.plan(
+            self.filesystem,
+            cli=CLI,
+            artifacts=[artifact if artifact is not None else self.artifact],
+            installed=self.installed(*entries),
+        )
+
+    # --- Deciding ---
+
+    def test_a_file_pegasus_wrote_and_nobody_touched_is_an_update(self):
+        step = self.plan_with(self.record()).steps[0]
+        self.assertEqual(step.action, planner.UPDATE)
+
+    def test_a_file_the_user_rewrote_is_still_skipped(self):
+        self.filesystem.files[SKILL] = b"the user's own version"
+        step = self.plan_with(self.record()).steps[0]
+        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.COLLISION))
+
+    def test_a_file_the_journal_never_recorded_is_still_skipped(self):
+        step = self.plan_with().steps[0]
+        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.COLLISION))
+
+    def test_a_file_already_carrying_this_content_and_mode_is_left_alone(self):
+        self.filesystem.modes[SKILL] = 0o644
+        step = self.plan_with(self.record(), artifact=a_file(content=self.previous)).steps[0]
+        self.assertEqual(step.action, planner.UNCHANGED)
+
+    def test_a_deliberate_change_is_never_overwritten(self):
+        """A mutation is the user's configuration, expressed through Pegasus.
+
+        ``with_mutation`` rebaselines the digest to keep ownership intact, so a
+        mutated artifact still looks like ours. Ours to retire, not to overwrite.
+        """
+        mutated = self.record(mutations=(Mutation(at=AT, by="set-model", after_digest=self.record().after_digest),))
+        step = self.plan_with(mutated).steps[0]
+        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.MUTATED))
+
+    def test_without_a_journal_nothing_updates(self):
+        """The signature stays optional, so a caller that knows nothing skips as before."""
+        step = plan_for(self.filesystem, self.artifact).steps[0]
+        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.COLLISION))
+
+    def test_updates_are_separable_from_creations(self):
+        plan = self.plan_with(self.record())
+        self.assertEqual(plan.creations, ())
+        self.assertEqual(len(plan.updates), 1)
+        self.assertEqual(plan.collisions, ())
+
+    def test_planning_an_update_writes_nothing(self):
+        self.plan_with(self.record())
+        self.assertEqual(self.filesystem.files[SKILL], self.previous)
+
+    # --- Applying ---
+
+    def test_applying_an_update_replaces_the_content(self):
+        planner.apply(self.filesystem, self.plan_with(self.record()), at=AT)
+        self.assertEqual(self.filesystem.files[SKILL], self.artifact.content)
+
+    def test_an_unchanged_file_is_not_rewritten(self):
+        self.filesystem.modes[SKILL] = 0o644
+        same = a_file(content=self.previous)
+        applied = planner.apply(self.filesystem, self.plan_with(self.record(), artifact=same), at=AT)
+        self.assertEqual(self.filesystem.writes, [])
+        self.assertEqual(applied.unchanged[0].artifact.id, same.id)
+
+    def test_a_mode_that_changed_is_an_update_even_when_the_content_did_not(self):
+        """The fingerprint is of content, and a permission is not content.
+
+        The previous unit shipped a program that installed unexecutable. Fixing
+        the bit in the tree has to reach a home that already has the file, and
+        the content there is byte-identical.
+        """
+        self.filesystem.modes[SKILL] = 0o644
+        step = self.plan_with(self.record(), artifact=a_file(content=self.previous, mode=0o755)).steps[0]
+        self.assertEqual(step.action, planner.UPDATE)
+
+    def test_the_new_mode_reaches_the_disk(self):
+        self.filesystem.modes[SKILL] = 0o644
+        plan = self.plan_with(self.record(), artifact=a_file(content=self.previous, mode=0o755))
+        planner.apply(self.filesystem, plan, at=AT)
+        self.assertEqual(self.filesystem.modes[SKILL], 0o755)
+
+    def test_an_update_is_recorded_with_the_new_fingerprint(self):
+        applied = planner.apply(self.filesystem, self.plan_with(self.record()), at=AT)
+        self.assertEqual(applied.records[0].after_digest, ownership.digest(self.artifact))
+
+    def test_an_update_keeps_what_the_user_had_before_it_was_adopted(self):
+        """Uninstall owes the user their original, and an update must not spend it."""
+        adopted = self.record(before=b"what the user wrote", adopted=True)
+        applied = planner.apply(self.filesystem, self.plan_with(adopted), at=AT)
+        self.assertEqual(applied.records[0].before, b"what the user wrote")
+        self.assertTrue(applied.records[0].adopted)
+
+    def test_undoing_a_run_that_could_not_be_recorded_restores_and_leaves_alone(self):
+        plan = self.plan_with(self.record())
+        applied = planner.apply(self.filesystem, plan, at=AT)
+        placed = self.installed(*applied.records)
+        retired, failures = planner.unplace(self.filesystem, applied, placed)
+        self.assertEqual(failures, [])
+        self.assertEqual(self.filesystem.files[SKILL], self.previous)
+        self.assertEqual(retired.removed, ())
+        self.assertEqual(retired.preserved, (self.artifact.id,))
+
+    def test_what_would_not_go_back_is_not_retired_either(self):
+        """Removing it would leave the user with neither version, which is worse."""
+        plan = self.plan_with(self.record())
+        applied = planner.apply(self.filesystem, plan, at=AT)
+        self.filesystem.fail_always.add(SKILL)
+        retired, failures = planner.unplace(self.filesystem, applied, self.installed(*applied.records))
+        self.assertEqual([path for path, _ in failures], [SKILL])
+        self.assertEqual(retired.removed, ())
+        self.assertIn(SKILL, self.filesystem.files)
+
+    def test_a_failed_run_puts_the_previous_content_back(self):
+        """An update has something to restore, so rolling it back is not a removal."""
+        failing = FakeFileSystem(files={SKILL: self.previous}, fail_on={CONFIG / "skills/beta/SKILL.md"})
+        plan = planner.plan(
+            failing,
+            cli=CLI,
+            artifacts=[self.artifact, a_file("skill:beta", CONFIG / "skills/beta/SKILL.md", b"never lands")],
+            installed=self.installed(self.record()),
+        )
+        with self.assertRaises(planner.PlannerError):
+            planner.apply(failing, plan, at=AT)
+        self.assertEqual(failing.files[SKILL], self.previous)
+
+
+class KeyUpdateTest(unittest.TestCase):
+    """A configuration key Pegasus owns is updated in place; the user's is not touched.
+
+    An append has the harder version of the question. It has no address, so its
+    item is found by fingerprint, and a new value must replace the old one where
+    it sits — appending instead would leave two of ours and reorder the user's.
+    """
+
+    def setUp(self):
+        self.filesystem = FakeFileSystem()
+
+    def install(self, *entries: Record) -> Install:
+        return Install(cli=CLI, installed_at=AT, config_dir=CONFIG, release={}, entries=entries)
+
+    def entry(self, value, *, ptr="/agent/alpha", identifier="agent:alpha", **overrides) -> Record:
+        fields = {
+            "id": identifier,
+            "kind": "config-key",
+            "target": SETTINGS,
+            "pointer": ptr,
+            "codec": "json",
+            "after_digest": ownership.digest_of_value(value),
+            "created_at": AT,
+        }
+        return Record(**{**fields, **overrides})
+
+    def given(self, payload):
+        self.filesystem.files[SETTINGS] = document(payload)
+
+    def plan_with(self, artifact, *entries: Record):
+        return planner.plan(
+            self.filesystem, cli=CLI, artifacts=[artifact], installed=self.install(*entries)
+        )
+
+    def settings(self):
+        return json.loads(self.filesystem.files[SETTINGS])
+
+    # --- An addressable key ---
+
+    def test_a_value_pegasus_wrote_and_nobody_touched_is_an_update(self):
+        old = {"model": "vendor/old"}
+        self.given({"agent": {"alpha": old}})
+        step = self.plan_with(a_key(), self.entry(old)).steps[0]
+        self.assertEqual(step.action, planner.UPDATE)
+
+    def test_applying_the_update_replaces_the_value(self):
+        old = {"model": "vendor/old"}
+        self.given({"agent": {"alpha": old}, "theirs": 1})
+        planner.apply(self.filesystem, self.plan_with(a_key(), self.entry(old)), at=AT)
+        self.assertEqual(self.settings()["agent"]["alpha"], {"model": "vendor/model"})
+        self.assertEqual(self.settings()["theirs"], 1)
+
+    def test_a_value_the_user_changed_is_still_skipped(self):
+        self.given({"agent": {"alpha": {"model": "what the user chose"}}})
+        step = self.plan_with(a_key(), self.entry({"model": "vendor/old"})).steps[0]
+        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.COLLISION))
+
+    def test_a_value_the_journal_never_recorded_is_still_skipped(self):
+        self.given({"agent": {"alpha": {"model": "vendor/old"}}})
+        step = self.plan_with(a_key()).steps[0]
+        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.COLLISION))
+
+    def test_a_value_already_in_place_is_left_alone(self):
+        current = {"model": "vendor/model"}
+        self.given({"agent": {"alpha": current}})
+        step = self.plan_with(a_key(), self.entry(current)).steps[0]
+        self.assertEqual(step.action, planner.UNCHANGED)
+
+    def test_a_deliberate_change_is_never_overwritten(self):
+        old = {"model": "vendor/old"}
+        mutated = self.entry(old, mutations=(Mutation(at=AT, by="set-model", after_digest=ownership.digest_of_value(old)),))
+        self.given({"agent": {"alpha": old}})
+        step = self.plan_with(a_key(), mutated).steps[0]
+        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.MUTATED))
+
+    def test_an_updated_key_keeps_what_the_user_had_before_it_was_adopted(self):
+        old = {"model": "vendor/old"}
+        self.given({"agent": {"alpha": old}})
+        adopted = self.entry(old, before={"model": "theirs"}, adopted=True)
+        applied = planner.apply(self.filesystem, self.plan_with(a_key(), adopted), at=AT)
+        self.assertEqual(applied.records[0].before, {"model": "theirs"})
+        self.assertTrue(applied.records[0].adopted)
+
+    # --- An append ---
+
+    def an_append(self, value):
+        return ConfigKeyArtifact(
+            id="system-prompt-instruction", path=SETTINGS, pointer="/instructions/-", value=value
+        )
+
+    def test_an_append_whose_value_changed_is_replaced_where_it_sits(self):
+        """Appending the new one instead would leave two of ours and move theirs."""
+        self.given({"instructions": ["./theirs.md", "./pegasus-AGENTS.md", "./also-theirs.md"]})
+        entry = self.entry("./pegasus-AGENTS.md", ptr="/instructions/-", identifier="system-prompt-instruction")
+        plan = self.plan_with(self.an_append("./pegasus-baseline.md"), entry)
+        self.assertEqual(plan.steps[0].action, planner.UPDATE)
+        planner.apply(self.filesystem, plan, at=AT)
+        self.assertEqual(
+            self.settings()["instructions"], ["./theirs.md", "./pegasus-baseline.md", "./also-theirs.md"]
+        )
+
+    def test_an_append_already_holding_the_new_value_is_left_alone(self):
+        self.given({"instructions": ["./pegasus-AGENTS.md"]})
+        entry = self.entry("./pegasus-AGENTS.md", ptr="/instructions/-", identifier="system-prompt-instruction")
+        step = self.plan_with(self.an_append("./pegasus-AGENTS.md"), entry).steps[0]
+        self.assertEqual(step.action, planner.UNCHANGED)
+
+    def test_the_document_goes_back_byte_for_byte_when_a_key_was_updated(self):
+        """Same debt as an updated file, and it was half paid.
+
+        Retiring an updated key removes it: the record has no ``before``, so
+        removal is what retiring means — and the key was there, with the previous
+        value, before this run.
+        """
+        old = {"model": "vendor/old"}
+        self.given({"agent": {"alpha": old}, "theirs": 1})
+        before = self.filesystem.files[SETTINGS]
+        applied = planner.apply(self.filesystem, self.plan_with(a_key(), self.entry(old)), at=AT)
+        placed = self.install(*applied.records)
+        _, failures = planner.unplace(self.filesystem, applied, placed)
+        self.assertEqual(failures, [])
+        self.assertEqual(self.filesystem.files[SETTINGS], before)
+
+    def test_a_document_this_run_created_is_not_something_to_put_back(self):
+        """Pegasus owns keys inside a configuration file, never the file itself."""
+        applied = planner.apply(self.filesystem, self.plan_with(a_key()), at=AT)
+        self.assertEqual(applied.replaced, ())
+
+    def test_replacing_a_key_the_user_deleted_keeps_what_they_had_before_it(self):
+        """The debt survives the key's absence: it was never about the key."""
+        adopted = self.entry({"model": "vendor/old"}, before={"model": "theirs"}, adopted=True)
+        self.given({"theirs": 1})
+        applied = planner.apply(self.filesystem, self.plan_with(a_key(), adopted), at=AT)
+        self.assertEqual(applied.records[0].before, {"model": "theirs"})
+        self.assertTrue(applied.records[0].adopted)
+
+    def test_an_append_the_user_removed_is_placed_again(self):
+        """Today's answer, kept on purpose: absence is a creation, not a verdict."""
+        self.given({"instructions": ["./theirs.md"]})
+        entry = self.entry("./pegasus-AGENTS.md", ptr="/instructions/-", identifier="system-prompt-instruction")
+        plan = self.plan_with(self.an_append("./pegasus-AGENTS.md"), entry)
+        self.assertEqual(plan.steps[0].action, planner.CREATE)
+        planner.apply(self.filesystem, plan, at=AT)
+        self.assertEqual(self.settings()["instructions"], ["./theirs.md", "./pegasus-AGENTS.md"])
 
 
 class ApplyTest(unittest.TestCase):
