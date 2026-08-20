@@ -838,22 +838,62 @@ Explícitamente fuera de alcance, para que el corte sea revisable:
 
 ## Corte de entrega propuesto
 
-Seis unidades. Cada una tiene tests propios y límite de rollback. El detalle de tareas se define aparte.
+Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests propios y límite de rollback. El detalle de tareas se define aparte.
 
-| # | Unidad | Entrega verificable |
-|---|--------|---------------------|
-| 0 | Demolición y reubicación | El repositorio queda ordenado, sin motor v3 y sin lógica nueva |
-| 1a | Tipos, punteros, códecs, puerto y registry | El motor genérico existe y no conoce ningún CLI |
-| 1b | Carga de contenido, adapter OpenCode y catálogo | Genera en memoria el catálogo del contenido presente, con digests deterministas |
-| 2 | Motor de instalación, journal v4, rollback | Paridad funcional con v3.1.2 en modo desatendido |
-| 3 | Los 12 agentes cableados con sus prompts, y el contenido normalizado | Los 10 SDD existen como subagentes reales |
-| 4 | Launcher, venv privado, empaquetado | `pegasus` disponible en el PATH tras instalar |
-| 5 | TUI: menú principal e instalación | Instalación completa sin escribir un flag |
-| 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con mutación registrada |
+**El número de unidad es un identificador estable, no un puesto en la cola.** Las unidades 0 a 6 se numeraron al escribir este corte; las unidades 7 y 8 se agregaron después, cuando el trabajo las descubrió, y las dos se entregan antes de la 4. Los números no se renumeran, para que toda referencia ya escrita siga apuntando a la misma unidad. El orden real de trabajo está más abajo.
+
+| # | Unidad | Entrega verificable | Estado |
+|---|--------|---------------------|--------|
+| 0 | Demolición y reubicación | El repositorio queda ordenado, sin motor v3 y sin lógica nueva | Entregada |
+| 1a | Tipos, punteros, códecs, puerto y registry | El motor genérico existe y no conoce ningún CLI | Entregada |
+| 1b | Carga de contenido, adapter OpenCode y catálogo | Genera en memoria el catálogo del contenido presente, con digests deterministas | Entregada |
+| 2 | Motor de instalación, journal v4, rollback | Paridad funcional con v3.1.2 en modo desatendido | Entregada |
+| 3 | Los 12 agentes cableados con sus prompts, y el contenido normalizado | Los 10 SDD existen como subagentes reales | En curso |
+| 4 | Launcher, venv privado, empaquetado | `pegasus` disponible en el PATH tras instalar | Pendiente |
+| 5 | TUI: menú principal e instalación | Instalación completa sin escribir un flag | Pendiente |
+| 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con mutación registrada | Pendiente |
+| 7 | Actualización de una instalación existente | Reinstalar sobre una instalación propia actualiza el payload; lo que el usuario reescribió se preserva y se reporta | Pendiente |
+| 8 | Distribución de MCPs | Los MCPs del producto quedan disponibles sin vendorizar ni compilar ningún binario, con versión fija e integridad verificada | Pendiente |
 
 La unidad 1b genera el catálogo **del contenido presente**, no del contenido final: los descriptores de los 10 agentes SDD y las categorías `mcp/` y `policies/` llegan en unidades posteriores.
 
-El presupuesto de revisión es de **800 líneas cambiadas por PR**. Cada unidad se mide al planificar sus tareas; la que se pase se parte en una cadena, con la estrategia definida antes de empezar a escribir código. La unidad 1 ya se midió y por eso está partida en 1a y 1b; la 2 es la próxima candidata.
+### Unidad 7 — Actualización de una instalación existente
+
+Hoy el planner responde una sola pregunta por artefacto: si el target ya está ocupado, lo saltea por colisión. Para un artefacto de archivo la pregunta es si la ruta existe, así que sobre una instalación propia se saltea el payload entero, no solo los artefactos de configuración. La consecuencia es que no hay camino de actualización: se instala una vez, y toda instalación posterior es un no-op que reporta colisiones.
+
+El andamio para resolverlo ya existe y no se consulta al planificar. El journal guarda el digest de cada artefacto que Pegasus escribió, y `ownership.still_ours` compara ese digest contra lo que hay en disco ahora. Lo que falta es el tercer estado entre crear y saltear: el target existe, el journal lo reclama como propio y el digest coincide con el registrado, así que es una actualización. Cuando el digest no coincide, el artefacto pasó a ser del usuario y saltear sigue siendo la respuesta correcta — preservado y reportado, como en el resto del motor.
+
+Sin esta unidad, cada verificación sobre una instalación existente cuesta un usuario nuevo o un desinstalar completo.
+
+### Unidad 8 — Distribución de MCPs
+
+Ningún binario de MCP se vendoriza ni se compila desde este repositorio: sostener la compilación para varios pares SO/arch es exactamente el costo que este diseño evita. El mecanismo es una descarga por par SO/arch para el MCP que se distribuye como binario, y un pin declarativo para el que se ejecuta con `npx` sin instalarse.
+
+Sobre ese mecanismo van las dos garantías que v3 ya exigía, y que no se relajan: **versión fija, nunca `latest`**, y **checksum SHA-256 obligatorio** antes de dejar el artefacto en su lugar. Esta unidad es la que trae la categoría de catálogo `mcp/` que la unidad 1b anticipa.
+
+### Orden de trabajo
+
+1. **Cierre de la unidad 3.** Dos cabos sueltos: que el instalador escriba el `.env` real del skill registry en el directorio donde el plugin lo busca, en vez de dejar un `.example` con placeholders en otro; y eliminar del baseline los dos pares de marcadores que quedaron sin lector, ahora que el prompt embarcado viaja en un archivo propio de Pegasus y no se mezcla con el del usuario.
+2. **Unidad 7.** Actualización de una instalación existente. Va temprano porque es la herramienta con la que se verifica todo lo que viene después.
+3. **Unidad 8.** Distribución de MCPs.
+4. **Unidad 4.** Launcher, venv privado, empaquetado. Destraba la TUI.
+5. **Unidades 5 y 6.** La TUI.
+
+El presupuesto de revisión es de **800 líneas cambiadas por PR**. Cada unidad se mide al planificar sus tareas; la que se pase se parte en una cadena, con la estrategia definida antes de empezar a escribir código. La unidad 1 ya se midió y por eso está partida en 1a y 1b.
+
+---
+
+## Deudas sin unidad asignada
+
+Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a propósito, y cada ítem declara qué lo destraba, para que el acarreo sea una decisión y no un olvido.
+
+| Deuda | Qué la destraba |
+|-------|-----------------|
+| `INSTALL.md` documenta el flujo de release de v3.1.1 y quedó obsoleto: en v4 no hay `install.sh` y el entrypoint es el módulo `pegasus` | La unidad 4, que fija el flujo definitivo. Actualizarlo antes sería documentar dos veces |
+| El caso wildcard contra wildcard del deny de herramientas nunca se verificó en runtime: un agente que niega todo y habilita un prefijo de MCP | La unidad 8. Sin MCPs instalados no hay nada que habilitar |
+| Los sitios de `content.py` que lanzan `ContentError` no tienen un test de tabla que recorra todos y afirme que cada uno nombra una ruta real | Nada. Unidad candidata en cualquier momento |
+| `engram-operations` no viaja como skill embarcada | Nada |
+| `tools/check_docs_links.py` reporta 13 links rotos, 6 de ellos reales y preexistentes | Nada |
 
 ---
 
