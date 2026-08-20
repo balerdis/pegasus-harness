@@ -26,7 +26,7 @@ writing it once is both cheaper and safer than a read-modify-write per key.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -170,7 +170,7 @@ def _file_step(
     all four may be written over, and only if the new bytes differ from it.
     """
     if not filesystem.exists(artifact.path):
-        return Step(artifact=artifact, action=CREATE, digest=digest)
+        return Step(artifact=artifact, action=CREATE, digest=digest, entry=entry)
     if entry is None or entry.kind != "file" or entry.target != artifact.path:
         return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
     if entry.mutations:
@@ -186,7 +186,9 @@ def _file_step(
         return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
     if not ownership.still_ours(entry, current):
         return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
-    if current == digest:
+    if current == digest and filesystem.mode_of(artifact.path) == artifact.mode:
+        # Both halves, because a fingerprint is of content and a permission is
+        # not content. A program whose bit was wrong ships identical bytes.
         return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
     return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
 
@@ -200,19 +202,19 @@ def _key_step(artifact: ConfigKeyArtifact, document: Any, digest: str, entry: Re
     creation — the same answer as before this module could consult a journal.
     """
     if not _claimable(artifact, entry):
-        return _plain_step(artifact, document, digest)
+        return _plain_step(artifact, document, digest, None)
     if entry.mutations:
         if _occupied(artifact, document, digest):
             return Step(artifact=artifact, action=SKIP, digest=digest, reason=MUTATED)
-        return _plain_step(artifact, document, digest)
+        return _plain_step(artifact, document, digest, entry)
     if _appends(artifact.pointer):
         if _index_of(document, artifact.pointer, digest) is not None:
             return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
         if _index_of(document, artifact.pointer, entry.after_digest) is None:
-            return Step(artifact=artifact, action=CREATE, digest=digest)
+            return Step(artifact=artifact, action=CREATE, digest=digest, entry=entry)
         return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
     if not ownership.occupies(artifact, document):
-        return Step(artifact=artifact, action=CREATE, digest=digest)
+        return Step(artifact=artifact, action=CREATE, digest=digest, entry=entry)
     if ownership.digest_of_value(pointer.get_at(document, artifact.pointer)) != entry.after_digest:
         return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
     if entry.after_digest == digest:
@@ -230,11 +232,19 @@ def _claimable(artifact: ConfigKeyArtifact, entry: Record | None) -> bool:
     )
 
 
-def _plain_step(artifact: ConfigKeyArtifact, document: Any, digest: str) -> Step:
-    """The answer with no journal to consult: occupied is as far as it goes."""
+def _plain_step(
+    artifact: ConfigKeyArtifact, document: Any, digest: str, entry: Record | None
+) -> Step:
+    """The answer when occupancy is as far as the question goes.
+
+    A creation still carries the record when there is one. What the user had
+    before Pegasus took the address over is owed to them whether or not the
+    address is occupied right now — deleting the key does not cancel the debt,
+    and a fresh record would quietly write it off.
+    """
     if _occupied(artifact, document, digest):
         return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
-    return Step(artifact=artifact, action=CREATE, digest=digest)
+    return Step(artifact=artifact, action=CREATE, digest=digest, entry=entry)
 
 
 def _occupied(artifact: ConfigKeyArtifact, document: Any, digest: str) -> bool:
@@ -361,21 +371,34 @@ def _undo(
     return failures
 
 
-def put_back(filesystem: FileSystem, applied: Applied) -> list[str]:
-    """Restore the previous version of everything this run replaced.
+def unplace(
+    filesystem: FileSystem, applied: Applied, placed: Install
+) -> tuple[Retired, list[tuple[Path, str]]]:
+    """Undo a run that was applied and then could not be recorded.
 
-    For the caller that placed everything and only then found it could not
-    record it. Retiring is the wrong tool for an update: it takes the artifact
-    away, and the artifact was already there. Restoring first also settles what
-    retiring does next — the fingerprint no longer matches, so it leaves the file
-    alone instead of removing it.
+    The order is the correctness. Restoring comes first, because retiring is the
+    wrong tool for an update: it takes the artifact away, and the artifact was
+    already there. Restoring also settles what retiring does next — the
+    fingerprint no longer matches, so it leaves the address alone.
+
+    And an address that would not go back is withheld from retiring altogether.
+    Retiring it would find the fingerprint this run wrote, judge it ours, and
+    remove it — leaving the user with neither version, which is worse than
+    leaving them the one they did not ask for.
     """
-    failures: list[str] = []
+    failures = _put_back(filesystem, applied)
+    withheld = {path for path, _ in failures}
+    kept = tuple(entry for entry in placed.entries if entry.target not in withheld)
+    return retire(filesystem, replace(placed, entries=kept)), failures
+
+
+def _put_back(filesystem: FileSystem, applied: Applied) -> list[tuple[Path, str]]:
+    failures: list[tuple[Path, str]] = []
     for path, content, mode in applied.replaced:
         try:
             filesystem.write_atomic(path, content, mode=mode if mode is not None else 0o644)
         except FileSystemError as failure:
-            failures.append(str(failure))
+            failures.append((path, str(failure)))
     return failures
 
 

@@ -197,14 +197,15 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     try:
         store.save(journal_module.with_install(journal, merged))
     except JournalStoreError as error:
-        # Order matters: an updated file goes back to the version it held before
-        # retiring is asked about it, so retiring finds a fingerprint that no
-        # longer matches and leaves it alone rather than removing it.
-        restored = planner.put_back(runtime.filesystem, applied)
-        planner.retire(runtime.filesystem, placed)
+        retired, failures = planner.unplace(runtime.filesystem, applied, placed)
         left = sorted(str(path) for path in documents - existing if runtime.filesystem.exists(path))
         raise _unrecordable(
-            error, left, placed=len(applied.records), replaced=len(applied.replaced), failures=restored
+            error,
+            left,
+            placed=len(applied.records),
+            replaced=len(applied.replaced),
+            failures=[reason for _, reason in failures],
+            removed=len(retired.removed),
         ) from error
 
     created_ids = {step.artifact.id for step in plan.creations}
@@ -375,6 +376,7 @@ def _unrecordable(
     placed: int,
     replaced: int = 0,
     failures: list[str] | None = None,
+    removed: int = 0,
 ) -> CommandError:
     """The install came back out. Say so, and say what did not come with it.
 
@@ -397,7 +399,10 @@ def _unrecordable(
     if replaced:
         message += f". {replaced} already there went back to the version they held"
     if failures:
-        message += f". Some could not be put back: {'; '.join(failures)}"
+        message += (
+            f". Some could not be put back, and were left as this run wrote them rather than "
+            f"removed: {'; '.join(failures)}"
+        )
     if left_behind:
         message += f". Left behind, empty: {', '.join(left_behind)}"
     failure = CommandError(message)
@@ -406,6 +411,7 @@ def _unrecordable(
         "rolled_back": undone,
         "left_behind": left_behind,
         "restored": replaced,
+        "removed": removed,
     }
     return failure
 

@@ -287,9 +287,9 @@ class UpdateTest(unittest.TestCase):
         step = self.plan_with().steps[0]
         self.assertEqual((step.action, step.reason), (planner.SKIP, planner.COLLISION))
 
-    def test_a_file_already_carrying_this_content_is_left_alone(self):
-        same = a_file(content=self.previous)
-        step = self.plan_with(self.record(), artifact=same).steps[0]
+    def test_a_file_already_carrying_this_content_and_mode_is_left_alone(self):
+        self.filesystem.modes[SKILL] = 0o644
+        step = self.plan_with(self.record(), artifact=a_file(content=self.previous)).steps[0]
         self.assertEqual(step.action, planner.UNCHANGED)
 
     def test_a_deliberate_change_is_never_overwritten(self):
@@ -324,10 +324,28 @@ class UpdateTest(unittest.TestCase):
         self.assertEqual(self.filesystem.files[SKILL], self.artifact.content)
 
     def test_an_unchanged_file_is_not_rewritten(self):
+        self.filesystem.modes[SKILL] = 0o644
         same = a_file(content=self.previous)
         applied = planner.apply(self.filesystem, self.plan_with(self.record(), artifact=same), at=AT)
         self.assertEqual(self.filesystem.writes, [])
         self.assertEqual(applied.unchanged[0].artifact.id, same.id)
+
+    def test_a_mode_that_changed_is_an_update_even_when_the_content_did_not(self):
+        """The fingerprint is of content, and a permission is not content.
+
+        The previous unit shipped a program that installed unexecutable. Fixing
+        the bit in the tree has to reach a home that already has the file, and
+        the content there is byte-identical.
+        """
+        self.filesystem.modes[SKILL] = 0o644
+        step = self.plan_with(self.record(), artifact=a_file(content=self.previous, mode=0o755)).steps[0]
+        self.assertEqual(step.action, planner.UPDATE)
+
+    def test_the_new_mode_reaches_the_disk(self):
+        self.filesystem.modes[SKILL] = 0o644
+        plan = self.plan_with(self.record(), artifact=a_file(content=self.previous, mode=0o755))
+        planner.apply(self.filesystem, plan, at=AT)
+        self.assertEqual(self.filesystem.modes[SKILL], 0o755)
 
     def test_an_update_is_recorded_with_the_new_fingerprint(self):
         applied = planner.apply(self.filesystem, self.plan_with(self.record()), at=AT)
@@ -339,6 +357,26 @@ class UpdateTest(unittest.TestCase):
         applied = planner.apply(self.filesystem, self.plan_with(adopted), at=AT)
         self.assertEqual(applied.records[0].before, b"what the user wrote")
         self.assertTrue(applied.records[0].adopted)
+
+    def test_undoing_a_run_that_could_not_be_recorded_restores_and_leaves_alone(self):
+        plan = self.plan_with(self.record())
+        applied = planner.apply(self.filesystem, plan, at=AT)
+        placed = self.installed(*applied.records)
+        retired, failures = planner.unplace(self.filesystem, applied, placed)
+        self.assertEqual(failures, [])
+        self.assertEqual(self.filesystem.files[SKILL], self.previous)
+        self.assertEqual(retired.removed, ())
+        self.assertEqual(retired.preserved, (self.artifact.id,))
+
+    def test_what_would_not_go_back_is_not_retired_either(self):
+        """Removing it would leave the user with neither version, which is worse."""
+        plan = self.plan_with(self.record())
+        applied = planner.apply(self.filesystem, plan, at=AT)
+        self.filesystem.fail_always.add(SKILL)
+        retired, failures = planner.unplace(self.filesystem, applied, self.installed(*applied.records))
+        self.assertEqual([path for path, _ in failures], [SKILL])
+        self.assertEqual(retired.removed, ())
+        self.assertIn(SKILL, self.filesystem.files)
 
     def test_a_failed_run_puts_the_previous_content_back(self):
         """An update has something to restore, so rolling it back is not a removal."""
@@ -472,13 +510,23 @@ class KeyUpdateTest(unittest.TestCase):
         self.given({"agent": {"alpha": old}, "theirs": 1})
         before = self.filesystem.files[SETTINGS]
         applied = planner.apply(self.filesystem, self.plan_with(a_key(), self.entry(old)), at=AT)
-        self.assertEqual(planner.put_back(self.filesystem, applied), [])
+        placed = self.install(*applied.records)
+        _, failures = planner.unplace(self.filesystem, applied, placed)
+        self.assertEqual(failures, [])
         self.assertEqual(self.filesystem.files[SETTINGS], before)
 
     def test_a_document_this_run_created_is_not_something_to_put_back(self):
         """Pegasus owns keys inside a configuration file, never the file itself."""
         applied = planner.apply(self.filesystem, self.plan_with(a_key()), at=AT)
         self.assertEqual(applied.replaced, ())
+
+    def test_replacing_a_key_the_user_deleted_keeps_what_they_had_before_it(self):
+        """The debt survives the key's absence: it was never about the key."""
+        adopted = self.entry({"model": "vendor/old"}, before={"model": "theirs"}, adopted=True)
+        self.given({"theirs": 1})
+        applied = planner.apply(self.filesystem, self.plan_with(a_key(), adopted), at=AT)
+        self.assertEqual(applied.records[0].before, {"model": "theirs"})
+        self.assertTrue(applied.records[0].adopted)
 
     def test_an_append_the_user_removed_is_placed_again(self):
         """Today's answer, kept on purpose: absence is a creation, not a verdict."""
