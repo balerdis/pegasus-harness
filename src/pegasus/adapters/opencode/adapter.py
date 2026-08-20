@@ -30,12 +30,17 @@ BINARY = "opencode"
 ASSET_TARGETS: dict[str, PurePosixPath] = {
     "plugins": PurePosixPath("plugins"),
     "notifier": PurePosixPath("notifier"),
-    "env": PurePosixPath("env"),
     "registry": PurePosixPath("registry"),
     # The skill registry helper lives under a Pegasus-owned subtree so it never
     # sits next to files OpenCode manages itself.
     "skill-registry": PurePosixPath("pegasus/skill-registry"),
 }
+
+# The skill registry plugin reads its contract from this file, at the root of
+# OpenCode's configuration directory. The name is stated once here and once in
+# the plugin, and a test reads the plugin to hold the two together.
+SKILL_REGISTRY_CONTRACT = "pegasus-skill-registry.env"
+SKILL_REGISTRY_BIN = "pegasus-skill-registry"
 
 NOTIFIER_PLUGIN = "@mohak34/opencode-notifier@0.2.4"
 
@@ -118,6 +123,7 @@ class Adapter:
             for group, target in sorted(ASSET_TARGETS.items())
             for path, relative in _asset_files(ASSETS / group)
         ]
+        artifacts.append(_skill_registry_contract(layout))
         artifacts += [
             # Appending keeps the user's own skill paths and plugins untouched.
             ConfigKeyArtifact(
@@ -141,6 +147,28 @@ class Adapter:
             ),
         ]
         return artifacts
+
+
+def _skill_registry_contract(layout: Layout) -> FileArtifact:
+    """Answer, at install time, the two paths the skill registry plugin needs.
+
+    This file cannot be shipped as an asset: both values are absolute paths into
+    the home being installed into, so the only moment they are knowable is the
+    moment the layout exists. A template with placeholders would leave the plugin
+    reading instructions instead of an answer.
+    """
+    declared = {
+        "PEGASUS_SKILL_REGISTRY_BIN": layout.config_dir
+        / ASSET_TARGETS["skill-registry"]
+        / SKILL_REGISTRY_BIN,
+        "PEGASUS_SKILL_ROOTS": layout.skills_dir,
+    }
+    body = "".join(f"{key}={value}\n" for key, value in declared.items())
+    return FileArtifact(
+        id=f"own:{SKILL_REGISTRY_CONTRACT}",
+        path=layout.config_dir / SKILL_REGISTRY_CONTRACT,
+        content=body.encode("utf-8"),
+    )
 
 
 def _asset_files(directory: Path) -> list[tuple[Path, PurePosixPath]]:
