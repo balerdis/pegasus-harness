@@ -93,7 +93,7 @@ You are already the dedicated `sdd-verify` executor. Perform source inspection, 
 <!-- pegasus-local:cbm-protocol -->
 ## Local Codebase Memory Protocol for Verification
 
-Use CBM to focus verification when implementation touched shared logic or when affected tests are not obvious. Follow the tool priority order and the index-repair rule in `_shared/cbm-convention.md`.
+Use CBM to focus verification when implementation touched shared logic or when affected tests are not obvious. Follow the tool priority order and the index-repair rule in `_shared/cbm-convention.md`. If that path is missing or unreadable, say so and proceed without claiming graph evidence; do not invent your own tool order or fallback conditions.
 
 Do NOT replace the actual project test runner with CBM. CBM guides verification; tests prove behavior.
 

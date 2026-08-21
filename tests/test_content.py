@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 
+from pegasus.adapters.opencode import render as opencode_render
 from pegasus.core import content
 from pegasus.core.content import AgentMode, ContentError, Execution, RunsAs
 
@@ -380,13 +381,40 @@ class ShippedContentTest(unittest.TestCase):
         # tool need used to fall back on the runtime's defaults. Now that the
         # renderer's deny baseline covers every agent, this is the one whose
         # tools this repository must declare on purpose rather than by omission.
-        # `codebase-memory` is required rather than optional because the body
-        # calls it mandatory for structural discovery.
+        # `codebase-memory` is optional rather than required: it comes from an
+        # MCP the user may decline, so no installation could be made to satisfy
+        # it. What the runtime always has is what gets required.
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         self.assertEqual(
             set(orchestrator.requires_tools),
-            {"read", "bash", "grep", "glob", "codebase-memory"},
+            {"read", "bash", "grep", "glob"},
         )
+        # Exact, not a subset check: `_tools` grants requires_tools ∪ optional_tools
+        # identically, so a loose containment check would miss an extra tool sneaking
+        # into optional_tools and being granted alongside codebase-memory.
+        self.assertEqual(set(orchestrator.optional_tools), {"codebase-memory"})
+
+    def test_no_agent_requires_a_tool_an_mcp_provides(self):
+        """A tool that arrives with an optional MCP cannot be a hard requirement.
+
+        The user chooses which MCP servers get installed, so a `requires_tools`
+        entry backed by one names a condition some installations can never meet.
+        Such a tool belongs in `optional_tools`, where declining the server means
+        the tool is simply not granted instead of leaving an unmeetable promise.
+
+        The set is derived from the OpenCode adapter's `TOOL_NAME` map rather than
+        listed by hand: an entry whose OpenCode name contains "mcp" is MCP-backed.
+        That is the only machine-readable signal available until the `mcp/`
+        content category exists to let the loader refuse this outright.
+        """
+        mcp_backed = {name for name, opencode_name in opencode_render.TOOL_NAME.items() if "mcp" in opencode_name}
+        self.assertTrue(mcp_backed, "derivation from TOOL_NAME produced an empty set")
+        offenders = {
+            agent.name: sorted(mcp_backed.intersection(agent.requires_tools))
+            for agent in self.content.agents
+            if mcp_backed.intersection(agent.requires_tools)
+        }
+        self.assertEqual(offenders, {})
 
     def test_the_orchestrator_is_the_agent_a_session_starts_in(self):
         starting = [agent.name for agent in self.content.agents if agent.default]

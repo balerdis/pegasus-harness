@@ -89,7 +89,10 @@ Why this split:
 
 ## Orchestrator Prompt Instructions for Sub-Agents
 
+Every template below reads from or writes to memory. Inject those lines only when the artifact store mode is `engram` or `hybrid`; under `openspec` or `none`, drop the retrieval and persistence lines and keep the rest of the template. A mandate the session cannot honour is worse than no mandate: it tells the sub-agent the pipeline breaks unless it calls a tool it does not have.
+
 Non-SDD:
+
 ```
 PERSISTENCE (MANDATORY):
 If you make important discoveries, decisions, or fix bugs, you MUST save them to engram before returning:

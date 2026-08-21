@@ -172,7 +172,14 @@ class KingPegasusToolsTest(unittest.TestCase):
         )
 
     def test_gains_codebase_memory(self):
-        self.assertIn("codebase-memory", self.agent.requires_tools)
+        # Optional, not required: the tool comes from an MCP the user may not
+        # select, and a requirement no installation can satisfy is not one.
+        # The body already reads that way — it says what to do when CBM is absent.
+        # Exact, not a subset check: `render._tools` grants requires_tools ∪
+        # optional_tools identically, so a loose containment check would miss an
+        # extra tool sneaking into optional_tools and being granted alongside it.
+        self.assertEqual(set(self.agent.optional_tools), {"codebase-memory"})
+        self.assertNotIn("codebase-memory", self.agent.requires_tools)
 
     def test_gains_nothing_else(self):
         for forbidden in ("write", "edit", "bash"):
