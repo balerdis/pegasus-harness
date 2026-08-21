@@ -339,7 +339,7 @@ Si un archivo tendría sentido en un CLI que todavía no soportamos, va al núcl
 |--------|-----------------|-----------------------|
 | `FileSystem` | Escritura atómica, permisos, rutas de usuario, espacio | Windows y POSIX difieren; además hace testeable el motor sin tocar disco |
 | `JournalStore` | Persistir y leer el journal de ownership | Permite tests con journal en memoria |
-| `DependencyFetcher` | Descargar, verificar y probar MCPs | Aísla la red; ya existe en v3, se mantiene el contrato |
+| `DependencyFetcher` | Materializar, verificar y probar MCPs | Aísla la red y la deja ocurrir solo en instalación; el contrato se diseña de cero en la unidad 8, no se hereda de v3 |
 | `ModelCatalog` | Proveedores y modelos disponibles | Es parte del adapter, no un puerto global: cada CLI resuelve modelos a su manera |
 
 ---
@@ -482,6 +482,8 @@ El journal es lo que hace a Pegasus aditivo: registra qué creó, para poder ret
 El nombre lleva la versión del esquema. v3 escribía `journal-v3.json` en el mismo directorio, y v4 es una instalación limpia al lado de v3, no una reescritura de su estado: nunca abre ni pisa el archivo de v3.
 
 El directorio se **crea** con permisos `0700`. Si ya existía —porque v3 lo creó con `0755`— conserva los suyos: endurecerlo sería mutar algo que esta instalación no creó, y el archivo en `0600` ya protege el contenido.
+
+Esa ruta está escrita a mano y no consulta el entorno. La unidad 8 le pone un resolutor y la mueve a la convención de cada plataforma, con el journal y las dependencias en el mismo lugar; los permisos y la política del store no cambian. Cuando eso ocurra, la coincidencia de directorio con v3 desaparece y con ella el caso del `0755` heredado.
 
 Quien resuelve esa ruta es `FileJournalStore`, detrás del puerto `JournalStore`. Escribe a través del puerto `FileSystem`, así que la política del store —quién puede escribir, qué se puede escribir, qué significa un archivo dañado— se prueba sin un home real. Un journal ilegible **no** es un journal vacío: el store falla ruidosamente, porque tratarlo como vacío dejaría huérfano todo lo ya instalado.
 
@@ -871,13 +873,84 @@ El rollback distingue las dos colocaciones: una creación se deshace removiendo,
 
 ### Unidad 8 — Distribución de MCPs
 
-Ningún binario de MCP se vendoriza ni se compila desde este repositorio: sostener la compilación para varios pares SO/arch es exactamente el costo que este diseño evita. El mecanismo es una descarga por par SO/arch para el MCP que se distribuye como binario, y un pin declarativo para el que se ejecuta con `npx` sin instalarse.
+Ningún binario de MCP se vendoriza ni se compila desde este repositorio: sostener la compilación para varios pares SO/arch es exactamente el costo que este diseño evita. **No vendorizar significa que la release no lleva binarios ajenos, no que no se descargue nada**: la descarga ocurre en la máquina del usuario, durante la instalación, y nunca después. Esta unidad es la que trae la categoría de catálogo `mcp/` que la unidad 1b anticipa.
 
-Sobre ese mecanismo van las dos garantías que v3 ya exigía, y que no se relajan: **versión fija, nunca `latest`**, y **checksum SHA-256 obligatorio** antes de dejar el artefacto en su lugar. Esta unidad es la que trae la categoría de catálogo `mcp/` que la unidad 1b anticipa.
+Sobre cualquiera de los mecanismos van las dos garantías que no se relajan: **versión fija, nunca `latest`**, e **integridad verificada antes de dejar el artefacto en su lugar**. La primera la sostenemos nosotros en el descriptor, siempre. La segunda depende del mecanismo, y el diseño lo dice en voz alta en vez de fingir uniformidad.
+
+#### Tres formas, declaradas por el descriptor
+
+Los MCPs del producto no se distribuyen todos igual, y forzarlos a un mecanismo único sería inventar un problema. El descriptor declara cuál le toca a cada uno.
+
+| Forma | Qué hace la instalación | Integridad | Red al arrancar el agente |
+|-------|-------------------------|------------|---------------------------|
+| `remote` | Escribe una URL en la configuración del CLI | La del endpoint | Sí, por naturaleza: el servidor es remoto |
+| `npm` | Materializa el paquete pineado en el directorio propio de Pegasus | La cadena del registry: hash de integridad del tarball y, cuando existe, atestación de provenance | Ninguna |
+| `download` | Baja el activo del par SO/arch y verifica su SHA-256 contra el checksum publicado | Nuestra, obligatoria, fail-closed | Ninguna |
+
+Que la integridad de la forma `npm` la sostenga el registry y no nosotros es una decisión, no un descuido: verificar un hash propio exigiría materializar el paquete a mano y renunciar a una cadena que ya hace ese trabajo mejor —y que, en el caso de los paquetes que envuelven un binario nativo, lo verifica una segunda vez contra el checksum de su propio release.
+
+#### Por qué el comando configurado nunca es `npx`
+
+La tentación es escribir `npx --package=<paquete>@<versión>` como comando del servidor y darlo por resuelto: es una línea de texto y no descarga nada en la instalación. Precisamente por eso no sirve. **`npx` no es un paso de instalación: es un paso de arranque.** El paquete se resuelve la primera vez que el CLI anfitrión spawnea el servidor, y vuelve a consultarse en cada arranque posterior.
+
+Medido con una versión exacta y una caché de npm dedicada: con la caché fría, el primer arranque tarda nueve segundos y deja setenta y dos megabytes. Con la caché caliente arranca en poco más de un segundo. Pero con la caché caliente, la versión exacta ya resuelta y el registry inalcanzable, **`npx` se cuelga un minuto y medio y después falla**. La caché no lo vuelve autosuficiente; solo el modo offline explícito lo hace, y ese modo depende de una caché que no es nuestra y que el usuario puede borrar con una orden.
+
+Un MCP que necesita la red para arrancar traslada el riesgo desde la instalación —donde hay una persona mirando, un reporte y un rollback— hasta el arranque del agente, que es el peor lugar posible para descubrirlo. Por eso el paquete se materializa en instalación y la configuración apunta al binario resuelto por ruta absoluta.
+
+#### Dónde vive Pegasus
+
+Pegasus ya tiene un lugar propio: la unidad 2 dejó el journal en `~/.local/share/pegasus-harness/`, un directorio que crea con permisos `0700`. Lo que esa ruta no tiene es un resolutor — está escrita a mano y no consulta el entorno, así que hoy es una convención de Linux disfrazada de camino universal. Esta unidad le pone el resolutor que le falta, porque es la primera que necesita poner ahí algo que no es estado propio, y la unidad 4 lo adopta cuando llegue.
+
+El directorio pasa a respetar la convención de cada plataforma: `$XDG_DATA_HOME/pegasus-harness/` con fallback a `~/.local/share/pegasus-harness/`, `~/Library/Application Support/pegasus-harness/` en macOS, `%LOCALAPPDATA%\pegasus-harness\` en Windows. El journal se muda con él: hay un solo lugar donde vive Pegasus, no uno para su estado y otro para lo que baja. No hay estado que migrar —v4 no está publicado— y el journal de v3 queda aún más lejos de lo que ya estaba, que es exactamente donde debe estar.
+
+Las dependencias cuelgan de `deps/<id>/<versión>/`, con la versión en la ruta: actualizar es colocar al lado y retirar lo viejo, que es exactamente la forma que el motor de la unidad 7 ya sabe ejecutar.
+
+Falta una pieza del núcleo para que eso sea posible. Hoy el catálogo y el registry rechazan cualquier artefacto cuya ruta caiga fuera del directorio de configuración del CLI anfitrión, y tienen razón: un adapter que escribe fuera del territorio de su CLI es un error. Pero el directorio propio de Pegasus es un segundo territorio legítimo, y los dos gates tienen que aprender a distinguirlo de una fuga. Mientras no lo hagan, lo que se baja no puede colocarse por el camino normal.
+
+**Lo que baja es un artefacto nuestro como cualquier otro**: entra al journal, tiene digest, se le detecta la mutación y se retira con rollback. Escribirlo en un directorio compartido del sistema sería reclamar una dirección que no es nuestra, y el planner tendría razón en negarse: si el usuario ya tiene ese binario instalado por su cuenta, pisarlo es justo lo que la unidad 7 se construyó para no hacer.
+
+#### La plataforma no soportada se rechaza
+
+Si el par SO/arch que corre no está entre los que el descriptor declara, la instalación se rechaza y lo dice. No hay tabla de degradaciones ni instalación parcial silenciosa: una instalación a medias es peor que una que no ocurrió, porque miente sobre lo que dejó.
+
+#### El usuario elige, y el contenido se adapta por ausencia
+
+Cuáles MCPs se instalan lo decide el usuario, en la TUI y por flags, con la paridad que el resto del producto ya exige: la TUI es la superficie para la persona, las flags son para que un agente pueda operar sin persona mirando, y ninguna de las dos llega después que la otra.
+
+**Una herramienta que llega con un MCP no puede ser un requisito.** Si el usuario elige qué servidores se instalan, declarar una de sus herramientas como requerida nombra una condición que algunas instalaciones no pueden cumplir nunca. Esas herramientas van entre las opcionales, donde declinar el servidor significa simplemente que la herramienta no se concede, en vez de dejar una promesa incumplible. Hoy el motor todavía no sabe qué herramientas provee cada MCP, así que la regla se sostiene con un test; la categoría `mcp/` es lo que va a permitir que el loader la rechace de plano, y ahí el test pasa a ser innecesario.
+
+Un MCP que no se seleccionó no puede quedar mencionado como si estuviera. Eso se resuelve sin condicionales en la prosa, por dos vías. **`optional_tools` pasa a significar algo**: hoy el render lo fusiona con `requires_tools` y concede ambos por igual, así que la distinción no cambia nada; a partir de esta unidad una herramienta opcional se concede solo si su MCP viaja. Y **el cuerpo del descriptor de cada MCP es su convención**, así que si el MCP no se selecciona su convención tampoco se embarca: es el mismo artefacto, no dos que hay que mantener sincronizados.
+
+La prosa de las convenciones ya está escrita defensiva —dice qué hacer cuando la referencia no está, en vez de asumirla— y la que todavía no lo esté se pasa a esa forma. Es más barato que sostener contenido condicional, y no le pide a la revisión adversarial que juzgue prosa con ramas, que es donde fabrica contradicciones.
+
+Que el cuerpo del descriptor sea la convención tiene una consecuencia que conviene decir antes de que sorprenda: **hoy no todas las convenciones están donde van a vivir.** La de memoria viaja inlineada en el prompt de sistema, que es el único artefacto que se embarca en toda instalación pase lo que pase. Hoy abre diciendo cuándo aplica, así que no engaña a nadie; pero un usuario que no seleccionó ese MCP recibe igual el protocolo entero y tiene que leerlo para descubrir que no le toca. Esta unidad la muda al descriptor, que es donde la selección puede alcanzarla.
+
+Y en la dirección opuesta hay un MCP sin una sola línea de prosa en todo el contenido. Instalarlo así sería pagar una capacidad que ningún agente sabe que existe: no rompe nada, simplemente no sirve para nada. Su convención se escribe en esta unidad, en el cuerpo de su descriptor, junto con el mecanismo.
+
+#### Los dos tests que esta unidad tiene que voltear
+
+Dos tests afirman hoy la ausencia de MCP, y los dos son correctos: describen el estado real. Ninguno se toca antes de tiempo; se vuelven rojos dentro de 8a, como primer paso, y el código los pone en verde.
+
+El primero afirma que el adapter de OpenCode no declara la capacidad y no implementa su render. Voltearlo es exactamente el trabajo de 8a, y no tiene más vuelta.
+
+El segundo esconde un problema que la unidad tiene que resolver, no heredar. Afirma que el catálogo rechaza una capacidad declarada sin fuente de contenido, y para eso necesita una capacidad que no tenga fuente. Hoy hay una sola: `mcp`. La única otra capacidad sin entrada en la tabla de fuentes es la de modelo por agente, que está clasificada como interactiva y por eso nunca llega a la consulta. **En cuanto esta unidad le dé fuente a `mcp`, ese test se queda sin sujeto posible**, y la rama que lanza el error queda inalcanzable: código muerto con un test que ya no puede ejercitarlo.
+
+La salida no es buscarle un sujeto nuevo, es que la condición no pueda existir. La tabla de fuentes queda obligada a cubrir toda capacidad no interactiva, y esa obligación se verifica una sola vez al cargar el módulo. La consulta pasa a ser directa, sin rama de error, y el test pasa a afirmar la cobertura de la tabla en vez de un rechazo: no necesita sujeto, no puede quedarse sin él, y falla al importar si alguien agrega una capacidad y se olvida de su fuente. El error deja de poder ocurrir en la instalación de un usuario y pasa a ocurrir en la máquina de quien lo escribió mal.
+
+#### El corte de la unidad
+
+La unidad completa se pasa del presupuesto de revisión, así que va en cadena:
+
+- **8a.** La categoría `mcp/` y su loader, el descriptor, la entrada de la capacidad en el catálogo, el render del servidor como clave de configuración y el flip de la capacidad en el manifiesto del adapter. Entra la forma `remote` y la selección con sus dos superficies. Al terminar, hay un MCP realmente instalado.
+- **8b.** El directorio propio de Pegasus, el puerto que materializa y verifica, y las formas `npm` y `download` sobre él.
+
+Esta unidad es la que destraba la deuda del caso wildcard contra wildcard del deny de herramientas: hasta que haya un MCP instalado no hay ningún prefijo que habilitar, y el caso no se puede verificar en runtime.
+
+**Nada de esto se porta de v3.** El contrato de release de v3 sirve como inventario de qué datos hicieron falta alguna vez, no como plantilla: aquel diseño compilaba el binario a mano dentro de una imagen fijada por digest, lo vendorizaba en el repositorio y terminaba admitiendo en su propio archivo de provenance que la firma no se podía verificar. Los campos del descriptor se diseñan de cero contra los tres mecanismos de arriba.
 
 ### Orden de trabajo
 
-1. **Unidad 8.** Distribución de MCPs.
+1. **Unidad 8**, en cadena: **8a** la categoría `mcp/` y la selección, **8b** el directorio propio y la materialización.
 2. **Unidad 4.** Launcher, venv privado, empaquetado. Destraba la TUI.
 3. **Unidades 5 y 6.** La TUI.
 
