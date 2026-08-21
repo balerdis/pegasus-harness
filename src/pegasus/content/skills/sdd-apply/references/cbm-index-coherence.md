@@ -20,7 +20,7 @@ Use the orchestrator-provided pre-apply dirty-worktree baseline and apply-owned 
 
 Check `index_status` first. Reindex with `index_repository` in `moderate` mode before collecting graph evidence. Escalate to `full` only when moderate indexing cannot provide usable structural evidence for the changed surface, and record why; do not reindex routine local edits that did not trigger this gate.
 
-`check_index_coverage` is unavailable and MUST NOT be required. Adequate CBM evidence is `index_status` plus representative `search_graph` and/or `search_code` results for the apply-owned changed surface. Use direct files and focused tests when the graph is missing, stale, or cannot represent the relevant surface; direct inspection and tests remain authoritative.
+`check_index_coverage` is unavailable and MUST NOT be required. Adequate CBM evidence is `index_status` plus representative `search_graph` and/or `search_code` results for the apply-owned changed surface. Use direct files and focused tests when the graph is missing, stale, or cannot represent the relevant surface; direct inspection and tests remain authoritative. If the CBM tools are not present in the session at all, record coherence as `unavailable` naming that reason, and rely on direct inspection and tests; their absence is not a gate failure.
 
 ## Apply-Progress Reporting
 

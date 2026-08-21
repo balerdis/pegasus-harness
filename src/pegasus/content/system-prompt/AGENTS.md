@@ -45,6 +45,8 @@ Multiple skills can apply at once. Match by file context (extensions, paths) and
 
 ## Engram Persistent Memory — Protocol
 
+This section's memory protocol applies only when the engram tools (`mem_save`, `mem_search`, `mem_context`, and the rest of the `mem_*` family) are present in your session. If they are absent, do not attempt to save or search memory, do not claim memory was consulted, and do not substitute another store. `### DELIVERY GUARANTEE` below still applies in full either way: it governs how a turn ends, not how memory works.
+
 You have access to Engram, a persistent memory system that survives across sessions and compactions.
 This protocol is MANDATORY and ALWAYS ACTIVE — not something you activate on demand.
 
