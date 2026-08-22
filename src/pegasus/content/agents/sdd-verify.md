@@ -3,7 +3,7 @@ name: sdd-verify
 description: Sole readiness authority for executable and configuration changes
 mode: subagent
 requires_tools: [read, write, bash]
-optional_tools: [codebase-memory]
+optional_mcp: [context7]
 model_configurable: true
 ---
 

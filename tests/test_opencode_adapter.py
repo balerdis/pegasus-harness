@@ -8,7 +8,18 @@ from pathlib import Path, PurePosixPath
 from pegasus.adapters.opencode import Adapter
 from pegasus.adapters.opencode import render as render_module
 from pegasus.core import content as content_module
-from pegasus.core.content import Agent, AgentMode, Asset, Command, Execution, RunsAs, Skill, SystemPrompt
+from pegasus.core.content import (
+    Agent,
+    AgentMode,
+    Asset,
+    Command,
+    Distribution,
+    Execution,
+    Mcp,
+    RunsAs,
+    Skill,
+    SystemPrompt,
+)
 from pegasus.core import registry as registry_module
 from pegasus.core.registry import Registry
 from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileArtifact, Layout
@@ -64,12 +75,12 @@ class RegistrationTest(unittest.TestCase):
         manifest = Adapter().capabilities()
         self.assertEqual(
             sorted(item.value for item in manifest.enabled),
-            ["prompts", "skills", "slash_commands", "sub_agents", "system_prompt"],
+            ["mcp", "prompts", "skills", "slash_commands", "sub_agents", "system_prompt"],
         )
 
-    def test_mcp_stays_undeclared_until_its_content_exists(self):
-        self.assertFalse(Adapter().capabilities().mcp)
-        self.assertFalse(hasattr(Adapter(), "render_mcp"))
+    def test_mcp_is_declared_now_that_its_content_exists(self):
+        self.assertTrue(Adapter().capabilities().mcp)
+        self.assertTrue(callable(getattr(Adapter(), "render_mcp", None)))
 
 
 class DetectionTest(unittest.TestCase):
@@ -141,10 +152,21 @@ class AgentRenderTest(unittest.TestCase):
         self.assertNotIn("hidden", self.value(self.agent(mode=AgentMode.PRIMARY)))
 
     def test_tools_are_translated_to_opencode_names(self):
-        agent = self.agent(requires_tools=("read", "bash"), optional_tools=("codebase-memory",))
+        agent = self.agent(requires_tools=("read", "bash"), optional_tools=("write",))
         self.assertEqual(
             self.value(agent)["tools"],
-            {"*": False, "read": True, "bash": True, "codebase-memory-mcp*": True},
+            {"*": False, "read": True, "bash": True, "write": True},
+        )
+
+    def test_an_optional_mcp_id_is_granted_as_a_wildcard(self):
+        agent = self.agent(optional_mcp=("context7",))
+        self.assertEqual(self.value(agent)["tools"], {"*": False, "context7*": True})
+
+    def test_native_tools_and_mcp_wildcards_are_granted_together(self):
+        agent = self.agent(requires_tools=("read", "bash"), optional_mcp=("context7",))
+        self.assertEqual(
+            self.value(agent)["tools"],
+            {"*": False, "read": True, "bash": True, "context7*": True},
         )
 
     def test_no_declared_tools_still_renders_the_deny_baseline(self):
@@ -272,6 +294,46 @@ class SystemPromptRenderTest(unittest.TestCase):
         self.assertEqual(key.value, "./pegasus-AGENTS.md")
 
 
+class McpRenderTest(unittest.TestCase):
+    def setUp(self):
+        self.adapter = Adapter()
+        self.layout = self.adapter.layout(ENVIRONMENT)
+        self.mcp = Mcp(
+            name="context7",
+            description="d",
+            body="# Context7 Convention\n",
+            distribution=Distribution.REMOTE,
+            endpoint="https://mcp.context7.com/mcp",
+            source=PurePosixPath("mcp/context7.md"),
+        )
+        self.artifacts = self.adapter.render_mcp(self.layout, self.mcp)
+
+    def test_renders_exactly_two_artifacts(self):
+        self.assertEqual(len(self.artifacts), 2)
+
+    def test_the_server_is_a_configuration_key(self):
+        key = only(self.artifacts, ConfigKeyArtifact)[0]
+        self.assertEqual(key.pointer, "/mcp/context7")
+        self.assertEqual(key.path, self.layout.settings_file)
+
+    def test_a_remote_server_carries_no_headers(self):
+        key = only(self.artifacts, ConfigKeyArtifact)[0]
+        self.assertEqual(
+            key.value,
+            {"type": "remote", "url": "https://mcp.context7.com/mcp", "enabled": True},
+        )
+
+    def test_the_convention_lands_under_shared_skills(self):
+        file_artifact = only(self.artifacts, FileArtifact)[0]
+        self.assertEqual(
+            file_artifact.path, self.layout.skills_dir / "_shared" / "context7-convention.md"
+        )
+        self.assertEqual(file_artifact.content, b"# Context7 Convention\n")
+
+    def test_the_dispatch_table_covers_every_distribution_member(self):
+        self.assertEqual(set(render_module.MCP_VALUE), set(Distribution))
+
+
 class OwnArtifactsTest(unittest.TestCase):
     def setUp(self):
         self.layout = Adapter().layout(ENVIRONMENT)
@@ -389,6 +451,7 @@ class ShippedContentRenderTest(unittest.TestCase):
             *(item for agent in loaded.agents for item in adapter.render_agent(cls.layout, agent)),
             *(item for agent in loaded.agents for item in adapter.render_prompt(cls.layout, agent)),
             *(item for command in loaded.commands for item in adapter.render_command(cls.layout, command)),
+            *(item for mcp in loaded.mcp for item in adapter.render_mcp(cls.layout, mcp)),
             *adapter.render_system_prompt(cls.layout, loaded.system_prompt),
             *adapter.own_artifacts(cls.layout),
         ]
@@ -419,14 +482,12 @@ class ShippedContentRenderTest(unittest.TestCase):
             self.assertEqual(value["permission"]["task"]["*"], "deny", agent.name)
 
     def test_the_persona_renders_its_declared_tools_as_a_real_restriction(self):
-        """The voice declares `read` and `codebase-memory`; only this side proves that
-        denies everything else, including write, edit, and bash.
+        """The voice declares only `read`; only this side proves that denies
+        everything else, including write, edit, and bash.
         """
         persona = next(a for a in self.loaded.agents if a.name == "king-pegasus")
         value = only(render_module.agent(self.layout, persona), ConfigKeyArtifact)[0].value
-        self.assertEqual(
-            value["tools"], {"*": False, "read": True, "codebase-memory-mcp*": True}
-        )
+        self.assertEqual(value["tools"], {"*": False, "read": True})
 
     def test_the_orchestrator_renders_its_declared_allows_on_top_of_the_deny_baseline(self):
         orchestrator = next(a for a in self.loaded.agents if a.name == "pegasus-orchestrator")

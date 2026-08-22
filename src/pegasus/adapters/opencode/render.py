@@ -6,10 +6,21 @@ OpenCode name. This is the only place those names are allowed to appear.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from pegasus.core import placeholders
-from pegasus.core.content import Agent, AgentMode, Command, Execution, RunsAs, Skill, SystemPrompt
+from pegasus.core.content import (
+    Agent,
+    AgentMode,
+    Command,
+    Distribution,
+    Execution,
+    Mcp,
+    RunsAs,
+    Skill,
+    SystemPrompt,
+)
 from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout
 
 AGENT_FOR_ROLE: dict[RunsAs, str | None] = {
@@ -31,7 +42,6 @@ TOOL_NAME: dict[str, str] = {
     "bash": "bash",
     "grep": "grep",
     "glob": "glob",
-    "codebase-memory": "codebase-memory-mcp*",
 }
 
 
@@ -139,6 +149,63 @@ def system_prompt(layout: Layout, item: SystemPrompt) -> list[Artifact]:
     ]
 
 
+MCP_VALUE: dict[Distribution, Any] = {
+    # No `headers`: this server needs no authentication, and a secret would
+    # never travel in a repository descriptor anyway.
+    Distribution.REMOTE: lambda item: {"type": "remote", "url": item.endpoint, "enabled": True},
+}
+"""How to spell each distribution mechanism as an OpenCode server value.
+
+Keyed by `Distribution` rather than branched with `if`, so a member added to
+the core without a matching entry here fails at import instead of falling
+through to whatever branch happened to run last.
+"""
+
+_UNMAPPED_DISTRIBUTIONS = [item for item in Distribution if item not in MCP_VALUE]
+if _UNMAPPED_DISTRIBUTIONS:
+    # Same reasoning as the catalog's own import-time invariant: a member the
+    # core grows without teaching this adapter must be impossible to import,
+    # not a silent fallthrough discovered in a user's installation.
+    raise RenderError(
+        "no OpenCode value for distribution(s): "
+        + ", ".join(sorted(item.value for item in _UNMAPPED_DISTRIBUTIONS))
+    )
+
+
+def mcp(layout: Layout, item: Mcp) -> list[Artifact]:
+    """The server as a settings key, plus its usage convention as a shared skill file.
+
+    No guard around the lookup: the import-time invariant above already proves
+    every mechanism has an entry, so a miss cannot happen and a branch for it
+    would be unreachable code with a test that has to forge its own subject.
+    """
+    value = MCP_VALUE[item.distribution](item)
+    return [
+        ConfigKeyArtifact(
+            id=f"mcp:{item.name}",
+            path=layout.settings_file,
+            pointer=f"/mcp/{item.name}",
+            value=value,
+        ),
+        FileArtifact(
+            id=f"mcp-convention:{item.name}",
+            path=_convention_path(layout, item),
+            content=_body(layout, item.body, item.name).encode("utf-8"),
+        ),
+    ]
+
+
+def _convention_path(layout: Layout, item: Mcp) -> Path:
+    """Where a server's convention lands, beside the ones already shipped.
+
+    `_shared/` already holds this project's conventions (`cbm-convention.md`,
+    `engram-convention.md`), and the shipped content already references them
+    defensively as `{{skills_root}}/_shared/<name>-convention.md`. Reusing it
+    needs no new placeholder and no new layout anchor.
+    """
+    return layout.skills_dir / "_shared" / f"{item.name}-convention.md"
+
+
 def _body(layout: Layout, body: str, owner: str) -> str:
     """Answer the placeholders a body left for its installer.
 
@@ -179,7 +246,12 @@ def _tools(item: Agent) -> dict[str, bool]:
     unknown = [name for name in names if name not in TOOL_NAME]
     if unknown:
         raise RenderError(f"{item.name}: no OpenCode name for tools {', '.join(sorted(unknown))}")
-    return {"*": False, **{TOOL_NAME[name]: True for name in names}}
+    granted = {TOOL_NAME[name]: True for name in names}
+    # No table needed here: `mcp()` below writes each server at `/mcp/<id>`, so the
+    # id IS the server key OpenCode matches tools against, and `f"{id}*"` is that
+    # same key with the wildcard OpenCode uses to grant every tool under it.
+    granted.update({f"{mcp_id}*": True for mcp_id in item.optional_mcp})
+    return {"*": False, **granted}
 
 
 def _frontmatter(fields: dict[str, Any]) -> str:

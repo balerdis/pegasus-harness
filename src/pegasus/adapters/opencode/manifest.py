@@ -22,10 +22,9 @@ MANIFEST = CapabilityManifest(
     # {file:...}. A CLI that embeds the prompt in the agent declaration would
     # deny this and receive one artifact instead of two.
     prompts=True,
-    # OpenCode does support MCP, but the mcp/ content category does not exist
-    # yet: the servers still live in manifests/release-contract.json. Flips to
-    # True together with that category and render_mcp.
-    mcp=False,
+    # The mcp/ content category and render_mcp both exist now: OpenCode's
+    # servers are declared in content, not in manifests/release-contract.json.
+    mcp=True,
     # Model assignment arrives with the configuration menu.
     per_agent_model=False,
 )

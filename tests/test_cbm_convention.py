@@ -171,14 +171,12 @@ class KingPegasusToolsTest(unittest.TestCase):
             agent for agent in content_module.load().agents if agent.name == "king-pegasus"
         )
 
-    def test_gains_codebase_memory(self):
-        # Optional, not required: the tool comes from an MCP the user may not
-        # select, and a requirement no installation can satisfy is not one.
-        # The body already reads that way — it says what to do when CBM is absent.
-        # Exact, not a subset check: `render._tools` grants requires_tools ∪
-        # optional_tools identically, so a loose containment check would miss an
-        # extra tool sneaking into optional_tools and being granted alongside it.
-        self.assertEqual(set(self.agent.optional_tools), {"codebase-memory"})
+    def test_gains_no_mcp_yet(self):
+        # No MCP is declared here yet. `codebase-memory` has no descriptor, so
+        # no agent may name it, and this voice is pending a reformulation that
+        # decides what it is allowed to act on before it is granted a server.
+        self.assertEqual(self.agent.optional_tools, ())
+        self.assertEqual(self.agent.optional_mcp, ())
         self.assertNotIn("codebase-memory", self.agent.requires_tools)
 
     def test_gains_nothing_else(self):

@@ -485,18 +485,16 @@ class ShippedContentTest(unittest.TestCase):
         # tool need used to fall back on the runtime's defaults. Now that the
         # renderer's deny baseline covers every agent, this is the one whose
         # tools this repository must declare on purpose rather than by omission.
-        # `codebase-memory` is optional rather than required: it comes from an
-        # MCP the user may decline, so no installation could be made to satisfy
-        # it. What the runtime always has is what gets required.
+        # It declares no server: this coordinator is pending a reformulation
+        # that decides what it may act on, so nothing is granted beyond the
+        # native tools it needs to read and search.
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         self.assertEqual(
             set(orchestrator.requires_tools),
             {"read", "bash", "grep", "glob"},
         )
-        # Exact, not a subset check: `_tools` grants requires_tools ∪ optional_tools
-        # identically, so a loose containment check would miss an extra tool sneaking
-        # into optional_tools and being granted alongside codebase-memory.
-        self.assertEqual(set(orchestrator.optional_tools), {"codebase-memory"})
+        self.assertEqual(orchestrator.optional_tools, ())
+        self.assertEqual(orchestrator.optional_mcp, ())
 
     def test_the_orchestrator_is_the_agent_a_session_starts_in(self):
         starting = [agent.name for agent in self.content.agents if agent.default]
