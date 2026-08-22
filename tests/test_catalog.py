@@ -94,11 +94,9 @@ class BuildTest(unittest.TestCase):
         adapter = StubAdapter(manifest=manifest)
         self.assertEqual(len(catalog_module.build(Content(), adapter)), 0)
 
-    def test_a_declared_capability_with_no_content_source_is_refused(self):
-        manifest = CapabilityManifest(cli_id="probe", skills=True, mcp=True)
-        with self.assertRaises(CatalogError) as raised:
-            catalog_module.build(Content(), StubAdapter(manifest=manifest))
-        self.assertIn("mcp", str(raised.exception))
+    def test_every_non_interactive_capability_has_a_content_source(self):
+        non_interactive = set(Capability) - catalog_module.INTERACTIVE
+        self.assertEqual(non_interactive, set(catalog_module.SOURCES))
 
 
 class DigestTest(unittest.TestCase):
@@ -236,7 +234,10 @@ class ShippedCatalogTest(unittest.TestCase):
         keys = [entry for entry in self.catalog.entries if entry.kind == "config-key"]
         # 89, not 88: `_shared/cbm-convention.md` is the one new shipped file,
         # centralizing CBM protocol prose that used to be restated per phase.
-        self.assertEqual((len(files), len(keys)), (89, 17))
+        # 90, not 89: `_shared/context7-convention.md` is the mcp category's own
+        # shared file, now that render_mcp exists and mcp is a declared capability.
+        # 18, not 17: `/mcp/context7` is the one shipped MCP server's settings key.
+        self.assertEqual((len(files), len(keys)), (90, 18))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:

@@ -3,7 +3,6 @@ name: pegasus-orchestrator
 description: Coordinates Pegasus SDD work
 mode: primary
 requires_tools: [read, bash, grep, glob]
-optional_tools: [codebase-memory]
 may_delegate_to: [explore, general, sdd-explore, sdd-propose, sdd-spec, sdd-design, sdd-tasks, sdd-apply, sdd-verify, sdd-archive, sdd-init, sdd-onboard]
 model_configurable: true
 ---

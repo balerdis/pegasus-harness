@@ -26,6 +26,7 @@ SOURCES: dict[Capability, tuple[str, str]] = {
     Capability.PROMPTS: ("agents", "render_prompt"),
     Capability.SLASH_COMMANDS: ("commands", "render_command"),
     Capability.SYSTEM_PROMPT: ("system_prompt", "render_system_prompt"),
+    Capability.MCP: ("mcp", "render_mcp"),
 }
 """Which part of the content core feeds each capability, and what renders it."""
 
@@ -35,6 +36,23 @@ INTERACTIVE = frozenset({Capability.PER_AGENT_MODEL})
 
 class CatalogError(ValueError):
     """The catalog cannot be built, or would place two artifacts at one address."""
+
+
+_UNSOURCED = [
+    capability
+    for capability in Capability
+    if capability not in INTERACTIVE and capability not in SOURCES
+]
+if _UNSOURCED:
+    # Checked once, at import time, rather than where `render` used to look the
+    # capability up: a `KeyError` caught at runtime would only ever be found in a
+    # user's installation, on whichever CLI first declared the missing capability.
+    # An import-time invariant makes the same mistake impossible to ship at all --
+    # the author's own machine refuses to import the module.
+    raise CatalogError(
+        "no content source for capability(ies): "
+        + ", ".join(sorted(capability.value for capability in _UNSOURCED))
+    )
 
 
 @dataclass(frozen=True)
@@ -91,12 +109,7 @@ def render(content: Content, adapter: Any, environment: Environment) -> list[Any
     artifacts: list[Any] = []
 
     for capability in sorted(manifest.enabled - INTERACTIVE, key=lambda item: item.value):
-        try:
-            attribute, renderer = SOURCES[capability]
-        except KeyError:
-            raise CatalogError(
-                f"{adapter.id!r} declares {capability.value!r} but the catalog has no content for it"
-            ) from None
+        attribute, renderer = SOURCES[capability]
         for item in _items(content, attribute):
             artifacts.extend(getattr(adapter, renderer)(layout, item))
 

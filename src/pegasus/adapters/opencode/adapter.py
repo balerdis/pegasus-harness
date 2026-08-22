@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from pegasus.adapters.opencode import layout as layout_module
 from pegasus.adapters.opencode import manifest as manifest_module
 from pegasus.adapters.opencode import render
-from pegasus.core.content import Agent, Command, Skill, SystemPrompt
+from pegasus.core.content import Agent, Command, Mcp, Skill, SystemPrompt
 from pegasus.core.types import (
     Artifact,
     CapabilityManifest,
@@ -104,6 +104,9 @@ class Adapter:
 
     def render_system_prompt(self, layout: Layout, system_prompt: SystemPrompt) -> list[Artifact]:
         return render.system_prompt(layout, system_prompt)
+
+    def render_mcp(self, layout: Layout, mcp: Mcp) -> list[Artifact]:
+        return render.mcp(layout, mcp)
 
     # --- What this adapter ships on its own ---
 

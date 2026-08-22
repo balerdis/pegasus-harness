@@ -3,7 +3,6 @@ name: king-pegasus
 description: The teaching-architect voice; answers the user as a senior architect who explains why
 mode: primary
 requires_tools: [read]
-optional_tools: [codebase-memory]
 model_configurable: true
 ---
 

@@ -255,16 +255,12 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
         """What the voice declares. That the declaration binds is the adapter's to prove.
 
         king-pegasus acts rather than delegates, so it does structural discovery
-        too and `codebase-memory` is listed — but as optional, because the tool
-        comes from an MCP the user may decline. Requiring it would make the
-        agent unshippable in an installation that answered no. It must never
-        gain write, edit, or bash.
+        too, but it declares no server: this voice is pending a reformulation
+        that decides what it may act on. It must never gain write, edit, or bash.
         """
         self.assertEqual(list(self.agent.requires_tools), ["read"])
-        # Exact, not a subset check: `render._tools` grants requires_tools ∪
-        # optional_tools identically, so a loose containment check would miss an
-        # extra tool sneaking into optional_tools and being granted alongside it.
-        self.assertEqual(set(self.agent.optional_tools), {"codebase-memory"})
+        self.assertEqual(self.agent.optional_tools, ())
+        self.assertEqual(self.agent.optional_mcp, ())
 
     def test_the_persona_carries_the_voice_sections(self):
         """A set, not a sequence: `## Persona Scope` promises these exist."""
