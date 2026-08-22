@@ -4,6 +4,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path, PurePosixPath
@@ -168,6 +169,49 @@ class CollisionTest(unittest.TestCase):
         with self.assertRaises(CatalogError) as raised:
             self.build(artifacts)
         self.assertIn(".bashrc", str(raised.exception))
+
+
+class McpConventionNamespaceTest(unittest.TestCase):
+    """A server id that matches a hand-authored `_shared/` convention stem must
+    not collide with it -- that is what the `_shared/mcp/` subdirectory buys.
+
+    `cbm` and `engram` are both real planned servers, and `_shared/cbm-convention.md`
+    and `_shared/engram-convention.md` already exist as hand-authored files. Before
+    the servers' conventions moved into their own subdirectory, loading both ids
+    would have addressed two different writers at the very same path.
+    """
+
+    def build_content(self, root: Path):
+        skill_dir = root / "skills" / "_shared"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: _shared\ndescription: Shared convention files\n---\n\nShared.\n",
+            encoding="utf-8",
+        )
+        (skill_dir / "cbm-convention.md").write_text("# CBM Convention\n\nHand-authored.\n", encoding="utf-8")
+        (skill_dir / "engram-convention.md").write_text(
+            "# Engram Convention\n\nHand-authored.\n", encoding="utf-8"
+        )
+        mcp_dir = root / "mcp"
+        mcp_dir.mkdir()
+        for server_id in ("cbm", "engram"):
+            (mcp_dir / f"{server_id}.md").write_text(
+                f"---\nname: {server_id}\ndescription: Probe server\n"
+                f"distribution: remote\nendpoint: https://example.test/{server_id}\n"
+                f"---\n\n# {server_id} convention body\n",
+                encoding="utf-8",
+            )
+        return content_module.load(root)
+
+    def test_two_colliding_ids_load_and_render_without_a_catalog_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            content = self.build_content(Path(directory))
+        catalog = catalog_module.build(content, Adapter())
+        targets = {str(entry.target) for entry in catalog.entries if entry.kind == "file"}
+        self.assertIn("skills/_shared/cbm-convention.md", targets)
+        self.assertIn("skills/_shared/engram-convention.md", targets)
+        self.assertIn("skills/_shared/mcp/cbm-convention.md", targets)
+        self.assertIn("skills/_shared/mcp/engram-convention.md", targets)
 
 
 class SerializationTest(unittest.TestCase):

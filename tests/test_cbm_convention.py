@@ -124,10 +124,26 @@ class AgentPointerResolutionTest(unittest.TestCase):
     )
 
     def test_every_placeholder_reference_resolves_from_the_skills_root(self):
+        """Every reference into the skills tree this repository ships is a real file.
+
+        A server's convention is the one kind of reference that resolves to
+        nothing here: it is not a shipped asset but a file rendered from the
+        server's own descriptor body, so it exists only under the skills root of
+        a real installation. The exclusion is derived from the shipped servers
+        rather than listed, so a second server needs nobody to remember it, and
+        those references are covered instead by the loader invariant that proves
+        each one names a path the renderer will actually produce.
+        """
+        rendered_not_shipped = {
+            str(content_module.mcp_convention_path(server.name))
+            for server in content_module.load().mcp
+        }
         offenders = []
         for path in sorted(AGENTS.glob("*.md")):
             text = path.read_text(encoding="utf-8")
             for match in self.REFERENCE.finditer(text):
+                if match.group(1) in rendered_not_shipped:
+                    continue
                 if not (SKILLS / match.group(1)).is_file():
                     offenders.append(f"{path.name} -> {match.group(1)}")
         self.assertEqual(offenders, [])

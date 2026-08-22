@@ -326,7 +326,8 @@ class McpRenderTest(unittest.TestCase):
     def test_the_convention_lands_under_shared_skills(self):
         file_artifact = only(self.artifacts, FileArtifact)[0]
         self.assertEqual(
-            file_artifact.path, self.layout.skills_dir / "_shared" / "context7-convention.md"
+            file_artifact.path,
+            self.layout.skills_dir / "_shared" / "mcp" / "context7-convention.md",
         )
         self.assertEqual(file_artifact.content, b"# Context7 Convention\n")
 

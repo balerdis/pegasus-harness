@@ -951,7 +951,9 @@ Sin el segundo, agregar `npm` al núcleo en 8b habría renderizado un servidor n
 
 #### La convención aterriza donde ya viven las convenciones
 
-El cuerpo del descriptor se escribe en `_shared/<id>-convention.md`, que es donde `cbm-convention.md` y `engram-convention.md` ya viven y donde el contenido embarcado ya las referencia con la forma defensiva: nombra la ruta y dice qué hacer si no está. Sin placeholder nuevo, sin ancla de layout nueva.
+El cuerpo del descriptor se escribe en `_shared/mcp/<id>-convention.md`, que cuelga del mismo `_shared/` donde `cbm-convention.md` y `engram-convention.md` ya viven y donde el contenido embarcado ya las referencia con la forma defensiva: nombra la ruta y dice qué hacer si no está. Sin placeholder nuevo, sin ancla de layout nueva.
+
+El subdirectorio propio no es cosmético. `_shared/` ya tiene dos convenciones escritas a mano, y `cbm` y `engram` no son nombres cualquiera: son servidores MCP planeados de verdad. Si la convención de un servidor cayera en el mismo espacio de nombres plano, un id que coincidiera con uno de esos stems pisaría un archivo con el que no tiene nada que ver. `mcp/` como subdirectorio propio no detecta esa colisión al construir el catálogo: la vuelve imposible de escribir.
 
 Eso resuelve el alcance sin condicionales en la prosa y sin conocimiento cruzado. **La referencia es siempre la misma frase; lo condicional es el archivo.** Si el servidor no se eligió, el archivo no se escribe, la cláusula defensiva se activa, y ningún agente leyó una convención que no le tocaba. La alternativa —enlazar la convención globalmente, como hace el prompt de sistema— se descartó: le habría mandado la convención de cada servidor a los doce agentes, que es el mismo defecto que esta unidad viene a corregir.
 
@@ -959,7 +961,7 @@ Eso resuelve el alcance sin condicionales en la prosa y sin conocimiento cruzado
 
 Dos tests afirmaban la ausencia de MCP, y los dos eran correctos: describían el estado real. Se volvieron rojos como primer paso de 8a1 y el código los puso en verde. Lo que sigue es por qué el segundo no podía simplemente actualizarse.
 
-El primero afirma que el adapter de OpenCode no declara la capacidad y no implementa su render. Voltearlo es exactamente el trabajo de 8a, y no tiene más vuelta.
+El primero afirma que el adapter de OpenCode no declara la capacidad y no implementa su render. Voltearlo es exactamente el trabajo de 8a1, y no tiene más vuelta.
 
 El segundo esconde un problema que la unidad tiene que resolver, no heredar. Afirma que el catálogo rechaza una capacidad declarada sin fuente de contenido, y para eso necesita una capacidad que no tenga fuente. Hoy hay una sola: `mcp`. La única otra capacidad sin entrada en la tabla de fuentes es la de modelo por agente, que está clasificada como interactiva y por eso nunca llega a la consulta. **En cuanto esta unidad le dé fuente a `mcp`, ese test se queda sin sujeto posible**, y la rama que lanza el error queda inalcanzable: código muerto con un test que ya no puede ejercitarlo.
 

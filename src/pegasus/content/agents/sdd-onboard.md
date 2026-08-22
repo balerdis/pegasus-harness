@@ -23,6 +23,8 @@ It owns the full onboarding procedure: what you receive, the guided walkthrough 
 
 If that required path is missing or unreadable, STOP and return `blocked` naming the unreadable path. Do not infer the procedure, do not search for substitutes, and do not proceed from this prompt alone.
 
+Current documentation for third-party libraries, frameworks, SDKs and CLIs lives behind context7. Follow `{{skills_root}}/_shared/mcp/context7-convention.md` for tool order, query budget, and the rule against sending secrets in a query. If that path is missing or unreadable, say so and proceed without claiming documentation evidence; do not invent your own tool order.
+
 ## Path resolution
 
 Resolve every skill-file reference against the skills root, per `{{skills_root}}/_shared/sdd-phase-common.md`.
