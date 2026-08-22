@@ -203,6 +203,8 @@ def _convention_path(layout: Layout, item: Mcp) -> Path:
     the core's call, made once in `mcp_convention_path`. This adapter's job stays
     what it always was: answering where the skills root itself lives on disk.
     """
+    if layout.skills_dir is None:
+        raise RenderError(f"{item.name}: this layout has no skills directory")
     return layout.skills_dir / mcp_convention_path(item.name)
 
 

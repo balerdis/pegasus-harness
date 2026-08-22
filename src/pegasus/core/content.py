@@ -9,6 +9,7 @@ and letting an adapter guess.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -41,6 +42,31 @@ to notice after the fact.
 def mcp_convention_path(server_id: str) -> PurePosixPath:
     """Where one server's convention lands, relative to the skills root."""
     return _MCP_CONVENTION_DIR / f"{server_id}-convention.md"
+
+
+_MCP_REFERENCE_PATTERN = re.compile(
+    r"\{\{skills_root\}\}/"
+    + re.escape(_MCP_CONVENTION_DIR.as_posix())
+    + r"/([^/\s]+?)-convention\.md"
+)
+"""Built from the same directory `mcp_convention_path` writes into, so the two
+can never drift apart: a change to where a convention lands changes what this
+matches too, instead of leaving a second, hand-copied guess of the shape.
+"""
+
+
+def _referenced_mcp_ids(body: str) -> set[str]:
+    """Every server id an agent body names as a convention path.
+
+    This is a containment check, not a comprehension check: it proves the exact
+    path string is present somewhere in the body, never that the surrounding
+    prose says anything useful about it. A fenced code block or a sentence
+    telling the agent NOT to do this would satisfy it just the same. That is
+    accepted here because the failure this guards against is an author who
+    never mentioned the server at all -- catching more than that would mean
+    judging prose, which this project deliberately leaves untested.
+    """
+    return set(_MCP_REFERENCE_PATTERN.findall(body))
 
 SESSION_STARTS_IN = "pegasus-orchestrator"
 """The agent a session opens in.
@@ -296,23 +322,35 @@ def _require_known_optional_mcp(agents: tuple[Agent, ...], servers: tuple[Mcp, .
 
 
 def _require_mcp_convention_referenced(agents: tuple[Agent, ...]) -> None:
-    """A declared server's convention must actually be reachable from the agent.
+    """A declared server and its convention reference have to travel together.
 
     The permission is granted from the declaration alone: `optional_mcp: [id]`
-    hands the agent a server's tools with nothing else read from the descriptor,
-    so an agent can be granted a server's tools while its own body never tells it
-    that server has a usage convention at all. That is the state this invariant
-    exists to make unrepresentable: a declaration and its reference now have to
-    travel together, so the grant and the guidance cannot drift apart.
+    hands the agent a server's tools with nothing else read from the descriptor.
+    Left one-directional, that makes two states representable that should not
+    be: a declared server whose convention the body never mentions, and a body
+    that points at a convention for a server it never declared -- an agent told
+    to follow a convention for tools it will never have. Both directions have to
+    agree, so the set of ids declared and the set of ids referenced are required
+    to be exactly equal.
     """
     for agent in agents:
-        for server_id in agent.optional_mcp:
+        declared = set(agent.optional_mcp)
+        referenced = _referenced_mcp_ids(agent.body)
+        if declared == referenced:
+            continue
+        problems = []
+        for server_id in sorted(declared - referenced):
             expected = "{{skills_root}}/" + mcp_convention_path(server_id).as_posix()
-            if expected not in agent.body:
-                raise ContentError(
-                    f"{agent.source}: declares 'optional_mcp: [{server_id}]' but its "
-                    f"body never references {expected!r}"
-                )
+            problems.append(
+                f"declares 'optional_mcp: [{server_id}]' but its body never references "
+                f"{expected!r}"
+            )
+        for server_id in sorted(referenced - declared):
+            expected = "{{skills_root}}/" + mcp_convention_path(server_id).as_posix()
+            problems.append(
+                f"references {expected!r} but never declares 'optional_mcp: [{server_id}]'"
+            )
+        raise ContentError(f"{agent.source}: " + "; ".join(problems))
 
 
 def _load_commands(directory: Path, root: Path) -> tuple[Command, ...]:
