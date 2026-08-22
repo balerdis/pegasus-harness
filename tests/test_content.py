@@ -5,9 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 
-from pegasus.adapters.opencode import render as opencode_render
 from pegasus.core import content
-from pegasus.core.content import AgentMode, ContentError, Execution, RunsAs
+from pegasus.core.content import AgentMode, ContentError, Distribution, Execution, RunsAs
 
 SKILL = """---
 name: alpha
@@ -56,6 +55,16 @@ execution: isolated
 ---
 
 Command body.
+"""
+
+MCP = """---
+name: probe-mcp
+description: Probes an MCP server
+distribution: remote
+endpoint: https://example.test/mcp
+---
+
+Convention body.
 """
 
 
@@ -183,7 +192,17 @@ class AgentTest(TemporaryContent):
             "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n"
         )
         self.assertFalse(agent.model_configurable)
-        self.assertEqual((agent.requires_tools, agent.may_delegate_to), ((), ()))
+        self.assertEqual(
+            (agent.requires_tools, agent.optional_mcp, agent.may_delegate_to), ((), (), ())
+        )
+
+    def test_optional_mcp_is_read(self):
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        agent = self.load_agent(
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\nx\n"
+        )
+        self.assertEqual(agent.optional_mcp, ("context7",))
 
     def test_delegation_list_is_read(self):
         agent = self.load_agent(
@@ -199,6 +218,41 @@ class AgentTest(TemporaryContent):
     def test_missing_mode_is_rejected(self):
         with self.assertRaises(ContentError):
             self.load_agent("---\nname: probe-agent\ndescription: d\n---\n\nx\n")
+
+
+class OptionalMcpInvariantTest(TemporaryContent):
+    """An `optional_mcp` id has to name a server that actually ships.
+
+    Otherwise the agent would run believing tools might arrive from a server
+    that was never going to be installed under any configuration.
+    """
+
+    def test_a_dangling_id_is_refused_naming_the_agent_file_and_the_id(self):
+        write_session_start(self.root)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [phantom]\n---\n\nx\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("agents/probe-agent.md", message)
+        self.assertIn("phantom", message)
+
+    def test_an_id_a_server_actually_declares_is_accepted(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\nx\n",
+        )
+        loaded = content.load(self.root)
+        agent = next(a for a in loaded.agents if a.name == "probe-agent")
+        self.assertEqual(agent.optional_mcp, ("context7",))
 
 
 class SessionStartTest(TemporaryContent):
@@ -322,6 +376,40 @@ class CommandTest(TemporaryContent):
         self.assertIn("description", str(raised.exception))
 
 
+class McpTest(TemporaryContent):
+    def load_mcp(self, text):
+        write(self.root, "mcp/probe-mcp.md", text)
+        return content.load(self.root).mcp[0]
+
+    def test_reads_every_declared_field(self):
+        mcp = self.load_mcp(MCP)
+        self.assertEqual(mcp.description, "Probes an MCP server")
+        self.assertIn("Convention body.", mcp.body)
+        self.assertEqual(mcp.distribution, Distribution.REMOTE)
+        self.assertEqual(mcp.endpoint, "https://example.test/mcp")
+
+    def test_unknown_distribution_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(MCP.replace("distribution: remote", "distribution: bundled"))
+        self.assertIn("bundled", str(raised.exception))
+
+    def test_provides_tools_is_gone(self):
+        """The permission an agent gets is derived from the server's id, not
+        tabulated on the server: a hand-maintained list here would be
+        unverifiable documentation with nothing to keep it honest.
+        """
+        mcp = self.load_mcp(MCP)
+        self.assertFalse(hasattr(mcp, "provides_tools"))
+
+    def test_missing_endpoint_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(
+                "---\nname: probe-mcp\ndescription: d\ndistribution: remote\n---\n\nx\n"
+            )
+        self.assertIn("mcp/probe-mcp.md", str(raised.exception))
+        self.assertIn("endpoint", str(raised.exception))
+
+
 class ErrorReportingTest(TemporaryContent):
     def test_a_malformed_command_names_its_file(self):
         write(self.root, "commands/broken.md", "---\nname: broken\ndescription: d\n---\n\nx\n")
@@ -342,6 +430,22 @@ class ShippedContentTest(unittest.TestCase):
 
     def test_commands_load(self):
         self.assertEqual(len(self.content.commands), 16)
+
+    def test_mcp_servers_load(self):
+        self.assertEqual([server.name for server in self.content.mcp], ["context7"])
+
+    def test_every_shipped_server_declares_a_mechanism_and_a_convention(self):
+        """A server nothing can carry out is not installable.
+
+        `distribution` has one member per mechanism the installer implements, so the
+        type check is what refuses a descriptor written ahead of its mechanism. The
+        permission it grants is no longer tabulated on the server at all: an agent
+        names the server's id, and the adapter derives the tool wildcard from that
+        id itself.
+        """
+        for server in self.content.mcp:
+            self.assertIsInstance(server.distribution, Distribution, server.name)
+            self.assertTrue(server.body.strip(), server.name)
 
     def test_every_command_declares_an_agnostic_role(self):
         for command in self.content.commands:
@@ -393,28 +497,6 @@ class ShippedContentTest(unittest.TestCase):
         # identically, so a loose containment check would miss an extra tool sneaking
         # into optional_tools and being granted alongside codebase-memory.
         self.assertEqual(set(orchestrator.optional_tools), {"codebase-memory"})
-
-    def test_no_agent_requires_a_tool_an_mcp_provides(self):
-        """A tool that arrives with an optional MCP cannot be a hard requirement.
-
-        The user chooses which MCP servers get installed, so a `requires_tools`
-        entry backed by one names a condition some installations can never meet.
-        Such a tool belongs in `optional_tools`, where declining the server means
-        the tool is simply not granted instead of leaving an unmeetable promise.
-
-        The set is derived from the OpenCode adapter's `TOOL_NAME` map rather than
-        listed by hand: an entry whose OpenCode name contains "mcp" is MCP-backed.
-        That is the only machine-readable signal available until the `mcp/`
-        content category exists to let the loader refuse this outright.
-        """
-        mcp_backed = {name for name, opencode_name in opencode_render.TOOL_NAME.items() if "mcp" in opencode_name}
-        self.assertTrue(mcp_backed, "derivation from TOOL_NAME produced an empty set")
-        offenders = {
-            agent.name: sorted(mcp_backed.intersection(agent.requires_tools))
-            for agent in self.content.agents
-            if mcp_backed.intersection(agent.requires_tools)
-        }
-        self.assertEqual(offenders, {})
 
     def test_the_orchestrator_is_the_agent_a_session_starts_in(self):
         starting = [agent.name for agent in self.content.agents if agent.default]

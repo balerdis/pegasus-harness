@@ -60,6 +60,17 @@ class Execution(str, Enum):
     INLINE = "inline"
 
 
+class Distribution(str, Enum):
+    """How an MCP server reaches the user's machine.
+
+    One member per mechanism the installer can actually execute, so a descriptor
+    cannot declare a mechanism nothing can carry out. (Two more members arrive
+    in a later unit.)
+    """
+
+    REMOTE = "remote"
+
+
 @dataclass(frozen=True)
 class Asset:
     """One file belonging to a content item, already read into memory.
@@ -82,6 +93,13 @@ class Skill:
 
 @dataclass(frozen=True)
 class Agent:
+    """`requires_tools` and `optional_tools` name native tools only.
+
+    A tool that exists because an MCP server is installed is never in either list:
+    it is named through `optional_mcp` instead, by the server's id rather than by
+    a tool name that only happens to be true today.
+    """
+
     name: str
     description: str
     body: str
@@ -89,6 +107,7 @@ class Agent:
     source: PurePosixPath
     requires_tools: tuple[str, ...] = ()
     optional_tools: tuple[str, ...] = ()
+    optional_mcp: tuple[str, ...] = ()
     may_delegate_to: tuple[str, ...] = ()
     model_configurable: bool = False
 
@@ -118,6 +137,16 @@ class Command:
 
 
 @dataclass(frozen=True)
+class Mcp:
+    name: str
+    description: str
+    body: str
+    distribution: Distribution
+    endpoint: str
+    source: PurePosixPath
+
+
+@dataclass(frozen=True)
 class SystemPrompt:
     body: str
     source: PurePosixPath
@@ -128,6 +157,7 @@ class Content:
     skills: tuple[Skill, ...] = ()
     agents: tuple[Agent, ...] = ()
     commands: tuple[Command, ...] = ()
+    mcp: tuple[Mcp, ...] = ()
     system_prompt: SystemPrompt | None = None
 
 
@@ -147,10 +177,14 @@ def split_frontmatter(text: str, source: str = "<text>") -> tuple[dict[str, Any]
 def load(root: Path = DEFAULT_ROOT) -> Content:
     """Read the whole content core, or refuse with the offending file named."""
     root = root.resolve()
+    agents = _load_agents(root / "agents", root)
+    mcp = _load_mcp(root / "mcp", root)
+    _require_known_optional_mcp(agents, mcp)
     return Content(
         skills=_load_skills(root / "skills", root),
-        agents=_load_agents(root / "agents", root),
+        agents=agents,
         commands=_load_commands(root / "commands", root),
+        mcp=mcp,
         system_prompt=_load_system_prompt(root / SYSTEM_PROMPT_DIR, root),
     )
 
@@ -191,6 +225,7 @@ def _load_agents(directory: Path, root: Path) -> tuple[Agent, ...]:
                 source=source,
                 requires_tools=_names(fields, "requires_tools", source),
                 optional_tools=_names(fields, "optional_tools", source),
+                optional_mcp=_names(fields, "optional_mcp", source),
                 may_delegate_to=_names(fields, "may_delegate_to", source),
                 model_configurable=_flag(fields, "model_configurable", source),
             )
@@ -223,6 +258,23 @@ def _require_the_session_start(agents: tuple[Agent, ...], directory: Path, root:
         )
 
 
+def _require_known_optional_mcp(agents: tuple[Agent, ...], servers: tuple[Mcp, ...]) -> None:
+    """An `optional_mcp` id nothing provides is a typo that would ship as a
+    silently ungranted tool: the agent would run believing a server's tools
+    might arrive, and no installation could ever grant them. Checking here,
+    once, is what makes that typo a load-time refusal instead of a permission
+    nobody notices is missing.
+    """
+    known = {server.name for server in servers}
+    for agent in agents:
+        unknown = [name for name in agent.optional_mcp if name not in known]
+        if unknown:
+            raise ContentError(
+                f"{agent.source}: 'optional_mcp' names {', '.join(sorted(unknown))}, "
+                f"which no mcp server declares"
+            )
+
+
 def _load_commands(directory: Path, root: Path) -> tuple[Command, ...]:
     commands = []
     for path in _markdown_files(directory):
@@ -238,6 +290,23 @@ def _load_commands(directory: Path, root: Path) -> tuple[Command, ...]:
             )
         )
     return tuple(commands)
+
+
+def _load_mcp(directory: Path, root: Path) -> tuple[Mcp, ...]:
+    servers = []
+    for path in _markdown_files(directory):
+        fields, body, source = _descriptor(path, root)
+        servers.append(
+            Mcp(
+                name=path.stem,
+                description=_text(fields, "description", source),
+                body=body,
+                distribution=_choice(fields, "distribution", Distribution, source),
+                endpoint=_text(fields, "endpoint", source),
+                source=source,
+            )
+        )
+    return tuple(servers)
 
 
 def _load_system_prompt(directory: Path, root: Path) -> SystemPrompt | None:
