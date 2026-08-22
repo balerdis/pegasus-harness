@@ -855,7 +855,9 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 5 | TUI: menú principal e instalación | Instalación completa sin escribir un flag | Pendiente |
 | 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con mutación registrada | Pendiente |
 | 7 | Actualización de una instalación existente | Reinstalar sobre una instalación propia actualiza el payload; lo que el usuario reescribió se preserva y se reporta | Entregada |
-| 8 | Distribución de MCPs | Los MCPs del producto quedan disponibles sin vendorizar ni compilar ningún binario, con versión fija e integridad verificada | Pendiente |
+| 8a1 | Categoría `mcp/`, descriptor y render del servidor | Un MCP remoto se instala de verdad, con su convención embarcada y su permiso concedido | Entregada |
+| 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira | Pendiente |
+| 8b | Directorio propio, formas `npm` y `download` | Los MCPs que traen binario quedan disponibles sin vendorizar ni compilar ninguno, con versión fija e integridad verificada | Pendiente |
 
 La unidad 1b genera el catálogo **del contenido presente**, no del contenido final: los descriptores de los 10 agentes SDD y las categorías `mcp/` y `policies/` llegan en unidades posteriores.
 
@@ -915,7 +917,9 @@ Si el par SO/arch que corre no está entre los que el descriptor declara, la ins
 
 #### El usuario elige, y el contenido se adapta por ausencia
 
-Cuáles MCPs se instalan lo decide el usuario, en la TUI y por flags, con la paridad que el resto del producto ya exige: la TUI es la superficie para la persona, las flags son para que un agente pueda operar sin persona mirando, y ninguna de las dos llega después que la otra.
+Cuáles MCPs se instalan lo decide el usuario. La paridad que el resto del producto exige se sostiene sin construir la TUI acá, porque **la selección no vive en ninguna superficie**: es una función pura del núcleo que recibe el contenido y los ids elegidos y devuelve el contenido que sobrevivió. Las flags la llaman en esta unidad; la TUI de la unidad 5 la llamará igual, sin agregarle nada.
+
+Que la selección se aplique una sola vez, en el núcleo y antes de renderizar, no es una comodidad: un adapter renderiza un ítem a la vez y nunca ve el árbol completo, así que un render por ítem no podría saber qué eligió el usuario ni aunque quisiera. Aplicarla una vez es lo que deja a todos los adapters —y a cualquier superficie futura— sin enterarse de que hubo una elección.
 
 **Una herramienta que llega con un MCP no puede ser un requisito.** Si el usuario elige qué servidores se instalan, declarar una de sus herramientas como requerida nombra una condición que algunas instalaciones no pueden cumplir nunca. Esas herramientas van entre las opcionales, donde declinar el servidor significa simplemente que la herramienta no se concede, en vez de dejar una promesa incumplible. Hoy el motor todavía no sabe qué herramientas provee cada MCP, así que la regla se sostiene con un test; la categoría `mcp/` es lo que va a permitir que el loader la rechace de plano, y ahí el test pasa a ser innecesario.
 
@@ -927,9 +931,33 @@ Que el cuerpo del descriptor sea la convención tiene una consecuencia que convi
 
 Y en la dirección opuesta hay un MCP sin una sola línea de prosa en todo el contenido. Instalarlo así sería pagar una capacidad que ningún agente sabe que existe: no rompe nada, simplemente no sirve para nada. Su convención se escribe en esta unidad, en el cuerpo de su descriptor, junto con el mecanismo.
 
+#### Un agente declara servidores, no las herramientas que traen
+
+`optional_tools` significaba dos cosas a la vez: herramientas nativas del CLI y herramientas que sólo existen porque un servidor está instalado. `sdd-explore` lo mostraba en una sola línea —`optional_tools: [write, codebase-memory]`— donde `write` es nativa y la otra llega con un MCP. Un campo, dos conceptos, y ninguna regla que pudiera distinguirlos sin adivinar.
+
+Se separan. `requires_tools` y `optional_tools` nombran **sólo herramientas nativas**; `optional_mcp` nombra **ids de servidor**. Y no hay `requires_mcp`: un servidor que el usuario puede declinar no puede ser un requisito, y ahora eso es estructural en vez de una regla sostenida por un test — no hay campo donde escribirlo.
+
+Tres cosas se caen solas con la separación:
+
+- **El permiso deja de ser una tabla y pasa a derivarse.** El adapter escribe cada servidor en `/mcp/<id>`, así que el id *es* la clave que el CLI usa para nombrar sus herramientas, y el patrón de permiso es esa misma clave con el comodín. La tabla de traducción del adapter vuelve a nombrar sólo herramientas nativas.
+- **El descriptor no declara qué herramientas provee.** Nadie lo leería: el agente nombra el servidor y el permiso sale del id. Un campo sin lector es documentación que se desincroniza en silencio.
+- **Un id que ningún descriptor provee es un error de carga**, no una herramienta que se deja de conceder sin que nadie avise.
+
+#### Invariantes en los dos bordes
+
+La misma idea aplicada dos veces, en los dos lugares donde una tabla tiene que cubrir un enum: el catálogo verifica al importar que toda capacidad no interactiva tenga fuente, y el adapter verifica al importar que toda forma de distribución tenga traducción. Los dos con `if` y `raise`, no con `assert`: `python -O` borra los `assert`, y un invariante que desaparece bajo optimización desaparece exactamente en producción.
+
+Sin el segundo, agregar `npm` al núcleo en 8b habría renderizado un servidor npm como si fuera remoto, en silencio. Con él, no se puede ni importar el módulo hasta que el adapter sepa qué hacer.
+
+#### La convención aterriza donde ya viven las convenciones
+
+El cuerpo del descriptor se escribe en `_shared/<id>-convention.md`, que es donde `cbm-convention.md` y `engram-convention.md` ya viven y donde el contenido embarcado ya las referencia con la forma defensiva: nombra la ruta y dice qué hacer si no está. Sin placeholder nuevo, sin ancla de layout nueva.
+
+Eso resuelve el alcance sin condicionales en la prosa y sin conocimiento cruzado. **La referencia es siempre la misma frase; lo condicional es el archivo.** Si el servidor no se eligió, el archivo no se escribe, la cláusula defensiva se activa, y ningún agente leyó una convención que no le tocaba. La alternativa —enlazar la convención globalmente, como hace el prompt de sistema— se descartó: le habría mandado la convención de cada servidor a los doce agentes, que es el mismo defecto que esta unidad viene a corregir.
+
 #### Los dos tests que esta unidad tiene que voltear
 
-Dos tests afirman hoy la ausencia de MCP, y los dos son correctos: describen el estado real. Ninguno se toca antes de tiempo; se vuelven rojos dentro de 8a, como primer paso, y el código los pone en verde.
+Dos tests afirmaban la ausencia de MCP, y los dos eran correctos: describían el estado real. Se volvieron rojos como primer paso de 8a1 y el código los puso en verde. Lo que sigue es por qué el segundo no podía simplemente actualizarse.
 
 El primero afirma que el adapter de OpenCode no declara la capacidad y no implementa su render. Voltearlo es exactamente el trabajo de 8a, y no tiene más vuelta.
 
@@ -941,8 +969,11 @@ La salida no es buscarle un sujeto nuevo, es que la condición no pueda existir.
 
 La unidad completa se pasa del presupuesto de revisión, así que va en cadena:
 
-- **8a.** La categoría `mcp/` y su loader, el descriptor, la entrada de la capacidad en el catálogo, el render del servidor como clave de configuración y el flip de la capacidad en el manifiesto del adapter. Entra la forma `remote` y la selección con sus dos superficies. Al terminar, hay un MCP realmente instalado.
+- **8a1.** La categoría `mcp/` y su loader, el descriptor, la entrada de la capacidad en el catálogo, el render del servidor y de su convención, y el flip de la capacidad en el manifiesto del adapter. Entra la forma `remote`. Al terminar, hay un MCP realmente instalado, con su convención embarcada y su permiso concedido a los agentes que lo declaran.
+- **8a2.** La selección: `--mcp` decide qué servidores se instalan, y dejar de nombrar uno que ya estaba instalado lo retira.
 - **8b.** El directorio propio de Pegasus, el puerto que materializa y verifica, y las formas `npm` y `download` sobre él.
+
+8a se midió al escribir su código y se pasó del presupuesto, así que se partió en dos. La costura no es arbitraria: 8a1 instala el servidor para todos, 8a2 le da al usuario la decisión. Cada mitad deja el árbol coherente, y ninguna embarca una capacidad que no funcione.
 
 Esta unidad es la que destraba la deuda del caso wildcard contra wildcard del deny de herramientas: hasta que haya un MCP instalado no hay ningún prefijo que habilitar, y el caso no se puede verificar en runtime.
 
@@ -971,6 +1002,9 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 | Un `refresh failed` del plugin del skill registry queda sólo en `console.error`, así que una falla del registry no se superficializa | Nada. Es del plugin, no del contrato que lo alimenta |
 | Los sitios de `content.py` que lanzan `ContentError` no tienen un test de tabla que recorra todos y afirme que cada uno nombra una ruta real | Nada. Unidad candidata en cualquier momento |
 | `engram-operations` no viaja como skill embarcada | Nada |
+| La voz `king-pegasus` explica y no puede aplicar nada de lo que explica: declara sólo `read` y su cuerpo le prohíbe generar cualquier artefacto | Nada. Es una decisión de producto sobre qué hace esa voz, y hasta tomarla no se le concede ningún servidor |
+| El orquestador tiene prohibición absoluta de ejecutar —"never by running the phase work yourself"— sin umbral, y no tiene `write` ni `edit`. Prosa y herramientas están de acuerdo, así que no es un bug: es un diseño que hay que cambiar en las dos mitades a la vez | Nada. Cambiar sólo la prosa le nombraría una capacidad que no tiene |
+| Dos gates defensivos —el del protocolo de memoria en el prompt de sistema y el de `cbm-convention.md`— no tienen ningún test que los proteja, y no se pueden afirmar sin afirmar prosa | La unidad 8b: cuando cada convención viva en el cuerpo de su descriptor, la ausencia significará ausencia y los dos gates se borran en vez de necesitar protección |
 | `tools/check_docs_links.py` reporta 13 links rotos, 6 de ellos reales y preexistentes | Nada |
 
 ---
