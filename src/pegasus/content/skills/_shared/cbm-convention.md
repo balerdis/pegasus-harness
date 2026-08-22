@@ -1,5 +1,9 @@
 # Codebase Memory Convention (reference documentation)
 
+This convention applies only when the `codebase-memory` MCP tools are present in your
+session. If they are absent, do not attempt them, do not claim graph evidence, and
+proceed with direct file and text search instead.
+
 This project uses `codebase-memory-mcp` to maintain a knowledge graph of the codebase.
 ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery: structural
 relationships, callers/callees, architecture, dependency graphs, impact analysis, and
