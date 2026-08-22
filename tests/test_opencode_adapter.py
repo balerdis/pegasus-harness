@@ -334,6 +334,12 @@ class McpRenderTest(unittest.TestCase):
     def test_the_dispatch_table_covers_every_distribution_member(self):
         self.assertEqual(set(render_module.MCP_VALUE), set(Distribution))
 
+    def test_a_layout_without_skills_refuses_instead_of_an_attribute_error(self):
+        layout = Layout(config_dir=CONFIG, settings_file=CONFIG / "opencode.json")
+        with self.assertRaises(render_module.RenderError) as raised:
+            render_module.mcp(layout, self.mcp)
+        self.assertIn("context7", str(raised.exception))
+
 
 class OwnArtifactsTest(unittest.TestCase):
     def setUp(self):

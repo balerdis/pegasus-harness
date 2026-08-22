@@ -258,13 +258,14 @@ class OptionalMcpInvariantTest(TemporaryContent):
 
 
 class McpConventionReferenceInvariantTest(TemporaryContent):
-    """An agent that is granted a server's tools must also point at its convention.
+    """A declared server and a referenced convention have to name the same set.
 
     The permission is derived from the declaration alone (`optional_mcp: [id]`
     grants the wildcard, nothing else reads the descriptor), so nothing forces an
-    agent body to ever mention that the server has a usage convention at all. This
-    invariant keeps the grant and the guidance travelling together instead of
-    letting the reference lag or never get written.
+    agent body to ever mention that the server has a usage convention at all --
+    and nothing stops a body from pointing at a convention for a server it never
+    declared, granting no permission at all. This invariant keeps both
+    directions travelling together instead of letting either one drift.
     """
 
     def test_a_body_that_never_mentions_the_convention_path_is_refused(self):
@@ -296,6 +297,63 @@ class McpConventionReferenceInvariantTest(TemporaryContent):
         loaded = content.load(self.root)
         agent = next(a for a in loaded.agents if a.name == "probe-agent")
         self.assertEqual(agent.optional_mcp, ("context7",))
+
+    def test_a_body_that_references_a_convention_never_declared_is_refused(self):
+        """The reverse direction: a reference with no matching declaration grants
+        no permission, so the body would tell the agent to follow a convention
+        for tools it will never have.
+        """
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("agents/probe-agent.md", message)
+        self.assertIn("context7", message)
+
+    def test_both_directions_are_named_together_when_both_are_wrong(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/cbm.md", MCP.replace("probe-mcp", "cbm"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\n"
+            "Follow {{skills_root}}/_shared/mcp/cbm-convention.md for tool order.\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("agents/probe-agent.md", message)
+        self.assertIn("context7", message)
+        self.assertIn("cbm", message)
+
+    def test_the_matcher_finds_exactly_what_the_writer_would_have_written(self):
+        """The body pattern the loader scans with has to be built from the same
+        pieces `mcp_convention_path` uses, so a change to that path shape cannot
+        make the writer and the matcher disagree about what counts as a reference.
+        """
+        for server_id in ("context7", "cbm", "a-b-c"):
+            path = "{{skills_root}}/" + content.mcp_convention_path(server_id).as_posix()
+            found = content._referenced_mcp_ids(f"See {path} for details.\n")
+            self.assertEqual(found, {server_id})
+
+    def test_the_matcher_does_not_cross_a_path_separator(self):
+        """A slash inside the captured id would mean the pattern accepted more
+        path than the id ever contains, defeating the point of anchoring it to
+        the writer's own shape.
+        """
+        found = content._referenced_mcp_ids(
+            "{{skills_root}}/_shared/mcp/not/a-convention.md\n"
+        )
+        self.assertEqual(found, set())
 
 
 class SessionStartTest(TemporaryContent):
