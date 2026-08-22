@@ -200,7 +200,8 @@ class AgentTest(TemporaryContent):
         write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
         agent = self.load_agent(
             "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\nx\n"
+            "optional_mcp: [context7]\n---\n\n"
+            "See {{skills_root}}/_shared/mcp/context7-convention.md.\n"
         )
         self.assertEqual(agent.optional_mcp, ("context7",))
 
@@ -248,7 +249,49 @@ class OptionalMcpInvariantTest(TemporaryContent):
             self.root,
             "agents/probe-agent.md",
             "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\n"
+            "See {{skills_root}}/_shared/mcp/context7-convention.md.\n",
+        )
+        loaded = content.load(self.root)
+        agent = next(a for a in loaded.agents if a.name == "probe-agent")
+        self.assertEqual(agent.optional_mcp, ("context7",))
+
+
+class McpConventionReferenceInvariantTest(TemporaryContent):
+    """An agent that is granted a server's tools must also point at its convention.
+
+    The permission is derived from the declaration alone (`optional_mcp: [id]`
+    grants the wildcard, nothing else reads the descriptor), so nothing forces an
+    agent body to ever mention that the server has a usage convention at all. This
+    invariant keeps the grant and the guidance travelling together instead of
+    letting the reference lag or never get written.
+    """
+
+    def test_a_body_that_never_mentions_the_convention_path_is_refused(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
             "optional_mcp: [context7]\n---\n\nx\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("agents/probe-agent.md", message)
+        self.assertIn("context7", message)
+        self.assertIn("{{skills_root}}/_shared/mcp/context7-convention.md", message)
+
+    def test_a_body_that_references_the_convention_path_is_accepted(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\n"
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
         )
         loaded = content.load(self.root)
         agent = next(a for a in loaded.agents if a.name == "probe-agent")
@@ -408,6 +451,21 @@ class McpTest(TemporaryContent):
             )
         self.assertIn("mcp/probe-mcp.md", str(raised.exception))
         self.assertIn("endpoint", str(raised.exception))
+
+
+class McpConventionPathTest(unittest.TestCase):
+    """The core, not the adapter, owns where a server's convention lands."""
+
+    def test_the_path_is_relative_to_the_skills_root(self):
+        self.assertEqual(
+            content.mcp_convention_path("context7"),
+            PurePosixPath("_shared/mcp/context7-convention.md"),
+        )
+
+    def test_the_path_is_keyed_by_the_server_id(self):
+        self.assertEqual(
+            content.mcp_convention_path("cbm"), PurePosixPath("_shared/mcp/cbm-convention.md")
+        )
 
 
 class ErrorReportingTest(TemporaryContent):

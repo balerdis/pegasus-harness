@@ -20,6 +20,7 @@ from pegasus.core.content import (
     RunsAs,
     Skill,
     SystemPrompt,
+    mcp_convention_path,
 )
 from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout
 
@@ -196,14 +197,13 @@ def mcp(layout: Layout, item: Mcp) -> list[Artifact]:
 
 
 def _convention_path(layout: Layout, item: Mcp) -> Path:
-    """Where a server's convention lands, beside the ones already shipped.
+    """Where a server's convention lands, inside this layout's skills root.
 
-    `_shared/` already holds this project's conventions (`cbm-convention.md`,
-    `engram-convention.md`), and the shipped content already references them
-    defensively as `{{skills_root}}/_shared/<name>-convention.md`. Reusing it
-    needs no new placeholder and no new layout anchor.
+    The layout inside the content tree -- `_shared/mcp/<id>-convention.md` -- is
+    the core's call, made once in `mcp_convention_path`. This adapter's job stays
+    what it always was: answering where the skills root itself lives on disk.
     """
-    return layout.skills_dir / "_shared" / f"{item.name}-convention.md"
+    return layout.skills_dir / mcp_convention_path(item.name)
 
 
 def _body(layout: Layout, body: str, owner: str) -> str:

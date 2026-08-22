@@ -23,6 +23,25 @@ MARKER = "---"
 SKILL_FILE = "SKILL.md"
 SYSTEM_PROMPT_DIR = "system-prompt"
 
+_MCP_CONVENTION_DIR = PurePosixPath("_shared") / "mcp"
+"""Where every server's usage convention lands, relative to the skills root.
+
+`_shared/` already holds hand-authored convention files that the skills renderer
+writes by copying an asset verbatim (`cbm-convention.md`, `engram-convention.md`,
+`openspec-convention.md`). A server's convention is a different kind of write:
+the loader derives it from the server's own descriptor body. Landing both writers
+in that same flat namespace means a server whose id happens to match one of those
+stems collides with a file it has nothing to do with -- and `cbm` and `engram` are
+both real planned servers, not a hypothetical. A subdirectory of its own makes
+that collision impossible to express, rather than something a catalog build has
+to notice after the fact.
+"""
+
+
+def mcp_convention_path(server_id: str) -> PurePosixPath:
+    """Where one server's convention lands, relative to the skills root."""
+    return _MCP_CONVENTION_DIR / f"{server_id}-convention.md"
+
 SESSION_STARTS_IN = "pegasus-orchestrator"
 """The agent a session opens in.
 
@@ -180,6 +199,7 @@ def load(root: Path = DEFAULT_ROOT) -> Content:
     agents = _load_agents(root / "agents", root)
     mcp = _load_mcp(root / "mcp", root)
     _require_known_optional_mcp(agents, mcp)
+    _require_mcp_convention_referenced(agents)
     return Content(
         skills=_load_skills(root / "skills", root),
         agents=agents,
@@ -273,6 +293,26 @@ def _require_known_optional_mcp(agents: tuple[Agent, ...], servers: tuple[Mcp, .
                 f"{agent.source}: 'optional_mcp' names {', '.join(sorted(unknown))}, "
                 f"which no mcp server declares"
             )
+
+
+def _require_mcp_convention_referenced(agents: tuple[Agent, ...]) -> None:
+    """A declared server's convention must actually be reachable from the agent.
+
+    The permission is granted from the declaration alone: `optional_mcp: [id]`
+    hands the agent a server's tools with nothing else read from the descriptor,
+    so an agent can be granted a server's tools while its own body never tells it
+    that server has a usage convention at all. That is the state this invariant
+    exists to make unrepresentable: a declaration and its reference now have to
+    travel together, so the grant and the guidance cannot drift apart.
+    """
+    for agent in agents:
+        for server_id in agent.optional_mcp:
+            expected = "{{skills_root}}/" + mcp_convention_path(server_id).as_posix()
+            if expected not in agent.body:
+                raise ContentError(
+                    f"{agent.source}: declares 'optional_mcp: [{server_id}]' but its "
+                    f"body never references {expected!r}"
+                )
 
 
 def _load_commands(directory: Path, root: Path) -> tuple[Command, ...]:
