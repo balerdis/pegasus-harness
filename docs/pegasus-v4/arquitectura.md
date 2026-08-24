@@ -981,9 +981,86 @@ Esta unidad es la que destraba la deuda del caso wildcard contra wildcard del de
 
 **Nada de esto se porta de v3.** El contrato de release de v3 sirve como inventario de qué datos hicieron falta alguna vez, no como plantilla: aquel diseño compilaba el binario a mano dentro de una imagen fijada por digest, lo vendorizaba en el repositorio y terminaba admitiendo en su propio archivo de provenance que la firma no se podía verificar. Los campos del descriptor se diseñan de cero contra los tres mecanismos de arriba.
 
+### Unidad 9 — El digest deja de ser permiso: instalar y desinstalar pisan, el snapshot recupera
+
+Hoy el digest cumple dos papeles a la vez: es lo que decide si un artefacto se pisa, y es lo que decide si se puede recuperar. Esta unidad los separa. La política pasa a ser tres reglas:
+
+- **Instalar** escribe todo lo que el journal reclama, sin mirar si el usuario lo tocó. Lo que el journal no reclama —el caso C— sólo se escribe con confirmación explícita.
+- **Desinstalar** borra todo lo que el journal reclama, sin mirar si el usuario lo tocó.
+- **Recuperar** es el snapshot y `restore`. No el journal.
+
+El digest deja de ser una condición que el planner consulta antes de escribir. La pregunta "¿esto es lo que dejamos la vez pasada?" se borra del camino de instalar y de desinstalar, y la única pregunta que sigue viva es "¿esto es nuestro?", que contesta el journal solo.
+
+Conviene decir primero qué NO justifica el snapshot, porque los dos argumentos obvios están mal. El caso C —una dirección que el journal no reclama y que la instalación quiere ocupar— ya está protegido: se pide confirmación explícita, y el snapshot no le agrega nada, porque ahí nunca se escribe sin que alguien mire. Y una instalación que se corta a mitad de camino ya está protegida por el rollback en memoria que hoy vive en el planner (`Applied.replaced` y `_put_back`, `planner.py:396-403`): ese mecanismo deshace lo que un solo comando alcanzó a tocar, mientras el comando está corriendo.
+
+El hueco real es uno solo: **una dirección que el journal sí reclama, donde el usuario editó a mano el archivo que es nuestro.** Ahí la política nueva escribe sin preguntar —es la primera regla de la lista—, así que no hay consentimiento y no hay aviso. El snapshot existe para que ese contenido no desaparezca sin dejar rastro en ningún otro lado. El precio se dice en voz alta: si pasaron más instalaciones que las que la retención guarda, el contenido original no existe en ningún lado.
+
+#### Lo que muere
+
+`ownership.still_ours` y sus dos llamadores (`planner.py:187` en instalar, `planner.py:490` en desinstalar); el resultado `preserved` en los dos caminos; los gates de `MUTATED` en `_file_step` (`planner.py:176-180`) y en `_key_step` (`planner.py:206-208`); `Record.before`; `Record.adopted`; el resultado `restored`; la decisión de restaurar contra remover en `journal.retirement` (`journal.py:106-108`); `Mutation`, `with_mutation` y `with_adoption`; y `render_model_assignment` de `ports/cli_adapter.py` —con lo que `registry.py:24-30` pasa de exigir tres métodos de modelo a exigir dos—.
+
+Quedan huérfanos dos lugares que conviene nombrar para que no sorprendan en la revisión: `_file_digest` (`planner.py:560-563`) pierde a su único llamador, y `_amend` y `_mutated` (`journal.py:152-164`) sólo son alcanzables desde `with_mutation` y `with_adoption`, que mueren con esta unidad.
+
+Y una cosa que conviene decir sin vueltas: **`with_mutation` y `with_adoption` no tienen un llamador de producción hoy**. Sus únicos call sites son los tests unitarios del propio journal. Nada en el motor que se distribuye produce hoy una mutación o un registro adoptado, porque el comando que la produciría —`models set`— no existe todavía.
+
+#### Lo que sobrevive, y no por razones de política
+
+`unaccounted` sobrevive: un ítem de una lista no tiene dirección propia, así que "el usuario lo borró" y "el usuario lo editó hasta volverlo irreconocible" son físicamente indistinguibles, y esto sólo aplica a listas que todavía tienen sobrevivientes. El digest sobrevive como identificador de esos ítems y como dato de `doctor`. `ownership.occupies` sobrevive porque es exactamente la detección del caso C. `retire` y `unplace` sobreviven en su estructura actual. `cli._merged` sobrevive. Y `Capability.PER_AGENT_MODEL` sigue clasificada `INTERACTIVE` en `catalog.py:33`: esta unidad no la reclasifica.
+
+#### Asignación de modelo — lo que esta unidad hace y lo que no
+
+El diseño actual asigna modelos registrando una mutación sobre nuestro propio artefacto: `journal.py:147` tiene hardcodeado el literal `"set-model-adopted"`. Ese mecanismo muere acá. El reemplazo —que se construye con el menú interactivo, no en esta unidad— se resume en un principio:
+
+> Una asignación de modelo no es una mutación de nuestro artefacto. Es una preferencia que vive en el estado propio de Pegasus y participa del render.
+
+Dos consecuencias quedan registradas para cuando llegue esa unidad. Pisar el artefacto pasa a ser inofensivo, porque la asignación deja de vivir en el artefacto: es parte de lo que renderizamos, no algo que hay que proteger de nuestra propia escritura. Y la preferencia va a vivir en su propio store, con su propio puerto, al lado del journal pero con una postura de falla opuesta: **falla blando**. Ausente o ilegible degrada a "sin asignación" y se renderiza el default, deliberadamente al revés que el journal, que revienta ante un archivo corrupto porque degradar ahí orfanaría artefactos propios. Esta unidad sólo borra y documenta el principio; no construye ese store.
+
+#### El snapshot — el contrato de diseño
+
+El snapshot captura el archivo entero, siempre. Un blob por archivo tocado, sin importar si Pegasus iba a escribir el archivo completo o sólo una clave adentro. `restore` devuelve bytes exactos y modo exacto, sin merge ni reconstrucción — el modo importa porque `planner.py:310` ya escribe un documento de configuración con el modo que el archivo tenía antes, y devolverlo como `0644` rompería algo que el motor ya respeta hoy.
+
+El snapshot captura también el journal. El journal no está en `plan.placements` —se guarda aparte, en `cli.py:198`—, así que hay que agregarlo a mano a lo que se captura. Si no, `restore` devuelve los archivos al estado anterior mientras el journal sigue reclamando la versión nueva, y la próxima instalación compara contra las huellas equivocadas.
+
+Es una carpeta por generación, numerada con un número creciente, colgando del mismo directorio donde vive el journal:
+
+```
+~/.local/share/pegasus-harness/snapshots/
+  000004/
+    manifest.json
+    0001.blob
+```
+
+El manifest se escribe último, como marca de que la generación está completa. Una carpeta sin manifest la ignoran tanto `restore` como la retención. Cada entrada del manifest tiene la ruta, `existed`, el modo, y la referencia al blob. `existed: false` significa que ahí no había archivo, así que volver a ese estado es borrar la ruta — eso es lo que permite que `restore` devuelva el estado anterior exacto y no simplemente sobrescriba.
+
+La fecha va adentro del manifest, no en el nombre de la carpeta. La razón real: en los tests el reloj es un literal fijo (`tests/test_cli.py:49`), y el test que prueba "hay snapshot en instalar Y en desinstalar" toma exactamente dos snapshots en una misma corrida — con la fecha en el nombre, colisionarían. Una razón secundaria: `timespec="seconds"` no da orden total, y la retención necesita ordenar. No vale el argumento de que en producción dos snapshots en el mismo segundo son improbables — ese argumento se consideró y se descartó.
+
+`restore` deshace la instalación completa, no un rescate selectivo archivo por archivo. Devuelve todo lo que la instalación tocó, y hay que decirlo sin vueltas: eso significa que también se vuelve a la versión anterior de todo lo demás que esa instalación actualizó, no sólo del archivo que motivó la recuperación.
+
+La retención guarda 5 generaciones, y no es un argumento de disco: el contenido son 80 archivos y 356 KB, el catálogo renderiza 90 archivos y 18 claves de configuración, así que un snapshot de reinstalación son unos 400 KB y cinco generaciones son unos 2 MB. Lo que la retención decide en realidad es cuánto atrás llega la promesa de recuperación.
+
+El puerto de filesystem crece dos métodos: `list_dir` —para calcular el próximo número de generación y para la retención— y uno para borrar un directorio, que sólo usa la retención. Hace falta porque `remove` es explícitamente sólo para archivos (`ports/filesystem.py:65-70`; en `fs_posix.py:75-79` es `path.unlink`, que falla contra un directorio). No hay archivos comprimidos en ningún lado de `src/`: los snapshots son archivos sueltos, por diseño.
+
+#### El corte — cuatro PRs, con la medición
+
+Medido: mueren 119 líneas de fuente (journal.py 65, planner.py 37, ownership.py 9, cli.py 3, registry.py 1, ports/cli_adapter.py 4); mueren 29 tests y se editan 6; cero tests se invierten; quedan 543 de 572; y 73 líneas de documentación en doce ubicaciones, de las cuales 51 son borrado limpio.
+
+Estimado: ~374 líneas de fuente nueva, ~705 de tests, ~70 de prosa. Las estimaciones se dimensionan contra varas ya medidas en el repo: `ports/journal_store.py` con 47 líneas, `infra/journal_store_file.py` con 104, y la proporción test-sobre-fuente que el propio repo ya tiene, 2,5×, tomada de `tests/test_journal_store.py` con 264 líneas.
+
+| PR | Contenido | src | tests | doc | Total |
+|---|-----------|-----|-------|-----|-------|
+| 1 | Manifest, store y puerto, más `list_dir`. Nada lo llama todavía: cero cambio de comportamiento | 187 | 210 | 0 | 397 |
+| 2 | Escritor de snapshot y su cableado en install y uninstall. Desde acá no se escribe sin red | 102 | 275 | 50 | 427 |
+| 3 | Muere la política vieja: la tabla completa, los 29 tests, las doce ubicaciones de documentación | 119 | 161 | 63 | 343 |
+| 4 | `restore`, retención, y el método para borrar un directorio | 127 | 255 | 20 | 402 |
+
+Dos cosas hacen que el corte sea éste y no otro. **PR 2 tiene que entrar antes que PR 3**, y no es prolijidad: borrar la maquinaria vieja de preservar/restaurar mientras instalar todavía puede escribir sin snapshot abre una ventana donde una edición del usuario se destruye sin ninguna red — peor que el comportamiento de hoy, no un intermedio aceptable. Y el corte en dos que se consideró primero —política más escritura del snapshot en un PR, restore más retención en el otro— se descartó con números: su primer PR daba cerca de 1145 líneas, y sólo la mitad de nacimiento (802) ya pasaba el presupuesto de 800 líneas antes de sumarle una sola línea de muerte.
+
+Queda registrado que las estimaciones se remiden cuando cierre el PR 1: los PRs 2, 3 y 4 se recalibran contra líneas reales en vez de contra la analogía de arriba.
+
 ### Orden de trabajo
 
 1. **Unidad 8**, en cadena: **8a** la categoría `mcp/` y la selección, **8b** el directorio propio y la materialización.
+   - **La Unidad 9** corre adentro de esa cadena, antes de **8a2**: reemplaza el digest-permiso por el snapshot antes de que 8a2 le dé al usuario el poder de retirar servidores sobre esa misma política.
 2. **Unidad 4.** Launcher, venv privado, empaquetado. Destraba la TUI.
 3. **Unidades 5 y 6.** La TUI.
 
