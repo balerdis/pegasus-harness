@@ -27,6 +27,7 @@ import pegasus
 from fakes import FakeFileSystem
 from pegasus import cli
 from pegasus.adapters import available
+from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
 from pegasus.core.types import Environment
 from pegasus.infra.snapshot_store_file import snapshots_root
@@ -318,6 +319,95 @@ class InstallTest(CommandTestCase):
         self.filesystem.fail_always.add(self.store().path)
         _, report = self.run_cli("install", "--cli", CLI)
         self.assertEqual(report["left_behind"], [str(self.layout().settings_file)])
+
+
+class InstallMcpTest(CommandTestCase):
+    """`--mcp` is the whole point of this unit: nothing installs unless named."""
+
+    def settings(self) -> dict:
+        return json.loads(self.filesystem.files[self.layout().settings_file])
+
+    def convention_path(self, server_id: str) -> Path:
+        # Derived, not spelled out: the core owns where a convention lands, and a
+        # second copy of that layout here would drift the first time it moves.
+        return self.layout().skills_dir / content_module.mcp_convention_path(server_id)
+
+    def tools_of(self, agent_name: str) -> dict:
+        return self.settings()["agent"][agent_name]["tools"]
+
+    def test_choosing_context7_places_its_key_and_its_convention_file(self):
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        self.assertEqual(code, 0)
+        self.assertIn("context7", self.settings()["mcp"])
+        self.assertTrue(self.filesystem.exists(self.convention_path("context7")))
+
+    def test_choosing_context7_grants_it_to_the_agents_that_declare_it(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        self.assertEqual(
+            self.tools_of("sdd-apply"),
+            {
+                "*": False,
+                "read": True,
+                "write": True,
+                "edit": True,
+                "bash": True,
+                "grep": True,
+                "glob": True,
+                "context7*": True,
+            },
+        )
+
+    def test_choosing_nothing_places_no_server_and_no_grant(self):
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertNotIn("mcp", self.settings())
+        self.assertFalse(self.filesystem.exists(self.convention_path("context7")))
+        self.assertEqual(
+            self.tools_of("sdd-apply"),
+            {
+                "*": False,
+                "read": True,
+                "write": True,
+                "edit": True,
+                "bash": True,
+                "grep": True,
+                "glob": True,
+            },
+        )
+
+    def test_an_unknown_server_id_fails_cleanly_and_places_nothing(self):
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "bogus")
+        self.assertEqual(code, cli.FAILED)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("bogus", report["error"])
+        self.assertEqual(self.filesystem.writes, [])
+
+    def test_the_flag_is_repeatable(self):
+        """No second shipped server exists yet, so this proves append semantics
+        the only way available: naming the same id twice still selects it once,
+        rather than the second `--mcp` silently replacing the first."""
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "context7", "--mcp", "context7")
+        self.assertEqual(code, 0)
+        self.assertIn("context7", self.settings()["mcp"])
+
+    def test_reinstalling_without_the_server_takes_its_key_and_file_back_out(self):
+        """A server chosen once and then left unnamed on the next install should
+        not stay behind as an orphan: this is the case the unit exists to prove
+        one way or the other."""
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        self.assertIn("context7", self.settings()["mcp"])
+        self.assertTrue(self.filesystem.exists(self.convention_path("context7")))
+
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertNotIn("context7", self.settings().get("mcp", {}))
+        self.assertFalse(self.filesystem.exists(self.convention_path("context7")))
 
 
 class UninstallTest(CommandTestCase):

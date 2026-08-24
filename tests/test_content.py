@@ -674,5 +674,86 @@ class ShippedContentTest(unittest.TestCase):
             self.assertFalse(skill.source.is_absolute())
 
 
+class SelectMcpTest(unittest.TestCase):
+    """`select_mcp` is what turns "every shipped server" into "what the user asked for"."""
+
+    def setUp(self):
+        self.context7 = content.Mcp(
+            name="context7",
+            description="Fetches library docs",
+            body="Convention body.",
+            distribution=Distribution.REMOTE,
+            endpoint="https://example.test/context7",
+            source=PurePosixPath("mcp/context7.md"),
+        )
+        self.other = content.Mcp(
+            name="other",
+            description="Another server",
+            body="Convention body.",
+            distribution=Distribution.REMOTE,
+            endpoint="https://example.test/other",
+            source=PurePosixPath("mcp/other.md"),
+        )
+        self.agent = content.Agent(
+            name="probe-agent",
+            description="Probes things",
+            body="x",
+            mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/probe-agent.md"),
+            optional_mcp=("context7", "other"),
+        )
+        self.plain_agent = content.Agent(
+            name="plain-agent",
+            description="Names no server",
+            body="x",
+            mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/plain-agent.md"),
+        )
+        self.content = content.Content(
+            agents=(self.agent, self.plain_agent), mcp=(self.context7, self.other)
+        )
+
+    def test_keeps_only_the_chosen_server(self):
+        selected = content.select_mcp(self.content, ["context7"])
+        self.assertEqual([server.name for server in selected.mcp], ["context7"])
+
+    def test_keeps_only_the_chosen_id_in_optional_mcp(self):
+        selected = content.select_mcp(self.content, ["context7"])
+        chosen_agent = next(a for a in selected.agents if a.name == "probe-agent")
+        self.assertEqual(chosen_agent.optional_mcp, ("context7",))
+
+    def test_an_agent_naming_no_server_is_left_alone(self):
+        selected = content.select_mcp(self.content, ["context7"])
+        untouched_agent = next(a for a in selected.agents if a.name == "plain-agent")
+        self.assertEqual(untouched_agent.optional_mcp, ())
+
+    def test_choosing_nothing_is_the_default_and_installs_no_server(self):
+        selected = content.select_mcp(self.content, [])
+        self.assertEqual(selected.mcp, ())
+        for agent in selected.agents:
+            self.assertEqual(agent.optional_mcp, ())
+
+    def test_an_unknown_id_is_refused_and_named(self):
+        with self.assertRaises(ContentError) as raised:
+            content.select_mcp(self.content, ["bogus"])
+        self.assertIn("bogus", str(raised.exception))
+
+    def test_the_refusal_also_lists_the_ids_that_do_exist(self):
+        with self.assertRaises(ContentError) as raised:
+            content.select_mcp(self.content, ["bogus"])
+        message = str(raised.exception)
+        self.assertIn("context7", message)
+        self.assertIn("other", message)
+
+    def test_is_pure_the_input_content_is_unchanged(self):
+        before_mcp = self.content.mcp
+        before_agents = self.content.agents
+        content.select_mcp(self.content, ["context7"])
+        self.assertEqual(self.content.mcp, before_mcp)
+        self.assertEqual(self.content.agents, before_agents)
+        self.assertEqual(self.agent.optional_mcp, ("context7", "other"))
+
+
+
 if __name__ == "__main__":
     unittest.main()

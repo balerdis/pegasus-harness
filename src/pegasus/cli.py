@@ -134,6 +134,12 @@ def _parser() -> argparse.ArgumentParser:
     install.add_argument("--cli", required=True)
     install.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     install.add_argument("--dry-run", action="store_true", help="report the plan without writing anything")
+    install.add_argument(
+        "--mcp",
+        action="append",
+        metavar="ID",
+        help="install this mcp server too (repeatable); a server not named here is not installed",
+    )
 
     uninstall = commands.add_parser("uninstall", help="take Pegasus back out of one CLI")
     uninstall.add_argument("--cli", required=True)
@@ -176,8 +182,13 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     # message instead of a traceback over a finished installation.
     activation = list(adapter.activation_steps())
 
-    catalog = catalog_module.build(content_module.load(), adapter)
-    artifacts = catalog_module.render(content_module.load(), adapter, environment)
+    # One read of the content tree, one application of the user's choice — not
+    # two of each. `build` and `render` walk the same content, and reloading
+    # for the second would risk handing them two objects that could in
+    # principle differ, for no reason beyond having asked disk twice.
+    content = _select_mcp(arguments.mcp)
+    catalog = catalog_module.build(content, adapter)
+    artifacts = catalog_module.render(content, adapter, environment)
     plan = planner.plan(
         runtime.filesystem,
         cli=adapter.id,
@@ -474,6 +485,20 @@ def _adapter(cli_id: str):
     if cli_id not in registry:
         raise CommandError(f"{cli_id!r} is not a CLI this release supports; try one of: {', '.join(registry.ids())}")
     return registry.get(cli_id)
+
+
+def _select_mcp(chosen: list[str] | None) -> content_module.Content:
+    """The user's `--mcp` flags, applied to the whole content tree once.
+
+    `ContentError` here means the user's own flag named a server that does not
+    exist, which is a clean message rather than the traceback a malformed
+    shipped descriptor would still deserve — that case is left to whatever
+    already raises `ContentError` unhandled in `main`.
+    """
+    try:
+        return content_module.select_mcp(content_module.load(), chosen or [])
+    except content_module.ContentError as error:
+        raise CommandError(str(error)) from error
 
 
 def _require_present(adapter, environment: Environment) -> None:
