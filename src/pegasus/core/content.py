@@ -10,7 +10,8 @@ and letting an adapter guess.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -232,6 +233,39 @@ def load(root: Path = DEFAULT_ROOT) -> Content:
         commands=_load_commands(root / "commands", root),
         mcp=mcp,
         system_prompt=_load_system_prompt(root / SYSTEM_PROMPT_DIR, root),
+    )
+
+
+def select_mcp(content: Content, chosen: Iterable[str]) -> Content:
+    """Keep only the mcp servers the user chose, and only the `optional_mcp`
+    entries that name them.
+
+    An adapter renders one item at a time -- one `Mcp`, one `Agent` -- and never
+    sees the whole content tree, so it has no way to know which servers the user
+    picked; a per-item renderer could not apply this choice even if it wanted to.
+    Applying it once, here, before anything is rendered, is what lets every
+    adapter -- and a future interactive surface -- stay unaware that a choice was
+    ever made: they only ever see the servers that survived it.
+
+    Choosing nothing is the default this returns: a `Content` with no servers and
+    no agent declaring one, because a server nobody named does not install.
+    """
+    known = {server.name for server in content.mcp}
+    chosen_ids = tuple(chosen)
+    unknown = sorted(name for name in chosen_ids if name not in known)
+    if unknown:
+        raise ContentError(
+            f"chose unknown mcp server(s) {', '.join(unknown)}; "
+            f"the servers this release ships are: {', '.join(sorted(known)) or 'none'}"
+        )
+    kept = set(chosen_ids)
+    return replace(
+        content,
+        mcp=tuple(server for server in content.mcp if server.name in kept),
+        agents=tuple(
+            replace(agent, optional_mcp=tuple(name for name in agent.optional_mcp if name in kept))
+            for agent in content.agents
+        ),
     )
 
 
