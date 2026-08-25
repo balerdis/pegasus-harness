@@ -789,6 +789,7 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 8a1 | Categoría `mcp/`, descriptor y render del servidor | Un MCP remoto se instala de verdad, con su convención embarcada y su permiso concedido | Entregada |
 | 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira | Pendiente |
 | 8b | Directorio propio, formas `npm` y `download` | Los MCPs que traen binario quedan disponibles sin vendorizar ni compilar ninguno, con versión fija e integridad verificada | Pendiente |
+| 9 | El digest deja de ser permiso; snapshot, `restore` y retención | Instalar y desinstalar pisan lo que el journal reclama, y `restore` devuelve el estado exacto anterior al último comando | Entregada |
 
 La unidad 1b genera el catálogo **del contenido presente**, no del contenido final: los descriptores de los 10 agentes SDD y las categorías `mcp/` y `policies/` llegan en unidades posteriores.
 
@@ -993,7 +994,7 @@ Queda registrado que las estimaciones se remiden cuando cierre el PR 1: los PRs 
 2. **Unidad 4.** Launcher, venv privado, empaquetado. Destraba la TUI.
 3. **Unidades 5 y 6.** La TUI.
 
-Ya entregado, en este orden: el cierre de la unidad 3 —el `.env` real del skill registry y el retiro de los marcadores sin lector— y la unidad 7, que fue temprano por ser la herramienta con la que se verifica todo lo que viene después.
+Ya entregado, en este orden: el cierre de la unidad 3 —el `.env` real del skill registry y el retiro de los marcadores sin lector—; la unidad 7, que fue temprano por ser la herramienta con la que se verifica todo lo que viene después; la **8a1**, con la categoría `mcp/` y el primer servidor instalado de verdad; y la **unidad 9**, en cadena de cuatro PRs.
 
 El presupuesto de revisión es de **800 líneas cambiadas por PR**. Cada unidad se mide al planificar sus tareas; la que se pase se parte en una cadena, con la estrategia definida antes de empezar a escribir código. La unidad 1 ya se midió y por eso está partida en 1a y 1b.
 
@@ -1031,10 +1032,13 @@ Tests que fallan si el diseño se degrada:
 - [ ] Instalar y desinstalar escriben lo que el journal reclama sin consultar la huella del artefacto
 - [ ] Toda instalación y toda desinstalación toma un snapshot antes de escribir
 - [ ] `restore` devuelve bytes y modo exactos, sin merge ni reconstrucción
-- [ ] Desinstalar deja el sistema sin rastros de Pegasus, salvo lo que el usuario modificó
+- [ ] Desinstalar deja el sistema sin rastros de Pegasus, incluido lo que el usuario modificó sobre una dirección propia; lo único que puede quedar es un ítem de lista que no se pudo identificar
+- [ ] La retención acota la historia de snapshots, y una limpieza que falla no vuelve fallido el comando que ya escribió
 
 ---
 
 ## Próximo paso
 
-Revisar y aprobar este documento. Con la aprobación se define el corte en unidades y la estrategia de cadena de PRs, y recién ahí se escribe código.
+Retomar **8a2**, el retiro de un servidor MCP que el usuario deja de nombrar. Quedó en pausa a propósito con un test en rojo declarado: el retiro que le faltaba era el código que la unidad 9 reescribió, así que terminarlo antes habría sido escribirlo dos veces.
+
+Después **8b**, y con ella el resolutor de directorio propio que la unidad 4 necesita.
