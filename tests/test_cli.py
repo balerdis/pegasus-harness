@@ -29,6 +29,7 @@ from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import journal as journal_module
 from pegasus.core.types import Environment
+from pegasus.infra.snapshot_store_file import snapshots_root
 
 AT = "2026-08-14T00:00:00+00:00"
 CLI = available().ids()[0]
@@ -286,7 +287,17 @@ class InstallTest(CommandTestCase):
         code, report = self.run_cli("install", "--cli", CLI)
 
         self.assertNotEqual(code, 0)
-        self.assertEqual(self.filesystem.files, placed)
+        # Outside the snapshots, nothing moved: the first install's files are
+        # exactly what is still there. A snapshot generation is allowed to have
+        # appeared, because taking one is this run's own behaviour rather than a
+        # mutation of the earlier install, and excluding only that leaves the
+        # original claim — that a failed reinstall adds nothing else — intact.
+        root = snapshots_root(self.home)
+
+        def outside_the_snapshots(files):
+            return {path: content for path, content in files.items() if not path.is_relative_to(root)}
+
+        self.assertEqual(outside_the_snapshots(self.filesystem.files), outside_the_snapshots(placed))
         self.assertEqual({entry.id for entry in self.installed_entries()}, owned)
         self.assertFalse(report["rolled_back"], "nothing was placed, so nothing was rolled back")
 
@@ -413,6 +424,79 @@ class DoctorTest(CommandTestCase):
         code, report = self.run_cli("doctor")
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
+
+
+class SnapshotTest(CommandTestCase):
+    def snapshots(self):
+        return cli.snapshot_store(self.runtime())
+
+    def test_a_dry_run_writes_no_snapshot(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--dry-run")
+        self.assertEqual(self.filesystem.list_dir(snapshots_root(self.home)), [])
+
+    def test_installing_writes_a_snapshot_before_the_first_artifact_reaches_disk(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        snapshot_index = next(
+            i for i, path in enumerate(self.filesystem.writes) if path.is_relative_to(snapshots_root(self.home))
+        )
+        artifact_index = next(
+            i for i, path in enumerate(self.filesystem.writes) if path.is_relative_to(self.layout().config_dir)
+        )
+        self.assertLess(snapshot_index, artifact_index)
+
+    def test_the_snapshot_of_an_install_contains_the_journals_path(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        manifest = self.snapshots().read(1)
+        self.assertIn(self.store().path, {entry.path for entry in manifest.entries})
+
+    def test_a_newly_created_file_is_captured_as_not_having_existed(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        manifest = self.snapshots().read(1)
+        entry = next(e for e in manifest.entries if e.path == self.layout().system_prompt_file)
+        self.assertFalse(entry.existed)
+        self.assertIsNone(entry.mode)
+        self.assertIsNone(entry.blob)
+
+    def test_a_file_that_existed_before_is_captured_with_its_previous_bytes_and_mode(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        before_content = self.filesystem.files[self.store().path]
+        before_mode = self.filesystem.modes[self.store().path]
+
+        self.run_cli("install", "--cli", CLI)
+
+        manifest = self.snapshots().read(2)
+        entry = next(e for e in manifest.entries if e.path == self.store().path)
+        self.assertTrue(entry.existed)
+        self.assertEqual(entry.mode, f"{before_mode:04o}")
+        blob_path = self.snapshots().root / "000002" / entry.blob
+        self.assertEqual(self.filesystem.files[blob_path], before_content)
+
+    def test_uninstalling_writes_a_snapshot_too(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.run_cli("uninstall", "--cli", CLI)
+        manifest = self.snapshots().read(2)
+        self.assertTrue(manifest.entries)
+
+    def test_when_the_snapshot_store_refuses_install_writes_nothing(self):
+        self.present()
+        self.filesystem.fail_list.add(snapshots_root(self.home))
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(self.filesystem.writes, [])
+
+    def test_generation_numbers_advance_across_successive_commands(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.run_cli("uninstall", "--cli", CLI)
+        self.assertIsNotNone(self.snapshots().read(1))
+        self.assertIsNotNone(self.snapshots().read(2))
 
 
 class HumanOutputTest(CommandTestCase):
