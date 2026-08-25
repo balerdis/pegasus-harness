@@ -518,6 +518,128 @@ class SnapshotTest(CommandTestCase):
         self.assertIsNotNone(self.snapshots().read(2))
 
 
+class RestoreTest(CommandTestCase):
+    def snapshots(self):
+        return cli.snapshot_store(self.runtime())
+
+    def test_restoring_returns_a_files_previous_bytes_and_mode_exactly(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        target = self.layout().system_prompt_file
+        self.filesystem.write_atomic(target, b"hand-edited by the user", mode=0o600)
+        # Installing again overwrites the hand edit without asking, but not
+        # before this second snapshot captures it.
+        self.run_cli("install", "--cli", CLI)
+
+        code, report = self.run_cli("restore", "2")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(self.filesystem.files[target], b"hand-edited by the user")
+        self.assertEqual(self.filesystem.modes[target], 0o600)
+        self.assertIn(str(target), report["written"])
+
+    def test_restoring_an_entry_recorded_as_absent_removes_the_path(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        target = self.layout().system_prompt_file
+        self.assertIn(target, self.filesystem.files)
+
+        code, report = self.run_cli("restore", "1")
+
+        self.assertEqual(code, 0)
+        self.assertNotIn(target, self.filesystem.files)
+        self.assertIn(str(target), report["removed"])
+
+    def test_restoring_with_no_argument_picks_the_most_recent_readable_generation(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.run_cli("install", "--cli", CLI)
+
+        code, report = self.run_cli("restore")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(report["generation"], 2)
+
+    def test_restore_resolves_its_target_before_taking_its_own_snapshot(self):
+        """The trap: resolving "most recent" after the new snapshot is taken
+        would make restore recover its own copy of the present."""
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+
+        code, report = self.run_cli("restore")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(report["generation"], 1)
+
+    def test_restore_takes_its_own_snapshot(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+
+        self.run_cli("restore")
+
+        self.assertEqual(self.snapshots().readable_generations(), [1, 2])
+
+    def test_when_the_snapshot_store_refuses_restore_writes_nothing(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        before = dict(self.filesystem.files)
+        self.filesystem.fail_list.add(snapshots_root(self.home))
+
+        code, report = self.run_cli("restore")
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(self.filesystem.files, before)
+
+    def test_restoring_an_unreadable_generation_is_refused(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.filesystem.make_dir(snapshots_root(self.home) / "000002")
+
+        code, report = self.run_cli("restore", "2")
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+
+    def test_restoring_with_nothing_ever_installed_is_refused(self):
+        self.present()
+        code, report = self.run_cli("restore")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+
+
+class RetentionTest(CommandTestCase):
+    def snapshots(self):
+        return cli.snapshot_store(self.runtime())
+
+    def test_a_sixth_generation_deletes_the_first_and_five_remain(self):
+        self.present()
+        for _ in range(6):
+            self.run_cli("install", "--cli", CLI)
+        self.assertEqual(self.snapshots().readable_generations(), [2, 3, 4, 5, 6])
+
+    def test_a_retention_failure_leaves_the_command_successful_and_is_still_reported(self):
+        self.present()
+        for _ in range(5):
+            self.run_cli("install", "--cli", CLI)
+        self.filesystem.fail_remove_dir.add(snapshots_root(self.home) / "000001")
+
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(report["status"], "installed")
+        self.assertTrue(report["retention"]["failed"])
+        self.assertIn(1, self.snapshots().readable_generations())
+
+    def test_retention_run_twice_does_not_fail(self):
+        self.present()
+        for _ in range(6):
+            self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("uninstall", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["retention"]["failed"], [])
+
+
 class HumanOutputTest(CommandTestCase):
     def test_without_json_the_output_is_prose_and_not_a_document(self):
         self.present()

@@ -46,6 +46,11 @@ SCHEMA = "pegasus/cli-report/v1"
 OK = 0
 FAILED = 1
 
+# How many generations the retention pass keeps. Not a disk argument — the
+# blobs are small — but a decision about how far back the recovery promise
+# reaches.
+RETAIN_GENERATIONS = 5
+
 
 class CommandError(Exception):
     """Something the user needs to know about, phrased for them rather than raised at them."""
@@ -136,6 +141,16 @@ def _parser() -> argparse.ArgumentParser:
 
     doctor = commands.add_parser("doctor", help="what is supported, what is present, what has drifted")
     doctor.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    # No `--cli`: a generation is whatever one command touched, not one CLI's
+    # installation, so restoring is never scoped to a CLI the way install and
+    # uninstall are.
+    restore = commands.add_parser("restore", help="undo the most recent generation, or a specific one")
+    restore.add_argument(
+        "generation", type=int, nargs="?", default=None,
+        help="the generation to restore; defaults to the most recent one that can be read back",
+    )
+    restore.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     return parser
 
 
@@ -245,6 +260,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
         "unchanged": [_placed(step) for step in applied.unchanged],
         "skipped": [_left(step) for step in applied.skipped],
         "journal": str(store.path),
+        "retention": _retain(snapshot),
     }
 
 
@@ -308,6 +324,59 @@ def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
         "removed": list(retired.removed),
         "unaccounted": list(retired.unaccounted),
         "kept_links": list(retired.kept_links),
+        "retention": _retain(snapshot),
+    }
+
+
+def _restore(arguments, runtime: Runtime) -> dict[str, Any]:
+    store = journal_store(runtime)
+    store.ensure_writable()
+    snapshot = snapshot_store(runtime)
+    snapshot.ensure_writable()
+
+    # Resolved before this run's own snapshot is written. Reversing the order
+    # would make "the most recent generation" resolve to the copy this very
+    # call is about to take, and restore would recover its own copy of the
+    # present instead of anything that came before it.
+    generation = arguments.generation
+    try:
+        if generation is None:
+            generation = snapshot.most_recent_readable()
+            if generation is None:
+                raise CommandError("there is no snapshot generation to restore")
+        manifest = snapshot.read(generation)
+    except SnapshotStoreError as error:
+        raise CommandError(f"generation {generation} cannot be restored: {error}") from error
+
+    # Same reasoning as install and uninstall: restore writes, so nothing is
+    # touched without its own copy taken first. What it captures is the
+    # addresses it is about to touch, plus the journal, same as the others.
+    touched = sorted({entry.path for entry in manifest.entries} | {store.path}, key=str)
+    try:
+        snapshot.save(capture_paths(runtime.filesystem, touched), taken_at=runtime.now)
+    except SnapshotStoreError as error:
+        raise CommandError(
+            f"a snapshot of what this restore is about to overwrite could not be taken, "
+            f"so nothing was restored: {error}"
+        ) from error
+
+    written: list[str] = []
+    removed: list[str] = []
+    for entry in manifest.entries:
+        if entry.existed:
+            content = snapshot.read_blob(generation, entry.blob)
+            runtime.filesystem.write_atomic(entry.path, content, mode=int(entry.mode, 8))
+            written.append(str(entry.path))
+        else:
+            runtime.filesystem.remove(entry.path)
+            removed.append(str(entry.path))
+
+    return {
+        "status": "restored",
+        "generation": generation,
+        "written": written,
+        "removed": removed,
+        "retention": _retain(snapshot),
     }
 
 
@@ -381,7 +450,7 @@ def _document(filesystem: FileSystem, entry: Record):
         raise CommandError(f"{entry.target} cannot be parsed, so nothing in it can be judged: {error}") from error
 
 
-COMMANDS = {"install": _install, "uninstall": _uninstall, "doctor": _doctor}
+COMMANDS = {"install": _install, "uninstall": _uninstall, "doctor": _doctor, "restore": _restore}
 
 
 # --- Shaping the report ----------------------------------------------------
@@ -402,6 +471,20 @@ def _require_present(adapter, environment: Environment) -> None:
         f"{adapter.display_name} was not found on this machine, and installing into a CLI that is not "
         f"here would only leave files nothing reads"
     )
+
+
+def _retain(snapshot: FileSnapshotStore) -> dict[str, Any]:
+    """Run retention after a snapshot-taking command has already succeeded.
+
+    A retention failure must never turn a command that already wrote its
+    snapshot into a reported failure — the old generation left behind is
+    untidy, not dangerous — so this never raises. It still has to surface
+    somewhere rather than vanish silently, and the report is where every
+    other fact about the run already lives, so a failed removal is named
+    there under ``retention.failed``.
+    """
+    outcome = snapshot.retain(keep=RETAIN_GENERATIONS)
+    return {"removed": list(outcome.removed), "failed": list(outcome.failed)}
 
 
 def _is_key(step: planner.Step) -> bool:
@@ -477,6 +560,12 @@ def _prose(report: dict[str, Any]) -> str:
     command = report["command"]
     if command == "doctor":
         return "\n".join(_cli_prose(entry) for entry in report["clis"])
+    if command == "restore":
+        lines = [
+            f"generation {report['generation']}: wrote back {len(report['written'])}, "
+            f"removed {len(report['removed'])}."
+        ]
+        return "\n".join(_and_retention(lines, report))
     if command == "install":
         planned = report["status"] == "planned"
         lines = [
@@ -487,12 +576,12 @@ def _prose(report: dict[str, Any]) -> str:
         if report["skipped"]:
             lines.append("Left alone because something was already there:")
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["skipped"])
-        return "\n".join(_and_activation(lines, report))
+        return "\n".join(_and_retention(_and_activation(lines, report), report))
 
     lines = [f"{report['cli']}: removed {len(report['removed'])}."]
     if report["unaccounted"]:
         lines.append(f"Could not be accounted for: {', '.join(report['unaccounted'])}")
-    return "\n".join(_and_activation(lines, report))
+    return "\n".join(_and_retention(_and_activation(lines, report), report))
 
 
 def _and_activation(lines: list[str], report: dict[str, Any]) -> list[str]:
@@ -505,6 +594,19 @@ def _and_activation(lines: list[str], report: dict[str, Any]) -> list[str]:
     if not steps:
         return lines
     return [*lines, "Before this takes effect:", *(f"  {step}" for step in steps)]
+
+
+def _and_retention(lines: list[str], report: dict[str, Any]) -> list[str]:
+    """The part cleanup could not finish, so prose never hides it either.
+
+    A retention failure never fails the command — the snapshot the caller
+    needed is already on disk — but it must still reach the person reading
+    the report, not just the JSON document.
+    """
+    failed = (report.get("retention") or {}).get("failed") or []
+    if not failed:
+        return lines
+    return [*lines, "Old snapshot generations could not be cleaned up:", *(f"  {reason}" for reason in failed)]
 
 
 def _cli_prose(entry: dict[str, Any]) -> str:
