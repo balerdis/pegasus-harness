@@ -24,7 +24,7 @@ from pegasus.core.snapshot import Entry, Manifest, SnapshotError
 from pegasus.core.types import Codec
 from pegasus.infra.journal_store_file import DATA_DIR, DATA_DIR_MODE, FILE_MODE
 from pegasus.ports.filesystem import FileSystem, FileSystemError
-from pegasus.ports.snapshot_store import Capture, SnapshotStoreError
+from pegasus.ports.snapshot_store import Capture, Retention, SnapshotStoreError
 
 SNAPSHOTS_DIRNAME = "snapshots"
 MANIFEST_FILENAME = "manifest.json"
@@ -159,6 +159,39 @@ class FileSnapshotStore:
             return snapshot_module.from_dict(payload)
         except SnapshotError as error:
             raise SnapshotStoreError(f"the manifest at {manifest_path} is malformed: {error}") from error
+
+    def read_blob(self, generation: int, blob: str) -> bytes:
+        path = self._root / _generation_name(generation) / blob
+        try:
+            return self._fs.read_bytes(path)
+        except FileSystemError as error:
+            raise SnapshotStoreError(f"cannot read blob {blob!r} of generation {generation}: {error}") from error
+
+    def readable_generations(self) -> list[int]:
+        return [
+            generation
+            for generation in sorted(self._claimed_generations())
+            if self._fs.exists(self._root / _generation_name(generation) / MANIFEST_FILENAME)
+        ]
+
+    def most_recent_readable(self) -> int | None:
+        readable = self.readable_generations()
+        return readable[-1] if readable else None
+
+    def retain(self, *, keep: int) -> Retention:
+        generations = sorted(self._claimed_generations())
+        doomed = generations[: max(0, len(generations) - max(keep, 0))]
+        removed: list[int] = []
+        failed: list[str] = []
+        for generation in doomed:
+            folder = self._root / _generation_name(generation)
+            try:
+                self._fs.remove_dir(folder)
+            except FileSystemError as error:
+                failed.append(f"generation {generation} could not be removed: {error}")
+                continue
+            removed.append(generation)
+        return Retention(removed=tuple(removed), failed=tuple(failed))
 
     def _next_generation(self) -> int:
         """The number after the highest any folder has already claimed.

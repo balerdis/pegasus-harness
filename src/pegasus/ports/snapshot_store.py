@@ -52,6 +52,21 @@ class Capture:
     content: bytes | None
 
 
+@dataclass(frozen=True)
+class Retention:
+    """What one retention pass did, kept apart from whether the caller's
+    command succeeded.
+
+    A retention failure is untidy, not destructive: the generation that
+    matters to the caller — the one it just wrote — already exists on disk
+    by the time retention runs, so a folder that failed to delete is reported
+    here rather than raised, and the caller decides where that surfaces.
+    """
+
+    removed: tuple[int, ...]
+    failed: tuple[str, ...]
+
+
 @runtime_checkable
 class SnapshotStore(Protocol):
     def ensure_writable(self) -> None:
@@ -88,4 +103,40 @@ class SnapshotStore(Protocol):
         or its manifest cannot be parsed. Unlike :meth:`save`, this never
         degrades: a caller asking to restore a specific generation needs to
         know whether it can be trusted, not be handed a guess.
+        """
+
+    def read_blob(self, generation: int, blob: str) -> bytes:
+        """Return the bytes of one blob inside a generation.
+
+        Raises :class:`SnapshotStoreError` when the blob cannot be read, the
+        same failure type :meth:`read` uses for the manifest that names it.
+        """
+
+    def readable_generations(self) -> list[int]:
+        """Every generation number a call to :meth:`read` would currently
+        honour, in ascending order.
+
+        A folder without a manifest still holds its number — :meth:`save`
+        treats it as occupied so nothing is ever written into it — but it is
+        not a save that finished, so it is never offered here. Restoring
+        "the most recent" and retention's bookkeeping both need exactly this
+        list, not the wider one that also counts unfinished folders.
+        """
+
+    def most_recent_readable(self) -> int | None:
+        """The highest generation :meth:`readable_generations` would list, or
+        ``None`` when there is not one yet.
+        """
+
+    def retain(self, *, keep: int) -> Retention:
+        """Delete every generation folder beyond the newest ``keep``.
+
+        Every command that takes a snapshot calls this once it has already
+        succeeded, so a folder that fails to delete is reported through the
+        returned :class:`Retention` rather than raised: the snapshot the
+        caller needed is already on disk, and an old generation left behind
+        is untidy, never a reason to make a command that already succeeded
+        look like it failed. Run twice with nothing new in between, the
+        second call finds nothing left to remove and reports an empty
+        outcome rather than failing.
         """
