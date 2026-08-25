@@ -360,16 +360,29 @@ def _restore(arguments, runtime: Runtime) -> dict[str, Any]:
             f"so nothing was restored: {error}"
         ) from error
 
+    # One address at a time, so a failure in the middle leaves some of them
+    # already back. Reporting that as nothing having changed would send the
+    # user looking for the problem somewhere else, and would tell an agent the
+    # filesystem is in a state it is not in — so what was already done travels
+    # with the failure instead of dying with it.
     written: list[str] = []
     removed: list[str] = []
     for entry in manifest.entries:
-        if entry.existed:
-            content = snapshot.read_blob(generation, entry.blob)
-            runtime.filesystem.write_atomic(entry.path, content, mode=int(entry.mode, 8))
-            written.append(str(entry.path))
-        else:
-            runtime.filesystem.remove(entry.path)
-            removed.append(str(entry.path))
+        try:
+            if entry.existed:
+                content = snapshot.read_blob(generation, entry.blob)
+                runtime.filesystem.write_atomic(entry.path, content, mode=int(entry.mode, 8))
+                written.append(str(entry.path))
+            else:
+                runtime.filesystem.remove(entry.path)
+                removed.append(str(entry.path))
+        except (FileSystemError, SnapshotStoreError) as error:
+            failure = CommandError(
+                f"generation {generation} could not be put back in full, and what had already been "
+                f"changed was left as it is: {error}"
+            )
+            failure.report = {"generation": generation, "written": written, "removed": removed}
+            raise failure from error
 
     return {
         "status": "restored",
@@ -555,6 +568,12 @@ def _prose(report: dict[str, Any]) -> str:
     if report.get("status") == "failed":
         if report.get("rolled_back"):
             return f"The installation was undone. {report['error']}"
+        # Claiming nothing changed is only honest when nothing did. A command
+        # that got partway through says how far, because the whole point of
+        # this output is that a number in it can be trusted.
+        changed = len(report.get("written", ())) + len(report.get("removed", ()))
+        if changed:
+            return f"Stopped after changing {changed}. {report['error']}"
         return f"Nothing was changed. {report['error']}"
 
     command = report["command"]

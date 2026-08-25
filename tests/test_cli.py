@@ -538,6 +538,31 @@ class RestoreTest(CommandTestCase):
         self.assertEqual(self.filesystem.modes[target], 0o600)
         self.assertIn(str(target), report["written"])
 
+    def test_a_restore_that_fails_partway_says_what_it_already_changed(self):
+        """A command that wrote something must never report that it wrote nothing.
+
+        Restoring touches one address at a time, so a failure in the middle
+        leaves some of them already back at their previous contents. Reporting
+        that as "nothing was changed" would send the user looking for a problem
+        somewhere else, and would tell an agent that the filesystem is in a
+        state it is not in.
+        """
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        target = self.layout().system_prompt_file
+        self.filesystem.write_atomic(target, b"hand-edited by the user", mode=0o600)
+        self.run_cli("install", "--cli", CLI)
+        # The journal sorts after the prompt file, so the prompt is already back
+        # by the time this refusal lands.
+        self.filesystem.fail_always.add(cli.journal_store(self.runtime()).path)
+
+        code, report = self.run_cli("restore", "2")
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn(str(target), report["written"])
+        self.assertNotIn("Nothing was changed", cli._prose(report))
+
     def test_restoring_an_entry_recorded_as_absent_removes_the_path(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
