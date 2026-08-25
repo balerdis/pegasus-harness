@@ -10,6 +10,7 @@ from pathlib import Path
 from pegasus.ports.filesystem import FileSystemError
 
 DEFAULT_MODE = 0o644
+DEFAULT_DIR_MODE = 0o755
 
 
 class FakeFileSystem:
@@ -34,6 +35,7 @@ class FakeFileSystem:
         self.files: dict[Path, bytes] = dict(files or {})
         self.modes: dict[Path, int] = dict(modes or {})
         self.directories: set[Path] = set()
+        self.directory_modes: dict[Path, int] = {}
         self.owner = owner
         self.privileged = privileged
         self.fail_on: set[Path] = set(fail_on or ())
@@ -56,12 +58,23 @@ class FakeFileSystem:
         if path in self.files:
             return self.modes.get(path, DEFAULT_MODE)
         if path in self.directories:
-            return 0o755
+            return self.directory_modes.get(path, DEFAULT_DIR_MODE)
         return None
+
+    def list_dir(self, path: Path) -> list[str]:
+        if path in self.files:
+            raise FileSystemError(f"not a directory: {path}")
+        names = {
+            candidate.relative_to(path).parts[0]
+            for candidate in (*self.files, *self.directories)
+            if candidate != path and path in candidate.parents
+        }
+        return sorted(names)
 
     # --- Writing ---
 
     def write_atomic(self, path: Path, content: bytes, *, mode: int = DEFAULT_MODE) -> None:
+        self.make_dir(path.parent)
         if path in self.fail_always:
             raise FileSystemError(f"refusing to write {path}: injected permanent failure")
         if path in self.fail_on:
@@ -81,7 +94,18 @@ class FakeFileSystem:
         self.removals.append(path)
 
     def make_dir(self, path: Path, *, mode: int = 0o755) -> None:
+        # Additive, like the real filesystem: a directory that already exists
+        # keeps whatever mode it has. The mode argument only ever applies to
+        # the leaf this call creates; any missing parents created along the
+        # way get the default mode, never the one that was requested.
+        if path in self.directories:
+            return
+        for ancestor in reversed(path.parents):
+            if ancestor not in self.directories:
+                self.directories.add(ancestor)
+                self.directory_modes[ancestor] = DEFAULT_DIR_MODE
         self.directories.add(path)
+        self.directory_modes[path] = mode
 
     # --- Who is running ---
 

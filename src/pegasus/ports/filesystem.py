@@ -50,6 +50,16 @@ class FileSystem(Protocol):
         or narrowing who can read it.
         """
 
+    def list_dir(self, path: Path) -> list[str]:
+        """Names of the entries directly inside a directory, sorted.
+
+        A path that does not exist lists as empty, consistent with
+        :meth:`remove`: what is absent is not an error. Sorting is not needed
+        by anything that only computes a maximum, but a port that returned
+        entries in arbitrary order would make every caller's tests brittle.
+        Raises :class:`FileSystemError` when the path exists but is a file.
+        """
+
     # --- Writing ---
 
     def write_atomic(self, path: Path, content: bytes, *, mode: int = 0o644) -> None:

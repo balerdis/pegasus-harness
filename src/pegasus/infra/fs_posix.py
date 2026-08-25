@@ -48,6 +48,14 @@ class PosixFileSystem:
         except OSError:
             return None
 
+    def list_dir(self, path: Path) -> list[str]:
+        if not path.exists():
+            return []
+        try:
+            return sorted(entry.name for entry in path.iterdir())
+        except OSError as error:
+            raise FileSystemError(f"cannot list {path}: {error}") from error
+
     # --- Writing ---
 
     def write_atomic(self, path: Path, content: bytes, *, mode: int = 0o644) -> None:
