@@ -308,6 +308,121 @@ class FileSnapshotStoreTest(unittest.TestCase):
         with self.assertRaises(SnapshotStoreError):
             store(filesystem).read(1)
 
+    # --- Listing readable generations, for restore ---
+
+    def test_readable_generations_lists_every_finished_generation_in_order(self):
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        subject.save([one_capture()], taken_at=AT)
+        subject.save([one_capture()], taken_at=AT)
+        subject.save([one_capture()], taken_at=AT)
+        self.assertEqual(subject.readable_generations(), [1, 2, 3])
+
+    def test_readable_generations_excludes_a_folder_without_a_manifest(self):
+        """An unfinished write holds its number but is not offered as readable."""
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        subject.save([one_capture()], taken_at=AT)
+        filesystem.make_dir(snapshots_root(HOME) / "000002")
+        self.assertEqual(subject.readable_generations(), [1])
+
+    def test_readable_generations_is_empty_for_a_fresh_store(self):
+        self.assertEqual(store(FakeFileSystem()).readable_generations(), [])
+
+    def test_most_recent_readable_is_the_highest_readable_generation(self):
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        subject.save([one_capture()], taken_at=AT)
+        subject.save([one_capture()], taken_at=AT)
+        self.assertEqual(subject.most_recent_readable(), 2)
+
+    def test_most_recent_readable_skips_a_trailing_unfinished_generation(self):
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        subject.save([one_capture()], taken_at=AT)
+        filesystem.make_dir(snapshots_root(HOME) / "000002")
+        self.assertEqual(subject.most_recent_readable(), 1)
+
+    def test_most_recent_readable_is_none_for_a_fresh_store(self):
+        self.assertIsNone(store(FakeFileSystem()).most_recent_readable())
+
+    # --- Reading a blob back, for restore ---
+
+    def test_read_blob_returns_the_bytes_written_for_that_entry(self):
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        generation = subject.save([one_capture(content=b"hand-edited")], taken_at=AT)
+        manifest = subject.read(generation)
+        entry = manifest.entries[0]
+        self.assertEqual(subject.read_blob(generation, entry.blob), b"hand-edited")
+
+    def test_read_blob_of_a_missing_generation_raises_the_store_error(self):
+        with self.assertRaises(SnapshotStoreError):
+            store(FakeFileSystem()).read_blob(1, "0001.blob")
+
+    # --- Retention ---
+
+    def test_retain_removes_generations_beyond_the_kept_count(self):
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        for _ in range(6):
+            subject.save([one_capture()], taken_at=AT)
+
+        outcome = subject.retain(keep=5)
+
+        self.assertEqual(outcome.removed, (1,))
+        self.assertEqual(outcome.failed, ())
+        self.assertEqual(subject.readable_generations(), [2, 3, 4, 5, 6])
+
+    def test_retain_deletes_the_folder_and_its_contents(self):
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        for _ in range(6):
+            subject.save([one_capture()], taken_at=AT)
+
+        subject.retain(keep=5)
+
+        folder = snapshots_root(HOME) / "000001"
+        self.assertEqual(filesystem.list_dir(folder), [])
+        self.assertFalse(filesystem.exists(folder))
+
+    def test_retain_does_nothing_when_within_the_kept_count(self):
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        subject.save([one_capture()], taken_at=AT)
+        subject.save([one_capture()], taken_at=AT)
+
+        outcome = subject.retain(keep=5)
+
+        self.assertEqual(outcome.removed, ())
+        self.assertEqual(subject.readable_generations(), [1, 2])
+
+    def test_retain_run_twice_does_not_fail(self):
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        for _ in range(6):
+            subject.save([one_capture()], taken_at=AT)
+
+        subject.retain(keep=5)
+        second = subject.retain(keep=5)
+
+        self.assertEqual(second.removed, ())
+        self.assertEqual(second.failed, ())
+
+    def test_a_retention_failure_is_reported_rather_than_raised(self):
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        for _ in range(6):
+            subject.save([one_capture()], taken_at=AT)
+        filesystem.fail_remove_dir.add(snapshots_root(HOME) / "000001")
+
+        outcome = subject.retain(keep=5)
+
+        self.assertEqual(outcome.removed, ())
+        self.assertEqual(len(outcome.failed), 1)
+        # The generation survives: a failed retention is untidy, not destructive.
+        self.assertIn(1, subject.readable_generations())
+
 
 class FileSnapshotStoreOnRealDiskTest(unittest.TestCase):
     """The fake proves the policy; this proves the modes actually land on disk."""
