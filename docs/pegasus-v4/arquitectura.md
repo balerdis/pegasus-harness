@@ -192,12 +192,7 @@ class CliAdapter(Protocol):
     # --- Modelos: solo si capabilities().per_agent_model es True ---
     def model_catalog(self, env: Environment) -> ModelCatalog: ...
     def read_model_assignments(self, env: Environment) -> dict[str, ModelAssignment]: ...
-    def render_model_assignment(
-        self, agent_id: str, assignment: ModelAssignment | None
-    ) -> Artifact: ...
 ```
-
-`render_model_assignment` con `assignment=None` produce el artefacto que **quita** el modelo. Ese es el camino de vuelta a "sin modelo elegido".
 
 ### `Layout` — las anclas de ruta
 
@@ -250,7 +245,7 @@ Es todo lo que el motor sabe hacer con un artefacto. Cada operación tiene exact
 | Detectar colisión | ¿El path ya existe? | ¿El puntero ya resuelve a algo? |
 | Escribir | Escritura atómica de `content` | `set_at(doc, pointer, value)` y reescritura atómica |
 | Hashear | `sha256(content)` | `sha256` de la serialización canónica de `value` |
-| Revertir | Borrar el archivo, o restaurar `before` | `unset_at(doc, pointer)`, o restaurar `before` |
+| Revertir | Borrar el archivo | `unset_at(doc, pointer)` |
 
 `set_at` y `unset_at` son dos funciones genéricas que navegan un árbol de diccionarios y listas creando lo que falte. No mencionan ningún CLI.
 
@@ -265,12 +260,12 @@ Un puntero terminado en `/-` no direcciona un casillero sino el final de una lis
 
 Por eso el ítem se identifica por **lo que es** y no por **dónde está**.
 
-Eso tiene una consecuencia que hay que decir en voz alta: **la invariante "un artefacto cuya huella no coincide se preserva y se reporta" no se puede aplicar a un append.** Si la lista todavía tiene ítems y ninguno lleva la huella registrada, hay dos causas posibles y son indistinguibles:
+Eso tiene una consecuencia que hay que decir en voz alta: **un ítem de lista no tiene dirección propia que inspeccionar, y esa falta de dirección es la que le impide a un append comportarse como el resto del desinstalador.** Si la lista todavía tiene ítems y ninguno lleva la huella registrada, hay dos causas posibles y son indistinguibles:
 
 - el usuario borró nuestro ítem, o
 - el usuario lo editó en el lugar, y ahora es idéntico a un ítem que hubiera puesto él.
 
-No hay dato en el journal que las separe, y un ítem de lista no tiene dirección propia que inspeccionar. Ninguna de las dos es una remoción y ninguna es una preservación, así que el desinstalador las reporta como un cuarto resultado: **`unaccounted`**. Los otros tres —`removed`, `restored`, `preserved`— son afirmaciones sobre algo que Pegasus hizo, y ninguna sería cierta acá.
+No hay dato en el journal que las separe. Ninguna de las dos es una remoción, así que el desinstalador las reporta como un segundo resultado: **`unaccounted`**. `removed` es una afirmación sobre algo que Pegasus hizo, y acá no sería cierta.
 
 **La ambigüedad necesita sobrevivientes**, y afirmarla donde no existe sería su propia imprecisión. Los cuatro estados posibles:
 
@@ -410,10 +405,10 @@ El journal es lo que hace a Pegasus aditivo: registra qué creó, para poder ret
 
 | v3 | v4 | Por qué |
 |----|----|---------|
-| Solo `baseline_digest` (huella posterior) | `before` + `after_digest` | Permite **restaurar**, no solo borrar o preservar |
+| `baseline_digest`, usada como permiso para escribir | `after_digest`, que identifica qué es nuestro pero ya no decide si se pisa | Instalar y desinstalar escriben todo lo que el journal reclama sin mirar la huella; volver atrás es trabajo del snapshot, no del journal |
 | Una instalación global | Instalaciones por CLI | Se puede tener Pegasus en dos CLIs con ciclos de vida independientes |
 | Clave plana (`key`) | JSON Pointer | El motor escribe rutas anidadas sin conocer el esquema |
-| Sin registro de mutaciones | `mutations[]` con rebase de huella | Configurar un modelo no rompe el ownership |
+| Sin registro de mutaciones | Ninguno: la asignación de modelo vive en su propio store, no en el journal | Pisar el artefacto deja de ser un riesgo para el ownership porque el journal nunca se entera de esa preferencia |
 
 ### Formato
 
@@ -435,30 +430,19 @@ El journal es lo que hace a Pegasus aditivo: registra qué creó, para poder ret
           "id": "skill:sdd-apply",
           "kind": "file",
           "target": "/home/serg/.config/opencode/skills/sdd-apply/SKILL.md",
-          "before": null,
           "after_digest": "sha256:5e6f…",
           "mode": "0644",
           "ownership": "owned",
-          "created_at": "2026-08-14T00:41:09Z",
-          "mutations": []
+          "created_at": "2026-08-14T00:41:09Z"
         },
         {
           "id": "agent:sdd-apply",
           "kind": "config-key",
           "target": "/home/serg/.config/opencode/opencode.json",
           "pointer": "/agent/sdd-apply",
-          "before": null,
           "after_digest": "sha256:7a8b…",
           "ownership": "owned",
-          "adopted": false,
-          "created_at": "2026-08-14T00:41:09Z",
-          "mutations": [
-            {
-              "at": "2026-08-14T01:10:00Z",
-              "by": "set-model",
-              "after_digest": "sha256:9c0d…"
-            }
-          ]
+          "created_at": "2026-08-14T00:41:09Z"
         }
       ],
       "links": [
@@ -487,58 +471,6 @@ Esa ruta está escrita a mano y no consulta el entorno. La unidad 8 le pone un r
 
 Quien resuelve esa ruta es `FileJournalStore`, detrás del puerto `JournalStore`. Escribe a través del puerto `FileSystem`, así que la política del store —quién puede escribir, qué se puede escribir, qué significa un archivo dañado— se prueba sin un home real. Un journal ilegible **no** es un journal vacío: el store falla ruidosamente, porque tratarlo como vacío dejaría huérfano todo lo ya instalado.
 
-### Semántica de `before`
-
-| Valor | Significa | Al desinstalar |
-|-------|-----------|----------------|
-| `null` | No existía antes de Pegasus | Se elimina |
-| valor previo | Existía, o el usuario lo editó y lo adoptamos | Se **restaura** al valor previo |
-
-Los archivos existentes se siguen tratando como colisión y se saltean, igual que en v3. La adopción con `before` no nulo queda reservada a claves de configuración, donde el valor previo es chico y se guarda en línea.
-
-### Semántica de `mutations[]`
-
-Cuando el usuario configura un modelo, el flujo es:
-
-1. Se verifica que la huella actual del artefacto coincida con `after_digest`.
-2. Se aplica el cambio.
-3. Se agrega una entrada a `mutations[]` y se actualiza `after_digest`.
-
-Con eso, el artefacto sigue siendo reconocido como propio y el desinstalador lo limpia normalmente. Esto resuelve el problema que en v3 dejaría configuración huérfana para siempre.
-
-### Cuando el usuario editó el artefacto: preguntar y adoptar
-
-Si la huella del paso 1 no coincide, el usuario editó eso a mano. Pegasus **no rechaza el cambio ni pisa en silencio**: pregunta.
-
-```
-El agente sdd-apply fue modificado fuera de Pegasus.
-
-  Tu versión actual:   { "model": "openai/gpt-5", "temperature": 0.2 }
-  Cambio solicitado:   model → anthropic/claude-sonnet-5
-
-  ▸ Adoptar: aplico el cambio y conservo el resto de tu configuración
-    Cancelar: no toco nada
-```
-
-Al adoptar:
-
-- Se guarda el valor actual del usuario en `before` (si `before` ya era `null`, pasa a contener esa versión).
-- Se marca la entrada con `adopted: true`.
-- Se aplica el cambio **preservando las claves que el usuario agregó**: se escribe solo el campo del modelo, no se reemplaza el objeto entero.
-- Se registra la mutación con `by: "set-model-adopted"`.
-
-La consecuencia importante es en la desinstalación: un artefacto con `adopted: true` **se restaura al valor previo del usuario** en lugar de eliminarse. Pegasus se retira dejando la edición del usuario intacta.
-
-En modo desatendido no hay a quién preguntar, así que el comportamiento es explícito por flag:
-
-```bash
-pegasus models set … --on-modified ask       # default en TUI
-pegasus models set … --on-modified adopt     # adopta sin preguntar
-pegasus models set … --on-modified skip      # deja el artefacto como está y reporta
-```
-
-Sin flag, el modo desatendido usa `skip` y lo informa en su salida JSON. Nunca adopta por omisión: adoptar es una decisión del usuario, y en desatendido no hay usuario presente.
-
 ### Lo que el desinstalador deja atrás
 
 Retirar no reescribe un archivo de configuración si no cambió nada en él: la indentación del usuario es suya y no se gasta sin motivo.
@@ -550,7 +482,7 @@ Queda un residuo conocido y aceptado: si el archivo de configuración del CLI **
 - [ ] Todo `target` está contenido dentro del home del usuario
 - [ ] El journal lo escribe el usuario dueño del home, nunca root
 - [ ] Escritura atómica: archivo temporal, `fsync`, `rename`
-- [ ] Al desinstalar, un artefacto cuya huella no coincide se preserva y se reporta (salvo los appends, donde la huella no alcanza para decidirlo y el resultado es `unaccounted` — ver "La excepción: punteros que agregan a una lista")
+- [ ] Al desinstalar, todo lo que el journal reclama se borra sin mirar si el usuario lo tocó, salvo los appends, donde la huella no alcanza para decidir si el ítem sigue siendo nuestro y el resultado es `unaccounted` (ver "La excepción: punteros que agregan a una lista")
 - [ ] Un `link` nunca se borra: Pegasus no es dueño de dependencias preexistentes
 - [ ] Reinstalar nunca reduce lo que el journal ya poseía
 - [ ] El journal se consulta antes de escribir el primer artefacto, no después del último
@@ -678,7 +610,7 @@ Modelos · OpenCode
   enter: configurar · d: quitar modelo · esc: volver
 ```
 
-`d` devuelve el agente a "sin modelo": escribe el artefacto que elimina la clave y registra la mutación.
+`d` devuelve el agente a "sin modelo": borra la preferencia de su propio store y se renderiza el default. No toca el journal, porque la asignación de modelo nunca vivió ahí.
 
 ### Paridad con flags
 
@@ -688,7 +620,6 @@ La TUI no puede hacer nada que los flags no puedan. Esta regla protege `INSTALL_
 pegasus                                          # TUI
 pegasus install --cli opencode --confirm cbm --decline playwright
 pegasus models set --cli opencode --agent sdd-apply --model anthropic/claude-sonnet-5 --effort high
-pegasus models set --cli opencode --agent sdd-apply --model … --on-modified adopt
 pegasus models unset --cli opencode --agent sdd-apply
 pegasus uninstall --cli opencode
 pegasus doctor --json
@@ -807,7 +738,7 @@ Todo lo que v3 ya garantiza se mantiene, y se extiende a las dependencias nuevas
 | Payload verificado con SHA-256 | Sí | Sí, sobre el catálogo generado |
 | Dependencias con versión fija, sin `npx` ni `latest` | Sí | Sí |
 | Sin ejecución como root | Sí | Sí |
-| Rollback que preserva lo modificado por el usuario | Sí | Sí, y además restaura |
+| Rollback que preserva lo modificado por el usuario | Sí | Sí, pero por otro camino: el journal ya no preserva nada, la vuelta atrás es el snapshot tomado antes de escribir, y tiene un horizonte — pasada la retención, el original ya no está en ningún lado |
 | Dependencias Python con hashes | — | `pip install --require-hashes` |
 | Detección sin ejecutar binarios de terceros | — | Sí |
 
@@ -853,8 +784,8 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 3 | Los 12 agentes cableados con sus prompts, y el contenido normalizado | Los 10 SDD existen como subagentes reales | Entregada |
 | 4 | Launcher, venv privado, empaquetado | `pegasus` disponible en el PATH tras instalar | Pendiente |
 | 5 | TUI: menú principal e instalación | Instalación completa sin escribir un flag | Pendiente |
-| 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con mutación registrada | Pendiente |
-| 7 | Actualización de una instalación existente | Reinstalar sobre una instalación propia actualiza el payload; lo que el usuario reescribió se preserva y se reporta | Entregada |
+| 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con la preferencia guardada en el estado propio de Pegasus | Pendiente |
+| 7 | Actualización de una instalación existente | Reinstalar sobre una instalación propia actualiza el payload. La segunda mitad de lo entregado —preservar y reportar lo que el usuario reescribió— la reemplazó la unidad 9 | Entregada |
 | 8a1 | Categoría `mcp/`, descriptor y render del servidor | Un MCP remoto se instala de verdad, con su convención embarcada y su permiso concedido | Entregada |
 | 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira | Pendiente |
 | 8b | Directorio propio, formas `npm` y `download` | Los MCPs que traen binario quedan disponibles sin vendorizar ni compilar ninguno, con versión fija e integridad verificada | Pendiente |
@@ -863,11 +794,9 @@ La unidad 1b genera el catálogo **del contenido presente**, no del contenido fi
 
 ### Unidad 7 — Actualización de una instalación existente
 
-El planner responde cuatro preguntas por artefacto, en este orden: si algo ocupa la dirección, si el journal la reclama como propia, si no fue cambiada a propósito desde entonces, y si los bytes que hay son los que el journal registró. Sólo lo que sobrevive las cuatro se sobrescribe, y sólo si el contenido nuevo difiere del que ya está — si es idéntico no es trabajo, y se deja quieto.
+El planner responde dos preguntas por artefacto: si algo ocupa la dirección, y si el journal la reclama como propia. Lo que el journal reclama se sobrescribe, y sólo si el contenido nuevo difiere del que ya está — si es idéntico no es trabajo, y se deja quieto.
 
-Un digest que no coincide sigue siendo del usuario: preservado y reportado, como en el resto del motor. Y lo que no se puede leer tampoco se puede probar propio, así que se saltea igual.
-
-**Una mutación no se sobrescribe nunca.** Registrar una mutación rebasea el digest para que la propiedad no se pierda, así que un artefacto cambiado a propósito sigue pareciendo nuestro. Es nuestro para retirarlo, no para pisarlo: el cambio es del usuario, hecho a través de Pegasus. La condición existe antes que las mutaciones, que llegan con las unidades 5 y 6.
+La unidad 9 sacó de acá dos preguntas más que esta unidad había traído: si el artefacto fue cambiado a propósito desde entonces, y si los bytes que hay son los que el journal registró. Las dos usaban el digest para decidir si escribir, y las dos se fueron con él. Lo que el usuario haya reescrito sobre una dirección nuestra se pisa, y lo que lo protege es la copia que se toma antes de escribir, no una huella que se consulta al escribir.
 
 Un append es la versión difícil de la pregunta. No tiene dirección propia, así que su item se busca por huella y el valor nuevo lo reemplaza donde está: appendear en su lugar dejaría dos nuestros y correría los del usuario. Un item que la lista ya no tiene vuelve a ser una creación — la ausencia no es un veredicto.
 
@@ -1001,7 +930,7 @@ El hueco real es uno solo: **una dirección que el journal sí reclama, donde el
 
 Quedan huérfanos dos lugares que conviene nombrar para que no sorprendan en la revisión: `_file_digest` (`planner.py:560-563`) pierde a su único llamador, y `_amend` y `_mutated` (`journal.py:152-164`) sólo son alcanzables desde `with_mutation` y `with_adoption`, que mueren con esta unidad.
 
-Y una cosa que conviene decir sin vueltas: **`with_mutation` y `with_adoption` no tienen un llamador de producción hoy**. Sus únicos call sites son los tests unitarios del propio journal. Nada en el motor que se distribuye produce hoy una mutación o un registro adoptado, porque el comando que la produciría —`models set`— no existe todavía.
+Y una cosa que conviene decir sin vueltas, porque es la que hizo barato el borrado: **`with_mutation` y `with_adoption` nunca tuvieron un llamador de producción**. Sus únicos call sites eran los tests unitarios del propio journal. El motor que se distribuye jamás produjo una mutación ni un registro adoptado, porque el comando que la produciría —`models set`— todavía no existe. Se borró un mecanismo completo, probado y serializado, que no tenía un solo usuario.
 
 #### Lo que sobrevive, y no por razones de política
 
@@ -1099,9 +1028,9 @@ Tests que fallan si el diseño se degrada:
 - [ ] Cada capacidad declarada en `True` tiene ruta y render
 - [ ] Cada códec serializa de forma canónica y preserva las claves que Pegasus no escribió
 - [ ] El journal rechaza targets fuera del home del usuario
-- [ ] Una mutación sobre un artefacto editado por el usuario pregunta antes de adoptar
-- [ ] Un artefacto adoptado se restaura al valor del usuario al desinstalar
-- [ ] En modo desatendido, una mutación sobre un artefacto editado no adopta por omisión
+- [ ] Instalar y desinstalar escriben lo que el journal reclama sin consultar la huella del artefacto
+- [ ] Toda instalación y toda desinstalación toma un snapshot antes de escribir
+- [ ] `restore` devuelve bytes y modo exactos, sin merge ni reconstrucción
 - [ ] Desinstalar deja el sistema sin rastros de Pegasus, salvo lo que el usuario modificó
 
 ---
