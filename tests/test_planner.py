@@ -238,11 +238,11 @@ class AppendTest(unittest.TestCase):
 
 
 class UpdateTest(unittest.TestCase):
-    """Reinstalling over Pegasus's own work updates it; over the user's, it does not.
+    """Reinstalling over an address the journal claims writes it, whatever is there.
 
-    The journal is what separates the two. A path that exists says nothing on its
-    own: the question is whether the bytes there are still the ones Pegasus
-    recorded writing.
+    The journal is the only question. A path that exists says nothing on its own,
+    and neither do the bytes in it: what the user wrote over our own artifact is
+    overwritten, and the copy taken before the write is what gives it back.
     """
 
     def setUp(self):
@@ -273,6 +273,24 @@ class UpdateTest(unittest.TestCase):
         )
 
     # --- Deciding ---
+
+    def test_a_file_that_cannot_be_read_is_left_alone_and_reported(self):
+        """Unreadable is not the same as unchanged, and not a matter of policy.
+
+        Overwriting an address the journal claims is the rule, but it rests on
+        being able to copy the address first, and something that cannot be read
+        cannot be copied. Writing it anyway would destroy the one version there
+        is with nothing to give back — so this is the same kind of exception as
+        a list item with no address of its own: a physical impossibility, not a
+        judgement about who owns the bytes.
+        """
+        self.filesystem.fail_read.add(SKILL)
+
+        result = self.plan_with(self.record())
+
+        self.assertEqual([step.action for step in result.steps], [planner.SKIP])
+        self.assertEqual([step.reason for step in result.steps], [planner.COLLISION])
+
 
     def test_a_file_pegasus_wrote_and_nobody_touched_is_an_update(self):
         step = self.plan_with(self.record()).steps[0]

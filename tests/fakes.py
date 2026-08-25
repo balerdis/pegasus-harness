@@ -32,6 +32,7 @@ class FakeFileSystem:
         fail_always: set[Path] | None = None,
         fail_remove: set[Path] | None = None,
         fail_list: set[Path] | None = None,
+        fail_read: set[Path] | None = None,
     ):
         self.files: dict[Path, bytes] = dict(files or {})
         self.modes: dict[Path, int] = dict(modes or {})
@@ -43,6 +44,7 @@ class FakeFileSystem:
         self.fail_always: set[Path] = set(fail_always or ())
         self.fail_remove: set[Path] = set(fail_remove or ())
         self.fail_list: set[Path] = set(fail_list or ())
+        self.fail_read: set[Path] = set(fail_read or ())
         self.writes: list[Path] = []
         self.removals: list[Path] = []
 
@@ -52,6 +54,8 @@ class FakeFileSystem:
         return path in self.files or path in self.directories
 
     def read_bytes(self, path: Path) -> bytes:
+        if path in self.fail_read:
+            raise FileSystemError(f"refusing to read {path}: injected failure")
         if path not in self.files:
             raise FileSystemError(f"no such file: {path}")
         return self.files[path]

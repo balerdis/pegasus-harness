@@ -164,19 +164,33 @@ def _file_step(
 ) -> Step:
     """A file's fate, once the journal can be consulted about it.
 
-    Only two questions matter now. Does anything hold this address, and does
-    the journal claim it. An address the journal claims is overwritten without
+    Two questions decide it. Does anything hold this address, and does the
+    journal claim it. An address the journal claims is overwritten without
     asking whether the user changed it since — that question belonged to a
-    digest-as-permission policy that no longer applies. The only thing left to
-    decide is whether the bytes there already match what would be written,
-    which is not a permission check, only what keeps a reinstall from
+    digest-as-permission policy that no longer applies. Reading the bytes is
+    not a third question about permission: it only keeps a reinstall from
     rewriting a file that is already correct.
+
+    Which leaves one address this cannot write, and not by choice. Overwriting
+    rests on having copied the address first, so a file that cannot be read is
+    a file that cannot be copied, and writing it would destroy the only version
+    there is with nothing left to give back.
     """
     if not filesystem.exists(artifact.path):
         return Step(artifact=artifact, action=CREATE, digest=digest, entry=entry)
     if entry is None or entry.kind != "file" or entry.target != artifact.path:
         return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
-    current = ownership.digest_of_bytes(filesystem.read_bytes(artifact.path))
+    try:
+        current = ownership.digest_of_bytes(filesystem.read_bytes(artifact.path))
+    except FileSystemError:
+        # Unreadable is not the same as absent, and leaving it alone is not the
+        # deference this policy dropped. Overwriting rests on having copied the
+        # address first, and what cannot be read cannot be copied — writing it
+        # anyway would destroy the only version there is with nothing to give
+        # back. Same kind of exception as a list item with no address of its
+        # own: a physical impossibility, not a judgement about whose bytes
+        # those are.
+        return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
     if current == digest and filesystem.mode_of(artifact.path) == artifact.mode:
         # Both halves, because a fingerprint is of content and a permission is
         # not content. A program whose bit was wrong ships identical bytes.
