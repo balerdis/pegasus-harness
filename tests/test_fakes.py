@@ -11,6 +11,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from pegasus.ports.filesystem import FileSystemError
 from fakes import DEFAULT_DIR_MODE, FakeFileSystem
 
 ROOT = Path("/home/probe")
@@ -68,6 +69,19 @@ class FakeFileSystemMakeDirTest(unittest.TestCase):
         filesystem.make_dir(ROOT, mode=0o700)
         filesystem.write_atomic(target, b"hello")
         self.assertEqual(filesystem.mode_of(ROOT), 0o700)
+
+    def test_remove_dir_refuses_a_path_that_is_a_file(self):
+        """Mirrors fs_posix.remove_dir, where rmtree on a file raises.
+
+        A double that quietly deletes the file instead would let a caller that
+        aimed remove_dir at the wrong kind of path pass its tests and destroy
+        data in production. The double is only useful while it fails where the
+        real one fails.
+        """
+        filesystem = FakeFileSystem(files={ROOT / "note.txt": b"payload"})
+        with self.assertRaises(FileSystemError):
+            filesystem.remove_dir(ROOT / "note.txt")
+        self.assertIn(ROOT / "note.txt", filesystem.files)
 
 
 if __name__ == "__main__":
