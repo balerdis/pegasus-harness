@@ -17,7 +17,7 @@ from fakes import FakeFileSystem
 from pegasus.core.snapshot import Entry, Manifest, SnapshotError
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import DATA_DIR, DATA_DIR_MODE
-from pegasus.infra.snapshot_store_file import FileSnapshotStore, snapshots_root
+from pegasus.infra.snapshot_store_file import FileSnapshotStore, capture_paths, snapshots_root
 from pegasus.ports.filesystem import FileSystemError
 from pegasus.ports.snapshot_store import Capture, SnapshotStore, SnapshotStoreError
 
@@ -41,6 +41,25 @@ class SnapshotsRootTest(unittest.TestCase):
     def test_the_root_hangs_off_the_same_directory_as_the_journal(self):
         """Derived from the journal's own location, not a restated literal."""
         self.assertEqual(snapshots_root(HOME), HOME / DATA_DIR / "snapshots")
+
+
+class CapturePathsTest(unittest.TestCase):
+    def test_a_file_that_cannot_be_read_fails_as_a_snapshot_failure(self):
+        """Capturing is the snapshot's own job, so its failures wear its own name.
+
+        A caller guarding a snapshot catches this store's error; letting the
+        filesystem's own type through would slip past that guard and reach the
+        user as a message about a file, with no word on whether the command it
+        was protecting went ahead anyway.
+        """
+
+        class Unreadable(FakeFileSystem):
+            def read_bytes(self, path: Path) -> bytes:
+                raise FileSystemError(f"refusing to read {path}: injected failure")
+
+        filesystem = Unreadable(files={TARGET: b"whatever"})
+        with self.assertRaises(SnapshotStoreError):
+            capture_paths(filesystem, [TARGET])
 
 
 class FileSnapshotStoreTest(unittest.TestCase):

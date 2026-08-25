@@ -17,7 +17,7 @@ home's owner may.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Iterable, Sequence
 
 from pegasus.core import codecs, snapshot as snapshot_module
 from pegasus.core.snapshot import Entry, Manifest, SnapshotError
@@ -35,6 +35,40 @@ BLOB_WIDTH = 4
 def snapshots_root(home: Path) -> Path:
     """Where snapshot generations live for a given home. Pure path arithmetic."""
     return home / DATA_DIR / SNAPSHOTS_DIRNAME
+
+
+def capture_paths(filesystem: FileSystem, paths: Iterable[Path]) -> list[Capture]:
+    """Read every path as it stands right now, ready for :meth:`FileSnapshotStore.save`.
+
+    The port's own docstring names two halves of a snapshot's job: "the file
+    contents captured on the way in, and the place a generation is written to
+    and read back from." This is the first half, kept beside the store rather
+    than in :mod:`pegasus.core.snapshot` because reading bytes and a mode off
+    disk is exactly the filesystem I/O that module promises never to do.
+
+    A path that does not exist yet has no bytes and no mode to have captured,
+    so it is recorded as absent rather than guessed at — the store itself
+    refuses a capture that claims otherwise.
+    """
+    captures: list[Capture] = []
+    for path in paths:
+        try:
+            if not filesystem.exists(path):
+                captures.append(Capture(path=path, existed=False, mode=None, content=None))
+                continue
+            mode = filesystem.mode_of(path)
+            content = filesystem.read_bytes(path)
+        except FileSystemError as error:
+            raise SnapshotStoreError(f"cannot capture {path}: {error}") from error
+        captures.append(
+            Capture(
+                path=path,
+                existed=True,
+                mode=f"{mode:04o}" if mode is not None else None,
+                content=content,
+            )
+        )
+    return captures
 
 
 def _generation_name(generation: int) -> str:
