@@ -179,114 +179,27 @@ class InstallsTest(unittest.TestCase):
         self.assertEqual([item.cli for item in journal.installs], ["other"])
 
 
-class MutationTest(unittest.TestCase):
-    def setUp(self):
-        self.journal = journal_module.with_install(
-            journal_module.empty("4.0.0"), install(config_record())
-        )
+class LegacyPayloadTest(unittest.TestCase):
+    """A journal written by an earlier engine may carry fields this one no longer uses.
 
-    def mutate(self, **overrides):
-        fields = dict(
-            cli="opencode",
-            entry_id="agent:sdd-verify",
-            by="set-model",
-            after_digest="sha256:" + "d" * 64,
-            at="2026-08-14T01:00:00+00:00",
-        )
-        fields.update(overrides)
-        return journal_module.with_mutation(self.journal, **fields)
+    Parsing is additive: it reads what it needs from a dict and never checks the
+    dict is exactly that shape, so a key from a retired feature is silently
+    dropped rather than rejected.
+    """
 
-    def entry(self, journal):
-        return journal.installs[0].entries[0]
+    def test_before_adopted_and_mutations_are_ignored_rather_than_rejected(self):
+        payload = journal_module.to_dict(Journal(pegasus_version="4.0.0", installs=(install(config_record()),)))
+        entry = payload["installs"][0]["entries"][0]
+        entry["before"] = {"model": "someone/else"}
+        entry["adopted"] = True
+        entry["mutations"] = [{"at": AT, "by": "set-model", "after_digest": "sha256:" + "d" * 64}]
 
-    def test_records_the_mutation(self):
-        entry = self.entry(self.mutate())
-        self.assertEqual([item.by for item in entry.mutations], ["set-model"])
+        parsed = journal_module.from_dict(payload, HOME)
 
-    def test_rebaselines_the_digest_so_ownership_survives(self):
-        entry = self.entry(self.mutate())
-        self.assertEqual(entry.after_digest, "sha256:" + "d" * 64)
-
-    def test_mutations_accumulate(self):
-        journal = self.mutate()
-        journal = journal_module.with_mutation(
-            journal,
-            cli="opencode",
-            entry_id="agent:sdd-verify",
-            by="set-model",
-            after_digest="sha256:" + "e" * 64,
-            at="2026-08-14T02:00:00+00:00",
-        )
-        self.assertEqual(len(journal.installs[0].entries[0].mutations), 2)
-
-    def test_an_unknown_entry_is_refused(self):
-        with self.assertRaises(JournalError) as raised:
-            self.mutate(entry_id="agent:nope")
-        self.assertIn("agent:nope", str(raised.exception))
-
-    def test_an_unknown_cli_is_refused(self):
-        with self.assertRaises(JournalError):
-            self.mutate(cli="nope")
-
-
-class AdoptionTest(unittest.TestCase):
-    """Adopting keeps the user's previous value so uninstall can restore it."""
-
-    def setUp(self):
-        self.journal = journal_module.with_install(
-            journal_module.empty("4.0.0"), install(config_record())
-        )
-
-    def adopt(self):
-        return journal_module.with_adoption(
-            self.journal,
-            cli="opencode",
-            entry_id="agent:sdd-verify",
-            before={"model": "someone/else", "temperature": 0.2},
-            after_digest="sha256:" + "f" * 64,
-            at="2026-08-14T01:00:00+00:00",
-        )
-
-    def test_keeps_the_users_previous_value(self):
-        entry = self.adopt().installs[0].entries[0]
-        self.assertEqual(entry.before, {"model": "someone/else", "temperature": 0.2})
-
-    def test_marks_the_entry_as_adopted(self):
-        self.assertTrue(self.adopt().installs[0].entries[0].adopted)
-
-    def test_records_the_mutation_as_an_adoption(self):
-        self.assertEqual([m.by for m in self.adopt().installs[0].entries[0].mutations], ["set-model-adopted"])
-
-    def test_adopting_twice_keeps_the_first_previous_value(self):
-        """The user's original value is what uninstall must restore, not an interim one."""
-        once = self.adopt()
-        twice = journal_module.with_adoption(
-            once,
-            cli="opencode",
-            entry_id="agent:sdd-verify",
-            before={"model": "pegasus/wrote-this"},
-            after_digest="sha256:" + "0" * 64,
-            at="2026-08-14T02:00:00+00:00",
-        )
-        self.assertEqual(twice.installs[0].entries[0].before, {"model": "someone/else", "temperature": 0.2})
-
-    def test_an_adopted_entry_survives_serialization(self):
-        payload = journal_module.to_dict(self.adopt())
-        self.assertEqual(journal_module.from_dict(payload, HOME), self.adopt())
-
-
-class RestoreDecisionTest(unittest.TestCase):
-    """What uninstall must do with each entry, decided by the journal alone."""
-
-    def test_an_entry_that_never_existed_is_removed(self):
-        self.assertEqual(journal_module.retirement(record()), "remove")
-
-    def test_an_adopted_entry_is_restored(self):
-        entry = record(before={"model": "x"}, adopted=True)
-        self.assertEqual(journal_module.retirement(entry), "restore")
-
-    def test_a_previous_value_without_adoption_is_still_restored(self):
-        self.assertEqual(journal_module.retirement(record(before="previous")), "restore")
+        entry = parsed.installs[0].entries[0]
+        self.assertFalse(hasattr(entry, "before"))
+        self.assertFalse(hasattr(entry, "adopted"))
+        self.assertFalse(hasattr(entry, "mutations"))
 
 
 if __name__ == "__main__":

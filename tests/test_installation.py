@@ -148,7 +148,7 @@ class InstallAndRetireTest(unittest.TestCase):
         planner.apply(self.fs, plan, at=AT)
         self.assertEqual(target.path.read_bytes(), b"a newer shipped version\n")
 
-    def test_a_file_the_user_edited_is_not_overwritten_by_a_reinstall(self):
+    def test_a_file_the_user_edited_is_overwritten_by_a_reinstall(self):
         applied = self.install()
         target = next(item for item in self.artifacts if isinstance(item, FileArtifact))
         target.path.write_bytes(b"the user's own words\n")
@@ -157,9 +157,9 @@ class InstallAndRetireTest(unittest.TestCase):
             for item in self.artifacts
         ]
         plan = self.replan(applied, newer)
-        self.assertEqual([step.artifact.id for step in plan.collisions], [target.id])
+        self.assertEqual([step.artifact.id for step in plan.updates], [target.id])
         planner.apply(self.fs, plan, at=AT)
-        self.assertEqual(target.path.read_bytes(), b"the user's own words\n")
+        self.assertEqual(target.path.read_bytes(), b"a newer shipped version\n")
 
     # --- Retiring ---
 
@@ -170,7 +170,6 @@ class InstallAndRetireTest(unittest.TestCase):
         )
         retired = planner.retire(self.fs, install)
         self.assertEqual(len(retired.removed), len(applied.records))
-        self.assertEqual(retired.preserved, ())
 
     def test_a_home_that_was_installed_and_retired_holds_nothing_of_ours(self):
         applied = self.install()
@@ -185,7 +184,8 @@ class InstallAndRetireTest(unittest.TestCase):
             self.assertEqual(settings.read_text(encoding="utf-8").strip(), "{}")
         self.assertEqual(leftovers, [])
 
-    def test_a_file_the_user_edited_survives_the_uninstall(self):
+    def test_a_file_the_user_edited_is_removed_by_the_uninstall_too(self):
+        """The snapshot is what keeps the edit recoverable, not this check."""
         applied = self.install()
         edited = next(record for record in applied.records if record.kind == "file")
         edited.target.write_bytes(b"the user rewrote this")
@@ -193,8 +193,8 @@ class InstallAndRetireTest(unittest.TestCase):
             cli=self.cli, installed_at=AT, config_dir=self.layout.config_dir, release={}, entries=applied.records
         )
         retired = planner.retire(self.fs, install)
-        self.assertIn(edited.id, retired.preserved)
-        self.assertEqual(edited.target.read_bytes(), b"the user rewrote this")
+        self.assertIn(edited.id, retired.removed)
+        self.assertFalse(edited.target.exists())
 
     def test_a_key_the_user_added_survives_the_uninstall(self):
         settings = self.layout.settings_file

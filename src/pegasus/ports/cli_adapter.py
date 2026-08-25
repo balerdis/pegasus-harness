@@ -119,8 +119,3 @@ class CliAdapter(Protocol):
 
     def read_model_assignments(self, environment: Environment) -> dict[str, ModelAssignment]:
         """Current per-agent assignments. Agents without one are simply absent."""
-
-    def render_model_assignment(
-        self, agent_id: str, assignment: ModelAssignment | None
-    ) -> Artifact:
-        """Assign a model, or clear it when ``assignment`` is None."""

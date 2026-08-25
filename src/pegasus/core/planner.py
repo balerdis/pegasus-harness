@@ -40,7 +40,6 @@ UPDATE = "update"
 UNCHANGED = "unchanged"
 SKIP = "skip"
 COLLISION = "collision"
-MUTATED = "mutated"
 APPEND = "/-"
 """A pointer ending here addresses the end of a list, which is not a slot."""
 
@@ -115,14 +114,15 @@ class Retired:
     """What an uninstall did, by artifact id.
 
     ``unaccounted`` is the honest answer for a list item that could not be
-    found. Every other outcome is a claim about something Pegasus did — removed
-    it, put a previous value back, or deliberately left it alone — and none of
-    those is true when the item is simply not there to judge.
+    found. A list item has no address of its own, so the user having deleted it
+    and the user having edited it beyond recognition are physically
+    indistinguishable, and neither is a removal. Every other artifact has an
+    address, and is unconditionally removed — the user's edit, if there was
+    one, is destroyed with it. The snapshot is what makes that content
+    recoverable, not this report.
     """
 
     removed: tuple[str, ...] = ()
-    restored: tuple[str, ...] = ()
-    preserved: tuple[str, ...] = ()
     unaccounted: tuple[str, ...] = ()
     kept_links: tuple[str, ...] = ()
 
@@ -164,28 +164,19 @@ def _file_step(
 ) -> Step:
     """A file's fate, once the journal can be consulted about it.
 
-    The order of the questions is the whole design. Does anything hold this
-    address; does the journal claim it; was it deliberately changed since;
-    are the bytes there still the ones recorded. Only an address that survives
-    all four may be written over, and only if the new bytes differ from it.
+    Only two questions matter now. Does anything hold this address, and does
+    the journal claim it. An address the journal claims is overwritten without
+    asking whether the user changed it since — that question belonged to a
+    digest-as-permission policy that no longer applies. The only thing left to
+    decide is whether the bytes there already match what would be written,
+    which is not a permission check, only what keeps a reinstall from
+    rewriting a file that is already correct.
     """
     if not filesystem.exists(artifact.path):
         return Step(artifact=artifact, action=CREATE, digest=digest, entry=entry)
     if entry is None or entry.kind != "file" or entry.target != artifact.path:
         return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
-    if entry.mutations:
-        # A mutation rebaselines the digest to keep ownership intact, so a
-        # deliberately changed artifact still looks like ours. Ours to retire,
-        # not to overwrite: the change is the user's, made through Pegasus.
-        return Step(artifact=artifact, action=SKIP, digest=digest, reason=MUTATED)
-    try:
-        current = ownership.digest_of_bytes(filesystem.read_bytes(artifact.path))
-    except FileSystemError:
-        # Unreadable is not the same as absent: what cannot be fingerprinted
-        # cannot be proved ours, and an unprovable claim is left alone.
-        return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
-    if not ownership.still_ours(entry, current):
-        return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
+    current = ownership.digest_of_bytes(filesystem.read_bytes(artifact.path))
     if current == digest and filesystem.mode_of(artifact.path) == artifact.mode:
         # Both halves, because a fingerprint is of content and a permission is
         # not content. A program whose bit was wrong ships identical bytes.
@@ -196,17 +187,14 @@ def _file_step(
 def _key_step(artifact: ConfigKeyArtifact, document: Any, digest: str, entry: Record | None) -> Step:
     """A configuration key's fate, asked of the document rather than of the disk.
 
-    The two shapes ask it differently. An addressable key is ours when the value
-    sitting at its pointer is the one recorded. An append has no address, so its
+    The two shapes ask it differently. An addressable key the journal claims is
+    overwritten without asking whether its current value is still the one
+    recorded — the same policy as a file. An append has no address, so its
     item is found by fingerprint, and a value the list no longer holds is a
     creation — the same answer as before this module could consult a journal.
     """
     if not _claimable(artifact, entry):
         return _plain_step(artifact, document, digest, None)
-    if entry.mutations:
-        if _occupied(artifact, document, digest):
-            return Step(artifact=artifact, action=SKIP, digest=digest, reason=MUTATED)
-        return _plain_step(artifact, document, digest, entry)
     if _appends(artifact.pointer):
         if _index_of(document, artifact.pointer, digest) is not None:
             return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
@@ -215,9 +203,7 @@ def _key_step(artifact: ConfigKeyArtifact, document: Any, digest: str, entry: Re
         return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
     if not ownership.occupies(artifact, document):
         return Step(artifact=artifact, action=CREATE, digest=digest, entry=entry)
-    if ownership.digest_of_value(pointer.get_at(document, artifact.pointer)) != entry.after_digest:
-        return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
-    if entry.after_digest == digest:
+    if ownership.digest_of_value(pointer.get_at(document, artifact.pointer)) == digest:
         return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
     return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
 
@@ -378,17 +364,16 @@ def unplace(
 
     The order is the correctness. Restoring comes first, because retiring is the
     wrong tool for an update: it takes the artifact away, and the artifact was
-    already there. Restoring also settles what retiring does next — the
-    fingerprint no longer matches, so it leaves the address alone.
-
-    And an address that would not go back is withheld from retiring altogether.
-    Retiring it would find the fingerprint this run wrote, judge it ours, and
-    remove it — leaving the user with neither version, which is worse than
-    leaving them the one they did not ask for.
+    already there. Every address this run updated is withheld from retiring
+    afterwards, whether or not the restore itself succeeded: retiring
+    unconditionally removes what the journal claims, and it would either erase
+    the content just put back, or, when the restore failed, remove the only
+    version left — leaving the user with neither. Only what this run created is
+    left for retiring to take back.
     """
     failures = _put_back(filesystem, applied)
-    withheld = {path for path, _ in failures}
-    kept = tuple(entry for entry in placed.entries if entry.target not in withheld)
+    updated = {path for path, _, _ in applied.replaced}
+    kept = tuple(entry for entry in placed.entries if entry.target not in updated)
     return retire(filesystem, replace(placed, entries=kept)), failures
 
 
@@ -403,12 +388,7 @@ def _put_back(filesystem: FileSystem, applied: Applied) -> list[tuple[Path, str]
 
 
 def _file_record(step: Step, at: str) -> Record:
-    """The record for what was just written, keeping what only the old one knew.
-
-    ``before`` and ``adopted`` are a promise to the user about their own content,
-    made when Pegasus first took the address over. Rewriting the file does not
-    discharge that promise, so a fresh record would quietly drop it.
-    """
+    """The record for what was just written, keeping what only the old one knew."""
     entry = step.entry
     return Record(
         id=step.artifact.id,
@@ -416,9 +396,7 @@ def _file_record(step: Step, at: str) -> Record:
         target=step.artifact.path,
         after_digest=step.digest,
         created_at=entry.created_at if entry else at,
-        before=entry.before if entry else None,
         mode=f"{step.artifact.mode:04o}",
-        adopted=entry.adopted if entry else False,
     )
 
 
@@ -438,7 +416,7 @@ def _address_for(step: Step, document: Any) -> str:
 
 
 def _key_record(step: Step, at: str) -> Record:
-    """Like a file's record, and carrying the same debt forward. See ``_file_record``."""
+    """Like a file's record. See ``_file_record``."""
     entry = step.entry
     return Record(
         id=step.artifact.id,
@@ -446,10 +424,8 @@ def _key_record(step: Step, at: str) -> Record:
         target=step.artifact.path,
         after_digest=step.digest,
         created_at=entry.created_at if entry else at,
-        before=entry.before if entry else None,
         pointer=step.artifact.pointer,
         codec=step.artifact.codec.value,
-        adopted=entry.adopted if entry else False,
     )
 
 
@@ -459,38 +435,24 @@ def _key_record(step: Step, at: str) -> Record:
 def retire(filesystem: FileSystem, install: Install) -> Retired:
     """Take back what the journal records, and only that.
 
-    Anything whose fingerprint no longer matches is the user's work now: it is
-    preserved and reported. Links are never touched — Pegasus does not own a
-    dependency that already existed.
+    An address the journal records is removed unconditionally, whether or not
+    the user changed it since — the same policy as install, in reverse. Links
+    are never touched — Pegasus does not own a dependency that already existed.
 
     There is no rollback here, and none is needed: every operation is a no-op
     the second time, so an interrupted uninstall is finished by running it
     again.
     """
     removed: list[str] = []
-    restored: list[str] = []
-    preserved: list[str] = []
     unaccounted: list[str] = []
-    outcomes = {
-        "removed": removed,
-        "restored": restored,
-        "preserved": preserved,
-        "unaccounted": unaccounted,
-    }
+    outcomes = {"removed": removed, "unaccounted": unaccounted}
 
     files = [entry for entry in install.entries if entry.kind == "file"]
     keys = [entry for entry in install.entries if entry.kind == "config-key"]
 
     for entry in files:
-        if entry.before is not None:
-            raise PlannerError(
-                f"{entry.id} is a file recorded with a previous value; only configuration keys are adopted"
-            )
-        current = _file_digest(filesystem, entry.target)
-        if not ownership.still_ours(entry, current):
-            preserved.append(entry.id)
-            continue
-        filesystem.remove(entry.target)
+        if filesystem.exists(entry.target):
+            filesystem.remove(entry.target)
         removed.append(entry.id)
 
     for path, entries in _group(keys, lambda entry: entry.target).items():
@@ -514,8 +476,6 @@ def retire(filesystem: FileSystem, install: Install) -> Retired:
 
     return Retired(
         removed=tuple(removed),
-        restored=tuple(restored),
-        preserved=tuple(preserved),
         unaccounted=tuple(unaccounted),
         kept_links=tuple(link.id for link in install.links),
     )
@@ -524,12 +484,11 @@ def retire(filesystem: FileSystem, install: Install) -> Retired:
 def _retire_key(document: Any, entry: Record) -> tuple[Any, str]:
     """Undo one key, and say which outcome it was.
 
-    The invariant that a fingerprint mismatch is preserved and reported cannot
-    be enforced for a list item, and pretending otherwise would be the lie. A
-    list item has no address of its own, so an item whose fingerprint matches
-    nothing may have been deleted by the user, or edited into something no
-    longer recognisable as ours — indistinguishable, and neither a removal nor a
-    preservation.
+    An addressable key is removed unconditionally when it is there, regardless
+    of its current value. An append is different: it has no address of its own,
+    so an item whose fingerprint matches nothing may have been deleted by the
+    user, or edited into something no longer recognisable as ours —
+    indistinguishable, and not a removal either way.
 
     That ambiguity is narrower than it first looks, though, and claiming it
     where it does not exist would be its own inaccuracy. It needs survivors: a
@@ -549,18 +508,7 @@ def _retire_key(document: Any, entry: Record) -> tuple[Any, str]:
 
     if not pointer.exists_at(document, entry.pointer):
         return document, "removed"
-    current = ownership.digest_of_value(pointer.get_at(document, entry.pointer))
-    if current != entry.after_digest:
-        return document, "preserved"
-    if entry.before is not None:
-        return pointer.set_at(document, entry.pointer, entry.before), "restored"
     return pointer.unset_at(document, entry.pointer), "removed"
-
-
-def _file_digest(filesystem: FileSystem, path: Path) -> str | None:
-    if not filesystem.exists(path):
-        return None
-    return ownership.digest_of_bytes(filesystem.read_bytes(path))
 
 
 # --- Documents -------------------------------------------------------------

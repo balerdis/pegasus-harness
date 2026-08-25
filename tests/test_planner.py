@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fakes import FakeFileSystem
 from pegasus.core import ownership, planner
-from pegasus.core.journal import Install, Link, Mutation, Record
+from pegasus.core.journal import Install, Link, Record
 from pegasus.core.types import Codec, ConfigKeyArtifact, FileArtifact
 
 HOME = Path("/home/probe")
@@ -278,10 +278,11 @@ class UpdateTest(unittest.TestCase):
         step = self.plan_with(self.record()).steps[0]
         self.assertEqual(step.action, planner.UPDATE)
 
-    def test_a_file_the_user_rewrote_is_still_skipped(self):
+    def test_a_file_the_user_rewrote_is_overwritten_by_a_reinstall(self):
+        """Install pisa what the journal claims, without asking whether it changed."""
         self.filesystem.files[SKILL] = b"the user's own version"
         step = self.plan_with(self.record()).steps[0]
-        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.COLLISION))
+        self.assertEqual(step.action, planner.UPDATE)
 
     def test_a_file_the_journal_never_recorded_is_still_skipped(self):
         step = self.plan_with().steps[0]
@@ -291,16 +292,6 @@ class UpdateTest(unittest.TestCase):
         self.filesystem.modes[SKILL] = 0o644
         step = self.plan_with(self.record(), artifact=a_file(content=self.previous)).steps[0]
         self.assertEqual(step.action, planner.UNCHANGED)
-
-    def test_a_deliberate_change_is_never_overwritten(self):
-        """A mutation is the user's configuration, expressed through Pegasus.
-
-        ``with_mutation`` rebaselines the digest to keep ownership intact, so a
-        mutated artifact still looks like ours. Ours to retire, not to overwrite.
-        """
-        mutated = self.record(mutations=(Mutation(at=AT, by="set-model", after_digest=self.record().after_digest),))
-        step = self.plan_with(mutated).steps[0]
-        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.MUTATED))
 
     def test_without_a_journal_nothing_updates(self):
         """The signature stays optional, so a caller that knows nothing skips as before."""
@@ -351,13 +342,6 @@ class UpdateTest(unittest.TestCase):
         applied = planner.apply(self.filesystem, self.plan_with(self.record()), at=AT)
         self.assertEqual(applied.records[0].after_digest, ownership.digest(self.artifact))
 
-    def test_an_update_keeps_what_the_user_had_before_it_was_adopted(self):
-        """Uninstall owes the user their original, and an update must not spend it."""
-        adopted = self.record(before=b"what the user wrote", adopted=True)
-        applied = planner.apply(self.filesystem, self.plan_with(adopted), at=AT)
-        self.assertEqual(applied.records[0].before, b"what the user wrote")
-        self.assertTrue(applied.records[0].adopted)
-
     def test_undoing_a_run_that_could_not_be_recorded_restores_and_leaves_alone(self):
         plan = self.plan_with(self.record())
         applied = planner.apply(self.filesystem, plan, at=AT)
@@ -366,7 +350,6 @@ class UpdateTest(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(self.filesystem.files[SKILL], self.previous)
         self.assertEqual(retired.removed, ())
-        self.assertEqual(retired.preserved, (self.artifact.id,))
 
     def test_what_would_not_go_back_is_not_retired_either(self):
         """Removing it would leave the user with neither version, which is worse."""
@@ -444,10 +427,10 @@ class KeyUpdateTest(unittest.TestCase):
         self.assertEqual(self.settings()["agent"]["alpha"], {"model": "vendor/model"})
         self.assertEqual(self.settings()["theirs"], 1)
 
-    def test_a_value_the_user_changed_is_still_skipped(self):
+    def test_a_value_the_user_changed_is_overwritten_by_a_reinstall(self):
         self.given({"agent": {"alpha": {"model": "what the user chose"}}})
         step = self.plan_with(a_key(), self.entry({"model": "vendor/old"})).steps[0]
-        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.COLLISION))
+        self.assertEqual(step.action, planner.UPDATE)
 
     def test_a_value_the_journal_never_recorded_is_still_skipped(self):
         self.given({"agent": {"alpha": {"model": "vendor/old"}}})
@@ -459,21 +442,6 @@ class KeyUpdateTest(unittest.TestCase):
         self.given({"agent": {"alpha": current}})
         step = self.plan_with(a_key(), self.entry(current)).steps[0]
         self.assertEqual(step.action, planner.UNCHANGED)
-
-    def test_a_deliberate_change_is_never_overwritten(self):
-        old = {"model": "vendor/old"}
-        mutated = self.entry(old, mutations=(Mutation(at=AT, by="set-model", after_digest=ownership.digest_of_value(old)),))
-        self.given({"agent": {"alpha": old}})
-        step = self.plan_with(a_key(), mutated).steps[0]
-        self.assertEqual((step.action, step.reason), (planner.SKIP, planner.MUTATED))
-
-    def test_an_updated_key_keeps_what_the_user_had_before_it_was_adopted(self):
-        old = {"model": "vendor/old"}
-        self.given({"agent": {"alpha": old}})
-        adopted = self.entry(old, before={"model": "theirs"}, adopted=True)
-        applied = planner.apply(self.filesystem, self.plan_with(a_key(), adopted), at=AT)
-        self.assertEqual(applied.records[0].before, {"model": "theirs"})
-        self.assertTrue(applied.records[0].adopted)
 
     # --- An append ---
 
@@ -520,14 +488,6 @@ class KeyUpdateTest(unittest.TestCase):
         applied = planner.apply(self.filesystem, self.plan_with(a_key()), at=AT)
         self.assertEqual(applied.replaced, ())
 
-    def test_replacing_a_key_the_user_deleted_keeps_what_they_had_before_it(self):
-        """The debt survives the key's absence: it was never about the key."""
-        adopted = self.entry({"model": "vendor/old"}, before={"model": "theirs"}, adopted=True)
-        self.given({"theirs": 1})
-        applied = planner.apply(self.filesystem, self.plan_with(a_key(), adopted), at=AT)
-        self.assertEqual(applied.records[0].before, {"model": "theirs"})
-        self.assertTrue(applied.records[0].adopted)
-
     def test_an_append_the_user_removed_is_placed_again(self):
         """Today's answer, kept on purpose: absence is a creation, not a verdict."""
         self.given({"instructions": ["./theirs.md"]})
@@ -573,7 +533,6 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(record.kind, "file")
         self.assertEqual(record.target, SKILL)
         self.assertEqual(record.after_digest, ownership.digest(artifact))
-        self.assertIsNone(record.before)
         self.assertEqual(record.created_at, AT)
         self.assertEqual(record.mode, "0644")
 
@@ -585,12 +544,6 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(record.pointer, "/agent/alpha")
         self.assertEqual(record.codec, Codec.JSON.value)
         self.assertEqual(record.target, SETTINGS)
-
-    def test_nothing_pegasus_owns_starts_out_adopted(self):
-        """Install only ever creates what was missing, so before is always null."""
-        filesystem = FakeFileSystem()
-        applied = planner.apply(filesystem, plan_for(filesystem, a_file(), a_key()), at=AT)
-        self.assertTrue(all(record.before is None and not record.adopted for record in applied.records))
 
     def test_collisions_are_reported_and_never_written(self):
         filesystem = FakeFileSystem(files={SKILL: b"theirs"})
@@ -694,22 +647,16 @@ class RetireTest(unittest.TestCase):
         self.assertNotIn(SKILL, filesystem.files)
         self.assertEqual(retired.removed, ("skill:alpha",))
 
-    def test_a_file_the_user_edited_is_preserved_and_reported(self):
+    def test_a_file_the_user_edited_is_removed_too(self):
+        """Uninstall removes without asking; the snapshot is the safety net, not this check."""
         filesystem = FakeFileSystem(files={SKILL: b"edited by hand"})
         retired = planner.retire(filesystem, self.install(self.file_entry()))
-        self.assertEqual(filesystem.files[SKILL], b"edited by hand")
-        self.assertEqual(retired.preserved, ("skill:alpha",))
-        self.assertEqual(retired.removed, ())
+        self.assertNotIn(SKILL, filesystem.files)
+        self.assertEqual(retired.removed, ("skill:alpha",))
 
     def test_a_file_already_gone_counts_as_retired(self):
         retired = planner.retire(FakeFileSystem(), self.install(self.file_entry()))
         self.assertEqual(retired.removed, ("skill:alpha",))
-
-    def test_a_file_recorded_as_adopted_is_refused(self):
-        """Adoption is a configuration-key affordance; a file with it is corruption."""
-        filesystem = FakeFileSystem(files={SKILL: b"hello"})
-        with self.assertRaises(planner.PlannerError):
-            planner.retire(filesystem, self.install(self.file_entry(before="something")))
 
     # --- Configuration keys ---
 
@@ -722,21 +669,12 @@ class RetireTest(unittest.TestCase):
         self.assertEqual(written, {"theme": "dark"})
         self.assertEqual(retired.removed, ("agent:alpha",))
 
-    def test_a_key_the_user_edited_is_preserved_and_reported(self):
+    def test_a_key_the_user_edited_is_removed_too(self):
         payload = {"agent": {"alpha": {"model": "theirs"}}}
         filesystem = FakeFileSystem(files={SETTINGS: document(payload)})
         retired = planner.retire(filesystem, self.install(self.key_entry()))
-        self.assertEqual(json.loads(filesystem.files[SETTINGS]), payload)
-        self.assertEqual(retired.preserved, ("agent:alpha",))
-
-    def test_an_adopted_key_is_restored_to_what_the_user_had(self):
-        theirs = {"model": "theirs", "temperature": 0.2}
-        current = {"agent": {"alpha": {"model": "vendor/model"}}}
-        filesystem = FakeFileSystem(files={SETTINGS: document(current)})
-        entry = self.key_entry(before=theirs, adopted=True)
-        retired = planner.retire(filesystem, self.install(entry))
-        self.assertEqual(json.loads(filesystem.files[SETTINGS])["agent"]["alpha"], theirs)
-        self.assertEqual(retired.restored, ("agent:alpha",))
+        self.assertEqual(json.loads(filesystem.files[SETTINGS]), {})
+        self.assertEqual(retired.removed, ("agent:alpha",))
 
     def test_the_settings_file_keeps_its_permissions_when_retired(self):
         filesystem = FakeFileSystem(
@@ -757,12 +695,13 @@ class RetireTest(unittest.TestCase):
             planner.retire(filesystem, self.install(self.key_entry()))
 
     def test_a_file_nothing_was_retired_from_is_left_exactly_as_it_was(self):
-        """Rewriting it would reformat the user's spacing for no reason."""
-        theirs = b'{\n    "agent": {\n        "alpha": {"model": "theirs"}\n    }\n}\n'
+        """Unsetting a key that is not there does not touch the document at all."""
+        theirs = b'{\n    "theme": "dark"\n}\n'
         filesystem = FakeFileSystem(files={SETTINGS: theirs})
-        planner.retire(filesystem, self.install(self.key_entry()))
+        retired = planner.retire(filesystem, self.install(self.key_entry()))
         self.assertEqual(filesystem.files[SETTINGS], theirs)
         self.assertEqual(filesystem.writes, [])
+        self.assertEqual(retired.removed, ("agent:alpha",))
 
     # --- Links ---
 
@@ -783,7 +722,7 @@ class RetireTest(unittest.TestCase):
         first = planner.retire(filesystem, install)
         second = planner.retire(filesystem, install)
         self.assertEqual(first.removed, second.removed)
-        self.assertEqual(second.preserved, ())
+        self.assertEqual(second.unaccounted, ())
 
 
 if __name__ == "__main__":

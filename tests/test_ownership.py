@@ -116,32 +116,6 @@ class ConfigurationOccupationTest(unittest.TestCase):
             ownership.occupies(file_artifact(), {})
 
 
-class RecognitionTest:
-    """Whether what is on disk now is still what Pegasus put there."""
-
-
-class StillOursTest(unittest.TestCase):
-    def entry(self, digest: str) -> journal_module.Record:
-        return journal_module.Record(
-            id="skill:alpha",
-            kind="file",
-            target=CONFIG / "skills/alpha/SKILL.md",
-            after_digest=digest,
-            created_at="2026-08-14T00:00:00+00:00",
-        )
-
-    def test_a_matching_digest_is_still_ours(self):
-        digest = ownership.digest_of_bytes(b"hello")
-        self.assertTrue(ownership.still_ours(self.entry(digest), digest))
-
-    def test_a_changed_digest_is_not_ours_to_take_back(self):
-        self.assertFalse(
-            ownership.still_ours(self.entry(ownership.digest_of_bytes(b"hello")), ownership.digest_of_bytes(b"edited"))
-        )
-
-    def test_something_already_gone_counts_as_ours(self):
-        """Retiring what the user already deleted is the outcome Pegasus wanted."""
-        self.assertTrue(ownership.still_ours(self.entry(ownership.digest_of_bytes(b"hello")), None))
 
 
 if __name__ == "__main__":

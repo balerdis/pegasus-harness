@@ -32,36 +32,18 @@ class JournalError(ValueError):
 
 
 @dataclass(frozen=True)
-class Mutation:
-    """A deliberate change to an artifact after it was installed."""
-
-    at: str
-    by: str
-    after_digest: str
-
-
-@dataclass(frozen=True)
 class Record:
-    """One artifact Pegasus owns.
-
-    `before` is what was there beforehand: ``None`` means the artifact did not
-    exist, so retiring it means removing it. Any other value means Pegasus took
-    over something the user already had, and retiring it means putting that value
-    back.
-    """
+    """One artifact Pegasus owns."""
 
     id: str
     kind: str
     target: Path
     after_digest: str
     created_at: str
-    before: Any | None = None
     pointer: str | None = None
     codec: str | None = None
     mode: str | None = None
     ownership: str = OWNED
-    adopted: bool = False
-    mutations: tuple[Mutation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -103,11 +85,6 @@ def install_for(journal: Journal, cli: str) -> Install | None:
     return next((item for item in journal.installs if item.cli == cli), None)
 
 
-def retirement(entry: Record) -> str:
-    """What retiring this artifact means: put back what was there, or remove it."""
-    return "restore" if entry.before is not None else "remove"
-
-
 # --- Functional updates ----------------------------------------------------
 
 
@@ -120,48 +97,6 @@ def with_install(journal: Journal, install: Install) -> Journal:
 
 def without_install(journal: Journal, cli: str) -> Journal:
     return replace(journal, installs=tuple(item for item in journal.installs if item.cli != cli))
-
-
-def with_mutation(
-    journal: Journal, *, cli: str, entry_id: str, by: str, after_digest: str, at: str
-) -> Journal:
-    """Record a deliberate change and rebaseline the digest.
-
-    Rebaselining is what keeps ownership intact: without it, the next uninstall
-    would see a digest that no longer matches and preserve the artifact forever.
-    """
-    return _amend(journal, cli, entry_id, lambda entry: _mutated(entry, by, after_digest, at))
-
-
-def with_adoption(
-    journal: Journal, *, cli: str, entry_id: str, before: Any, after_digest: str, at: str
-) -> Journal:
-    """Take over a value the user edited, keeping theirs so it can be restored.
-
-    Adopting twice keeps the first captured value: what uninstall owes the user is
-    their original, not something Pegasus wrote in between.
-    """
-
-    def adopt(entry: Record) -> Record:
-        captured = entry.before if entry.adopted else before
-        return replace(_mutated(entry, "set-model-adopted", after_digest, at), before=captured, adopted=True)
-
-    return _amend(journal, cli, entry_id, adopt)
-
-
-def _mutated(entry: Record, by: str, after_digest: str, at: str) -> Record:
-    mutation = Mutation(at=at, by=by, after_digest=after_digest)
-    return replace(entry, after_digest=after_digest, mutations=(*entry.mutations, mutation))
-
-
-def _amend(journal: Journal, cli: str, entry_id: str, change) -> Journal:
-    install = install_for(journal, cli)
-    if install is None:
-        raise JournalError(f"no install recorded for {cli!r}")
-    if not any(entry.id == entry_id for entry in install.entries):
-        raise JournalError(f"{cli!r} has no owned artifact called {entry_id!r}")
-    entries = tuple(change(entry) if entry.id == entry_id else entry for entry in install.entries)
-    return with_install(journal, replace(install, entries=entries))
 
 
 # --- Serialization ---------------------------------------------------------
@@ -192,17 +127,13 @@ def _record_to_dict(entry: Record) -> dict[str, Any]:
         "kind": entry.kind,
         "target": str(entry.target),
         "after_digest": entry.after_digest,
-        "before": entry.before,
         "ownership": entry.ownership,
         "created_at": entry.created_at,
-        "mutations": [{"at": m.at, "by": m.by, "after_digest": m.after_digest} for m in entry.mutations],
     }
     for name in ("pointer", "codec", "mode"):
         value = getattr(entry, name)
         if value is not None:
             payload[name] = value
-    if entry.adopted:
-        payload["adopted"] = True
     return payload
 
 
@@ -272,26 +203,10 @@ def _record_from_dict(payload: Any, home: Path, cli: str) -> Record:
         target=_contained(payload.get("target"), home, f"{cli}: {identifier}"),
         after_digest=digest,
         created_at=_text(payload, "created_at", f"{cli}: {identifier}"),
-        before=payload.get("before"),
         pointer=pointer,
         codec=payload.get("codec"),
         mode=payload.get("mode"),
         ownership=OWNED,
-        adopted=bool(payload.get("adopted", False)),
-        mutations=tuple(_mutation_from_dict(item, cli, identifier) for item in payload.get("mutations", [])),
-    )
-
-
-def _mutation_from_dict(payload: Any, cli: str, identifier: str) -> Mutation:
-    if not isinstance(payload, dict):
-        raise JournalError(f"{cli}: {identifier} has a malformed mutation")
-    digest = payload.get("after_digest")
-    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
-        raise JournalError(f"{cli}: {identifier} has a mutation with a malformed digest")
-    return Mutation(
-        at=_text(payload, "at", f"{cli}: {identifier} mutation"),
-        by=_text(payload, "by", f"{cli}: {identifier} mutation"),
-        after_digest=digest,
     )
 
 
