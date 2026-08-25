@@ -105,6 +105,28 @@ class FileSnapshotStoreTest(unittest.TestCase):
         filesystem.files[root / "000001" / "0001.blob"] = b"leftover"
         self.assertEqual(store(filesystem).save([one_capture()], taken_at=AT), 2)
 
+    def test_a_folder_whose_name_is_not_a_plain_number_is_not_a_generation(self):
+        """Numbering only recognises what this store itself would have written.
+
+        Some characters are digits to `str.isdigit` and not to `int` — the
+        superscript two among them — so trusting the first to guarantee the
+        second turns a stray folder into a crash. Anything that is not a plain
+        ASCII number is simply not one of ours, and is skipped the same way a
+        folder called after a person would be.
+        """
+        filesystem = FakeFileSystem()
+        filesystem.make_dir(snapshots_root(HOME) / "\u00b2")
+        self.assertEqual(store(filesystem).save([one_capture()], taken_at=AT), 1)
+
+    def test_a_root_that_cannot_be_listed_is_reported_as_a_store_failure(self):
+        """A save that cannot count what is already there fails as this store's
+        own error, never as the filesystem's: a caller that catches the store's
+        error type would otherwise miss it entirely."""
+        root = snapshots_root(HOME)
+        filesystem = FakeFileSystem(fail_list={root})
+        with self.assertRaises(SnapshotStoreError):
+            store(filesystem).save([one_capture()], taken_at=AT)
+
     # --- Writing order and content ---
 
     def test_saving_writes_the_manifest_last(self):

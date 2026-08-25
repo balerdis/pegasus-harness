@@ -142,8 +142,19 @@ class FileSnapshotStore:
         return max(self._claimed_generations(), default=0) + 1
 
     def _claimed_generations(self) -> list[int]:
-        """Every folder that has taken a number, finished or not."""
-        return [int(name) for name in self._fs.list_dir(self._root) if name.isdigit()]
+        """Every folder that has taken a number, finished or not.
+
+        Only a plain ASCII number counts. ``str.isdigit`` is true for
+        characters ``int`` cannot parse — superscripts among them — so asking
+        it and then converting would turn a stray folder into a crash. A name
+        this store would never have written is not one of ours, and is passed
+        over the same way a folder named after a person is.
+        """
+        try:
+            names = self._fs.list_dir(self._root)
+        except FileSystemError as error:
+            raise SnapshotStoreError(f"cannot count the snapshots in {self._root}: {error}") from error
+        return [int(name) for name in names if name.isascii() and name.isdigit()]
 
     def _write_manifest(self, folder: Path, manifest: Manifest) -> None:
         content = codecs.dumps(Codec.JSON, snapshot_module.to_dict(manifest)).encode("utf-8")

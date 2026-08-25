@@ -31,6 +31,7 @@ class FakeFileSystem:
         fail_on: set[Path] | None = None,
         fail_always: set[Path] | None = None,
         fail_remove: set[Path] | None = None,
+        fail_list: set[Path] | None = None,
     ):
         self.files: dict[Path, bytes] = dict(files or {})
         self.modes: dict[Path, int] = dict(modes or {})
@@ -41,6 +42,7 @@ class FakeFileSystem:
         self.fail_on: set[Path] = set(fail_on or ())
         self.fail_always: set[Path] = set(fail_always or ())
         self.fail_remove: set[Path] = set(fail_remove or ())
+        self.fail_list: set[Path] = set(fail_list or ())
         self.writes: list[Path] = []
         self.removals: list[Path] = []
 
@@ -62,6 +64,8 @@ class FakeFileSystem:
         return None
 
     def list_dir(self, path: Path) -> list[str]:
+        if path in self.fail_list:
+            raise FileSystemError(f"refusing to list {path}: injected failure")
         if path in self.files:
             raise FileSystemError(f"not a directory: {path}")
         names = {
