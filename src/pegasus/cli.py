@@ -306,8 +306,6 @@ def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
         "status": "uninstalled",
         "activation": activation,
         "removed": list(retired.removed),
-        "restored": list(retired.restored),
-        "preserved": list(retired.preserved),
         "unaccounted": list(retired.unaccounted),
         "kept_links": list(retired.kept_links),
     }
@@ -491,13 +489,9 @@ def _prose(report: dict[str, Any]) -> str:
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["skipped"])
         return "\n".join(_and_activation(lines, report))
 
-    lines = [f"{report['cli']}: removed {len(report['removed'])}, restored {len(report['restored'])}."]
-    for label, key in (
-        ("Left alone because you changed them", "preserved"),
-        ("Could not be accounted for", "unaccounted"),
-    ):
-        if report[key]:
-            lines.append(f"{label}: {', '.join(report[key])}")
+    lines = [f"{report['cli']}: removed {len(report['removed'])}."]
+    if report["unaccounted"]:
+        lines.append(f"Could not be accounted for: {', '.join(report['unaccounted'])}")
     return "\n".join(_and_activation(lines, report))
 
 

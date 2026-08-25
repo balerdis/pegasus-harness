@@ -148,7 +148,7 @@ class ManifestCoherenceTest(unittest.TestCase):
         adapter = FakeAdapter(
             manifest=CapabilityManifest(cli_id="probe", skills=True, per_agent_model=True),
         )
-        for name in ("model_catalog", "read_model_assignments", "render_model_assignment"):
+        for name in ("model_catalog", "read_model_assignments"):
             setattr(adapter, name, lambda *args, **kwargs: None)
         Registry().register(adapter)
 

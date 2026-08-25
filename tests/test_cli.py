@@ -150,7 +150,6 @@ class InstallTest(CommandTestCase):
         self.run_cli("install", "--cli", CLI)
         _, report = self.run_cli("uninstall", "--cli", CLI)
         self.assertTrue(report["removed"])
-        self.assertEqual(report["preserved"], [])
 
     def test_reinstalling_keeps_the_date_pegasus_first_landed(self):
         self.present()
@@ -172,14 +171,15 @@ class InstallTest(CommandTestCase):
         self.assertEqual(report["skipped"], [])
         self.assertTrue(report["unchanged"])
 
-    def test_a_file_the_user_edited_is_still_reported_as_left_alone(self):
+    def test_a_file_the_user_edited_is_overwritten_by_a_reinstall(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
         target = self.layout().system_prompt_file
+        original = self.filesystem.files[target]
         self.filesystem.files[target] = b"the user's own words\n"
         _, report = self.run_cli("install", "--cli", CLI)
-        self.assertEqual([item["id"] for item in report["skipped"]], ["system-prompt"])
-        self.assertEqual(self.filesystem.files[target], b"the user's own words\n")
+        self.assertIn("system-prompt", [item["id"] for item in report["updated"]])
+        self.assertEqual(self.filesystem.files[target], original)
 
     def test_the_prose_names_what_it_updated(self):
         self.present()
@@ -331,7 +331,6 @@ class UninstallTest(CommandTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(report["status"], "uninstalled")
         self.assertTrue(report["removed"])
-        self.assertEqual(report["preserved"], [])
         self.assertEqual(report["unaccounted"], [])
 
     def test_uninstalling_forgets_the_install_in_the_journal(self):
@@ -345,13 +344,13 @@ class UninstallTest(CommandTestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
 
-    def test_an_artifact_the_user_edited_is_reported_as_preserved(self):
+    def test_an_artifact_the_user_edited_is_removed_too(self):
         self.install()
         edited = next(e for e in self.installed_entries() if e.kind == "file")
         self.filesystem.files[edited.target] = b"the user rewrote this"
         _, report = self.run_cli("uninstall", "--cli", CLI)
-        self.assertIn(edited.id, report["preserved"])
-        self.assertEqual(self.filesystem.files[edited.target], b"the user rewrote this")
+        self.assertIn(edited.id, report["removed"])
+        self.assertNotIn(edited.target, self.filesystem.files)
 
     def test_root_is_refused_before_anything_is_taken_back(self):
         self.install()

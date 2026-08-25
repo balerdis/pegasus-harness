@@ -24,7 +24,6 @@ RENDERERS: dict[Capability, tuple[str, ...]] = {
     Capability.PER_AGENT_MODEL: (
         "model_catalog",
         "read_model_assignments",
-        "render_model_assignment",
     ),
 }
 

@@ -1,18 +1,16 @@
 """Fingerprints and collisions: what Pegasus may claim, and what it must not touch.
 
-Two questions live here, and both are pure. Reading disk belongs to the planner;
+Two things live here, and both are pure. Reading disk belongs to the planner;
 what an answer *means* belongs to this module.
 
-**Is this still ours?** A fingerprint taken at install time is the only evidence
-Pegasus has that an artifact is still its own work and not something the user
-rewrote. The fingerprint the catalog publishes and the one the journal stores
-must be the same number, so both come from here — the catalog states an
-intention, the journal records a fact, and a drift between the two would make
-every uninstall find a mismatch and preserve everything forever.
+**Fingerprints.** The catalog and the journal must hash an artifact the same
+way, or a drift between the two would make every reinstall's book-keeping
+disagree with what was actually shipped. Both come from here.
 
 **Is something already there?** Collisions are what keep the install additive.
-A file that exists is skipped; a configuration key that already resolves is
-skipped. Pegasus reports what it left alone rather than negotiating with it.
+An address the journal does not claim is left exactly as it is if anything
+already occupies it. Pegasus reports what it left alone rather than negotiating
+with it.
 """
 from __future__ import annotations
 
@@ -20,7 +18,6 @@ import hashlib
 from typing import Any
 
 from pegasus.core import codecs, pointer
-from pegasus.core.journal import Record
 from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact
 
 PREFIX = "sha256:"
@@ -69,17 +66,3 @@ def occupies(artifact: ConfigKeyArtifact, document: Any) -> bool:
     if document is None:
         return False
     return pointer.exists_at(document, artifact.pointer)
-
-
-# --- Recognition -----------------------------------------------------------
-
-
-def still_ours(entry: Record, current: str | None) -> bool:
-    """Whether what is on disk now is still what Pegasus recorded.
-
-    ``current`` is ``None`` when nothing is there any more, which counts as
-    ours: retiring an artifact the user already deleted is the outcome Pegasus
-    was after. Anything else that disagrees with the recorded fingerprint is the
-    user's work now, and the invariant is that it is preserved and reported.
-    """
-    return current is None or current == entry.after_digest
