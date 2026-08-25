@@ -79,6 +79,17 @@ class FileSystem(Protocol):
         user deleted first is exactly the outcome Pegasus wanted.
         """
 
+    def remove_dir(self, path: Path) -> None:
+        """Delete a directory and everything inside it.
+
+        Retention deletes whole generation folders, never single files inside
+        them, so this is a distinct operation from :meth:`remove` rather than
+        a loop built on top of it. Removing something already absent is
+        success, the same posture as :meth:`remove`: a retention pass that
+        runs twice must not fail on the second run just because the first one
+        already cleared the folder away.
+        """
+
     def make_dir(self, path: Path, *, mode: int = 0o755) -> None:
         """Create a directory and its parents. Idempotent.
 

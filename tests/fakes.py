@@ -31,6 +31,7 @@ class FakeFileSystem:
         fail_on: set[Path] | None = None,
         fail_always: set[Path] | None = None,
         fail_remove: set[Path] | None = None,
+        fail_remove_dir: set[Path] | None = None,
         fail_list: set[Path] | None = None,
         fail_read: set[Path] | None = None,
     ):
@@ -43,6 +44,7 @@ class FakeFileSystem:
         self.fail_on: set[Path] = set(fail_on or ())
         self.fail_always: set[Path] = set(fail_always or ())
         self.fail_remove: set[Path] = set(fail_remove or ())
+        self.fail_remove_dir: set[Path] = set(fail_remove_dir or ())
         self.fail_list: set[Path] = set(fail_list or ())
         self.fail_read: set[Path] = set(fail_read or ())
         self.writes: list[Path] = []
@@ -99,6 +101,19 @@ class FakeFileSystem:
             raise FileSystemError(f"refusing to remove {path}: injected failure")
         self.files.pop(path, None)
         self.modes.pop(path, None)
+        self.removals.append(path)
+
+    def remove_dir(self, path: Path) -> None:
+        if path in self.fail_remove_dir:
+            raise FileSystemError(f"refusing to remove {path}: injected failure")
+        for candidate in list(self.files):
+            if candidate == path or path in candidate.parents:
+                self.files.pop(candidate, None)
+                self.modes.pop(candidate, None)
+        for candidate in list(self.directories):
+            if candidate == path or path in candidate.parents:
+                self.directories.discard(candidate)
+                self.directory_modes.pop(candidate, None)
         self.removals.append(path)
 
     def make_dir(self, path: Path, *, mode: int = 0o755) -> None:

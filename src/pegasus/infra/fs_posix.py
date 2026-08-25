@@ -18,6 +18,7 @@ is what a platform implementation should have to get right.
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import tempfile
 from pathlib import Path
@@ -83,6 +84,14 @@ class PosixFileSystem:
     def remove(self, path: Path) -> None:
         try:
             path.unlink(missing_ok=True)
+        except OSError as error:
+            raise FileSystemError(f"cannot remove {path}: {error}") from error
+
+    def remove_dir(self, path: Path) -> None:
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
         except OSError as error:
             raise FileSystemError(f"cannot remove {path}: {error}") from error
 
