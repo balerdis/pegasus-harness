@@ -491,6 +491,26 @@ class SnapshotTest(CommandTestCase):
         self.assertEqual(report["status"], "failed")
         self.assertEqual(self.filesystem.writes, [])
 
+    def test_when_the_snapshot_store_refuses_uninstall_removes_nothing(self):
+        """The way out needs the same guard as the way in.
+
+        Uninstalling deletes what the journal claims, so a run that cannot
+        capture first is a run that would destroy the only copy. Nothing is
+        removed and the journal still records the install, which is what lets
+        the user try again once whatever refused the snapshot is fixed.
+        """
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        surviving = dict(self.filesystem.files)
+        self.filesystem.fail_list.add(snapshots_root(self.home))
+
+        code, report = self.run_cli("uninstall", "--cli", CLI)
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(self.filesystem.files, surviving)
+        self.assertIsNotNone(self.installed_entries())
+
     def test_generation_numbers_advance_across_successive_commands(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
