@@ -106,6 +106,11 @@ class FakeFileSystem:
     def remove_dir(self, path: Path) -> None:
         if path in self.fail_remove_dir:
             raise FileSystemError(f"refusing to remove {path}: injected failure")
+        if path in self.files:
+            # The real one calls rmtree, which raises on a file. Deleting it
+            # here instead would let a caller aimed at the wrong kind of path
+            # pass its tests and destroy data in production.
+            raise FileSystemError(f"cannot remove {path}: not a directory")
         for candidate in list(self.files):
             if candidate == path or path in candidate.parents:
                 self.files.pop(candidate, None)
