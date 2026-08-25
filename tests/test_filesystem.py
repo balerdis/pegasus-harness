@@ -178,6 +178,30 @@ class PosixFileSystemTest(unittest.TestCase):
     def test_running_privileged_answers_for_the_current_process(self):
         self.assertEqual(self.fs.running_privileged(), os.geteuid() == 0)
 
+    # --- Listing ---
+
+    def test_listing_a_missing_directory_is_empty(self):
+        self.assertEqual(self.fs.list_dir(self.root / "absent"), [])
+
+    def test_listing_returns_entries_in_sorted_order(self):
+        target = self.root / "listed"
+        target.mkdir()
+        (target / "b").mkdir()
+        (target / "a").mkdir()
+        (target / "c").write_bytes(b"")
+        self.assertEqual(self.fs.list_dir(target), ["a", "b", "c"])
+
+    def test_listing_an_empty_directory_is_empty(self):
+        target = self.root / "empty"
+        target.mkdir()
+        self.assertEqual(self.fs.list_dir(target), [])
+
+    def test_listing_a_file_raises_the_port_error(self):
+        target = self.root / "note.txt"
+        target.write_bytes(b"")
+        with self.assertRaises(FileSystemError):
+            self.fs.list_dir(target)
+
 
 if __name__ == "__main__":
     unittest.main()
