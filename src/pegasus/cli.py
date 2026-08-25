@@ -36,8 +36,10 @@ from pegasus.core.journal import Install, Record
 from pegasus.core.types import Codec, Environment
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import FileJournalStore
+from pegasus.infra.snapshot_store_file import FileSnapshotStore, capture_paths
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.journal_store import JournalStoreError
+from pegasus.ports.snapshot_store import SnapshotStoreError
 
 SCHEMA = "pegasus/cli-report/v1"
 
@@ -82,6 +84,10 @@ def default_runtime(out: TextIO) -> Runtime:
 
 def journal_store(runtime: Runtime) -> FileJournalStore:
     return FileJournalStore(runtime.filesystem, home=runtime.home, pegasus_version=pegasus.__version__)
+
+
+def snapshot_store(runtime: Runtime) -> FileSnapshotStore:
+    return FileSnapshotStore(runtime.filesystem, home=runtime.home)
 
 
 # --- Entry point -----------------------------------------------------------
@@ -148,6 +154,8 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     # against the same unreadable journal, so no way left to find out they exist.
     store = journal_store(runtime)
     store.ensure_writable()
+    snapshot = snapshot_store(runtime)
+    snapshot.ensure_writable()
     journal = store.load()
     # Asked before anything is written, so an adapter that cannot answer costs a
     # message instead of a traceback over a finished installation.
@@ -175,6 +183,24 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
             "unchanged": [_placed(step) for step in plan.unchanged],
             "skipped": [_left(step) for step in plan.collisions],
         }
+
+    # Taken before a single byte of this run reaches disk, and never for a dry
+    # run: install and uninstall overwrite what the journal already claims
+    # without asking, so a hand edit to an owned artifact would vanish with
+    # nothing else remembering it. The journal is captured alongside the
+    # artifacts, and not because it happens to live on disk too — restoring
+    # the artifacts without it would put the files back while the journal kept
+    # claiming the version this run is about to write, so the next install
+    # would compare against fingerprints that no longer describe anything on
+    # disk.
+    touched = sorted({step.artifact.path for step in plan.placements} | {store.path}, key=str)
+    try:
+        snapshot.save(capture_paths(runtime.filesystem, touched), taken_at=runtime.now)
+    except SnapshotStoreError as error:
+        raise CommandError(
+            f"a snapshot of what this install is about to overwrite could not be taken, "
+            f"so nothing was written: {error}"
+        ) from error
 
     # Which configuration files were already there. Retiring gives back the keys
     # Pegasus owns, never the file itself, so this is how a rollback can tell the
@@ -251,12 +277,27 @@ def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
     adapter = _adapter(arguments.cli)
     store = journal_store(runtime)
     store.ensure_writable()
+    snapshot = snapshot_store(runtime)
+    snapshot.ensure_writable()
 
     journal = store.load()
     activation = list(adapter.activation_steps())
     install = journal_module.install_for(journal, adapter.id)
     if install is None:
         raise CommandError(f"Pegasus is not recorded as installed in {adapter.id!r}; there is nothing to take back")
+
+    # Same reasoning as install, in reverse: retiring overwrites what the
+    # journal claims without asking, and the journal itself is captured
+    # alongside the targets being retired for the same reason it is on the
+    # way in.
+    touched = sorted({entry.target for entry in install.entries} | {store.path}, key=str)
+    try:
+        snapshot.save(capture_paths(runtime.filesystem, touched), taken_at=runtime.now)
+    except SnapshotStoreError as error:
+        raise CommandError(
+            f"a snapshot of what this uninstall is about to remove could not be taken, "
+            f"so nothing was removed: {error}"
+        ) from error
 
     retired = planner.retire(runtime.filesystem, install)
     store.save(journal_module.without_install(journal, adapter.id))
