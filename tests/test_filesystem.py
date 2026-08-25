@@ -117,6 +117,23 @@ class PosixFileSystemTest(unittest.TestCase):
         with self.assertRaises(FileSystemError):
             self.fs.remove(target)
 
+    def test_remove_dir_deletes_a_directory_and_its_contents(self):
+        target = self.root / "generation"
+        (target / "nested").mkdir(parents=True)
+        (target / "nested" / "file.blob").write_bytes(b"payload")
+        self.fs.remove_dir(target)
+        self.assertFalse(target.exists())
+
+    def test_removing_an_absent_directory_is_not_an_error(self):
+        """A retention pass that runs twice must not fail the second time."""
+        self.fs.remove_dir(self.root / "absent")
+
+    def test_remove_dir_raises_the_port_error_on_a_file(self):
+        target = self.root / "note.txt"
+        target.write_bytes(b"")
+        with self.assertRaises(FileSystemError):
+            self.fs.remove_dir(target)
+
     # --- Directories ---
 
     def test_make_dir_creates_the_whole_chain(self):
