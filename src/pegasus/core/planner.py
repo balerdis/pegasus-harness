@@ -70,6 +70,20 @@ class Step:
 class Plan:
     cli: str
     steps: tuple[Step, ...]
+    retirements: tuple[Record, ...] = ()
+    """Journal entries the render no longer asks for.
+
+    Not a filter over ``steps``, unlike the four properties below: a
+    retirement is defined precisely by the render having produced no
+    artifact for it, so there is no ``Step`` to filter — only the record the
+    journal still holds. A placement is driven by an artifact; a retirement
+    is driven by its absence. That asymmetry is real, not an oversight, and
+    the core already admits one like it: ``Retired`` is a separate type from
+    ``Applied`` for the same reason.
+
+    ``apply`` must not act on this field — see its docstring. ``Plan``
+    describes; it does not execute.
+    """
 
     @property
     def creations(self) -> tuple[Step, ...]:
@@ -147,7 +161,28 @@ def plan(
     documents = _load_documents(filesystem, artifacts)
     owned = {entry.id: entry for entry in (installed.entries if installed else ())}
     steps = tuple(_step(filesystem, artifact, documents, owned) for artifact in artifacts)
-    return Plan(cli=cli, steps=steps)
+    return Plan(cli=cli, steps=steps, retirements=retirements(installed, artifacts))
+
+
+def retirements(installed: Install | None, artifacts: Sequence[Artifact]) -> tuple[Record, ...]:
+    """The journal entries this render no longer asks for.
+
+    ``plan`` runs the loop the other way already: for every artifact, is this
+    address still ours. That answers a placement's fate, but nothing in it
+    ever asks the inverse question, for every entry the journal already
+    holds, does the render still want it — an id absent from ``artifacts``
+    never produces a step, so nothing would otherwise notice it is gone.
+
+    A set difference over ids, and nothing more: it takes no ``filesystem``
+    because it touches no disk, which is what makes it the purest thing in
+    this module. ``installed.links`` are excluded by their type rather than
+    by a condition here, the same way ``retire`` never looks at them — a link
+    was never something Pegasus owned, so it is never something to retire.
+    """
+    if installed is None:
+        return ()
+    rendered = {artifact.id for artifact in artifacts}
+    return tuple(entry for entry in installed.entries if entry.id not in rendered)
 
 
 def _step(

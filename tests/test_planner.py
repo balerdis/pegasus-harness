@@ -110,6 +110,52 @@ class PlanTest(unittest.TestCase):
         with self.assertRaises(planner.PlannerError):
             plan_for(FakeFileSystem(), object())
 
+    def test_a_plan_carries_the_entries_the_render_no_longer_asks_for(self):
+        """`plan()` wires the pure set difference in, so a caller reading `Plan`
+        never has to compute it a second time."""
+        stale = Record(
+            id="skill:alpha", kind="file", target=SKILL, after_digest="sha256:" + "0" * 64, created_at=AT
+        )
+        previous = Install(
+            cli=CLI, installed_at=AT, config_dir=CONFIG, release={}, entries=(stale,)
+        )
+        result = planner.plan(FakeFileSystem(), cli=CLI, artifacts=[], installed=previous)
+        self.assertEqual(result.retirements, (stale,))
+
+
+class RetirementsTest(unittest.TestCase):
+    """The other half of ownership. `plan()` asks, for every artifact, whether
+    an occupied address is still ours; this asks the reverse question, for
+    every journal entry, whether the render still wants it. Neither loop
+    answers the other's question."""
+
+    def install(self, *entries, links=()) -> Install:
+        return Install(
+            cli=CLI, installed_at=AT, config_dir=CONFIG, release={}, entries=tuple(entries), links=tuple(links)
+        )
+
+    def entry(self, identifier: str = "skill:alpha") -> Record:
+        return Record(id=identifier, kind="file", target=SKILL, after_digest="sha256:" + "0" * 64, created_at=AT)
+
+    def test_an_entry_absent_from_the_render_is_returned(self):
+        install = self.install(self.entry())
+        self.assertEqual(planner.retirements(install, []), install.entries)
+
+    def test_an_entry_still_rendered_is_not_returned(self):
+        install = self.install(self.entry())
+        self.assertEqual(planner.retirements(install, [a_file(identifier="skill:alpha")]), ())
+
+    def test_without_a_journal_there_is_nothing_to_retire(self):
+        self.assertEqual(planner.retirements(None, [a_file()]), ())
+
+    def test_a_link_is_never_returned(self):
+        """`retirements` excludes links by type, the same way `retire` does:
+        a link is never something Pegasus owns, so it is never something to
+        take back."""
+        link = Link(id="cbm", target="/usr/local/bin/some-tool")
+        install = self.install(links=(link,))
+        self.assertEqual(planner.retirements(install, []), ())
+
 
 class AppendTest(unittest.TestCase):
     """Appending to a list is a create with no address of its own.
