@@ -21,6 +21,7 @@ import json
 import tempfile
 import tomllib
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import pegasus
@@ -408,6 +409,172 @@ class InstallMcpTest(CommandTestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("context7", self.settings().get("mcp", {}))
         self.assertFalse(self.filesystem.exists(self.convention_path("context7")))
+
+    def test_a_dry_run_of_reinstalling_without_the_server_reports_what_it_would_retire(self):
+        """A `--dry-run` that omits `--mcp` is about to retire two entries, and
+        saying `updated 5, unchanged 101` without naming them would be lying by
+        omission about what this run is going to do."""
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        before = list(self.filesystem.writes)
+
+        code, report = self.run_cli("install", "--cli", CLI, "--dry-run")
+
+        self.assertEqual(code, 0)
+        self.assertEqual({item["id"] for item in report["retired"]}, {"mcp:context7", "mcp-convention:context7"})
+        self.assertEqual(self.filesystem.writes, before)
+
+    def test_reinstalling_without_the_server_reports_what_it_retired(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertEqual(code, 0)
+        self.assertEqual({item["id"] for item in report["retired"]}, {"mcp:context7", "mcp-convention:context7"})
+
+    def test_the_snapshot_of_a_retiring_reinstall_covers_what_it_is_about_to_retire(self):
+        """`context7-convention.md` shares no address with anything else this run
+        touches, so nothing else would ever put it in the snapshot. Without this,
+        a `restore` after this reinstall gives back the key but not the file."""
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        convention = self.convention_path("context7")
+
+        self.run_cli("install", "--cli", CLI)
+
+        self.assertFalse(self.filesystem.exists(convention))
+
+        code, report = self.run_cli("restore", "2")
+
+        self.assertEqual(code, 0)
+        self.assertIn("context7", self.settings()["mcp"])
+        self.assertTrue(self.filesystem.exists(convention))
+
+    def test_a_reinstall_that_cannot_be_recorded_reports_what_it_already_retired(self):
+        """Retiring runs before the journal is saved, so a journal failure here
+        leaves at least the convention file gone, unrecorded and un-rolled-back
+        — `unplace` has no way to recreate a file it never wrote. The settings
+        document happens to come back whole, because it was also touched by an
+        update this run made and rolled back; the file has no such luck, which
+        is exactly the asymmetry the report has to admit."""
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        convention = self.convention_path("context7")
+        self.filesystem.fail_always.add(self.store().path)
+
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("mcp:context7", report["retired"])
+        self.assertIn("mcp-convention:context7", report["retired"])
+        self.assertFalse(self.filesystem.exists(convention))
+
+    def test_a_reinstall_whose_retirement_fails_reports_honestly_and_rolls_back_this_runs_placements(self):
+        """`retire` runs before `store.save`, in its own `try` now: a failure
+        here used to propagate straight to `main`'s generic handler, which has
+        no report payload for it, so `_prose` printed "Nothing was changed"
+        while this run's own placement — the settings document, updated to
+        drop the context7 tool grant — sat on disk, unrecorded. That is the
+        same class of problem `_unrecordable` exists to prevent for a
+        journal-save failure, and it gets the same treatment: this run's own
+        placement comes back out, and the report says so rather than lying
+        about a clean nothing-happened."""
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        convention = self.convention_path("context7")
+        self.filesystem.fail_remove.add(convention)
+
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(report["rolled_back"])
+        self.assertIn("retiring", report["error"])
+        self.assertNotIn("journal could not be written", report["error"])
+        self.assertNotIn("Nothing was changed", cli._prose(report))
+        # The removal that failed never happened, and this run's own update to
+        # the settings document was taken back out along with it.
+        self.assertTrue(self.filesystem.exists(convention))
+        self.assertIn("context7*", self.tools_of("sdd-apply"))
+        # The journal was never touched — `retire` failed before `store.save`
+        # was ever reached — so context7 is still recorded as installed, and a
+        # later run can finish retiring it.
+        owned = {entry.id for entry in self.installed_entries()}
+        self.assertIn("mcp:context7", owned)
+        self.assertIn("mcp-convention:context7", owned)
+
+
+class InstallUnaccountedRetirementTest(CommandTestCase):
+    """A retiring reinstall can meet a journal entry it cannot account for: an
+    appended list item whose recorded digest matches nothing currently
+    present. The user having deleted it and the user having edited it beyond
+    recognition are physically indistinguishable, so it must not be reported,
+    or treated, as a removal — see `Retired.unaccounted`'s docstring."""
+
+    def inject_unaccounted_entry(self) -> None:
+        """A journal entry no render will ever ask for again, pointing at a
+        real appended list (`/plugin/-`, always non-empty after an install) so
+        it has survivors to be ambiguous among, with a digest that matches
+        none of them."""
+        store = self.store()
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        template = next(entry for entry in install.entries if entry.id == "own:notifier-plugin")
+        fantasma = replace(template, id="own:fantasma", after_digest="sha256:" + "0" * 64)
+        store.save(journal_module.with_install(journal, replace(install, entries=install.entries + (fantasma,))))
+
+    def test_an_unaccounted_entry_is_not_reported_as_retired(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        self.inject_unaccounted_entry()
+
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("own:fantasma", {item["id"] for item in report["retired"]})
+        self.assertIn("own:fantasma", report["unaccounted"])
+
+    def test_an_unaccounted_entry_keeps_its_record_in_the_journal(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        self.inject_unaccounted_entry()
+
+        self.run_cli("install", "--cli", CLI)
+
+        self.assertIn("own:fantasma", {entry.id for entry in self.installed_entries()})
+
+    def test_the_unaccounted_entry_does_not_stop_genuinely_removed_entries_from_being_retired(self):
+        """`mcp:context7` and `mcp-convention:context7` are addressable, not
+        appended, so they are unconditionally removed in the same run that
+        leaves `own:fantasma` unaccounted for right next to them."""
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        self.inject_unaccounted_entry()
+
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertEqual(code, 0)
+        self.assertEqual({item["id"] for item in report["retired"]}, {"mcp:context7", "mcp-convention:context7"})
+        owned = {entry.id for entry in self.installed_entries()}
+        self.assertNotIn("mcp:context7", owned)
+        self.assertNotIn("mcp-convention:context7", owned)
+        self.assertIn("own:fantasma", owned)
+
+    def test_the_prose_says_what_could_not_be_accounted_for_too(self):
+        """`_prose` promises the same facts as the document, never a subset of
+        them, and `uninstall`'s branch already keeps that promise. A person who
+        does not pass `--json` has no other way to learn that an entry was left
+        behind rather than retired."""
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        self.inject_unaccounted_entry()
+
+        code, out = self.run_prose("install", "--cli", CLI)
+
+        self.assertEqual(code, 0)
+        self.assertIn("own:fantasma", out)
 
 
 class UninstallTest(CommandTestCase):

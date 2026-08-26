@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
@@ -208,6 +208,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
             "updated": [_placed(step) for step in plan.updates],
             "unchanged": [_placed(step) for step in plan.unchanged],
             "skipped": [_left(step) for step in plan.collisions],
+            "retired": [_recorded(record) for record in plan.retirements],
         }
 
     # Taken before a single byte of this run reaches disk, and never for a dry
@@ -219,7 +220,17 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     # claiming the version this run is about to write, so the next install
     # would compare against fingerprints that no longer describe anything on
     # disk.
-    touched = sorted({step.artifact.path for step in plan.placements} | {store.path}, key=str)
+    # Retirement targets, alongside what this run writes: the mcp key would
+    # land in this snapshot by accident, sharing a document with the five
+    # updated agent grants, but `context7-convention.md` shares an address
+    # with nothing else this run touches. Without naming it here, a `restore`
+    # after a retiring reinstall would give back the key and not the file.
+    touched = sorted(
+        {step.artifact.path for step in plan.placements}
+        | {record.target for record in plan.retirements}
+        | {store.path},
+        key=str,
+    )
     try:
         snapshot.save(capture_paths(runtime.filesystem, touched), taken_at=runtime.now)
     except SnapshotStoreError as error:
@@ -245,11 +256,43 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     placed = Install(
         cli=adapter.id, installed_at=runtime.now, config_dir=config_dir, release={}, entries=applied.records
     )
-    merged = _merged(journal, adapter, environment, catalog, applied.records, runtime.now)
+
+    # What this render no longer asks for goes back out now: after `apply`,
+    # which already wrote the same configuration document with the five
+    # updated agent grants, so retiring first would read a stale copy and
+    # clobber them on the write-back; and before the journal is saved, because
+    # a journal that still claims a key this run just removed is the exact
+    # orphaning `_merged` exists to prevent.
+    #
+    # `retire` sits in its own `try` rather than falling through to the one
+    # around `store.save`, because a failure here is a different event: this
+    # run's own placements are already on disk, unrecorded, and the journal
+    # was never even asked to save — the generic handler in `main` would
+    # otherwise report it as if nothing had happened. Rolling this run's
+    # placements back is safe to do unconditionally: `retire`'s own docstring
+    # promises every operation is a no-op the second time, so whatever it
+    # already removed before failing stays removed, and a later run finishes
+    # retiring the rest — there is nothing here for `unplace` to undo except
+    # this run's own placements.
+    try:
+        stale = planner.retire(runtime.filesystem, replace(placed, entries=plan.retirements))
+    except (FileSystemError, planner.PlannerError) as error:
+        rolled_back, failures = planner.unplace(runtime.filesystem, applied, placed)
+        left = sorted(str(path) for path in documents - existing if runtime.filesystem.exists(path))
+        raise _unretirable(
+            error,
+            left,
+            placed=len(applied.records),
+            replaced=len(applied.replaced),
+            failures=[reason for _, reason in failures],
+            removed=len(rolled_back.removed),
+        ) from error
+
+    merged = _merged(journal, adapter, environment, catalog, applied.records, stale.removed, runtime.now)
     try:
         store.save(journal_module.with_install(journal, merged))
     except JournalStoreError as error:
-        retired, failures = planner.unplace(runtime.filesystem, applied, placed)
+        rolled_back, failures = planner.unplace(runtime.filesystem, applied, placed)
         left = sorted(str(path) for path in documents - existing if runtime.filesystem.exists(path))
         raise _unrecordable(
             error,
@@ -257,10 +300,12 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
             placed=len(applied.records),
             replaced=len(applied.replaced),
             failures=[reason for _, reason in failures],
-            removed=len(retired.removed),
+            removed=len(rolled_back.removed),
+            retired=list(stale.removed),
         ) from error
 
     created_ids = {step.artifact.id for step in plan.creations}
+    retired_ids = set(stale.removed)
     return {
         "cli": adapter.id,
         "status": "installed",
@@ -270,12 +315,18 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
         "updated": [_recorded(record) for record in applied.records if record.id not in created_ids],
         "unchanged": [_placed(step) for step in applied.unchanged],
         "skipped": [_left(step) for step in applied.skipped],
+        # Filtered to what `retire` actually confirmed removed, not the intent
+        # `plan.retirements` describes — an unaccounted entry belongs in
+        # `unaccounted`, not here, or the report would claim a removal that
+        # never happened.
+        "retired": [_recorded(record) for record in plan.retirements if record.id in retired_ids],
+        "unaccounted": list(stale.unaccounted),
         "journal": str(store.path),
         "retention": _retain(snapshot),
     }
 
 
-def _merged(journal, adapter, environment, catalog, records, now: str) -> Install:
+def _merged(journal, adapter, environment, catalog, records, retired_ids, now: str) -> Install:
     """Add what this run placed to what earlier runs already owned.
 
     Replacing the record instead of extending it is how an install becomes
@@ -283,12 +334,23 @@ def _merged(journal, adapter, environment, catalog, records, now: str) -> Instal
     already there — its own work from the first run — and writing that empty
     result over the journal would orphan every artifact permanently. What the
     engine already owns stays owned.
+
+    ``retired_ids`` is threaded in rather than recomputed here on purpose: this
+    function cannot tell "not re-placed because it was already correct" apart
+    from "not re-placed because the user stopped asking for it" on its own —
+    that distinction is what `retire()` actually confirmed removed
+    (`Retired.removed`), not `plan.retirements`, which is only the intent. An
+    id `retire()` could not account for stays out of ``retired_ids``, so its
+    record survives this merge and a later run can still finish the job for
+    it. Dropping the ids that *were* confirmed is what keeps a retired entry
+    from being merged straight back in as if this run had never stopped
+    asking for it.
     """
     previous = journal_module.install_for(journal, adapter.id)
     entries = records
     if previous is not None:
-        placed = {record.id for record in records}
-        entries = tuple(entry for entry in previous.entries if entry.id not in placed) + tuple(records)
+        dropped = {record.id for record in records} | set(retired_ids)
+        entries = tuple(entry for entry in previous.entries if entry.id not in dropped) + tuple(records)
     return Install(
         cli=adapter.id,
         # The date Pegasus first landed here, not the date it was topped up.
@@ -537,6 +599,7 @@ def _unrecordable(
     replaced: int = 0,
     failures: list[str] | None = None,
     removed: int = 0,
+    retired: list[str] | None = None,
 ) -> CommandError:
     """The install came back out. Say so, and say what did not come with it.
 
@@ -547,6 +610,15 @@ def _unrecordable(
     them survives the rollback as an empty document. Harmless, but claiming a
     clean undo would be a small lie in the one report a user reads when something
     already went wrong.
+
+    ``retired`` is the one thing this rollback genuinely cannot touch. It runs
+    before the journal is saved, so by the time saving fails it has already
+    happened — the key is unset, the file is gone — and `unplace` only knows
+    how to undo this run's own placements, never a retirement; that was a
+    deliberate choice, not an omission, because the snapshot taken before this
+    run already holds what a retirement removed. Recovery is manual, but it is
+    real, so the report says exactly that instead of a rollback that quietly
+    stops short.
     """
     undone = placed > 0
     if undone:
@@ -565,6 +637,72 @@ def _unrecordable(
         )
     if left_behind:
         message += f". Left behind, empty: {', '.join(left_behind)}"
+    if retired:
+        message += (
+            f". {len(retired)} already retired from disk before the journal failed, and this rollback does "
+            f"not put them back: {', '.join(retired)}. Restore the snapshot taken before this run to get "
+            f"them back"
+        )
+    failure = CommandError(message)
+    failure.report = {
+        "placed": placed,
+        "rolled_back": undone,
+        "left_behind": left_behind,
+        "restored": replaced,
+        "removed": removed,
+        "retired": retired or [],
+    }
+    return failure
+
+
+def _unretirable(
+    error: FileSystemError | planner.PlannerError,
+    left_behind: list[str],
+    *,
+    placed: int,
+    replaced: int = 0,
+    failures: list[str] | None = None,
+    removed: int = 0,
+) -> CommandError:
+    """This run's own placements came back out, because retiring what this
+    render no longer asks for failed before the journal ever got a chance to
+    save. It is the same rollback ``_unrecordable`` performs, for a different
+    cause, and it must not borrow that helper's message — the journal was
+    never touched here, and saying it failed would blame the wrong thing.
+
+    There is nothing to say about the retirement's own progress, on purpose:
+    `retire()` raised instead of returning, so there is no `Retired` to read a
+    fact from, and guessing a count would be inventing one. What *is* true
+    without needing that fact: `retire()`'s docstring promises every operation
+    is a no-op the second time, so whatever it already removed before this
+    failure stays removed, and a later run finishes retiring the rest. That is
+    a convergence, not a partial-failure hazard, so the message names it as
+    one instead of a rollback that quietly stops short.
+    """
+    undone = placed > 0
+    if undone:
+        message = (
+            f"the artifacts were placed but retiring what this run no longer asks for failed partway "
+            f"through, so this run's own placements were taken back out rather than left unrecorded: {error}"
+        )
+    else:
+        message = (
+            f"nothing needed placing, and retiring what this run no longer asks for failed partway "
+            f"through anyway: {error}"
+        )
+    if replaced:
+        message += f". {replaced} already there went back to the version they held"
+    if failures:
+        message += (
+            f". Some could not be put back, and were left as this run wrote them rather than "
+            f"removed: {'; '.join(failures)}"
+        )
+    if left_behind:
+        message += f". Left behind, empty: {', '.join(left_behind)}"
+    message += (
+        ". Some of what this run was retiring may already be gone from disk — retiring is a no-op the "
+        "second time, so running install again finishes the rest"
+    )
     failure = CommandError(message)
     failure.report = {
         "placed": placed,
@@ -620,6 +758,14 @@ def _prose(report: dict[str, Any]) -> str:
         if report["skipped"]:
             lines.append("Left alone because something was already there:")
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["skipped"])
+        if report["retired"]:
+            lines.append(f"{'Would retire' if planned else 'Retired'}, no longer asked for:")
+            lines.extend(f"  {item['id']} → {item['target']}" for item in report["retired"])
+        # Fetched rather than indexed: a planned report has nothing to say here,
+        # because a dry run never asks `retire` anything and so never learns
+        # what it could not account for. Only a run that happened can.
+        if report.get("unaccounted"):
+            lines.append(f"Could not be accounted for: {', '.join(report['unaccounted'])}")
         return "\n".join(_and_retention(_and_activation(lines, report), report))
 
     lines = [f"{report['cli']}: removed {len(report['removed'])}."]
