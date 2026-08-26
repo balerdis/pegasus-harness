@@ -787,7 +787,7 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con la preferencia guardada en el estado propio de Pegasus | Pendiente |
 | 7 | Actualización de una instalación existente | Reinstalar sobre una instalación propia actualiza el payload. La segunda mitad de lo entregado —preservar y reportar lo que el usuario reescribió— la reemplazó la unidad 9 | Entregada |
 | 8a1 | Categoría `mcp/`, descriptor y render del servidor | Un MCP remoto se instala de verdad, con su convención embarcada y su permiso concedido | Entregada |
-| 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira | Pendiente |
+| 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira. El retiro salió genérico: alcanza a cualquier artefacto que el journal reclame y el render ya no produzca | Entregada |
 | 8b | Directorio propio, formas `npm` y `download` | Los MCPs que traen binario quedan disponibles sin vendorizar ni compilar ninguno, con versión fija e integridad verificada | Pendiente |
 | 9 | El digest deja de ser permiso; snapshot, `restore` y retención | Instalar y desinstalar pisan lo que el journal reclama, y `restore` devuelve el estado exacto anterior al último comando | Entregada |
 
@@ -907,6 +907,24 @@ La unidad completa se pasa del presupuesto de revisión, así que va en cadena:
 
 8a se midió al escribir su código y se pasó del presupuesto, así que se partió en dos. La costura no es arbitraria: 8a1 instala el servidor para todos, 8a2 le da al usuario la decisión. Cada mitad deja el árbol coherente, y ninguna embarca una capacidad que no funcione.
 
+#### El retiro salió más grande que su fila
+
+8a2 se escribió para que dejar de nombrar un servidor MCP lo retire, y lo que quedó construido no sabe qué es un MCP. La pregunta que faltaba era general —*el journal reclama esto y el render ya no lo produce*— y su respuesta también: `planner.retirements(installed, artifacts)` es una diferencia de conjuntos sobre ids, y `Plan` la expone como una colección de `Record`s.
+
+Que sea de `Record`s y no de `Step`s no es un detalle de implementación. Un `Step` lleva un artefacto, y un retiro se define justamente por que el render no produjo ninguno: lo único que queda de él es lo que el journal todavía recuerda. Forzar las dos cosas a una misma forma sería mentir sobre el dominio, y el núcleo ya admitía esa asimetría en otro lado —`Retired` es un tipo aparte de `Applied` por la misma razón.
+
+La regla vive en el núcleo y no en `cli.py` por una sola razón, y no es la comodidad de que el `--dry-run` la reporte gratis: `tui/` va a ser el segundo adapter conductor, y el punto de un hexágono es que todos obtengan la misma respuesta del núcleo. Duplicar un cálculo es barato; duplicar una regla del contrato de propiedad hace que la CLI y la TUI diverjan en el criterio, no en el número.
+
+La consecuencia que importa para lo que viene: **el día que una release deje de embarcar una skill, un comando o un agente, esto lo retira**. Los MCPs fueron el primer llamador, no el único.
+
+Dos cosas quedaron atadas al retiro y no son negociables. El snapshot cubre las direcciones retiradas —la ruta de un retiro nunca cae en `plan.placements`, así que sin nombrarla el `restore` devolvería la clave de un servidor y no su archivo de convención—; y el journal descarta **lo que `retire` confirmó haber removido**, nunca lo que se pretendía remover, porque una entrada que quedó `unaccounted` sigue en disco y perder su registro la orfanaría para siempre.
+
+#### Lo que el dry-run no puede prometer
+
+`--dry-run` anuncia los retiros, y para un artefacto con dirección propia lo que anuncia es lo que va a pasar. Para un ítem agregado a una lista —puntero terminado en `/-`— puede quedarse corto: si el usuario lo editó más allá de reconocerlo, la corrida real lo va a dejar `unaccounted` en vez de removerlo, y el dry-run no tiene cómo saberlo.
+
+No es un defecto a arreglar, es el precio de dos decisiones deliberadas: `retirements()` es pura y no mira disco, y el dry-run no llama a `retire`. Comprar la precisión exigiría romper las dos.
+
 Esta unidad es la que destraba la deuda del caso wildcard contra wildcard del deny de herramientas: hasta que haya un MCP instalado no hay ningún prefijo que habilitar, y el caso no se puede verificar en runtime.
 
 **Nada de esto se porta de v3.** El contrato de release de v3 sirve como inventario de qué datos hicieron falta alguna vez, no como plantilla: aquel diseño compilaba el binario a mano dentro de una imagen fijada por digest, lo vendorizaba en el repositorio y terminaba admitiendo en su propio archivo de provenance que la firma no se podía verificar. Los campos del descriptor se diseñan de cero contra los tres mecanismos de arriba.
@@ -994,7 +1012,7 @@ Queda registrado que las estimaciones se remiden cuando cierre el PR 1: los PRs 
 2. **Unidad 4.** Launcher, venv privado, empaquetado. Destraba la TUI.
 3. **Unidades 5 y 6.** La TUI.
 
-Ya entregado, en este orden: el cierre de la unidad 3 —el `.env` real del skill registry y el retiro de los marcadores sin lector—; la unidad 7, que fue temprano por ser la herramienta con la que se verifica todo lo que viene después; la **8a1**, con la categoría `mcp/` y el primer servidor instalado de verdad; y la **unidad 9**, en cadena de cuatro PRs.
+Ya entregado, en este orden: el cierre de la unidad 3 —el `.env` real del skill registry y el retiro de los marcadores sin lector—; la unidad 7, que fue temprano por ser la herramienta con la que se verifica todo lo que viene después; la **8a1**, con la categoría `mcp/` y el primer servidor instalado de verdad; la **unidad 9**, en cadena de cuatro PRs; y la **8a2**, que cerró la cadena 8a con la selección del usuario y un retiro que salió genérico.
 
 El presupuesto de revisión es de **800 líneas cambiadas por PR**. Cada unidad se mide al planificar sus tareas; la que se pase se parte en una cadena, con la estrategia definida antes de empezar a escribir código. La unidad 1 ya se midió y por eso está partida en 1a y 1b.
 
@@ -1015,6 +1033,7 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 | El orquestador tiene prohibición absoluta de ejecutar —"never by running the phase work yourself"— sin umbral, y no tiene `write` ni `edit`. Prosa y herramientas están de acuerdo, así que no es un bug: es un diseño que hay que cambiar en las dos mitades a la vez | Nada. Cambiar sólo la prosa le nombraría una capacidad que no tiene |
 | Dos gates defensivos —el del protocolo de memoria en el prompt de sistema y el de `cbm-convention.md`— no tienen ningún test que los proteja, y no se pueden afirmar sin afirmar prosa | La unidad 8b: cuando cada convención viva en el cuerpo de su descriptor, la ausencia significará ausencia y los dos gates se borran en vez de necesitar protección |
 | `tools/check_docs_links.py` reporta 13 links rotos, 6 de ellos reales y preexistentes | Nada |
+| `PosixFileSystem.exists` es el único método de la clase que no envuelve `OSError` en `FileSystemError`, y `Path.exists()` no traga `EACCES`: un directorio sin permiso de lectura le da al usuario un traceback crudo en vez de un mensaje, desde cualquier comando. Encontrado revisando 8a2, verificado como preexistente e independiente de ella | Nada. Candidata inmediata, y sale en un PR propio |
 
 ---
 
@@ -1034,11 +1053,13 @@ Tests que fallan si el diseño se degrada:
 - [ ] `restore` devuelve bytes y modo exactos, sin merge ni reconstrucción
 - [ ] Desinstalar deja el sistema sin rastros de Pegasus, incluido lo que el usuario modificó sobre una dirección propia; lo único que puede quedar es un ítem de lista que no se pudo identificar
 - [ ] La retención acota la historia de snapshots, y una limpieza que falla no vuelve fallido el comando que ya escribió
+- [ ] Instalar retira lo que el journal reclama y el render ya no produce, y el snapshot cubre esas direcciones
+- [ ] El journal descarta lo que el retiro confirmó haber removido, nunca lo que se pretendía remover
 
 ---
 
 ## Próximo paso
 
-Retomar **8a2**, el retiro de un servidor MCP que el usuario deja de nombrar. Quedó en pausa a propósito con un test en rojo declarado: el retiro que le faltaba era el código que la unidad 9 reescribió, así que terminarlo antes habría sido escribirlo dos veces.
+Sigue **8b**, y con ella el resolutor de directorio propio que la unidad 4 necesita. Es la que borra los dos gates defensivos sin test y la que destraba el caso wildcard contra wildcard.
 
-Después **8b**, y con ella el resolutor de directorio propio que la unidad 4 necesita.
+Después la **unidad 4**, que es el cuello de botella de todo lo que queda: sin launcher ni venv privado no hay `pegasus` en el PATH, y las dos unidades de TUI están bloqueadas detrás de ella.
