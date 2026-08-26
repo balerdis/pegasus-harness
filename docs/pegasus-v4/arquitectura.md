@@ -790,7 +790,8 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira. El retiro salió genérico: alcanza a cualquier artefacto que el journal reclame y el render ya no produzca | Entregada |
 | 8b | Directorio propio, formas `npm` y `download` | Los MCPs que traen binario quedan disponibles sin vendorizar ni compilar ninguno, con versión fija e integridad verificada | Pendiente |
 | 9 | El digest deja de ser permiso; snapshot, `restore` y retención | Instalar y desinstalar pisan lo que el journal reclama, y `restore` devuelve el estado exacto anterior al último comando | Entregada |
-| 10 | El puerto de filesystem puede decir "no puedo saberlo" | Una ruta que existe y no se puede leer deja de hacerse pasar por ausente, en los cuatro métodos que hoy la disfrazan y en los trece sitios que les creen | Pendiente |
+| 10 | El puerto de filesystem puede decir "no puedo saberlo" | Una ruta que existe y no se puede leer deja de hacerse pasar por ausente: `exists` y `list_dir`, y los trece sitios que les creen | Pendiente |
+| 11 | `mode_of` y `owned_by_current_user` | Un modo que no se pudo leer deja de convertirse en `0o644` al deshacer, y un guard que falla cerrado lo dice en vez de fingir una respuesta | Esbozada, sin medir |
 
 La unidad 1b genera el catálogo **del contenido presente**, no del contenido final: los descriptores de los 10 agentes SDD y las categorías `mcp/` y `policies/` llegan en unidades posteriores.
 
@@ -1051,6 +1052,8 @@ Cuatro métodos disfrazan "no puedo saberlo" de una respuesta benigna. Cinco —
 | `owned_by_current_user` | "`False` cuando no existe" | se traga cualquier `OSError`, sin declararlo |
 | `list_dir` | "una ruta que no existe lista vacío" | hereda el `path.exists()` crudo: un directorio ilegible lista `[]` |
 
+De los cuatro, **esta unidad arregla `exists` y `list_dir`**. `list_dir` entra porque ya es uno de los trece sitios auditados y su arreglo está contado en la implementación; los otros dos se van a la unidad 11, porque hacen cosas distintas con "no puedo saberlo" y una de ellas ya está bien.
+
 #### Los trece sitios, auditados
 
 Once llamadas a través del puerto más dos dentro de la propia implementación. La clasificación es por lo que causaría un `False` que en realidad significa "no puedo saberlo":
@@ -1070,6 +1073,47 @@ El contrato tiene que dejar que el puerto diga que no puede responder. Cuál es 
 #### Por qué va antes de 8b
 
 8b materializa dependencias en el directorio propio de Pegasus y las mete al journal como artefactos. Es la unidad que más superficie de archivo nueva agrega, y toda esa superficie pasa por los mismos trece sitios. Arreglar el puerto después significaría auditarla dos veces.
+
+---
+
+### Unidad 11 — `mode_of` y `owned_by_current_user` — esbozo, sin contrato todavía
+
+**Esta unidad está esbozada, no medida.** Lo que sigue es lo que se sabe hoy y el punto de partida de su auditoría; el contrato se escribe cuando esa auditoría exista, igual que la 10 esperó a tener sus trece sitios clasificados.
+
+`mode_of` y `owned_by_current_user` comparten con `exists` la forma del defecto —se tragan cualquier `OSError` y devuelven un valor benigno, sin que su docstring en el puerto lo declare— y por eso la tentación es arreglar los tres juntos. **Es la decisión equivocada, y no por prolijidad de proceso: los tres hacen cosas distintas con "no puedo saberlo", y una de ellas ya está bien.**
+
+#### Los tres comportamientos, que son tres y no uno
+
+**`owned_by_current_user` falla seguro, y no hay que tocarlo como a los otros.** Sus dos llamadores son el mismo guard, en `infra/journal_store_file.py:90` y en `infra/snapshot_store_file.py:238`:
+
+```python
+if not self._fs.owned_by_current_user(self._home):
+    raise JournalStoreError(f"{self._home} belongs to another user; refusing to write its journal")
+```
+
+Un "no puedo saberlo" da `False` y **se niega a escribir**. El error empuja hacia el lado seguro. Aplicarle el diseño de la unidad 10 —que levante— convertiría un guard que hoy falla cerrado en un crash: sería empeorarlo. Lo que probablemente necesita no es cambiar de comportamiento sino que su docstring diga la verdad sobre por qué devuelve `False`.
+
+**`mode_of` va para el otro lado, y ahí hay una consecuencia de seguridad.** En `core/planner.py:433`, dentro de `_put_back`:
+
+```python
+filesystem.write_atomic(path, content, mode=mode if mode is not None else 0o644)
+```
+
+El `None` que llega de `mode_of` puede significar "la ruta no existe" o "no pude leer sus bits", y las dos colapsan en `0o644`. Si el archivo del usuario era `0600`, **el rollback le ensancha los permisos**: algo privado pasa a ser legible por todos. Eso no es un reporte deshonesto, es una pérdida de confidencialidad, y es una categoría de daño que no aparece en ninguna de las trece filas de la unidad 10.
+
+Queda abierto si lo que hay que arreglar es el método, el `else 0o644` de `_put_back`, o los dos. Son archivos distintos, y la respuesta sale de la auditoría, no de antes.
+
+**Y hay un tercer comportamiento en `infra/snapshot_store_file.py:66`**, donde un `mode` en `None` sobre una ruta que sí existe choca con la validación de `core/snapshot.py:45` —*"an entry that existed needs both a mode and a blob reference"*— y levanta `SnapshotError`. Ruidoso pero seguro: ni silencioso como el rollback, ni cerrado como el guard.
+
+#### Con qué arranca la auditoría
+
+Ocho llamadores, ninguno clasificado todavía. `mode_of`: `planner.py:229` (decide `UNCHANGED` contra `UPDATE`), `planner.py:323` y `planner.py:336` (la captura para el rollback), `planner.py:516` (preservar el modo al reescribir un documento en `retire`), y `snapshot_store_file.py:59`. `owned_by_current_user`: los dos guards ya citados.
+
+Hay una pista que la auditoría debería confirmar o descartar temprano: en varios de esos sitios `mode_of` corre **inmediatamente después de un `read_bytes` que ya tuvo éxito**, así que la ventana en la que el `stat` falla y la lectura no es estrecha. Si eso se sostiene en los seis, la unidad es más chica de lo que parece; si no, es más grande. Medirlo es la primera tarea, antes de estimar una sola línea.
+
+#### Por qué no entra en la unidad 10
+
+La clasificación de la unidad 10 responde una pregunta —qué causa un `False` de `exists`— y estos ocho sitios no la responden: uno falla cerrado, otro puede ensanchar permisos, otro revienta una validación. Meterlos en el mismo PR dejaría la mitad del cambio medida y la otra mitad improvisada mientras se escribe, y desde afuera del diff las dos mitades se ven iguales. El presupuesto de 800 líneas existe para que una revisión entre entera en la cabeza de quien la hace; mezclar lo medido con lo no medido lo derrota aunque el número cierre.
 
 1. **Unidad 8**, en cadena: **8a** la categoría `mcp/` y la selección, **8b** el directorio propio y la materialización.
    - **La Unidad 9** corre adentro de esa cadena, antes de **8a2**: reemplaza el digest-permiso por el snapshot antes de que 8a2 le dé al usuario el poder de retirar servidores sobre esa misma política.
@@ -1124,7 +1168,9 @@ Tests que fallan si el diseño se degrada:
 
 ## Próximo paso
 
-Sigue la **unidad 10**, el contrato del puerto de filesystem. Entró al corte en vez de a la tabla de deudas por decisión explícita: la tabla ya se está inflando y se ataca después de la primera release, así que lo que se encuentra ahora y tiene consecuencia destructiva se arregla ahora. Su primera tarea es enseñarle a fallar al doble de test, porque hoy el escenario es inconstruible.
+Sigue la **unidad 10**, el contrato del puerto de filesystem, con el diseño ya elegido: `exists` levanta `FileSystemError` cuando no puede responder. Se midió contra la alternativa de tres estados y salió a la mitad de costo —~173 líneas contra ~323— porque la propagación ya está cableada en el `except` de `main`, así que ocho de los trece sitios no necesitan un solo cambio; y porque `None` es *falsy* en Python, de modo que un tercer estado reintroduciría el mismo bug en silencio en cualquier `if fs.exists(path):` que alguien escriba mañana. Entra en un PR, sin cadena. Entró al corte en vez de a la tabla de deudas por decisión explícita: la tabla ya se está inflando y se ataca después de la primera release, así que lo que se encuentra ahora y tiene consecuencia destructiva se arregla ahora. Su primera tarea es enseñarle a fallar al doble de test, porque hoy el escenario es inconstruible.
+
+La **unidad 11** queda esbozada detrás, con su hallazgo ya anotado para que no se pierda: un modo que no se pudo leer se convierte en `0o644` al deshacer, y puede ensanchar los permisos de un archivo privado del usuario.
 
 Después **8b**, y con ella el resolutor de directorio propio que la unidad 4 necesita. Es la que borra los dos gates defensivos sin test y la que destraba el caso wildcard contra wildcard.
 
