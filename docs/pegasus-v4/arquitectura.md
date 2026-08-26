@@ -790,6 +790,7 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira. El retiro salió genérico: alcanza a cualquier artefacto que el journal reclame y el render ya no produzca | Entregada |
 | 8b | Directorio propio, formas `npm` y `download` | Los MCPs que traen binario quedan disponibles sin vendorizar ni compilar ninguno, con versión fija e integridad verificada | Pendiente |
 | 9 | El digest deja de ser permiso; snapshot, `restore` y retención | Instalar y desinstalar pisan lo que el journal reclama, y `restore` devuelve el estado exacto anterior al último comando | Entregada |
+| 10 | El puerto de filesystem puede decir "no puedo saberlo" | Una ruta que existe y no se puede leer deja de hacerse pasar por ausente, en los cuatro métodos que hoy la disfrazan y en los trece sitios que les creen | Pendiente |
 
 La unidad 1b genera el catálogo **del contenido presente**, no del contenido final: los descriptores de los 10 agentes SDD y las categorías `mcp/` y `policies/` llegan en unidades posteriores.
 
@@ -1005,10 +1006,74 @@ Dos cosas hacen que el corte sea éste y no otro. **PR 2 tiene que entrar antes 
 
 Queda registrado que las estimaciones se remiden cuando cierre el PR 1: los PRs 2, 3 y 4 se recalibran contra líneas reales en vez de contra la analogía de arriba.
 
-### Orden de trabajo
+---
+
+### Unidad 10 — El puerto de filesystem puede decir "no puedo saberlo"
+
+El puerto declara, en `ports/filesystem.py`, que `exists` responde *"Whether anything is at this path. Never raises."* La implementación POSIX es `return path.exists()` sin `try/except`, y es el único de los diez métodos de la clase que no envuelve `OSError`. `Path.exists()` sólo se traga los errores que ya significan ausencia; un padre que no se puede atravesar levanta `EACCES`. Verificado corriendo, en Python 3.12.3: un directorio en modo 000 le da al usuario un traceback crudo desde cualquier comando, no un reporte.
+
+Eso es el síntoma. El problema es más abajo.
+
+#### El arreglo obvio destruye datos, y está medido
+
+La corrección evidente es tragarse el `OSError` y devolver `False`, que es lo que el contrato declarado pide y lo que dos métodos vecinos ya hacen. Se escribió, con su test, y se midió contra disco real antes de shippearla:
+
+```
+snapshot de la generación 2, tomado con un directorio en modo 000
+  entradas totales:        17
+  anotadas como AUSENTES:  16     ← los 16 archivos existen
+
+restore de esa generación, con los permisos ya arreglados
+  generation 2: wrote back 1, removed 16.
+  exit=0
+
+archivos en el directorio después:  0
+```
+
+**`restore` borró dieciséis archivos que existían y reportó éxito.** El estado de hoy, con el traceback, no pierde nada: revienta antes de guardar el snapshot, así que no llega a crearse una generación mentirosa. Lo de hoy es feo y seguro; el arreglo mínimo es prolijo y peligroso. La rama se borró sin pushear.
+
+#### La causa: un bool para dos preguntas
+
+`exists` devuelve `False` tanto para *no hay nada* como para *no puedo saberlo*, y hay sitios donde esa distinción es la que decide qué se borra. El peor no es el snapshot.
+
+`planner._file_step` **ya tiene** la guarda contra exactamente esta pérdida de datos. Su docstring la nombra: *"a file that cannot be read is a file that cannot be copied, and writing it would destroy the only version there is with nothing left to give back"*, y la implementa en el `except FileSystemError` del `read_bytes`. Pero el `if not filesystem.exists(...)` está cinco líneas más arriba y **la rodea**: devuelve `CREATE`, y `apply` sobreescribe. El arreglo obvio no abriría un agujero nuevo, desactivaría una protección escrita a propósito.
+
+Y `FileJournalStore.load` hace `if not exists(): return empty()`. Un journal ilegible se convierte en un journal vacío, y todo lo que sigue procede como si Pegasus nunca hubiera instalado nada. `ensure_writable`, que corre antes, sólo chequea privilegios y no toca disco, así que no lo atrapa.
+
+#### No es un método, es un patrón
+
+Cuatro métodos disfrazan "no puedo saberlo" de una respuesta benigna. Cinco —`read_bytes`, `write_atomic`, `remove`, `remove_dir`, `make_dir`— están bien y sirven de vara.
+
+| Método | Lo que declara el puerto | Lo que hace |
+|--------|--------------------------|-------------|
+| `exists` | "Never raises" | levanta `EACCES` |
+| `mode_of` | "o `None` cuando está ausente" | se traga cualquier `OSError`, sin declararlo |
+| `owned_by_current_user` | "`False` cuando no existe" | se traga cualquier `OSError`, sin declararlo |
+| `list_dir` | "una ruta que no existe lista vacío" | hereda el `path.exists()` crudo: un directorio ilegible lista `[]` |
+
+#### Los trece sitios, auditados
+
+Once llamadas a través del puerto más dos dentro de la propia implementación. La clasificación es por lo que causaría un `False` que en realidad significa "no puedo saberlo":
+
+| Consecuencia | Sitios |
+|---|---|
+| **Destructiva** — se pierden datos | `planner._file_step` (planifica `CREATE` sobre un archivo que existe, y `apply` lo pisa); `planner._read_document`; `FileJournalStore.load`; `capture_paths` |
+| **Deshonesta** — un reporte o el journal afirma algo falso | `retire` (saltea el borrado y apila el id en `removed` igual); `_current_digest` (`doctor` reporta como ausente algo presente); `readable_generations` (un `restore` sin argumento elige una generación más vieja que la última); y los tres `left`/`existing` de `_install` |
+| **Benigna** — degrada sin daño | `FileSnapshotStore.read` (rechaza igual, con el motivo equivocado); `list_dir` |
+
+#### Qué construye la unidad
+
+El contrato tiene que dejar que el puerto diga que no puede responder. Cuál es la forma —levantar `FileSystemError`, o una respuesta de tres estados— es la decisión de diseño de la unidad, y se toma con la tabla de arriba adelante: la respuesta correcta es la que hace que los cuatro sitios destructivos se nieguen a proceder y que los deshonestos digan la verdad, sin obligar a los benignos a manejar un error que no les cambia nada.
+
+**La primera tarea es el doble, no el puerto.** `FakeFileSystem` tiene seis hooks de falla y ninguno para `exists`, que es una membresía de conjunto incapaz de levantar. Hoy el escenario es literalmente inconstruible en los tests, y por eso hay **cero tests** que dependan de él: nada se rompe al cambiarlo, y nada lo cubre. Sin enseñarle al doble a fallar primero no hay forma de escribir un test en rojo, y es la lección de la unidad 9 repetida — sus cuatro defectos vivieron en la grieta entre el doble y el filesystem real.
+
+#### Por qué va antes de 8b
+
+8b materializa dependencias en el directorio propio de Pegasus y las mete al journal como artefactos. Es la unidad que más superficie de archivo nueva agrega, y toda esa superficie pasa por los mismos trece sitios. Arreglar el puerto después significaría auditarla dos veces.
 
 1. **Unidad 8**, en cadena: **8a** la categoría `mcp/` y la selección, **8b** el directorio propio y la materialización.
    - **La Unidad 9** corre adentro de esa cadena, antes de **8a2**: reemplaza el digest-permiso por el snapshot antes de que 8a2 le dé al usuario el poder de retirar servidores sobre esa misma política.
+   - **La Unidad 10** también corre adentro, entre **8a2** y **8b**: arregla el contrato del puerto de filesystem antes de que 8b agregue superficie de archivo nueva que pasaría por los mismos trece sitios sin auditar.
 2. **Unidad 4.** Launcher, venv privado, empaquetado. Destraba la TUI.
 3. **Unidades 5 y 6.** La TUI.
 
@@ -1033,7 +1098,6 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 | El orquestador tiene prohibición absoluta de ejecutar —"never by running the phase work yourself"— sin umbral, y no tiene `write` ni `edit`. Prosa y herramientas están de acuerdo, así que no es un bug: es un diseño que hay que cambiar en las dos mitades a la vez | Nada. Cambiar sólo la prosa le nombraría una capacidad que no tiene |
 | Dos gates defensivos —el del protocolo de memoria en el prompt de sistema y el de `cbm-convention.md`— no tienen ningún test que los proteja, y no se pueden afirmar sin afirmar prosa | La unidad 8b: cuando cada convención viva en el cuerpo de su descriptor, la ausencia significará ausencia y los dos gates se borran en vez de necesitar protección |
 | `tools/check_docs_links.py` reporta 13 links rotos, 6 de ellos reales y preexistentes | Nada |
-| `PosixFileSystem.exists` es el único método de la clase que no envuelve `OSError` en `FileSystemError`, y `Path.exists()` no traga `EACCES`: un directorio sin permiso de lectura le da al usuario un traceback crudo en vez de un mensaje, desde cualquier comando. Encontrado revisando 8a2, verificado como preexistente e independiente de ella | Nada. Candidata inmediata, y sale en un PR propio |
 
 ---
 
@@ -1060,6 +1124,8 @@ Tests que fallan si el diseño se degrada:
 
 ## Próximo paso
 
-Sigue **8b**, y con ella el resolutor de directorio propio que la unidad 4 necesita. Es la que borra los dos gates defensivos sin test y la que destraba el caso wildcard contra wildcard.
+Sigue la **unidad 10**, el contrato del puerto de filesystem. Entró al corte en vez de a la tabla de deudas por decisión explícita: la tabla ya se está inflando y se ataca después de la primera release, así que lo que se encuentra ahora y tiene consecuencia destructiva se arregla ahora. Su primera tarea es enseñarle a fallar al doble de test, porque hoy el escenario es inconstruible.
+
+Después **8b**, y con ella el resolutor de directorio propio que la unidad 4 necesita. Es la que borra los dos gates defensivos sin test y la que destraba el caso wildcard contra wildcard.
 
 Después la **unidad 4**, que es el cuello de botella de todo lo que queda: sin launcher ni venv privado no hay `pegasus` en el PATH, y las dos unidades de TUI están bloqueadas detrás de ella.
