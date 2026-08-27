@@ -5,25 +5,32 @@ anything the flags cannot. That makes this the surface an agent drives, so its
 output is a contract and not a convenience — every number in it has to be true,
 including the uncomfortable ones.
 
-**Why the home here is half real.** Writing goes through the filesystem port and
-is faked, but detection does not: an adapter answers ``detect`` with
-``shutil.which`` and a real ``is_dir`` check, so it looks at the machine the
-tests run on no matter what the port is told. Rather than paper over that, these
-tests give the runtime an empty ``PATH`` and a real empty directory to find or
-not find, which is the only way to drive detection deterministically today. The
-mismatch is a known wrinkle in the architecture, not something this module
-invents.
+**Real disk, mostly.** Every test in this module runs against a throwaway home
+and the real `PosixFileSystem`, via `RealHomeTestCase`. The one exception is
+`PrivilegeAndOwnershipTest`: "running as root" and "a home owned by someone
+else" have no honest real-disk equivalent short of actually being root or
+another user, so those three cases stay on `FakeFileSystem`.
+
+**Why detection is still half real.** Writing goes through the filesystem
+port, which is now real, but detection does not: an adapter answers
+``detect`` with ``shutil.which`` and a real ``is_dir`` check, so it looks at
+the machine the tests run on no matter what the port is told. Rather than
+paper over that, these tests give the runtime an empty ``PATH`` and rely on
+the throwaway home's config directory being absent (or created by
+``present()``) to drive detection deterministically. The mismatch is a known
+wrinkle in the architecture, not something this module invents.
 """
 from __future__ import annotations
 
 import io
 import json
-import os
+import stat
 import tempfile
 import tomllib
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 
 import pegasus
 from fakes import FakeFileSystem
@@ -32,23 +39,29 @@ from pegasus.adapters import available
 from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
 from pegasus.core.types import Environment
-from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import journal_path
 from pegasus.infra.snapshot_store_file import snapshots_root
+from platform_conditions import (
+    fail_probe_once_it_exists,
+    make_undeletable,
+    make_unreadable,
+    make_unwritable,
+)
+from real_home import RealHomeTestCase as _RealHomeTestCase
+from recording_filesystem import RecordingFileSystem
 
 AT = "2026-08-14T00:00:00+00:00"
 CLI = available().ids()[0]
 NO_BINARY = {"PATH": ""}
 
 
-class CommandTestCase(unittest.TestCase):
-    """A home the adapter can be told is there, or told is not."""
+class RealHomeTestCase(_RealHomeTestCase):
+    """The generic real-home base plus what only the CLI surface needs.
 
-    def setUp(self):
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.home = Path(self.directory.name)
-        self.filesystem = FakeFileSystem()
+    The throwaway home and the real POSIX filesystem come from the shared
+    base; everything below is specific to driving `cli.main` and to proving
+    facts about what it did or did not do to the real disk underneath it.
+    """
 
     def runtime(self) -> cli.Runtime:
         return cli.Runtime(
@@ -78,35 +91,76 @@ class CommandTestCase(unittest.TestCase):
     def installed_entries(self):
         return journal_module.install_for(self.store().load(), CLI).entries
 
+    def snapshot(self) -> dict[Path, bytes]:
+        """Every real file under the throwaway home, keyed by path — the
+        disk equivalent of the double's ``files`` dict, for tests that used
+        to compare that dict before and after a run."""
+        return {path: path.read_bytes() for path in self.home.rglob("*") if path.is_file()}
+
+    def assert_no_artifacts_written(self) -> None:
+        """No file landed under the CLI's own configuration directory."""
+        self.assertEqual([path for path in self.layout().config_dir.rglob("*") if path.is_file()], [])
+
+    def assert_disk_untouched(self) -> None:
+        """Nothing this command could have written reached disk at all: no
+        artifact, no journal, no snapshot generation."""
+        self.assert_no_artifacts_written()
+        self.assertFalse(journal_path(self.home).exists())
+        self.assertFalse(snapshots_root(self.home).exists())
+
+    def make_journal_unwritable(self) -> Callable[[], None]:
+        """Make the directory holding the journal refuse a write — the
+        honest equivalent of the double's ``fail_always.add(store().path)``:
+        a real directory has no way to refuse one specific file while
+        accepting everything else beside it, so this refuses the whole
+        directory, which is what the journal store's own write goes through
+        regardless.
+
+        The snapshots directory is created first, same as
+        `refuse_to_write_the_journal`: it shares this same parent, and a run
+        that reaches the journal has already taken its preflight snapshot,
+        which needs to create a fresh generation folder *inside* it. Locking
+        the parent after that folder already exists leaves the ability to
+        write inside it untouched, and only refuses a new entry directly in
+        the parent — which is exactly the journal file.
+        """
+        snapshots_root(self.home).mkdir(parents=True, exist_ok=True)
+        return make_unwritable(self.store().path.parent)
+
+    def refuse_to_write_the_journal(self) -> None:
+        """Make the journal write fail with real permissions, and only it.
+
+        The snapshots directory is created first and left writable, so the
+        preflight snapshot still succeeds and the run actually reaches the
+        journal — which is the whole point, since the report being tested is
+        the one a journal failure produces after the artifacts are already
+        placed.
+        """
+        snapshots_root(self.home).mkdir(parents=True, exist_ok=True)
+        data_dir = journal_path(self.home).parent
+        self.addCleanup(make_unwritable(data_dir))
+
+    def refuse_to_probe_once_it_exists(self, path: Path) -> None:
+        self.addCleanup(fail_probe_once_it_exists(path))
 
 
-class RealHomeTestCase(unittest.TestCase):
-    """A throwaway home with the real POSIX filesystem underneath it.
+class FakeHomeTestCase(unittest.TestCase):
+    """Only for what no real condition can produce.
 
-    The in-memory double answers the port, which is what makes most of this
-    module fast to write, but it cannot be wrong in the ways a filesystem is
-    wrong: it has no permission bits, so a path that exists and cannot be
-    read is not a state it can be put into. Every failure it can express had
-    to be taught to it one hook at a time, and the four defects the previous
-    unit's reviews found all lived in the gap between what it does and what
-    the operating system does.
-
-    So the conditions here are produced rather than injected: a directory is
-    made read-only and the write that lands in it fails for the reason a real
-    write fails. What no permission bit can produce — a path whose state
-    could be determined a moment ago and cannot be now — is stubbed at the
-    system call, the way `test_filesystem` already stubs `os.replace` to
-    stand in for a full disk. That is one line of the operating system
-    replaced, not a filesystem reimplemented.
+    "Running as root" and "a home owned by someone else" are facts
+    `PosixFileSystem` reads straight off the operating system —
+    ``running_privileged`` from ``os.geteuid()``, ``owned_by_current_user``
+    from the file's real owner — and neither can be faked from inside a test
+    without actually being root, or actually being another user. Every other
+    test in this module runs on real disk; these stay on the double because
+    there is no honest way to move them.
     """
 
     def setUp(self):
-        if os.geteuid() == 0:
-            self.skipTest("root is not refused by permission bits, and Pegasus refuses to install as root")
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.home = Path(self.directory.name)
-        self.filesystem = PosixFileSystem()
+        self.filesystem = FakeFileSystem()
 
     def runtime(self) -> cli.Runtime:
         return cli.Runtime(
@@ -124,44 +178,6 @@ class RealHomeTestCase(unittest.TestCase):
         code = cli.main([*argv, "--json"], runtime=context)
         return code, json.loads(context.out.getvalue())
 
-    def refuse_to_write_the_journal(self) -> None:
-        """Make the journal write fail with real permissions, and only it.
-
-        The snapshots directory is created first and left writable, so the
-        preflight snapshot still succeeds and the run actually reaches the
-        journal — which is the whole point, since the report being tested is
-        the one a journal failure produces after the artifacts are already
-        placed.
-        """
-        snapshots_root(self.home).mkdir(parents=True, exist_ok=True)
-        data_dir = journal_path(self.home).parent
-        # Restored before the temporary directory is removed: cleanups run in
-        # reverse, and a read-only directory cannot be deleted.
-        self.addCleanup(data_dir.chmod, 0o700)
-        data_dir.chmod(0o555)
-
-    def refuse_to_probe_once_it_exists(self, path: Path) -> None:
-        """Make determining this path's state fail, but only once something
-        is really there.
-
-        Keyed on the state of the disk, never on a call count. The document
-        does not exist when the run first probes it, and `apply` creates it
-        before the handler probes it again — so "once it exists" names the
-        two moments apart without encoding how many times the installer
-        happens to ask today. A count would: add one probe anywhere upstream
-        and the failure lands somewhere else while the test stays green.
-        """
-        original = os.stat
-
-        def patched(target, *arguments, **keywords):
-            answer = original(target, *arguments, **keywords)
-            if not isinstance(target, int) and Path(target) == path:
-                raise PermissionError(13, "Permission denied", str(target))
-            return answer
-
-        self.addCleanup(setattr, os, "stat", original)
-        os.stat = patched
-
 
 class VersionTest(unittest.TestCase):
     def test_the_package_version_matches_the_project_metadata(self):
@@ -170,7 +186,7 @@ class VersionTest(unittest.TestCase):
         self.assertEqual(pegasus.__version__, metadata["project"]["version"])
 
 
-class ArgumentTest(CommandTestCase):
+class ArgumentTest(RealHomeTestCase):
     def test_no_command_is_an_error_rather_than_a_silent_success(self):
         self.assertNotEqual(cli.main([], runtime=self.runtime()), 0)
 
@@ -198,7 +214,7 @@ class ArgumentTest(CommandTestCase):
                 self.assertEqual(report["command"], argv[0])
 
 
-class InstallTest(CommandTestCase):
+class InstallTest(RealHomeTestCase):
     def test_installing_into_a_clean_home_reports_what_it_created(self):
         self.present()
         code, report = self.run_cli("install", "--cli", CLI)
@@ -263,11 +279,11 @@ class InstallTest(CommandTestCase):
         self.present()
         self.run_cli("install", "--cli", CLI)
         target = self.layout().system_prompt_file
-        original = self.filesystem.files[target]
-        self.filesystem.files[target] = b"the user's own words\n"
+        original = target.read_bytes()
+        target.write_bytes(b"the user's own words\n")
         _, report = self.run_cli("install", "--cli", CLI)
         self.assertIn("system-prompt", [item["id"] for item in report["updated"]])
-        self.assertEqual(self.filesystem.files[target], original)
+        self.assertEqual(target.read_bytes(), original)
 
     def test_the_prose_names_what_it_updated(self):
         self.present()
@@ -283,16 +299,130 @@ class InstallTest(CommandTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(report["status"], "planned")
         self.assertTrue(report["created"])
-        self.assertEqual(self.filesystem.writes, [])
+        self.assert_disk_untouched()
 
     def test_installing_where_the_cli_is_absent_is_refused(self):
         """Installing into a CLI the user does not have would just leave litter."""
         code, report = self.run_cli("install", "--cli", CLI)
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
-        self.assertEqual(self.filesystem.writes, [])
+        self.assert_disk_untouched()
 
     # --- Refusing before doing ---
+
+    def test_an_install_that_cannot_be_recorded_is_taken_back_out(self):
+        """An installation nobody recorded is one nobody can uninstall."""
+        self.present()
+        self.addCleanup(self.make_journal_unwritable())
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(report["rolled_back"])
+        left = [path for path in self.layout().config_dir.rglob("*") if path.is_file()]
+        self.assertEqual(left, [self.layout().settings_file])
+
+    def test_a_journal_that_cannot_be_read_stops_the_install_before_it_writes(self):
+        """A journal we cannot read is one we cannot extend.
+
+        Discovering that after placing the artifacts would leave them on disk
+        with nothing recording them, and `doctor` would fail against the same
+        unreadable journal — so there would be no way left to find out they are
+        there. Reading is part of the preflight, not an afterthought.
+        """
+        self.present()
+        self.store().path.parent.mkdir(parents=True, exist_ok=True)
+        self.store().path.write_bytes(b"{ not json at all")
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assert_no_artifacts_written()
+
+    def test_a_dry_run_also_refuses_an_unreadable_journal(self):
+        self.present()
+        self.store().path.parent.mkdir(parents=True, exist_ok=True)
+        self.store().path.write_bytes(b"{ not json at all")
+        code, _ = self.run_cli("install", "--cli", CLI, "--dry-run")
+        self.assertNotEqual(code, 0)
+
+    def test_a_report_says_how_much_this_run_placed(self):
+        """`rolled_back: false` alone reads as "the rollback failed" to something
+        that only checks the flag. The count says which it was."""
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["placed"], len(report["created"]))
+
+    def test_a_failed_reinstall_reports_that_it_placed_nothing(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.addCleanup(self.make_journal_unwritable())
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(report["placed"], 0)
+        self.assertFalse(report["rolled_back"])
+
+    def test_a_failed_reinstall_does_not_take_the_working_install_with_it(self):
+        """The rollback undoes this run, never what earlier runs already owned.
+
+        A second install creates nothing, so there is nothing to undo. Rolling
+        back the accumulated view instead would delete a working installation
+        while the journal — never written, because saving is what failed — goes
+        on claiming all of it is there. That is worse than the orphaned files
+        this command was fixed to prevent: the same lie, pointing the other way.
+        """
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        placed = self.snapshot()
+        owned = {entry.id for entry in self.installed_entries()}
+
+        self.addCleanup(self.make_journal_unwritable())
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertNotEqual(code, 0)
+        # Outside the snapshots, nothing moved: the first install's files are
+        # exactly what is still there. A snapshot generation is allowed to have
+        # appeared, because taking one is this run's own behaviour rather than a
+        # mutation of the earlier install, and excluding only that leaves the
+        # original claim — that a failed reinstall adds nothing else — intact.
+        root = snapshots_root(self.home)
+
+        def outside_the_snapshots(files):
+            return {path: content for path, content in files.items() if not path.is_relative_to(root)}
+
+        self.assertEqual(outside_the_snapshots(self.snapshot()), outside_the_snapshots(placed))
+        self.assertEqual({entry.id for entry in self.installed_entries()}, owned)
+        self.assertFalse(report["rolled_back"], "nothing was placed, so nothing was rolled back")
+
+    def test_a_failed_reinstall_leaves_the_installation_usable(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        restore_writable = self.make_journal_unwritable()
+        self.addCleanup(restore_writable)
+        self.run_cli("install", "--cli", CLI)
+
+        restore_writable()
+        _, report = self.run_cli("doctor")
+        self.assertEqual(report["clis"][0]["missing"], [])
+        self.assertEqual(report["clis"][0]["drifted"], [])
+
+    def test_the_rollback_admits_the_settings_file_it_could_not_take_back(self):
+        """The documented residue, said out loud instead of reported as a clean undo."""
+        self.present()
+        self.addCleanup(self.make_journal_unwritable())
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(report["left_behind"], [str(self.layout().settings_file)])
+
+    # The probe inside `existing = {... exists(path) ...}` has no test of its
+    # own, deliberately. Nothing changes on disk between it and the probe
+    # `plan` already made of the same documents, so no real condition can make
+    # one fail and the other succeed — and both refuse before a single
+    # artifact is placed, which is the same guarantee. `test_planner`'s
+    # `fail_exists` cases cover the plan-time refusal; a second test here
+    # would only be able to prove it by counting calls.
+
+
+class PrivilegeAndOwnershipTest(FakeHomeTestCase):
+    """The three refusals `RealHomeTestCase` cannot produce: see
+    `FakeHomeTestCase`'s docstring for why they stay on the double."""
 
     def test_root_is_refused_before_a_single_artifact_is_written(self):
         self.present()
@@ -309,118 +439,21 @@ class InstallTest(CommandTestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(self.filesystem.writes, [])
 
-    def test_an_install_that_cannot_be_recorded_is_taken_back_out(self):
-        """An installation nobody recorded is one nobody can uninstall."""
-        self.present()
-        self.filesystem.fail_always.add(self.store().path)
-        code, report = self.run_cli("install", "--cli", CLI)
-        self.assertNotEqual(code, 0)
-        self.assertEqual(report["status"], "failed")
-        self.assertTrue(report["rolled_back"])
-        left = [path for path in self.filesystem.files if path.is_relative_to(self.layout().config_dir)]
-        self.assertEqual(left, [self.layout().settings_file])
-
-    def test_a_journal_that_cannot_be_read_stops_the_install_before_it_writes(self):
-        """A journal we cannot read is one we cannot extend.
-
-        Discovering that after placing the artifacts would leave them on disk
-        with nothing recording them, and `doctor` would fail against the same
-        unreadable journal — so there would be no way left to find out they are
-        there. Reading is part of the preflight, not an afterthought.
-        """
-        self.present()
-        self.filesystem.files[self.store().path] = b"{ not json at all"
-        code, report = self.run_cli("install", "--cli", CLI)
-        self.assertNotEqual(code, 0)
-        self.assertEqual(report["status"], "failed")
-        self.assertEqual(self.filesystem.writes, [])
-
-    def test_a_dry_run_also_refuses_an_unreadable_journal(self):
-        self.present()
-        self.filesystem.files[self.store().path] = b"{ not json at all"
-        code, _ = self.run_cli("install", "--cli", CLI, "--dry-run")
-        self.assertNotEqual(code, 0)
-
-    def test_a_report_says_how_much_this_run_placed(self):
-        """`rolled_back: false` alone reads as "the rollback failed" to something
-        that only checks the flag. The count says which it was."""
-        self.present()
-        code, report = self.run_cli("install", "--cli", CLI)
-        self.assertEqual(code, 0)
-        self.assertEqual(report["placed"], len(report["created"]))
-
-    def test_a_failed_reinstall_reports_that_it_placed_nothing(self):
+    def test_root_is_refused_before_anything_is_taken_back(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
-        self.filesystem.fail_always.add(self.store().path)
-        _, report = self.run_cli("install", "--cli", CLI)
-        self.assertEqual(report["placed"], 0)
-        self.assertFalse(report["rolled_back"])
-
-    def test_a_failed_reinstall_does_not_take_the_working_install_with_it(self):
-        """The rollback undoes this run, never what earlier runs already owned.
-
-        A second install creates nothing, so there is nothing to undo. Rolling
-        back the accumulated view instead would delete a working installation
-        while the journal — never written, because saving is what failed — goes
-        on claiming all of it is there. That is worse than the orphaned files
-        this command was fixed to prevent: the same lie, pointing the other way.
-        """
-        self.present()
-        self.run_cli("install", "--cli", CLI)
-        placed = dict(self.filesystem.files)
-        owned = {entry.id for entry in self.installed_entries()}
-
-        self.filesystem.fail_always.add(self.store().path)
-        code, report = self.run_cli("install", "--cli", CLI)
-
+        self.filesystem.privileged = True
+        before = dict(self.filesystem.files)
+        code, _ = self.run_cli("uninstall", "--cli", CLI)
         self.assertNotEqual(code, 0)
-        # Outside the snapshots, nothing moved: the first install's files are
-        # exactly what is still there. A snapshot generation is allowed to have
-        # appeared, because taking one is this run's own behaviour rather than a
-        # mutation of the earlier install, and excluding only that leaves the
-        # original claim — that a failed reinstall adds nothing else — intact.
-        root = snapshots_root(self.home)
-
-        def outside_the_snapshots(files):
-            return {path: content for path, content in files.items() if not path.is_relative_to(root)}
-
-        self.assertEqual(outside_the_snapshots(self.filesystem.files), outside_the_snapshots(placed))
-        self.assertEqual({entry.id for entry in self.installed_entries()}, owned)
-        self.assertFalse(report["rolled_back"], "nothing was placed, so nothing was rolled back")
-
-    def test_a_failed_reinstall_leaves_the_installation_usable(self):
-        self.present()
-        self.run_cli("install", "--cli", CLI)
-        self.filesystem.fail_always.add(self.store().path)
-        self.run_cli("install", "--cli", CLI)
-
-        self.filesystem.fail_always.clear()
-        _, report = self.run_cli("doctor")
-        self.assertEqual(report["clis"][0]["missing"], [])
-        self.assertEqual(report["clis"][0]["drifted"], [])
-
-    def test_the_rollback_admits_the_settings_file_it_could_not_take_back(self):
-        """The documented residue, said out loud instead of reported as a clean undo."""
-        self.present()
-        self.filesystem.fail_always.add(self.store().path)
-        _, report = self.run_cli("install", "--cli", CLI)
-        self.assertEqual(report["left_behind"], [str(self.layout().settings_file)])
-
-    # The probe inside `existing = {... exists(path) ...}` has no test of its
-    # own, deliberately. Nothing changes on disk between it and the probe
-    # `plan` already made of the same documents, so no real condition can make
-    # one fail and the other succeed — and both refuse before a single
-    # artifact is placed, which is the same guarantee. `test_planner`'s
-    # `fail_exists` cases cover the plan-time refusal; a second test here
-    # would only be able to prove it by counting calls.
+        self.assertEqual(self.filesystem.files, before)
 
 
-class InstallMcpTest(CommandTestCase):
+class InstallMcpTest(RealHomeTestCase):
     """`--mcp` is the whole point of this unit: nothing installs unless named."""
 
     def settings(self) -> dict:
-        return json.loads(self.filesystem.files[self.layout().settings_file])
+        return json.loads(self.layout().settings_file.read_bytes())
 
     def convention_path(self, server_id: str) -> Path:
         # Derived, not spelled out: the core owns where a convention lands, and a
@@ -479,7 +512,7 @@ class InstallMcpTest(CommandTestCase):
         self.assertEqual(code, cli.FAILED)
         self.assertEqual(report["status"], "failed")
         self.assertIn("bogus", report["error"])
-        self.assertEqual(self.filesystem.writes, [])
+        self.assert_disk_untouched()
 
     def test_the_flag_is_repeatable(self):
         """No second shipped server exists yet, so this proves append semantics
@@ -510,13 +543,13 @@ class InstallMcpTest(CommandTestCase):
         omission about what this run is going to do."""
         self.present()
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
-        before = list(self.filesystem.writes)
+        before = self.snapshot()
 
         code, report = self.run_cli("install", "--cli", CLI, "--dry-run")
 
         self.assertEqual(code, 0)
         self.assertEqual({item["id"] for item in report["retired"]}, {"mcp:context7", "mcp-convention:context7"})
-        self.assertEqual(self.filesystem.writes, before)
+        self.assertEqual(self.snapshot(), before)
 
     def test_reinstalling_without_the_server_reports_what_it_retired(self):
         self.present()
@@ -555,7 +588,7 @@ class InstallMcpTest(CommandTestCase):
         self.present()
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         convention = self.convention_path("context7")
-        self.filesystem.fail_always.add(self.store().path)
+        self.addCleanup(self.make_journal_unwritable())
 
         code, report = self.run_cli("install", "--cli", CLI)
 
@@ -578,7 +611,7 @@ class InstallMcpTest(CommandTestCase):
         self.present()
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         convention = self.convention_path("context7")
-        self.filesystem.fail_remove.add(convention)
+        self.addCleanup(make_undeletable(convention))
 
         code, report = self.run_cli("install", "--cli", CLI)
 
@@ -598,7 +631,7 @@ class InstallMcpTest(CommandTestCase):
     # permissions, and the double has none.
 
 
-class InstallUnaccountedRetirementTest(CommandTestCase):
+class InstallUnaccountedRetirementTest(RealHomeTestCase):
     """A retiring reinstall can meet a journal entry it cannot account for: an
     appended list item whose recorded digest matches nothing currently
     present. The user having deleted it and the user having edited it beyond
@@ -711,11 +744,8 @@ class SecondaryFaultTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         settings = self.layout().settings_file
         settings.unlink()
-        # Real permissions: the convention file cannot be removed because the
-        # directory holding it refuses it, which is what makes retiring fail.
-        holder = self.convention().parent
-        self.addCleanup(holder.chmod, 0o755)
-        holder.chmod(0o555)
+        # The convention file cannot be removed, which is what makes retiring fail.
+        self.addCleanup(make_undeletable(self.convention()))
         self.refuse_to_probe_once_it_exists(settings)
 
         code, report = self.run_cli("install", "--cli", CLI)
@@ -727,7 +757,7 @@ class SecondaryFaultTest(RealHomeTestCase):
         self.assertTrue(self.convention().exists())
 
 
-class UninstallTest(CommandTestCase):
+class UninstallTest(RealHomeTestCase):
     def install(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
@@ -754,21 +784,13 @@ class UninstallTest(CommandTestCase):
     def test_an_artifact_the_user_edited_is_removed_too(self):
         self.install()
         edited = next(e for e in self.installed_entries() if e.kind == "file")
-        self.filesystem.files[edited.target] = b"the user rewrote this"
+        edited.target.write_bytes(b"the user rewrote this")
         _, report = self.run_cli("uninstall", "--cli", CLI)
         self.assertIn(edited.id, report["removed"])
-        self.assertNotIn(edited.target, self.filesystem.files)
-
-    def test_root_is_refused_before_anything_is_taken_back(self):
-        self.install()
-        self.filesystem.privileged = True
-        before = dict(self.filesystem.files)
-        code, _ = self.run_cli("uninstall", "--cli", CLI)
-        self.assertNotEqual(code, 0)
-        self.assertEqual(self.filesystem.files, before)
+        self.assertFalse(edited.target.exists())
 
 
-class DoctorTest(CommandTestCase):
+class DoctorTest(RealHomeTestCase):
     def install(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
@@ -798,23 +820,23 @@ class DoctorTest(CommandTestCase):
     def test_doctor_names_an_artifact_the_user_edited(self):
         self.install()
         edited = next(e for e in self.installed_entries() if e.kind == "file")
-        self.filesystem.files[edited.target] = b"changed by hand"
+        edited.target.write_bytes(b"changed by hand")
         _, report = self.run_cli("doctor")
         self.assertEqual(report["clis"][0]["drifted"], [edited.id])
 
     def test_doctor_names_an_artifact_that_went_missing(self):
         self.install()
         gone = next(e for e in self.installed_entries() if e.kind == "file")
-        del self.filesystem.files[gone.target]
+        gone.target.unlink()
         _, report = self.run_cli("doctor")
         self.assertEqual(report["clis"][0]["missing"], [gone.id])
 
     def test_doctor_notices_a_configuration_key_the_user_removed(self):
         self.install()
         key = next(e for e in self.installed_entries() if e.kind == "config-key" and not e.pointer.endswith("/-"))
-        document = json.loads(self.filesystem.files[key.target])
+        document = json.loads(key.target.read_bytes())
         del document["agent" if "agent" in key.pointer else key.pointer.strip("/").split("/")[0]]
-        self.filesystem.files[key.target] = json.dumps(document).encode("utf-8")
+        key.target.write_bytes(json.dumps(document).encode("utf-8"))
         _, report = self.run_cli("doctor")
         self.assertIn(key.id, report["clis"][0]["missing"])
 
@@ -823,7 +845,7 @@ class DoctorTest(CommandTestCase):
         claiming either would be inventing a fact doctor could not check."""
         self.install()
         unreadable = next(e for e in self.installed_entries() if e.kind == "file")
-        self.filesystem.fail_exists.add(unreadable.target)
+        self.refuse_to_probe_once_it_exists(unreadable.target)
         _, report = self.run_cli("doctor")
         entry = report["clis"][0]
         self.assertEqual(entry["unreadable"], [unreadable.id])
@@ -834,7 +856,7 @@ class DoctorTest(CommandTestCase):
         self.install()
         entries = self.installed_entries()
         unreadable = next(e for e in entries if e.kind == "file")
-        self.filesystem.fail_exists.add(unreadable.target)
+        self.refuse_to_probe_once_it_exists(unreadable.target)
         code, report = self.run_cli("doctor")
         self.assertEqual(code, 0)
         self.assertEqual(report["clis"][0]["artifacts"], len(entries))
@@ -842,25 +864,36 @@ class DoctorTest(CommandTestCase):
     def test_doctor_prose_mentions_what_could_not_be_determined(self):
         self.install()
         unreadable = next(e for e in self.installed_entries() if e.kind == "file")
-        self.filesystem.fail_exists.add(unreadable.target)
+        self.refuse_to_probe_once_it_exists(unreadable.target)
         _, report = self.run_cli("doctor")
         self.assertIn(unreadable.id, cli._prose(report))
 
     def test_doctor_never_writes(self):
         self.install()
-        self.filesystem.writes.clear()
+        before = self.snapshot()
         self.run_cli("doctor")
-        self.assertEqual(self.filesystem.writes, [])
+        self.assertEqual(self.snapshot(), before)
 
     def test_doctor_reports_a_damaged_journal_instead_of_pretending_nothing_is_installed(self):
         self.install()
-        self.filesystem.files[self.store().path] = b"{ not json"
+        self.store().path.write_bytes(b"{ not json")
         code, report = self.run_cli("doctor")
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
 
 
-class SnapshotTest(CommandTestCase):
+class SnapshotTest(RealHomeTestCase):
+    """Order matters for one test here — a snapshot must reach disk before
+    the first artifact it protects — and mtimes are too coarse to prove
+    that on real disk, so this class runs on `RecordingFileSystem` instead
+    of the bare port. Every other test in it still asserts on real disk
+    state; the recorder only adds bookkeeping around the same real writes.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.filesystem = RecordingFileSystem()
+
     def snapshots(self):
         return cli.snapshot_store(self.runtime())
 
@@ -898,8 +931,8 @@ class SnapshotTest(CommandTestCase):
     def test_a_file_that_existed_before_is_captured_with_its_previous_bytes_and_mode(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
-        before_content = self.filesystem.files[self.store().path]
-        before_mode = self.filesystem.modes[self.store().path]
+        before_content = self.store().path.read_bytes()
+        before_mode = stat.S_IMODE(self.store().path.stat().st_mode)
 
         self.run_cli("install", "--cli", CLI)
 
@@ -908,7 +941,7 @@ class SnapshotTest(CommandTestCase):
         self.assertTrue(entry.existed)
         self.assertEqual(entry.mode, f"{before_mode:04o}")
         blob_path = self.snapshots().root / "000002" / entry.blob
-        self.assertEqual(self.filesystem.files[blob_path], before_content)
+        self.assertEqual(blob_path.read_bytes(), before_content)
 
     def test_uninstalling_writes_a_snapshot_too(self):
         self.present()
@@ -919,11 +952,19 @@ class SnapshotTest(CommandTestCase):
 
     def test_when_the_snapshot_store_refuses_install_writes_nothing(self):
         self.present()
-        self.filesystem.fail_list.add(snapshots_root(self.home))
+        root = snapshots_root(self.home)
+        root.mkdir(parents=True, exist_ok=True)
+        restore = make_unreadable(root)
+        self.addCleanup(restore)
+
         code, report = self.run_cli("install", "--cli", CLI)
+
+        restore()
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
-        self.assertEqual(self.filesystem.writes, [])
+        self.assert_no_artifacts_written()
+        self.assertFalse(journal_path(self.home).exists())
+        self.assertEqual(self.filesystem.list_dir(root), [])
 
     def test_a_path_the_snapshot_cannot_probe_refuses_the_install_before_writing_anything(self):
         """The acceptance test for the whole unit, at the command a person
@@ -937,11 +978,15 @@ class SnapshotTest(CommandTestCase):
         that lies."""
         self.present()
         unreadable = self.layout().settings_file
-        self.filesystem.fail_exists.add(unreadable)
+        restore = make_unreadable(unreadable.parent)
+        self.addCleanup(restore)
+
         code, report = self.run_cli("install", "--cli", CLI)
+
+        restore()
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
-        self.assertEqual(self.filesystem.writes, [])
+        self.assert_no_artifacts_written()
         self.assertEqual(self.filesystem.list_dir(snapshots_root(self.home)), [])
 
     def test_when_the_snapshot_store_refuses_uninstall_removes_nothing(self):
@@ -954,14 +999,16 @@ class SnapshotTest(CommandTestCase):
         """
         self.present()
         self.run_cli("install", "--cli", CLI)
-        surviving = dict(self.filesystem.files)
-        self.filesystem.fail_list.add(snapshots_root(self.home))
+        surviving = self.snapshot()
+        restore = make_unreadable(snapshots_root(self.home))
+        self.addCleanup(restore)
 
         code, report = self.run_cli("uninstall", "--cli", CLI)
 
+        restore()
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
-        self.assertEqual(self.filesystem.files, surviving)
+        self.assertEqual(self.snapshot(), surviving)
         self.assertIsNotNone(self.installed_entries())
 
     def test_generation_numbers_advance_across_successive_commands(self):
@@ -972,7 +1019,7 @@ class SnapshotTest(CommandTestCase):
         self.assertIsNotNone(self.snapshots().read(2))
 
 
-class RestoreTest(CommandTestCase):
+class RestoreTest(RealHomeTestCase):
     def snapshots(self):
         return cli.snapshot_store(self.runtime())
 
@@ -988,8 +1035,8 @@ class RestoreTest(CommandTestCase):
         code, report = self.run_cli("restore", "2")
 
         self.assertEqual(code, 0)
-        self.assertEqual(self.filesystem.files[target], b"hand-edited by the user")
-        self.assertEqual(self.filesystem.modes[target], 0o600)
+        self.assertEqual(target.read_bytes(), b"hand-edited by the user")
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
         self.assertIn(str(target), report["written"])
 
     def test_a_restore_that_fails_partway_says_what_it_already_changed(self):
@@ -1008,7 +1055,7 @@ class RestoreTest(CommandTestCase):
         self.run_cli("install", "--cli", CLI)
         # The journal sorts after the prompt file, so the prompt is already back
         # by the time this refusal lands.
-        self.filesystem.fail_always.add(cli.journal_store(self.runtime()).path)
+        self.addCleanup(self.make_journal_unwritable())
 
         code, report = self.run_cli("restore", "2")
 
@@ -1021,12 +1068,12 @@ class RestoreTest(CommandTestCase):
         self.present()
         self.run_cli("install", "--cli", CLI)
         target = self.layout().system_prompt_file
-        self.assertIn(target, self.filesystem.files)
+        self.assertTrue(target.exists())
 
         code, report = self.run_cli("restore", "1")
 
         self.assertEqual(code, 0)
-        self.assertNotIn(target, self.filesystem.files)
+        self.assertFalse(target.exists())
         self.assertIn(str(target), report["removed"])
 
     def test_restoring_with_no_argument_picks_the_most_recent_readable_generation(self):
@@ -1061,14 +1108,16 @@ class RestoreTest(CommandTestCase):
     def test_when_the_snapshot_store_refuses_restore_writes_nothing(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
-        before = dict(self.filesystem.files)
-        self.filesystem.fail_list.add(snapshots_root(self.home))
+        before = self.snapshot()
+        restore = make_unreadable(snapshots_root(self.home))
+        self.addCleanup(restore)
 
         code, report = self.run_cli("restore")
 
+        restore()
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
-        self.assertEqual(self.filesystem.files, before)
+        self.assertEqual(self.snapshot(), before)
 
     def test_restoring_an_unreadable_generation_is_refused(self):
         self.present()
@@ -1087,7 +1136,7 @@ class RestoreTest(CommandTestCase):
         self.assertEqual(report["status"], "failed")
 
 
-class RetentionTest(CommandTestCase):
+class RetentionTest(RealHomeTestCase):
     def snapshots(self):
         return cli.snapshot_store(self.runtime())
 
@@ -1096,6 +1145,32 @@ class RetentionTest(CommandTestCase):
         for _ in range(6):
             self.run_cli("install", "--cli", CLI)
         self.assertEqual(self.snapshots().readable_generations(), [2, 3, 4, 5, 6])
+
+    def test_retention_run_twice_does_not_fail(self):
+        self.present()
+        for _ in range(6):
+            self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("uninstall", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["retention"]["failed"], [])
+
+
+class RetentionOnTheDoubleTest(FakeHomeTestCase):
+    """One retention failure real permissions cannot reproduce.
+
+    Making generation 1's removal fail while leaving generation 6's own
+    creation unaffected needs the two to answer to different permissions,
+    but both are a write to the very same parent directory — `snapshots/` —
+    on a real POSIX filesystem, so no chmod can separate them. Locking that
+    directory to block the removal blocks the new generation's own folder
+    too, which fails the run before retention ever runs, for a different
+    reason than the one this test exists to prove. The double can still tell
+    the two apart, so this one test stays on it rather than being weakened
+    into asserting something else.
+    """
+
+    def snapshots(self):
+        return cli.snapshot_store(self.runtime())
 
     def test_a_retention_failure_leaves_the_command_successful_and_is_still_reported(self):
         self.present()
@@ -1110,16 +1185,8 @@ class RetentionTest(CommandTestCase):
         self.assertTrue(report["retention"]["failed"])
         self.assertIn(1, self.snapshots().readable_generations())
 
-    def test_retention_run_twice_does_not_fail(self):
-        self.present()
-        for _ in range(6):
-            self.run_cli("install", "--cli", CLI)
-        code, report = self.run_cli("uninstall", "--cli", CLI)
-        self.assertEqual(code, 0)
-        self.assertEqual(report["retention"]["failed"], [])
 
-
-class HumanOutputTest(CommandTestCase):
+class HumanOutputTest(RealHomeTestCase):
     def test_without_json_the_output_is_prose_and_not_a_document(self):
         self.present()
         context = self.runtime()
@@ -1139,13 +1206,13 @@ class HumanOutputTest(CommandTestCase):
 
     def test_prose_does_not_claim_nothing_changed_when_something_was_left_behind(self):
         self.present()
-        self.filesystem.fail_always.add(self.store().path)
+        self.addCleanup(self.make_journal_unwritable())
         context = self.runtime()
         cli.main(["install", "--cli", CLI], runtime=context)
         self.assertNotIn("Nothing was changed", context.out.getvalue())
 
 
-class ActivationTest(CommandTestCase):
+class ActivationTest(RealHomeTestCase):
     """Writing the files is not the same as the CLI having read them.
 
     A CLI that loads its configuration once, at startup, keeps running on what it
