@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import tempfile
 import tomllib
 import unittest
@@ -32,9 +31,10 @@ from pegasus.adapters import available
 from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
 from pegasus.core.types import Environment
-from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import journal_path
 from pegasus.infra.snapshot_store_file import snapshots_root
+from platform_conditions import fail_probe_once_it_exists, make_undeletable, make_unwritable
+from real_home import RealHomeTestCase as _RealHomeTestCase
 
 AT = "2026-08-14T00:00:00+00:00"
 CLI = available().ids()[0]
@@ -80,33 +80,13 @@ class CommandTestCase(unittest.TestCase):
 
 
 
-class RealHomeTestCase(unittest.TestCase):
-    """A throwaway home with the real POSIX filesystem underneath it.
+class RealHomeTestCase(_RealHomeTestCase):
+    """The generic real-home base plus what only the CLI surface needs.
 
-    The in-memory double answers the port, which is what makes most of this
-    module fast to write, but it cannot be wrong in the ways a filesystem is
-    wrong: it has no permission bits, so a path that exists and cannot be
-    read is not a state it can be put into. Every failure it can express had
-    to be taught to it one hook at a time, and the four defects the previous
-    unit's reviews found all lived in the gap between what it does and what
-    the operating system does.
-
-    So the conditions here are produced rather than injected: a directory is
-    made read-only and the write that lands in it fails for the reason a real
-    write fails. What no permission bit can produce — a path whose state
-    could be determined a moment ago and cannot be now — is stubbed at the
-    system call, the way `test_filesystem` already stubs `os.replace` to
-    stand in for a full disk. That is one line of the operating system
-    replaced, not a filesystem reimplemented.
+    The throwaway home and the real POSIX filesystem come from the shared
+    base; `runtime`, `layout`, `present` and `run_cli` are specific to
+    driving `cli.main`, which is why they live here rather than there.
     """
-
-    def setUp(self):
-        if os.geteuid() == 0:
-            self.skipTest("root is not refused by permission bits, and Pegasus refuses to install as root")
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.home = Path(self.directory.name)
-        self.filesystem = PosixFileSystem()
 
     def runtime(self) -> cli.Runtime:
         return cli.Runtime(
@@ -135,32 +115,10 @@ class RealHomeTestCase(unittest.TestCase):
         """
         snapshots_root(self.home).mkdir(parents=True, exist_ok=True)
         data_dir = journal_path(self.home).parent
-        # Restored before the temporary directory is removed: cleanups run in
-        # reverse, and a read-only directory cannot be deleted.
-        self.addCleanup(data_dir.chmod, 0o700)
-        data_dir.chmod(0o555)
+        self.addCleanup(make_unwritable(data_dir))
 
     def refuse_to_probe_once_it_exists(self, path: Path) -> None:
-        """Make determining this path's state fail, but only once something
-        is really there.
-
-        Keyed on the state of the disk, never on a call count. The document
-        does not exist when the run first probes it, and `apply` creates it
-        before the handler probes it again — so "once it exists" names the
-        two moments apart without encoding how many times the installer
-        happens to ask today. A count would: add one probe anywhere upstream
-        and the failure lands somewhere else while the test stays green.
-        """
-        original = os.stat
-
-        def patched(target, *arguments, **keywords):
-            answer = original(target, *arguments, **keywords)
-            if not isinstance(target, int) and Path(target) == path:
-                raise PermissionError(13, "Permission denied", str(target))
-            return answer
-
-        self.addCleanup(setattr, os, "stat", original)
-        os.stat = patched
+        self.addCleanup(fail_probe_once_it_exists(path))
 
 
 class VersionTest(unittest.TestCase):
@@ -711,11 +669,8 @@ class SecondaryFaultTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         settings = self.layout().settings_file
         settings.unlink()
-        # Real permissions: the convention file cannot be removed because the
-        # directory holding it refuses it, which is what makes retiring fail.
-        holder = self.convention().parent
-        self.addCleanup(holder.chmod, 0o755)
-        holder.chmod(0o555)
+        # The convention file cannot be removed, which is what makes retiring fail.
+        self.addCleanup(make_undeletable(self.convention()))
         self.refuse_to_probe_once_it_exists(settings)
 
         code, report = self.run_cli("install", "--cli", CLI)
