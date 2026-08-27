@@ -27,7 +27,22 @@ class RealHomeTestCase(unittest.TestCase):
     def setUp(self):
         if os.geteuid() == 0:
             self.skipTest("root is not refused by permission bits, and Pegasus refuses to install as root")
-        self.directory = tempfile.TemporaryDirectory()
+        self.directory = tempfile.TemporaryDirectory(dir=_scratch_root())
         self.addCleanup(self.directory.cleanup)
         self.home = Path(self.directory.name)
         self.filesystem = PosixFileSystem()
+
+
+def _scratch_root() -> str | None:
+    """Where the throwaway home is carved out of.
+
+    `write_atomic` waits for the device on every write, twice, so that a power
+    cut cannot leave a user's configuration half written. A home that is
+    deleted at the end of the test has nothing to survive, and that wait is
+    most of the suite's running time. A memory-backed filesystem keeps the
+    call doing exactly what it does in production and gives it nothing to
+    spin up; where there is none, the default location is used and the tests
+    are only slower.
+    """
+    memory = Path("/dev/shm")
+    return str(memory) if memory.is_dir() and os.access(memory, os.W_OK) else None
