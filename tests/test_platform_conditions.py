@@ -10,6 +10,7 @@ from pathlib import Path
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.ports.filesystem import FileSystemError
 from platform_conditions import (
+    fail_next_removal_once,
     fail_next_write_once,
     fail_probe_once_it_exists,
     make_undeletable,
@@ -66,6 +67,15 @@ class PlatformConditionsTest(unittest.TestCase):
             self.fs.write_atomic(target, b"first")
         self.fs.write_atomic(target, b"second")
         self.assertEqual(target.read_bytes(), b"second")
+
+    def test_fail_next_removal_once_fails_the_first_removal_and_lets_the_second_through(self):
+        target = self.root / "note.txt"
+        target.write_bytes(b"hello")
+        self.addCleanup(fail_next_removal_once(target))
+        with self.assertRaises(FileSystemError):
+            self.fs.remove(target)
+        self.fs.remove(target)
+        self.assertFalse(target.exists())
 
     def test_fail_probe_once_it_exists_lets_the_first_absence_through(self):
         target = self.root / "note.txt"

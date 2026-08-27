@@ -85,6 +85,28 @@ def fail_next_write_once(path: Path) -> Callable[[], None]:
     return lambda: _restore(os, "replace", patched, original)
 
 
+def fail_next_removal_once(path: Path) -> Callable[[], None]:
+    """Make the next removal of this path fail, and the one after it succeed.
+
+    The mirror of `fail_next_write_once`, and needed for the same reason:
+    creating a file and deleting one in the same directory are governed by
+    the same permission bit, so no mode can refuse a removal while still
+    allowing the write that has to succeed first.
+    """
+    original = os.unlink
+    triggered = False
+
+    def patched(target, *arguments, **keywords):
+        nonlocal triggered
+        if not triggered and Path(target) == path:
+            triggered = True
+            raise OSError(13, "Permission denied", str(target))
+        return original(target, *arguments, **keywords)
+
+    os.unlink = patched
+    return lambda: _restore(os, "unlink", patched, original)
+
+
 def fail_probe_once_it_exists(path: Path) -> Callable[[], None]:
     """Make determining this path's state fail, but only once something is
     really there.
