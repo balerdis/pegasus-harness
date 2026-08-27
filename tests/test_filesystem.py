@@ -99,6 +99,23 @@ class PosixFileSystemTest(unittest.TestCase):
         self.assertTrue(self.fs.exists(self.root))
         self.assertFalse(self.fs.exists(self.root / "absent.txt"))
 
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses permission bits")
+    def test_exists_raises_rather_than_reporting_absent_when_a_parent_cannot_be_read(self):
+        """A directory nobody can traverse hides everything under it, and
+        the fifteen files down there are not absent just because they could
+        not be seen. Reporting them as absent is what let a real `restore`
+        delete sixteen files that were on disk the whole time."""
+        blocked = self.root / "blocked"
+        blocked.mkdir()
+        present = blocked / "inside" / "note.txt"
+        present.parent.mkdir()
+        present.write_bytes(b"still here")
+        blocked.chmod(0o000)
+        self.addCleanup(blocked.chmod, 0o755)
+
+        with self.assertRaises(FileSystemError):
+            self.fs.exists(present)
+
     # --- Removing ---
 
     def test_remove_deletes_the_file(self):
@@ -216,6 +233,30 @@ class PosixFileSystemTest(unittest.TestCase):
     def test_listing_a_file_raises_the_port_error(self):
         target = self.root / "note.txt"
         target.write_bytes(b"")
+        with self.assertRaises(FileSystemError):
+            self.fs.list_dir(target)
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses permission bits")
+    def test_listing_raises_rather_than_reporting_empty_when_a_parent_cannot_be_read(self):
+        blocked = self.root / "blocked"
+        blocked.mkdir()
+        target = blocked / "inside"
+        target.mkdir()
+        (target / "note.txt").write_bytes(b"still here")
+        blocked.chmod(0o000)
+        self.addCleanup(blocked.chmod, 0o755)
+
+        with self.assertRaises(FileSystemError):
+            self.fs.list_dir(target)
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses permission bits")
+    def test_listing_raises_rather_than_reporting_empty_for_a_directory_that_cannot_be_read_itself(self):
+        target = self.root / "locked"
+        target.mkdir()
+        (target / "note.txt").write_bytes(b"still here")
+        target.chmod(0o000)
+        self.addCleanup(target.chmod, 0o755)
+
         with self.assertRaises(FileSystemError):
             self.fs.list_dir(target)
 

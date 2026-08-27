@@ -277,30 +277,30 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     try:
         stale = planner.retire(runtime.filesystem, replace(placed, entries=plan.retirements))
     except (FileSystemError, planner.PlannerError) as error:
-        rolled_back, failures = planner.unplace(runtime.filesystem, applied, placed)
-        left = sorted(str(path) for path in documents - existing if runtime.filesystem.exists(path))
+        removed, failures = _undo_placements(runtime.filesystem, applied, placed)
+        left = _left_behind(runtime.filesystem, documents - existing)
         raise _unretirable(
             error,
             left,
             placed=len(applied.records),
             replaced=len(applied.replaced),
-            failures=[reason for _, reason in failures],
-            removed=len(rolled_back.removed),
+            failures=failures,
+            removed=removed,
         ) from error
 
     merged = _merged(journal, adapter, environment, catalog, applied.records, stale.removed, runtime.now)
     try:
         store.save(journal_module.with_install(journal, merged))
     except JournalStoreError as error:
-        rolled_back, failures = planner.unplace(runtime.filesystem, applied, placed)
-        left = sorted(str(path) for path in documents - existing if runtime.filesystem.exists(path))
+        removed, failures = _undo_placements(runtime.filesystem, applied, placed)
+        left = _left_behind(runtime.filesystem, documents - existing)
         raise _unrecordable(
             error,
             left,
             placed=len(applied.records),
             replaced=len(applied.replaced),
-            failures=[reason for _, reason in failures],
-            removed=len(rolled_back.removed),
+            failures=failures,
+            removed=removed,
             retired=list(stale.removed),
         ) from error
 
@@ -489,6 +489,7 @@ def _health(adapter, environment: Environment, journal, runtime: Runtime) -> dic
         "artifacts": len(install.entries) if install else 0,
         "drifted": [],
         "missing": [],
+        "unreadable": [],
     }
     if install is None:
         return health
@@ -499,7 +500,15 @@ def _health(adapter, environment: Environment, journal, runtime: Runtime) -> dic
     health["activation"] = list(adapter.activation_steps())
 
     for entry in install.entries:
-        current = _current_digest(runtime.filesystem, entry)
+        # One entry a permission bit hides must not take the rest of the
+        # report down with it — a doctor that dies over a single unreadable
+        # artifact is worse than the per-entry table it would otherwise
+        # produce.
+        try:
+            current = _current_digest(runtime.filesystem, entry)
+        except FileSystemError:
+            health["unreadable"].append(entry.id)
+            continue
         if current is None:
             health["missing"].append(entry.id)
         elif current != entry.after_digest:
@@ -508,7 +517,12 @@ def _health(adapter, environment: Environment, journal, runtime: Runtime) -> dic
 
 
 def _current_digest(filesystem: FileSystem, entry: Record) -> str | None:
-    """What the artifact hashes to right now, or ``None`` if it is not there."""
+    """What the artifact hashes to right now, or ``None`` if it is not there.
+
+    Raises :class:`FileSystemError` when even that cannot be told — the
+    caller buckets that separately from "not there", because it is not the
+    same fact.
+    """
     if not filesystem.exists(entry.target):
         return None
     if entry.kind == "file":
@@ -722,6 +736,50 @@ def _recorded(record: Record) -> dict[str, Any]:
     return {"id": record.id, "kind": record.kind, "target": str(record.target)}
 
 
+def _undo_placements(
+    filesystem: FileSystem, applied: planner.Applied, placed: Install
+) -> tuple[int, list[str]]:
+    """Take this run's own placements back out, and never raise doing it.
+
+    ``unplace`` probes as it works — retiring a file asks whether it is there,
+    and retiring a key reads the document holding it — so it can fail for the
+    same reason the handler calling it is already reporting. Letting that
+    second failure escape replaces the specific rollback report with `main`'s
+    generic one, which is the opposite of what a person needs from the one
+    message they read when something has already gone wrong.
+
+    So a rollback that cannot finish is reported as a rollback that could not
+    finish, in the vocabulary the report already has for exactly that.
+    """
+    try:
+        retired, failures = planner.unplace(filesystem, applied, placed)
+    except (FileSystemError, planner.PlannerError) as error:
+        return 0, [f"the rollback could not be completed: {error}"]
+    return len(retired.removed), [reason for _, reason in failures]
+
+
+def _left_behind(filesystem: FileSystem, candidates: set[Path]) -> list[str]:
+    """Which of this run's freshly created, now-rolled-back documents are still
+    there, empty — for the rollback report a person reads when something has
+    already gone wrong.
+
+    Called from inside a handler that is already reporting a first failure, so
+    a second one here must not escape it: escaping would replace the specific
+    `_unretirable`/`_unrecordable` report with `main`'s generic one, over the
+    exact path a user reads when things went sideways. A candidate whose state
+    cannot be told is left out rather than guessed at either way — dropping it
+    silently is honest, unlike claiming it is there or claiming it is gone.
+    """
+    left: list[str] = []
+    for path in candidates:
+        try:
+            if filesystem.exists(path):
+                left.append(str(path))
+        except FileSystemError:
+            continue
+    return sorted(left)
+
+
 def _left(step: planner.Step) -> dict[str, Any]:
     return {"id": step.artifact.id, "target": str(step.artifact.path), "reason": step.reason}
 
@@ -805,8 +863,12 @@ def _cli_prose(entry: dict[str, Any]) -> str:
     if not entry["pegasus_installed"]:
         return f"{entry['display_name']}: present at {entry['config_dir']}, Pegasus not installed."
     line = f"{entry['display_name']}: {entry['artifacts']} artifacts installed at {entry['config_dir']}."
-    for label, key in (("changed by hand", "drifted"), ("missing", "missing")):
-        if entry[key]:
+    for label, key in (
+        ("changed by hand", "drifted"),
+        ("missing", "missing"),
+        ("could not be checked", "unreadable"),
+    ):
+        if entry.get(key):
             line += f" {len(entry[key])} {label}: {', '.join(entry[key])}."
     # A condition rather than an order: whoever already restarted is done, and
     # telling them again every time would turn the notice into noise.

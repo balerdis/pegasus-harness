@@ -168,11 +168,24 @@ class FileSnapshotStore:
             raise SnapshotStoreError(f"cannot read blob {blob!r} of generation {generation}: {error}") from error
 
     def readable_generations(self) -> list[int]:
-        return [
-            generation
-            for generation in sorted(self._claimed_generations())
-            if self._fs.exists(self._root / _generation_name(generation) / MANIFEST_FILENAME)
-        ]
+        """Every claimed generation whose manifest can be shown to be there.
+
+        One old folder this process cannot probe must not blind `restore` to
+        every generation, including a good, newer one — so a generation whose
+        manifest cannot even be checked for existence is treated the same as
+        one that turned out not to have a manifest: left out, not fatal to
+        the rest of the list.
+        """
+        readable: list[int] = []
+        for generation in sorted(self._claimed_generations()):
+            manifest_path = self._root / _generation_name(generation) / MANIFEST_FILENAME
+            try:
+                found = self._fs.exists(manifest_path)
+            except FileSystemError:
+                continue
+            if found:
+                readable.append(generation)
+        return readable
 
     def most_recent_readable(self) -> int | None:
         readable = self.readable_generations()

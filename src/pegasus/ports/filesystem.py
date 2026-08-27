@@ -36,7 +36,15 @@ class FileSystem(Protocol):
     # --- Reading ---
 
     def exists(self, path: Path) -> bool:
-        """Whether anything is at this path. Never raises."""
+        """Whether anything is at this path.
+
+        Raises :class:`FileSystemError` when that cannot be told — an
+        unreadable parent directory, most often — rather than returning
+        ``False``. ``False`` means absent, and a caller that treats "cannot
+        tell" as "absent" can go on to delete or overwrite something that was
+        there all along; a bool cannot carry both meanings without one of
+        them lying.
+        """
 
     def read_bytes(self, path: Path) -> bytes:
         """Read a file whole. Raises :class:`FileSystemError` if it cannot be read."""
@@ -57,7 +65,10 @@ class FileSystem(Protocol):
         :meth:`remove`: what is absent is not an error. Sorting is not needed
         by anything that only computes a maximum, but a port that returned
         entries in arbitrary order would make every caller's tests brittle.
-        Raises :class:`FileSystemError` when the path exists but is a file.
+        Raises :class:`FileSystemError` when the path exists but is a file,
+        and the same when it cannot be told whether the path exists at all —
+        an unreadable directory does not list as empty; that would say
+        nothing is there when the truth is only that it could not be seen.
         """
 
     # --- Writing ---
