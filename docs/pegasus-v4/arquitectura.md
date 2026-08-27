@@ -790,8 +790,8 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira. El retiro salió genérico: alcanza a cualquier artefacto que el journal reclame y el render ya no produzca | Entregada |
 | 8b | Directorio propio, formas `npm` y `download` | Los MCPs que traen binario quedan disponibles sin vendorizar ni compilar ninguno, con versión fija e integridad verificada | Pendiente |
 | 9 | El digest deja de ser permiso; snapshot, `restore` y retención | Instalar y desinstalar pisan lo que el journal reclama, y `restore` devuelve el estado exacto anterior al último comando | Entregada |
-| 10 | El puerto de filesystem puede decir "no puedo saberlo" | Una ruta que existe y no se puede leer deja de hacerse pasar por ausente: `exists` y `list_dir`, y los trece sitios que les creen | Pendiente |
-| 11 | `mode_of` y `owned_by_current_user` | Un modo que no se pudo leer deja de convertirse en `0o644` al deshacer, y un guard que falla cerrado lo dice en vez de fingir una respuesta | Esbozada, sin medir |
+| 10 | El puerto de filesystem puede decir "no puedo saberlo" | Una ruta que existe y no se puede leer deja de hacerse pasar por ausente: `exists` y `list_dir`, y los trece sitios que les creen | Entregada |
+| 11 | Los permisos dejan de ser un octal en el núcleo | Ningún literal octal de permisos bajo `core/` ni `ports/`; el bit de ejecución y el estado privado se dicen como lo que son, y un guard que falla cerrado lo declara | Esbozada, sin medir |
 
 La unidad 1b genera el catálogo **del contenido presente**, no del contenido final: los descriptores de los 10 agentes SDD y las categorías `mcp/` y `policies/` llegan en unidades posteriores.
 
@@ -889,7 +889,7 @@ El subdirectorio propio no es cosmético. `_shared/` ya tiene dos convenciones e
 
 Eso resuelve el alcance sin condicionales en la prosa y sin conocimiento cruzado. **La referencia es siempre la misma frase; lo condicional es el archivo.** Si el servidor no se eligió, el archivo no se escribe, la cláusula defensiva se activa, y ningún agente leyó una convención que no le tocaba. La alternativa —enlazar la convención globalmente, como hace el prompt de sistema— se descartó: le habría mandado la convención de cada servidor a los doce agentes, que es el mismo defecto que esta unidad viene a corregir.
 
-#### Los dos tests que esta unidad tiene que voltear
+#### Los dos tests que esta unidad volteó
 
 Dos tests afirmaban la ausencia de MCP, y los dos eran correctos: describían el estado real. Se volvieron rojos como primer paso de 8a1 y el código los puso en verde. Lo que sigue es por qué el segundo no podía simplemente actualizarse.
 
@@ -941,25 +941,25 @@ Hoy el digest cumple dos papeles a la vez: es lo que decide si un artefacto se p
 
 El digest deja de ser una condición que el planner consulta antes de escribir. La pregunta "¿esto es lo que dejamos la vez pasada?" se borra del camino de instalar y de desinstalar, y la única pregunta que sigue viva es "¿esto es nuestro?", que contesta el journal solo.
 
-Conviene decir primero qué NO justifica el snapshot, porque los dos argumentos obvios están mal. El caso C —una dirección que el journal no reclama y que la instalación quiere ocupar— ya está protegido: se pide confirmación explícita, y el snapshot no le agrega nada, porque ahí nunca se escribe sin que alguien mire. Y una instalación que se corta a mitad de camino ya está protegida por el rollback en memoria que hoy vive en el planner (`Applied.replaced` y `_put_back`, `planner.py:396-403`): ese mecanismo deshace lo que un solo comando alcanzó a tocar, mientras el comando está corriendo.
+Conviene decir primero qué NO justifica el snapshot, porque los dos argumentos obvios están mal. El caso C —una dirección que el journal no reclama y que la instalación quiere ocupar— ya está protegido: se pide confirmación explícita, y el snapshot no le agrega nada, porque ahí nunca se escribe sin que alguien mire. Y una instalación que se corta a mitad de camino ya está protegida por el rollback en memoria que hoy vive en el planner (`Applied.replaced` y `_put_back`, `planner.py`): ese mecanismo deshace lo que un solo comando alcanzó a tocar, mientras el comando está corriendo.
 
 El hueco real es uno solo: **una dirección que el journal sí reclama, donde el usuario editó a mano el archivo que es nuestro.** Ahí la política nueva escribe sin preguntar —es la primera regla de la lista—, así que no hay consentimiento y no hay aviso. El snapshot existe para que ese contenido no desaparezca sin dejar rastro en ningún otro lado. El precio se dice en voz alta: si pasaron más instalaciones que las que la retención guarda, el contenido original no existe en ningún lado.
 
-#### Lo que muere
+#### Lo que murió, y la lección que dejó
 
-`ownership.still_ours` y sus dos llamadores (`planner.py:187` en instalar, `planner.py:490` en desinstalar); el resultado `preserved` en los dos caminos; los gates de `MUTATED` en `_file_step` (`planner.py:176-180`) y en `_key_step` (`planner.py:206-208`); `Record.before`; `Record.adopted`; el resultado `restored`; la decisión de restaurar contra remover en `journal.retirement` (`journal.py:106-108`); `Mutation`, `with_mutation` y `with_adoption`; y `render_model_assignment` de `ports/cli_adapter.py` —con lo que `registry.py:24-30` pasa de exigir tres métodos de modelo a exigir dos—.
+El inventario de símbolos borrados vivía acá y se retiró: una vez que un símbolo no existe, listarlo no ayuda a nadie —no se puede ir a mirar— y la lista sólo envejece. Lo que sí vale la pena conservar es por qué el borrado salió barato.
 
-Quedan huérfanos dos lugares que conviene nombrar para que no sorprendan en la revisión: `_file_digest` (`planner.py:560-563`) pierde a su único llamador, y `_amend` y `_mutated` (`journal.py:152-164`) sólo son alcanzables desde `with_mutation` y `with_adoption`, que mueren con esta unidad.
+**`with_mutation` y `with_adoption` nunca tuvieron un llamador de producción.** Sus únicos call sites eran los tests unitarios del propio journal. El motor que se distribuye jamás produjo una mutación ni un registro adoptado, porque el comando que la produciría —`models set`— todavía no existe. Se borró un mecanismo completo, probado y serializado, que no tenía un solo usuario.
 
-Y una cosa que conviene decir sin vueltas, porque es la que hizo barato el borrado: **`with_mutation` y `with_adoption` nunca tuvieron un llamador de producción**. Sus únicos call sites eran los tests unitarios del propio journal. El motor que se distribuye jamás produjo una mutación ni un registro adoptado, porque el comando que la produciría —`models set`— todavía no existe. Se borró un mecanismo completo, probado y serializado, que no tenía un solo usuario.
+Eso deja una pregunta que conviene hacerse antes de construir, no después: **si esto se puede borrar sin que nadie lo note, ¿por qué estaba?** La respuesta fue que se construyó para una superficie —la asignación de modelos— que se diseñó antes y se sigue posponiendo. Un mecanismo sin llamador es una apuesta a que el llamador va a llegar, y acá la apuesta se perdió por dos unidades enteras.
 
 #### Lo que sobrevive, y no por razones de política
 
-`unaccounted` sobrevive: un ítem de una lista no tiene dirección propia, así que "el usuario lo borró" y "el usuario lo editó hasta volverlo irreconocible" son físicamente indistinguibles, y esto sólo aplica a listas que todavía tienen sobrevivientes. El digest sobrevive como identificador de esos ítems y como dato de `doctor`. `ownership.occupies` sobrevive porque es exactamente la detección del caso C. `retire` y `unplace` sobreviven en su estructura actual. `cli._merged` sobrevive. Y `Capability.PER_AGENT_MODEL` sigue clasificada `INTERACTIVE` en `catalog.py:33`: esta unidad no la reclasifica.
+`unaccounted` sobrevive: un ítem de una lista no tiene dirección propia, así que "el usuario lo borró" y "el usuario lo editó hasta volverlo irreconocible" son físicamente indistinguibles, y esto sólo aplica a listas que todavía tienen sobrevivientes. El digest sobrevive como identificador de esos ítems y como dato de `doctor`. `ownership.occupies` sobrevive porque es exactamente la detección del caso C. `retire` y `unplace` sobreviven en su estructura actual. `cli._merged` sobrevive. Y `Capability.PER_AGENT_MODEL` sigue clasificada `INTERACTIVE` en `catalog.py`: esta unidad no la reclasifica.
 
 #### Asignación de modelo — lo que esta unidad hace y lo que no
 
-El diseño actual asigna modelos registrando una mutación sobre nuestro propio artefacto: `journal.py:147` tiene hardcodeado el literal `"set-model-adopted"`. Ese mecanismo muere acá. El reemplazo —que se construye con el menú interactivo, no en esta unidad— se resume en un principio:
+El diseño actual asigna modelos registrando una mutación sobre nuestro propio artefacto: `journal.py` tiene hardcodeado el literal `"set-model-adopted"` en `_amend`. Ese mecanismo muere acá. El reemplazo —que se construye con el menú interactivo, no en esta unidad— se resume en un principio:
 
 > Una asignación de modelo no es una mutación de nuestro artefacto. Es una preferencia que vive en el estado propio de Pegasus y participa del render.
 
@@ -967,9 +967,9 @@ Dos consecuencias quedan registradas para cuando llegue esa unidad. Pisar el art
 
 #### El snapshot — el contrato de diseño
 
-El snapshot captura el archivo entero, siempre. Un blob por archivo tocado, sin importar si Pegasus iba a escribir el archivo completo o sólo una clave adentro. `restore` devuelve bytes exactos y modo exacto, sin merge ni reconstrucción — el modo importa porque `planner.py:310` ya escribe un documento de configuración con el modo que el archivo tenía antes, y devolverlo como `0644` rompería algo que el motor ya respeta hoy.
+El snapshot captura el archivo entero, siempre. Un blob por archivo tocado, sin importar si Pegasus iba a escribir el archivo completo o sólo una clave adentro. `restore` devuelve bytes exactos y modo exacto, sin merge ni reconstrucción — el modo importa porque `_write_document`, en `planner.py`, ya escribe un documento de configuración con el modo que el archivo tenía antes, y devolverlo como `0644` rompería algo que el motor ya respeta hoy.
 
-El snapshot captura también el journal. El journal no está en `plan.placements` —se guarda aparte, en `cli.py:198`—, así que hay que agregarlo a mano a lo que se captura. Si no, `restore` devuelve los archivos al estado anterior mientras el journal sigue reclamando la versión nueva, y la próxima instalación compara contra las huellas equivocadas.
+El snapshot captura también el journal. El journal no está en `plan.placements` —lo guarda el store propio, no el planner—, así que hay que agregarlo a mano a lo que se captura. Si no, `restore` devuelve los archivos al estado anterior mientras el journal sigue reclamando la versión nueva, y la próxima instalación compara contra las huellas equivocadas.
 
 Es una carpeta por generación, numerada con un número creciente, colgando del mismo directorio donde vive el journal:
 
@@ -982,13 +982,13 @@ Es una carpeta por generación, numerada con un número creciente, colgando del 
 
 El manifest se escribe último, como marca de que la generación está completa. Una carpeta sin manifest la ignoran tanto `restore` como la retención. Cada entrada del manifest tiene la ruta, `existed`, el modo, y la referencia al blob. `existed: false` significa que ahí no había archivo, así que volver a ese estado es borrar la ruta — eso es lo que permite que `restore` devuelva el estado anterior exacto y no simplemente sobrescriba.
 
-La fecha va adentro del manifest, no en el nombre de la carpeta. La razón real: en los tests el reloj es un literal fijo (`tests/test_cli.py:49`), y el test que prueba "hay snapshot en instalar Y en desinstalar" toma exactamente dos snapshots en una misma corrida — con la fecha en el nombre, colisionarían. Una razón secundaria: `timespec="seconds"` no da orden total, y la retención necesita ordenar. No vale el argumento de que en producción dos snapshots en el mismo segundo son improbables — ese argumento se consideró y se descartó.
+La fecha va adentro del manifest, no en el nombre de la carpeta. La razón real: en los tests el reloj es un literal fijo (`AT`, en `tests/test_cli.py`), y el test que prueba "hay snapshot en instalar Y en desinstalar" toma exactamente dos snapshots en una misma corrida — con la fecha en el nombre, colisionarían. Una razón secundaria: `timespec="seconds"` no da orden total, y la retención necesita ordenar. No vale el argumento de que en producción dos snapshots en el mismo segundo son improbables — ese argumento se consideró y se descartó.
 
 `restore` deshace la instalación completa, no un rescate selectivo archivo por archivo. Devuelve todo lo que la instalación tocó, y hay que decirlo sin vueltas: eso significa que también se vuelve a la versión anterior de todo lo demás que esa instalación actualizó, no sólo del archivo que motivó la recuperación.
 
 La retención guarda 5 generaciones, y no es un argumento de disco: el contenido son 80 archivos y 356 KB, el catálogo renderiza 90 archivos y 18 claves de configuración, así que un snapshot de reinstalación son unos 400 KB y cinco generaciones son unos 2 MB. Lo que la retención decide en realidad es cuánto atrás llega la promesa de recuperación.
 
-El puerto de filesystem crece dos métodos: `list_dir` —para calcular el próximo número de generación y para la retención— y uno para borrar un directorio, que sólo usa la retención. Hace falta porque `remove` es explícitamente sólo para archivos (`ports/filesystem.py:65-70`; en `fs_posix.py:75-79` es `path.unlink`, que falla contra un directorio). No hay archivos comprimidos en ningún lado de `src/`: los snapshots son archivos sueltos, por diseño.
+El puerto de filesystem crece dos métodos: `list_dir` —para calcular el próximo número de generación y para la retención— y uno para borrar un directorio, que sólo usa la retención. Hace falta porque `remove` es explícitamente sólo para archivos (`ports/filesystem.py`; en `fs_posix.py` es `path.unlink`, que falla contra un directorio). No hay archivos comprimidos en ningún lado de `src/`: los snapshots son archivos sueltos, por diseño.
 
 #### El corte — cuatro PRs, con la medición
 
@@ -1064,11 +1064,27 @@ Once llamadas a través del puerto más dos dentro de la propia implementación.
 | **Deshonesta** — un reporte o el journal afirma algo falso | `retire` (saltea el borrado y apila el id en `removed` igual); `_current_digest` (`doctor` reporta como ausente algo presente); `readable_generations` (un `restore` sin argumento elige una generación más vieja que la última); y los tres `left`/`existing` de `_install` |
 | **Benigna** — degrada sin daño | `FileSnapshotStore.read` (rechaza igual, con el motivo equivocado); `list_dir` |
 
-#### Qué construye la unidad
+#### Lo que construyó, y lo que costó
 
-El contrato tiene que dejar que el puerto diga que no puede responder. Cuál es la forma —levantar `FileSystemError`, o una respuesta de tres estados— es la decisión de diseño de la unidad, y se toma con la tabla de arriba adelante: la respuesta correcta es la que hace que los cuatro sitios destructivos se nieguen a proceder y que los deshonestos digan la verdad, sin obligar a los benignos a manejar un error que no les cambia nada.
+`exists` levanta `FileSystemError` cuando no puede responder, y sigue devolviendo un `bool` para presente y ausente. Se eligió contra la alternativa de tres estados con la medición adelante: ~173 líneas contra ~323, porque la propagación ya estaba cableada en el `except` de `main` y ocho de los trece sitios no necesitaron un solo cambio. Y porque `None` es *falsy* en Python: un tercer estado habría reintroducido este mismo defecto, en silencio, en cualquier `if fs.exists(path):` escrito después.
 
-**La primera tarea es el doble, no el puerto.** `FakeFileSystem` tiene seis hooks de falla y ninguno para `exists`, que es una membresía de conjunto incapaz de levantar. Hoy el escenario es literalmente inconstruible en los tests, y por eso hay **cero tests** que dependan de él: nada se rompe al cambiarlo, y nada lo cubre. Sin enseñarle al doble a fallar primero no hay forma de escribir un test en rojo, y es la lección de la unidad 9 repetida — sus cuatro defectos vivieron en la grieta entre el doble y el filesystem real.
+Tres sitios necesitaron trabajo, y en los tres la propagación pelada era peor que el bug. `doctor` ganó un tercer balde —una entrada que un permiso tapa no está ausente ni derivada— porque sin eso una sola entrada ilegible se habría llevado el reporte entero. `readable_generations` pasó de comprehension a bucle explícito, porque una generación vieja ilegible habría abortado encontrar cualquiera, incluida la más nueva y buena. Y las dos consultas de `left_behind`, que corren adentro de un handler que ya está reportando otra falla, dejaron de poder reemplazar ese mensaje específico por el genérico.
+
+El alcance quedó en `exists` y `list_dir`. `mode_of` y `owned_by_current_user` comparten la forma del defecto y hacen cosas distintas con él —uno falla cerrado y ya está bien—, así que se fueron a la unidad 11.
+
+**La estimación se pasó 195%**: ~173 líneas estimadas, 511 reales. Es el tercer caso del mismo patrón —la unidad 9 se pasó 130% en su PR de infraestructura, y la primera medición de esta unidad 128%—, y ya no es anécdota: **cuando una unidad crea cañería nueva, la estimación es un piso y no un número.** Parte del sobrecosto fue construir infraestructura del doble de test, que la migración a filesystem real elimina.
+
+#### El piloto de disco real, y el defecto que encontró
+
+La primera tarea fue el doble y no el puerto: `FakeFileSystem` tenía seis hooks de falla y ninguno para `exists`, así que el escenario era literalmente inconstruible y no había forma de escribir un test en rojo.
+
+Pero enseñarle al doble fue el último hook que se le agregó, no el primero de una serie. Dos tests pasaron a correr contra un home descartable con el filesystem real, produciendo las condiciones en vez de inyectarlas: un directorio que de verdad no se puede escribir, y la falla de consulta atada al **estado del disco** —falla una vez que el archivo existe, porque `apply` lo crea entre las dos consultas— en lugar de a un contador de llamadas.
+
+Salieron rojos, y encontraron un defecto que el doble escondía: `unplace` también consulta el filesystem, y esa llamada no estaba guardada, así que la excepción se escapaba del handler igual. El test anterior pasaba porque su contador caía en la consulta de al lado. **Un número de llamadas codifica cuántas veces el motor pregunta hoy**: se agrega una consulta en cualquier parte y el test queda verde verificando otra cosa.
+
+Un test se borró en vez de migrarse. Nada cambia en el disco entre la consulta de `existing` y la que `plan` ya hizo sobre los mismos documentos, así que ninguna condición real hace fallar una y no la otra, y las dos se niegan antes de colocar un artefacto. Probar ese sitio por separado exigía contar llamadas. La garantía quedó cubierta por los casos `fail_exists` de `test_planner`.
+
+De acá sale la decisión de migrar los tests a filesystem real sobre home descartable, y la clase base que esa migración va a reusar.
 
 #### Por qué va antes de 8b
 
@@ -1084,7 +1100,7 @@ El contrato tiene que dejar que el puerto diga que no puede responder. Cuál es 
 
 #### Los tres comportamientos, que son tres y no uno
 
-**`owned_by_current_user` falla seguro, y no hay que tocarlo como a los otros.** Sus dos llamadores son el mismo guard, en `infra/journal_store_file.py:90` y en `infra/snapshot_store_file.py:238`:
+**`owned_by_current_user` falla seguro, y no hay que tocarlo como a los otros.** Sus dos llamadores son el mismo guard, en `infra/journal_store_file.py` y en `infra/snapshot_store_file.py`:
 
 ```python
 if not self._fs.owned_by_current_user(self._home):
@@ -1093,21 +1109,27 @@ if not self._fs.owned_by_current_user(self._home):
 
 Un "no puedo saberlo" da `False` y **se niega a escribir**. El error empuja hacia el lado seguro. Aplicarle el diseño de la unidad 10 —que levante— convertiría un guard que hoy falla cerrado en un crash: sería empeorarlo. Lo que probablemente necesita no es cambiar de comportamiento sino que su docstring diga la verdad sobre por qué devuelve `False`.
 
-**`mode_of` va para el otro lado, y ahí hay una consecuencia de seguridad.** En `core/planner.py:433`, dentro de `_put_back`:
+**`mode_of` va para el otro lado, y su default merece una aclaración que costó caro.** En `core/planner.py`, dentro de `_put_back`:
 
 ```python
 filesystem.write_atomic(path, content, mode=mode if mode is not None else 0o644)
 ```
 
-El `None` que llega de `mode_of` puede significar "la ruta no existe" o "no pude leer sus bits", y las dos colapsan en `0o644`. Si el archivo del usuario era `0600`, **el rollback le ensancha los permisos**: algo privado pasa a ser legible por todos. Eso no es un reporte deshonesto, es una pérdida de confidencialidad, y es una categoría de daño que no aparece en ninguna de las trece filas de la unidad 10.
+El `None` que llega de `mode_of` puede significar "la ruta no existe" o "no pude leer sus bits", y las dos colapsan en `0o644`. Leído así parece una pérdida de confidencialidad: un archivo del usuario en `0600` que el rollback deja legible por todos.
+
+**No lo es, y verificarlo importó.** En `_undo`, un archivo que no existía llega con el contenido en `None` y el código toma la otra rama: **borra, no escribe**. Y donde sí escribe, `mode_of` corre justo después de un `read_bytes` que ya tuvo éxito, así que para que devuelva `None` habría que no poder consultar los permisos de un archivo que se acaba de leer. El único sitio que llega con `None` de verdad es `_write_document` creando un documento que todavía no existe, y ahí `0o644` es el default correcto.
+
+Queda entonces como **fragilidad latente**, no como defecto vivo: si alguien reordena esas dos llamadas o agrega un llamador nuevo, se vuelve alcanzable. La unidad no se justifica por esto sino por el octal dentro del núcleo.
+
+Y queda la regla que salió de habernos equivocado acá: **un defecto no se afirma sin reproducirlo.** Los dieciséis archivos de la unidad 10 se corrieron y se midieron; esto se afirmó leyendo, y estuvo mal.
 
 Queda abierto si lo que hay que arreglar es el método, el `else 0o644` de `_put_back`, o los dos. Son archivos distintos, y la respuesta sale de la auditoría, no de antes.
 
-**Y hay un tercer comportamiento en `infra/snapshot_store_file.py:66`**, donde un `mode` en `None` sobre una ruta que sí existe choca con la validación de `core/snapshot.py:45` —*"an entry that existed needs both a mode and a blob reference"*— y levanta `SnapshotError`. Ruidoso pero seguro: ni silencioso como el rollback, ni cerrado como el guard.
+**Y hay un tercer comportamiento en `infra/snapshot_store_file.py`**, donde un `mode` en `None` sobre una ruta que sí existe choca con la validación de `core/snapshot.py` —*"an entry that existed needs both a mode and a blob reference"*— y levanta `SnapshotError`. Ruidoso pero seguro: ni silencioso como el rollback, ni cerrado como el guard.
 
 #### Con qué arranca la auditoría
 
-Ocho llamadores, ninguno clasificado todavía. `mode_of`: `planner.py:229` (decide `UNCHANGED` contra `UPDATE`), `planner.py:323` y `planner.py:336` (la captura para el rollback), `planner.py:516` (preservar el modo al reescribir un documento en `retire`), y `snapshot_store_file.py:59`. `owned_by_current_user`: los dos guards ya citados.
+Ocho llamadores, ninguno clasificado todavía. `mode_of`: `planner.py` (decide `UNCHANGED` contra `UPDATE`), `planner.py` y `planner.py` (la captura para el rollback), `planner.py` (preservar el modo al reescribir un documento en `retire`), y `snapshot_store_file.py`. `owned_by_current_user`: los dos guards ya citados.
 
 Hay una pista que la auditoría debería confirmar o descartar temprano: en varios de esos sitios `mode_of` corre **inmediatamente después de un `read_bytes` que ya tuvo éxito**, así que la ventana en la que el `stat` falla y la lectura no es estrecha. Si eso se sostiene en los seis, la unidad es más chica de lo que parece; si no, es más grande. Medirlo es la primera tarea, antes de estimar una sola línea.
 
@@ -1121,7 +1143,7 @@ La clasificación de la unidad 10 responde una pregunta —qué causa un `False`
 2. **Unidad 4.** Launcher, venv privado, empaquetado. Destraba la TUI.
 3. **Unidades 5 y 6.** La TUI.
 
-Ya entregado, en este orden: el cierre de la unidad 3 —el `.env` real del skill registry y el retiro de los marcadores sin lector—; la unidad 7, que fue temprano por ser la herramienta con la que se verifica todo lo que viene después; la **8a1**, con la categoría `mcp/` y el primer servidor instalado de verdad; la **unidad 9**, en cadena de cuatro PRs; y la **8a2**, que cerró la cadena 8a con la selección del usuario y un retiro que salió genérico.
+Ya entregado, en este orden: el cierre de la unidad 3 —el `.env` real del skill registry y el retiro de los marcadores sin lector—; la unidad 7, que fue temprano por ser la herramienta con la que se verifica todo lo que viene después; la **8a1**, con la categoría `mcp/` y el primer servidor instalado de verdad; la **unidad 9**, en cadena de cuatro PRs; la **8a2**, que cerró la cadena 8a con la selección del usuario y un retiro que salió genérico; y la **unidad 10**, el contrato del puerto de filesystem.
 
 El presupuesto de revisión es de **800 líneas cambiadas por PR**. Cada unidad se mide al planificar sus tareas; la que se pase se parte en una cadena, con la estrategia definida antes de empezar a escribir código. La unidad 1 ya se midió y por eso está partida en 1a y 1b.
 
@@ -1168,9 +1190,13 @@ Tests que fallan si el diseño se degrada:
 
 ## Próximo paso
 
-Sigue la **unidad 10**, el contrato del puerto de filesystem, con el diseño ya elegido: `exists` levanta `FileSystemError` cuando no puede responder. Se midió contra la alternativa de tres estados y salió a la mitad de costo —~173 líneas contra ~323— porque la propagación ya está cableada en el `except` de `main`, así que ocho de los trece sitios no necesitan un solo cambio; y porque `None` es *falsy* en Python, de modo que un tercer estado reintroduciría el mismo bug en silencio en cualquier `if fs.exists(path):` que alguien escriba mañana. Entra en un PR, sin cadena. Entró al corte en vez de a la tabla de deudas por decisión explícita: la tabla ya se está inflando y se ataca después de la primera release, así que lo que se encuentra ahora y tiene consecuencia destructiva se arregla ahora. Su primera tarea es enseñarle a fallar al doble de test, porque hoy el escenario es inconstruible.
+Siguen dos trabajos que salieron de la unidad 10 y que no estaban en el corte original.
 
-La **unidad 11** queda esbozada detrás, con su hallazgo ya anotado para que no se pierda: un modo que no se pudo leer se convierte en `0o644` al deshacer, y puede ensanchar los permisos de un archivo privado del usuario.
+**La migración de los tests a filesystem real sobre home descartable.** El doble en memoria acumuló siete hooks de falla, uno por cada cosa que el sistema operativo sabe hacer y él no, y los cuatro defectos de la unidad 9 más el de `unplace` en la 10 vivieron todos en esa grieta. Medido: 35 tests contra directorios temporales reales tardan 0,2 segundos, así que la velocidad nunca fue el argumento. La unidad 10 deja la clase base y el patrón; falta medir el resto —cinco archivos de test— y costear los que hoy afirman sobre `writes`/`removals` del doble en vez de sobre el resultado en disco. Incluye el módulo de helpers de plataforma que produce las condiciones, que es el hexágono aplicado al setup de los tests.
+
+**La unidad 11**, que dejó de ser "que `mode_of` pueda decir no puedo saberlo" y ahora es que **los permisos dejen de ser un octal dentro del núcleo**. Medido: el octal transporta un bit —de 108 artefactos, `{'0644': 89, '0755': 1}`— y esconde tres necesidades sin relación entre sí. Su test guardián es objetivo: ningún literal octal de permisos bajo `core/` ni `ports/`, y cuando pasa la unidad está hecha.
+
+De su esbozo conviene retener una corrección: el `else 0o644` de `_put_back` **no es un defecto alcanzable hoy** —para llegar ahí habría que no poder leer los permisos de un archivo que se acaba de leer con éxito—, así que la unidad no se justifica por una pérdida de confidencialidad viva sino por el octal en el núcleo. Se llegó a afirmar lo contrario sin reproducirlo, y la regla que sale de eso es que un defecto no se afirma sin correrlo.
 
 Después **8b**, y con ella el resolutor de directorio propio que la unidad 4 necesita. Es la que borra los dos gates defensivos sin test y la que destraba el caso wildcard contra wildcard.
 
