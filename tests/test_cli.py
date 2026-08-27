@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
 import tomllib
 import unittest
@@ -31,6 +32,8 @@ from pegasus.adapters import available
 from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
 from pegasus.core.types import Environment
+from pegasus.infra.fs_posix import PosixFileSystem
+from pegasus.infra.journal_store_file import journal_path
 from pegasus.infra.snapshot_store_file import snapshots_root
 
 AT = "2026-08-14T00:00:00+00:00"
@@ -75,6 +78,89 @@ class CommandTestCase(unittest.TestCase):
     def installed_entries(self):
         return journal_module.install_for(self.store().load(), CLI).entries
 
+
+
+class RealHomeTestCase(unittest.TestCase):
+    """A throwaway home with the real POSIX filesystem underneath it.
+
+    The in-memory double answers the port, which is what makes most of this
+    module fast to write, but it cannot be wrong in the ways a filesystem is
+    wrong: it has no permission bits, so a path that exists and cannot be
+    read is not a state it can be put into. Every failure it can express had
+    to be taught to it one hook at a time, and the four defects the previous
+    unit's reviews found all lived in the gap between what it does and what
+    the operating system does.
+
+    So the conditions here are produced rather than injected: a directory is
+    made read-only and the write that lands in it fails for the reason a real
+    write fails. What no permission bit can produce — a path whose state
+    could be determined a moment ago and cannot be now — is stubbed at the
+    system call, the way `test_filesystem` already stubs `os.replace` to
+    stand in for a full disk. That is one line of the operating system
+    replaced, not a filesystem reimplemented.
+    """
+
+    def setUp(self):
+        if os.geteuid() == 0:
+            self.skipTest("root is not refused by permission bits, and Pegasus refuses to install as root")
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.home = Path(self.directory.name)
+        self.filesystem = PosixFileSystem()
+
+    def runtime(self) -> cli.Runtime:
+        return cli.Runtime(
+            filesystem=self.filesystem, home=self.home, now=AT, out=io.StringIO(), variables=NO_BINARY
+        )
+
+    def layout(self):
+        return available().get(CLI).layout(Environment(home=self.home))
+
+    def present(self) -> None:
+        self.layout().config_dir.mkdir(parents=True, exist_ok=True)
+
+    def run_cli(self, *argv) -> tuple[int, dict]:
+        context = self.runtime()
+        code = cli.main([*argv, "--json"], runtime=context)
+        return code, json.loads(context.out.getvalue())
+
+    def refuse_to_write_the_journal(self) -> None:
+        """Make the journal write fail with real permissions, and only it.
+
+        The snapshots directory is created first and left writable, so the
+        preflight snapshot still succeeds and the run actually reaches the
+        journal — which is the whole point, since the report being tested is
+        the one a journal failure produces after the artifacts are already
+        placed.
+        """
+        snapshots_root(self.home).mkdir(parents=True, exist_ok=True)
+        data_dir = journal_path(self.home).parent
+        # Restored before the temporary directory is removed: cleanups run in
+        # reverse, and a read-only directory cannot be deleted.
+        self.addCleanup(data_dir.chmod, 0o700)
+        data_dir.chmod(0o555)
+
+    def refuse_to_probe_once_it_exists(self, path: Path) -> None:
+        """Make determining this path's state fail, but only once something
+        is really there.
+
+        Keyed on the state of the disk, never on a call count. The document
+        does not exist when the run first probes it, and `apply` creates it
+        before the handler probes it again — so "once it exists" names the
+        two moments apart without encoding how many times the installer
+        happens to ask today. A count would: add one probe anywhere upstream
+        and the failure lands somewhere else while the test stays green.
+        """
+        original = os.stat
+
+        def patched(target, *arguments, **keywords):
+            answer = original(target, *arguments, **keywords)
+            if not isinstance(target, int) and Path(target) == path:
+                raise PermissionError(13, "Permission denied", str(target))
+            return answer
+
+        self.addCleanup(setattr, os, "stat", original)
+        os.stat = patched
 
 
 class VersionTest(unittest.TestCase):
@@ -321,6 +407,14 @@ class InstallTest(CommandTestCase):
         _, report = self.run_cli("install", "--cli", CLI)
         self.assertEqual(report["left_behind"], [str(self.layout().settings_file)])
 
+    # The probe inside `existing = {... exists(path) ...}` has no test of its
+    # own, deliberately. Nothing changes on disk between it and the probe
+    # `plan` already made of the same documents, so no real condition can make
+    # one fail and the other succeed — and both refuse before a single
+    # artifact is placed, which is the same guarantee. `test_planner`'s
+    # `fail_exists` cases cover the plan-time refusal; a second test here
+    # would only be able to prove it by counting calls.
+
 
 class InstallMcpTest(CommandTestCase):
     """`--mcp` is the whole point of this unit: nothing installs unless named."""
@@ -497,13 +591,11 @@ class InstallMcpTest(CommandTestCase):
         # The removal that failed never happened, and this run's own update to
         # the settings document was taken back out along with it.
         self.assertTrue(self.filesystem.exists(convention))
-        self.assertIn("context7*", self.tools_of("sdd-apply"))
-        # The journal was never touched — `retire` failed before `store.save`
-        # was ever reached — so context7 is still recorded as installed, and a
-        # later run can finish retiring it.
-        owned = {entry.id for entry in self.installed_entries()}
-        self.assertIn("mcp:context7", owned)
-        self.assertIn("mcp-convention:context7", owned)
+
+    # The companion of the journal-write case — a probe that fails inside the
+    # handler already reporting a retirement failure — lives in
+    # `SecondaryFaultTest`, against a real home. Both conditions it needs are
+    # permissions, and the double has none.
 
 
 class InstallUnaccountedRetirementTest(CommandTestCase):
@@ -575,6 +667,64 @@ class InstallUnaccountedRetirementTest(CommandTestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("own:fantasma", out)
+
+
+class SecondaryFaultTest(RealHomeTestCase):
+    """A probe that fails inside a handler already reporting another failure.
+
+    Both of these place their artifacts, hit a real failure, and then — while
+    building the report for it — cannot determine the state of a document they
+    have to mention. The specific report has to survive that second fault;
+    letting it escape would replace the one message a user reads when
+    something already went wrong with `main`'s generic one, and lose the
+    rollback accounting with it.
+
+    Neither condition is injected. The directory that refuses the write really
+    refuses it, and the file that cannot be probed really cannot be, because
+    `apply` created it after the run had already decided it was absent.
+    """
+
+    def convention(self) -> Path:
+        return self.layout().skills_dir / content_module.mcp_convention_path("context7")
+
+    def test_a_journal_write_failure_still_reports_specifically(self):
+        self.present()
+        settings = self.layout().settings_file
+        self.refuse_to_write_the_journal()
+        self.refuse_to_probe_once_it_exists(settings)
+
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("journal could not be written", report["error"])
+        self.assertIn("rolled_back", report)
+
+    def test_a_retirement_failure_still_reports_specifically(self):
+        """The other `try` that computes `left_behind`, around `retire`.
+
+        The settings document is removed between the two runs so this run
+        creates it again — which is what makes it absent when the run first
+        probes it and present when the handler probes it a second time.
+        """
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        settings = self.layout().settings_file
+        settings.unlink()
+        # Real permissions: the convention file cannot be removed because the
+        # directory holding it refuses it, which is what makes retiring fail.
+        holder = self.convention().parent
+        self.addCleanup(holder.chmod, 0o755)
+        holder.chmod(0o555)
+        self.refuse_to_probe_once_it_exists(settings)
+
+        code, report = self.run_cli("install", "--cli", CLI)
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("retiring", report["error"])
+        self.assertNotIn("journal could not be written", report["error"])
+        self.assertTrue(self.convention().exists())
 
 
 class UninstallTest(CommandTestCase):
@@ -668,6 +818,34 @@ class DoctorTest(CommandTestCase):
         _, report = self.run_cli("doctor")
         self.assertIn(key.id, report["clis"][0]["missing"])
 
+    def test_doctor_names_an_artifact_whose_state_could_not_be_determined(self):
+        """An entry `exists` cannot probe is neither missing nor drifted —
+        claiming either would be inventing a fact doctor could not check."""
+        self.install()
+        unreadable = next(e for e in self.installed_entries() if e.kind == "file")
+        self.filesystem.fail_exists.add(unreadable.target)
+        _, report = self.run_cli("doctor")
+        entry = report["clis"][0]
+        self.assertEqual(entry["unreadable"], [unreadable.id])
+        self.assertNotIn(unreadable.id, entry["missing"])
+        self.assertNotIn(unreadable.id, entry["drifted"])
+
+    def test_doctor_does_not_abort_the_whole_report_over_one_unreadable_entry(self):
+        self.install()
+        entries = self.installed_entries()
+        unreadable = next(e for e in entries if e.kind == "file")
+        self.filesystem.fail_exists.add(unreadable.target)
+        code, report = self.run_cli("doctor")
+        self.assertEqual(code, 0)
+        self.assertEqual(report["clis"][0]["artifacts"], len(entries))
+
+    def test_doctor_prose_mentions_what_could_not_be_determined(self):
+        self.install()
+        unreadable = next(e for e in self.installed_entries() if e.kind == "file")
+        self.filesystem.fail_exists.add(unreadable.target)
+        _, report = self.run_cli("doctor")
+        self.assertIn(unreadable.id, cli._prose(report))
+
     def test_doctor_never_writes(self):
         self.install()
         self.filesystem.writes.clear()
@@ -746,6 +924,25 @@ class SnapshotTest(CommandTestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
         self.assertEqual(self.filesystem.writes, [])
+
+    def test_a_path_the_snapshot_cannot_probe_refuses_the_install_before_writing_anything(self):
+        """The acceptance test for the whole unit, at the command a person
+        actually runs.
+
+        Measured on real disk before this fix: `exists` swallowed `EACCES`
+        for an unreadable directory and answered `False`, so a snapshot
+        recorded files that were really there as absent, and `restore` later
+        deleted them while reporting success. `install` must refuse before a
+        single byte reaches disk instead — not merely produce a snapshot
+        that lies."""
+        self.present()
+        unreadable = self.layout().settings_file
+        self.filesystem.fail_exists.add(unreadable)
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(self.filesystem.writes, [])
+        self.assertEqual(self.filesystem.list_dir(snapshots_root(self.home)), [])
 
     def test_when_the_snapshot_store_refuses_uninstall_removes_nothing(self):
         """The way out needs the same guard as the way in.

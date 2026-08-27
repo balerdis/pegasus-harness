@@ -70,6 +70,25 @@ class FakeFileSystemMakeDirTest(unittest.TestCase):
         filesystem.write_atomic(target, b"hello")
         self.assertEqual(filesystem.mode_of(ROOT), 0o700)
 
+
+class FakeFileSystemFailExistsTest(unittest.TestCase):
+    """`exists` needed a failure hook before the data-loss scenario it caused
+    could be written as a test at all — without one, "cannot tell" was
+    literally inconstructible on the double."""
+
+    def test_fail_exists_makes_the_next_call_raise(self):
+        filesystem = FakeFileSystem(fail_exists={ROOT / "note.txt"})
+        with self.assertRaises(FileSystemError):
+            filesystem.exists(ROOT / "note.txt")
+
+    def test_fail_exists_does_not_affect_other_paths(self):
+        filesystem = FakeFileSystem(
+            files={ROOT / "other.txt": b"hello"}, fail_exists={ROOT / "note.txt"}
+        )
+        self.assertTrue(filesystem.exists(ROOT / "other.txt"))
+
+
+class FakeFileSystemMakeDirRemoveDirTest(unittest.TestCase):
     def test_remove_dir_refuses_a_path_that_is_a_file(self):
         """Mirrors fs_posix.remove_dir, where rmtree on a file raises.
 

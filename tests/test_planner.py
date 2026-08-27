@@ -20,6 +20,7 @@ from fakes import FakeFileSystem
 from pegasus.core import ownership, planner
 from pegasus.core.journal import Install, Link, Record
 from pegasus.core.types import Codec, ConfigKeyArtifact, FileArtifact
+from pegasus.ports.filesystem import FileSystemError
 
 HOME = Path("/home/probe")
 CONFIG = HOME / ".config" / "some-cli"
@@ -68,6 +69,25 @@ class PlanTest(unittest.TestCase):
 
     def test_a_pointer_in_a_file_that_does_not_exist_yet_is_a_creation(self):
         self.assertEqual([step.action for step in plan_for(FakeFileSystem(), a_key()).steps], [planner.CREATE])
+
+    def test_planning_a_file_whose_existence_cannot_be_told_refuses_rather_than_creating_over_it(self):
+        """`_file_step` treats `not exists` as a green light for `CREATE`.
+        Letting a probe failure fall through the same branch would plan a
+        creation over a file that is actually there, and `apply` would
+        overwrite it with nothing kept to give back. This runs before a
+        single byte reaches disk, so refusing here — rather than swallowing
+        the failure — costs nothing."""
+        filesystem = FakeFileSystem(fail_exists={SKILL})
+        with self.assertRaises(FileSystemError):
+            plan_for(filesystem, a_file())
+
+    def test_planning_a_key_whose_document_existence_cannot_be_told_refuses_rather_than_treating_it_as_new(self):
+        """`_read_document` treats `not exists` as "no document yet". A probe
+        failure taking that branch would plan the key as a fresh creation
+        over a document `apply` would then overwrite."""
+        filesystem = FakeFileSystem(fail_exists={SETTINGS})
+        with self.assertRaises(FileSystemError):
+            plan_for(filesystem, a_key())
 
     def test_planning_writes_nothing(self):
         filesystem = FakeFileSystem()
@@ -757,6 +777,17 @@ class RetireTest(unittest.TestCase):
         filesystem = FakeFileSystem(files={SETTINGS: b"{ not json"})
         with self.assertRaises(planner.PlannerError):
             planner.retire(filesystem, self.install(self.key_entry()))
+
+    def test_retiring_a_file_whose_existence_cannot_be_told_refuses_rather_than_skipping_the_removal(self):
+        """`retire`'s files loop reads `filesystem.exists` as the gate for
+        whether there is anything to remove. A probe failure taking the
+        "nothing to remove" branch would still report the entry as removed
+        while the file — unreadably permissioned, not gone — sits there
+        untouched, which is exactly the deceptive-report failure mode this
+        unit exists to close."""
+        filesystem = FakeFileSystem(files={SKILL: b"hello"}, fail_exists={SKILL})
+        with self.assertRaises(FileSystemError):
+            planner.retire(filesystem, self.install(self.file_entry()))
 
     def test_a_file_nothing_was_retired_from_is_left_exactly_as_it_was(self):
         """Unsetting a key that is not there does not touch the document at all."""

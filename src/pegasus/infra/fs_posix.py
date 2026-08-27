@@ -35,7 +35,16 @@ class PosixFileSystem:
     # --- Reading ---
 
     def exists(self, path: Path) -> bool:
-        return path.exists()
+        try:
+            return path.exists()
+        except OSError as error:
+            # `Path.exists()` swallows only the errors that already mean
+            # absence — a parent that cannot be traversed raises instead, and
+            # that is not the same fact. Absent and unreadable collapse to
+            # the same `False` otherwise, and a caller downstream — a
+            # snapshot deciding what to write back — cannot tell one from
+            # the other once they do.
+            raise FileSystemError(f"cannot tell whether {path} exists: {error}") from error
 
     def read_bytes(self, path: Path) -> bytes:
         try:
@@ -50,7 +59,11 @@ class PosixFileSystem:
             return None
 
     def list_dir(self, path: Path) -> list[str]:
-        if not path.exists():
+        # Delegates to `self.exists` rather than a raw `path.exists()` on
+        # purpose: an unreadable parent must raise here exactly as it does
+        # there, not list empty by accident because the two calls happened
+        # to share the same underlying mistake.
+        if not self.exists(path):
             return []
         try:
             return sorted(entry.name for entry in path.iterdir())

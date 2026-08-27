@@ -118,6 +118,16 @@ class FileJournalStoreTest(unittest.TestCase):
         with self.assertRaises(JournalStoreError):
             store(Unreadable()).load()
 
+    def test_a_journal_whose_existence_cannot_be_told_refuses_rather_than_loading_as_empty(self):
+        """`load`'s `if not exists(): return empty()` would turn "cannot tell"
+        into "there is no journal at all" — everything Pegasus ever recorded
+        installing would vanish from this call's point of view, and every
+        command built on top of it would proceed as if none of it happened.
+        This runs before anything is written, so refusing costs nothing."""
+        filesystem = FakeFileSystem(fail_exists={journal_path(HOME)})
+        with self.assertRaises(FileSystemError):
+            store(filesystem).load()
+
     # --- Saving ---
 
     def test_saving_writes_to_the_journal_path(self):

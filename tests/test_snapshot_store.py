@@ -17,7 +17,12 @@ from fakes import FakeFileSystem
 from pegasus.core.snapshot import Entry, Manifest, SnapshotError
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import DATA_DIR, DATA_DIR_MODE
-from pegasus.infra.snapshot_store_file import FileSnapshotStore, capture_paths, snapshots_root
+from pegasus.infra.snapshot_store_file import (
+    MANIFEST_FILENAME,
+    FileSnapshotStore,
+    capture_paths,
+    snapshots_root,
+)
 from pegasus.ports.filesystem import FileSystemError
 from pegasus.ports.snapshot_store import Capture, SnapshotStore, SnapshotStoreError
 
@@ -58,6 +63,20 @@ class CapturePathsTest(unittest.TestCase):
                 raise FileSystemError(f"refusing to read {path}: injected failure")
 
         filesystem = Unreadable(files={TARGET: b"whatever"})
+        with self.assertRaises(SnapshotStoreError):
+            capture_paths(filesystem, [TARGET])
+
+    def test_a_path_that_cannot_be_probed_fails_the_capture_rather_than_being_recorded_as_absent(self):
+        """The acceptance test for the whole unit.
+
+        Measured on real disk before this fix: a directory in mode 000 made
+        `exists` swallow `EACCES` and answer `False`, so a snapshot recorded
+        sixteen files that were actually there as ``existed=False``, and a
+        later `restore` deleted all sixteen and reported `exit=0`. Capturing
+        must refuse before writing a manifest that lies this way — not
+        record the entry as absent, and not silently drop it either.
+        """
+        filesystem = FakeFileSystem(files={TARGET: b"still here"}, fail_exists={TARGET})
         with self.assertRaises(SnapshotStoreError):
             capture_paths(filesystem, [TARGET])
 
@@ -199,6 +218,20 @@ class FileSnapshotStoreTest(unittest.TestCase):
         with self.assertRaises(SnapshotStoreError):
             store(FakeFileSystem()).read(1)
 
+    def test_reading_a_generation_whose_manifest_existence_cannot_be_told_raises(self):
+        """`read`'s own `exists` call is unguarded, but it is called only from
+        `restore`'s own `try/except SnapshotStoreError` in `cli.py`, and the
+        raw `FileSystemError` this raises is still caught by `main`'s generic
+        handler one level up — refusing cleanly, never proceeding as if the
+        generation were simply missing."""
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        generation = subject.save([one_capture()], taken_at=AT)
+        manifest_path = snapshots_root(HOME) / f"{generation:06d}" / MANIFEST_FILENAME
+        filesystem.fail_exists.add(manifest_path)
+        with self.assertRaises(FileSystemError):
+            subject.read(generation)
+
     def test_reading_a_generation_with_a_corrupt_manifest_raises(self):
         filesystem = FakeFileSystem()
         folder = snapshots_root(HOME) / "000001"
@@ -328,6 +361,21 @@ class FileSnapshotStoreTest(unittest.TestCase):
 
     def test_readable_generations_is_empty_for_a_fresh_store(self):
         self.assertEqual(store(FakeFileSystem()).readable_generations(), [])
+
+    def test_readable_generations_skips_a_generation_it_cannot_probe_and_still_finds_a_newer_one(self):
+        """One old, unreadable generation folder must not make `restore`
+        blind to every generation, including a good, newer one — that would
+        be an availability regression stacked on top of the correctness bug
+        `exists` used to have."""
+        filesystem = FakeFileSystem()
+        subject = store(filesystem)
+        subject.save([one_capture()], taken_at=AT)
+        subject.save([one_capture()], taken_at=AT)
+        unreadable_manifest = snapshots_root(HOME) / "000001" / MANIFEST_FILENAME
+        filesystem.fail_exists.add(unreadable_manifest)
+
+        self.assertEqual(subject.readable_generations(), [2])
+        self.assertEqual(subject.most_recent_readable(), 2)
 
     def test_most_recent_readable_is_the_highest_readable_generation(self):
         filesystem = FakeFileSystem()

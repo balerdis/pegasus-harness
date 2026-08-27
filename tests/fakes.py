@@ -18,7 +18,9 @@ class FakeFileSystem:
 
     Beyond storing bytes it can be told to fail: ``fail_on`` names the paths
     whose next write must raise, which is how rollback gets exercised without
-    filling a real disk.
+    filling a real disk. ``fail_exists`` is the same idea for a probe rather
+    than a write — without it, a caller that cannot tell whether a path exists
+    was not constructible in a test at all.
     """
 
     def __init__(
@@ -34,6 +36,7 @@ class FakeFileSystem:
         fail_remove_dir: set[Path] | None = None,
         fail_list: set[Path] | None = None,
         fail_read: set[Path] | None = None,
+        fail_exists: set[Path] | None = None,
     ):
         self.files: dict[Path, bytes] = dict(files or {})
         self.modes: dict[Path, int] = dict(modes or {})
@@ -47,12 +50,15 @@ class FakeFileSystem:
         self.fail_remove_dir: set[Path] = set(fail_remove_dir or ())
         self.fail_list: set[Path] = set(fail_list or ())
         self.fail_read: set[Path] = set(fail_read or ())
+        self.fail_exists: set[Path] = set(fail_exists or ())
         self.writes: list[Path] = []
         self.removals: list[Path] = []
 
     # --- Reading ---
 
     def exists(self, path: Path) -> bool:
+        if path in self.fail_exists:
+            raise FileSystemError(f"refusing to tell whether {path} exists: injected failure")
         return path in self.files or path in self.directories
 
     def read_bytes(self, path: Path) -> bytes:
