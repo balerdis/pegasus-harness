@@ -1166,7 +1166,9 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 
 | Deuda | Qué la destraba |
 |-------|-----------------|
-| `INSTALL.md` documenta el flujo de release de v3.1.1 y quedó obsoleto: en v4 no hay `install.sh` y el entrypoint es el módulo `pegasus` | La unidad 4, que fija el flujo definitivo. Actualizarlo antes sería documentar dos veces |
+| `MANUAL.md` todavía documenta `./install.sh --client opencode`, y `docs/release-distribution.md` sólo describe el proceso de RC de v3 | Nada urgente. `INSTALL.md` e `INSTALL_BY_AGENT.md` ya están en v4; estos dos quedaron atrás |
+| `tools/agent_install_preflight.py` tiene forma de tarball de v3 y quedó huérfano: `INSTALL_BY_AGENT.md` ya no lo llama | Nada. Se borra cuando alguien confirme que nada más lo usa |
+| `pegasus setup` sólo sirve desde un checkout, y no por un detalle de rutas: reconstruir el venv exige el wheel y el lockfile con los hashes, y una instalación no guarda ninguno. Hoy se niega nombrando lo que falta | Que el release deje esos dos insumos al lado del venv, si algún día reconstruir sin volver a bajar el release vale lo que cuesta |
 | El caso wildcard contra wildcard del deny de herramientas nunca se verificó en runtime: un agente que niega todo y habilita un prefijo de MCP | La unidad 8. Sin MCPs instalados no hay nada que habilitar |
 | Un `refresh failed` del plugin del skill registry queda sólo en `console.error`, así que una falla del registry no se superficializa | Nada. Es del plugin, no del contrato que lo alimenta |
 | Los sitios de `content.py` que lanzan `ContentError` no tienen un test de tabla que recorra todos y afirme que cada uno nombra una ruta real | Nada. Unidad candidata en cualquier momento |

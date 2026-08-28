@@ -1312,8 +1312,15 @@ class ActivationTest(RealHomeTestCase):
 class SetupTest(RealHomeTestCase):
     """Provisioning Pegasus's own private venv and boot shim -- no adapter involved."""
 
-    REQUIREMENTS = Path("/repo/requirements.txt")
-    SOURCE = Path("/repo")
+    def setUp(self):
+        super().setUp()
+        # A real lockfile in a real place: `setup` refuses to provision out of
+        # inputs it cannot read, so a fictional path would test the refusal
+        # instead of the provisioning.
+        self.checkout = self.home / "checkout"
+        self.checkout.mkdir()
+        self.requirements = self.checkout / "requirements.txt"
+        self.requirements.write_bytes(b"PyYAML==6.0.2 --hash=sha256:0\n")
 
     def runtime(self, *, variables: dict[str, str] | None = None) -> cli.Runtime:
         self.provisioner = FakeVenvProvisioner()
@@ -1324,9 +1331,23 @@ class SetupTest(RealHomeTestCase):
             out=io.StringIO(),
             variables=variables if variables is not None else NO_BINARY,
             venv_provisioner=self.provisioner,
-            requirements=self.REQUIREMENTS,
-            source=self.SOURCE,
+            requirements=self.requirements,
+            source=self.checkout,
         )
+
+    def test_setup_refuses_when_the_lockfile_it_provisions_from_is_not_there(self):
+        """An installed Pegasus keeps neither the wheel it came from nor the
+        lockfile that pinned its venv, so it has nothing to rebuild out of.
+        Saying that is worth more than a `pip` error naming a path inside the
+        user's own virtual environment."""
+        self.requirements.unlink()
+
+        code, report = self.run_cli("setup")
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("checkout", report["error"])
+        self.assertEqual(self.provisioner.created, [])
 
     def test_setup_builds_the_venv_under_data_dir_then_stocks_it(self):
         context = self.runtime()
@@ -1334,7 +1355,7 @@ class SetupTest(RealHomeTestCase):
         self.assertEqual(code, 0)
         expected_venv = self.filesystem.data_dir(self.home) / "venv"
         self.assertEqual(self.provisioner.created, [expected_venv])
-        self.assertEqual(self.provisioner.installed, [(expected_venv, self.REQUIREMENTS, self.SOURCE)])
+        self.assertEqual(self.provisioner.installed, [(expected_venv, self.requirements, self.checkout)])
 
     def test_setup_reports_the_venv_and_shim_paths(self):
         _, report = self.run_cli_with(self.runtime(), "setup")
