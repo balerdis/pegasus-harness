@@ -92,6 +92,18 @@ class PosixFileSystem:
             return Path(configured) / "pegasus-harness"
         return home / ".local" / "share" / "pegasus-harness"
 
+    def bin_dir(self, home: Path) -> Path:
+        # `XDG_BIN_HOME` is not part of the base directory specification the
+        # way `XDG_DATA_HOME` is -- the spec names `~/.local/bin` and defines
+        # no variable for it. It is honoured because tools that do use the
+        # name are pointing somewhere deliberate, and ignoring them would put
+        # the shim where they did not ask for it. Same discipline otherwise:
+        # only an absolute setting counts, and it is handed in, not read here.
+        configured = self._variables.get("XDG_BIN_HOME", "").strip()
+        if configured and Path(configured).is_absolute():
+            return Path(configured)
+        return home / ".local" / "bin"
+
     # --- Permissions ---
 
     def mode_for(self, *, executable: bool) -> int:

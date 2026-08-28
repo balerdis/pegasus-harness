@@ -43,6 +43,9 @@ class RecordingFileSystem:
     def data_dir(self, home: Path) -> Path:
         return self._filesystem.data_dir(home)
 
+    def bin_dir(self, home: Path) -> Path:
+        return self._filesystem.bin_dir(home)
+
     # --- Permissions ---
 
     def mode_for(self, *, executable: bool) -> int:

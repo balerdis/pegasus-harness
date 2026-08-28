@@ -29,6 +29,7 @@ from typing import Any, Callable, TextIO
 
 import pegasus
 from pegasus.adapters import available
+from pegasus.core import bootstrap as bootstrap_module
 from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
 from pegasus.core import dependencies as dependencies_module
@@ -41,13 +42,22 @@ from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import FileJournalStore
 from pegasus.infra.npm_installer_subprocess import SubprocessNpmInstaller
 from pegasus.infra.snapshot_store_file import FileSnapshotStore, capture_paths
+from pegasus.infra.venv_provisioner_subprocess import SubprocessVenvProvisioner
 from pegasus.ports.downloader import Downloader
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.journal_store import JournalStoreError
 from pegasus.ports.npm_installer import NpmInstaller
 from pegasus.ports.snapshot_store import SnapshotStoreError
+from pegasus.ports.venv_provisioner import VenvProvisioner, VenvProvisionerError
 
 NODE_BINARY = "node"
+
+# The checkout this module itself lives in: src/pegasus/cli.py -> repo root.
+# `setup` reads its own shim from here and installs its own source from here,
+# which is what lets it run before Pegasus has ever been installed anywhere.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+REQUIREMENTS_FILE = REPO_ROOT / "requirements.txt"
+SHIM_SOURCE = REPO_ROOT / "bin" / "pegasus"
 
 SCHEMA = "pegasus/cli-report/v1"
 
@@ -79,6 +89,12 @@ class Runtime:
     variables: dict[str, str] = field(default_factory=dict)
     downloader: Downloader = field(default_factory=HttpDownloader)
     npm_installer: NpmInstaller = field(default_factory=SubprocessNpmInstaller)
+    venv_provisioner: VenvProvisioner = field(default_factory=SubprocessVenvProvisioner)
+    # Only `setup` reads these two: where its own hash-pinned lockfile and its
+    # own checkout live, so a test can point them at a fixture instead of this
+    # repository without touching anything else `Runtime` carries.
+    requirements: Path = REQUIREMENTS_FILE
+    source: Path = REPO_ROOT
 
     @property
     def environment(self) -> Environment:
@@ -126,7 +142,13 @@ def main(argv: list[str] | None = None, *, runtime: Runtime | None = None) -> in
     try:
         report = COMMANDS[arguments.command](arguments, runtime)
         code = OK
-    except (CommandError, JournalStoreError, planner.PlannerError, FileSystemError) as error:
+    except (
+        CommandError,
+        JournalStoreError,
+        planner.PlannerError,
+        FileSystemError,
+        VenvProvisionerError,
+    ) as error:
         report = {"status": "failed", "error": str(error), **getattr(error, "report", {})}
         code = FAILED
 
@@ -172,6 +194,11 @@ def _parser() -> argparse.ArgumentParser:
         help="the generation to restore; defaults to the most recent one that can be read back",
     )
     restore.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    # No `--cli`: this provisions Pegasus itself -- its own private venv and
+    # its own boot shim -- never a downstream CLI's configuration.
+    setup = commands.add_parser("setup", help="build Pegasus's own private venv and boot shim")
+    setup.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     return parser
 
 
@@ -736,7 +763,41 @@ def _document(filesystem: FileSystem, entry: Record):
         raise CommandError(f"{entry.target} cannot be parsed, so nothing in it can be judged: {error}") from error
 
 
-COMMANDS = {"install": _install, "uninstall": _uninstall, "doctor": _doctor, "restore": _restore}
+def _setup(arguments, runtime: Runtime) -> dict[str, Any]:
+    """Build Pegasus's own private venv, then copy its boot shim next to it.
+
+    Unlike `install`, there is no adapter and no journal entry here: this
+    provisions Pegasus itself, not a downstream CLI's configuration, and the
+    venv directory is its own record of what is provisioned -- rebuilding it
+    is always safe, the same way reinstalling a `download` server the journal
+    already owns costs nothing extra.
+    """
+    filesystem = runtime.filesystem
+    venv = bootstrap_module.venv_dir(filesystem.data_dir(runtime.home))
+    bootstrap_module.provision(
+        runtime.venv_provisioner, venv=venv, requirements=runtime.requirements, source=runtime.source
+    )
+    bin_dir = filesystem.bin_dir(runtime.home)
+    shim = bin_dir / bootstrap_module.SHIM_NAME
+    filesystem.write_atomic(
+        shim, filesystem.read_bytes(SHIM_SOURCE), mode=filesystem.mode_for(executable=True)
+    )
+    warning = bootstrap_module.path_warning(bin_dir, runtime.variables.get("PATH", ""))
+    return {
+        "status": "installed",
+        "venv": str(venv),
+        "shim": str(shim),
+        "activation": [warning] if warning else [],
+    }
+
+
+COMMANDS = {
+    "install": _install,
+    "uninstall": _uninstall,
+    "doctor": _doctor,
+    "restore": _restore,
+    "setup": _setup,
+}
 
 
 # --- Shaping the report ----------------------------------------------------
@@ -984,6 +1045,9 @@ def _prose(report: dict[str, Any]) -> str:
         return f"Nothing was changed. {report['error']}"
 
     command = report["command"]
+    if command == "setup":
+        lines = [f"venv provisioned at {report['venv']}.", f"shim installed at {report['shim']}."]
+        return "\n".join(_and_activation(lines, report))
     if command == "doctor":
         return "\n".join(_cli_prose(entry) for entry in report["clis"])
     if command == "restore":

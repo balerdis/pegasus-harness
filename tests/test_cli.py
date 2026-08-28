@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Callable
 
 import pegasus
-from fakes import FakeFileSystem
+from fakes import FakeFileSystem, FakeVenvProvisioner
 from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import content as content_module
@@ -1307,6 +1307,69 @@ class ActivationTest(RealHomeTestCase):
         written = context.out.getvalue()
         for step in available().get(CLI).activation_steps():
             self.assertIn(step, written)
+
+
+class SetupTest(RealHomeTestCase):
+    """Provisioning Pegasus's own private venv and boot shim -- no adapter involved."""
+
+    REQUIREMENTS = Path("/repo/requirements.txt")
+    SOURCE = Path("/repo")
+
+    def runtime(self, *, variables: dict[str, str] | None = None) -> cli.Runtime:
+        self.provisioner = FakeVenvProvisioner()
+        return cli.Runtime(
+            filesystem=self.filesystem,
+            home=self.home,
+            now=AT,
+            out=io.StringIO(),
+            variables=variables if variables is not None else NO_BINARY,
+            venv_provisioner=self.provisioner,
+            requirements=self.REQUIREMENTS,
+            source=self.SOURCE,
+        )
+
+    def test_setup_builds_the_venv_under_data_dir_then_stocks_it(self):
+        context = self.runtime()
+        code = cli.main(["setup", "--json"], runtime=context)
+        self.assertEqual(code, 0)
+        expected_venv = self.filesystem.data_dir(self.home) / "venv"
+        self.assertEqual(self.provisioner.created, [expected_venv])
+        self.assertEqual(self.provisioner.installed, [(expected_venv, self.REQUIREMENTS, self.SOURCE)])
+
+    def test_setup_reports_the_venv_and_shim_paths(self):
+        _, report = self.run_cli_with(self.runtime(), "setup")
+        expected_venv = self.filesystem.data_dir(self.home) / "venv"
+        expected_shim = self.filesystem.bin_dir(self.home) / "pegasus"
+        self.assertEqual(report["venv"], str(expected_venv))
+        self.assertEqual(report["shim"], str(expected_shim))
+
+    def test_setup_writes_an_executable_shim(self):
+        self.run_cli_with(self.runtime(), "setup")
+        shim = self.filesystem.bin_dir(self.home) / "pegasus"
+        self.assertTrue(shim.exists())
+        self.assertEqual(stat.S_IMODE(shim.stat().st_mode), 0o755)
+
+    def test_setup_warns_when_bin_dir_is_not_on_path(self):
+        _, report = self.run_cli_with(self.runtime(variables={"PATH": "/usr/bin"}), "setup")
+        self.assertTrue(report["activation"])
+        self.assertIn(str(self.filesystem.bin_dir(self.home)), report["activation"][0])
+
+    def test_setup_is_quiet_when_bin_dir_is_already_on_path(self):
+        on_path = {"PATH": f"/usr/bin:{self.filesystem.bin_dir(self.home)}"}
+        _, report = self.run_cli_with(self.runtime(variables=on_path), "setup")
+        self.assertEqual(report["activation"], [])
+
+    def test_setup_reports_failure_without_crashing_when_provisioning_fails(self):
+        context = self.runtime()
+        expected_venv = self.filesystem.data_dir(self.home) / "venv"
+        context.venv_provisioner.fail_create.add(expected_venv)
+        code, report = self.run_cli_with(context, "setup")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+
+    def run_cli_with(self, context: cli.Runtime, *argv) -> tuple[int, dict]:
+        code = cli.main([*argv, "--json"], runtime=context)
+        return code, json.loads(context.out.getvalue())
 
 
 if __name__ == "__main__":

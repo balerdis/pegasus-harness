@@ -60,6 +60,25 @@ class PosixFileSystemTest(unittest.TestCase):
             Path("/home/probe/.local/share/pegasus-harness"),
         )
 
+    def test_bin_dir_falls_back_to_local_bin_when_xdg_bin_home_is_empty(self):
+        filesystem = PosixFileSystem({"XDG_BIN_HOME": ""})
+        home = Path("/home/probe")
+        self.assertEqual(filesystem.bin_dir(home), home / ".local" / "bin")
+
+    def test_bin_dir_honours_xdg_bin_home_when_set(self):
+        filesystem = PosixFileSystem({"XDG_BIN_HOME": "/mnt/bin"})
+        self.assertEqual(filesystem.bin_dir(Path("/home/probe")), Path("/mnt/bin"))
+
+    def test_bin_dir_ignores_a_relative_xdg_bin_home(self):
+        filesystem = PosixFileSystem({"XDG_BIN_HOME": "somewhere"})
+        self.assertEqual(filesystem.bin_dir(Path("/home/probe")), Path("/home/probe/.local/bin"))
+
+    def test_bin_dir_stays_inside_the_home_when_no_environment_was_handed_in(self):
+        """Same guarantee as `data_dir`: a filesystem built without an
+        environment answers from the home alone, never the real machine's own
+        `PATH` convention."""
+        self.assertEqual(PosixFileSystem().bin_dir(Path("/home/probe")), Path("/home/probe/.local/bin"))
+
     # --- Permissions ---
 
     def test_an_executable_artifact_gets_a_program_mode(self):
