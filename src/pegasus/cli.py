@@ -35,18 +35,21 @@ from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
 from pegasus.core import dependencies as dependencies_module
 from pegasus.core import journal as journal_module
+from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core import ownership, planner, pointer
 from pegasus.core.journal import KINDS, Install, Record
-from pegasus.core.types import Codec, Environment
+from pegasus.core.types import Codec, Environment, ModelAssignment
 from pegasus.infra.downloader_http import HttpDownloader
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import FileJournalStore
+from pegasus.infra.model_assignment_store_file import FileModelAssignmentStore
 from pegasus.infra.npm_installer_subprocess import SubprocessNpmInstaller
 from pegasus.infra.snapshot_store_file import FileSnapshotStore, capture_paths
 from pegasus.infra.venv_provisioner_subprocess import SubprocessVenvProvisioner
 from pegasus.ports.downloader import Downloader
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.journal_store import JournalStoreError
+from pegasus.ports.model_assignment_store import ModelAssignmentStoreError
 from pegasus.ports.npm_installer import NpmInstaller
 from pegasus.ports.snapshot_store import SnapshotStoreError
 from pegasus.ports.venv_provisioner import VenvProvisioner, VenvProvisionerError
@@ -134,6 +137,10 @@ def snapshot_store(runtime: Runtime) -> FileSnapshotStore:
     return FileSnapshotStore(runtime.filesystem, home=runtime.home)
 
 
+def model_assignment_store(runtime: Runtime) -> FileModelAssignmentStore:
+    return FileModelAssignmentStore(runtime.filesystem, home=runtime.home)
+
+
 # --- Entry point -----------------------------------------------------------
 
 
@@ -163,7 +170,14 @@ def main(argv: list[str] | None = None, *, runtime: Runtime | None = None) -> in
 #: Every exception a command handler is allowed to let through instead of
 #: raising past `main` — an agent's stdin has no traceback to read, only this
 #: report.
-COMMAND_ERRORS = (CommandError, JournalStoreError, planner.PlannerError, FileSystemError, VenvProvisionerError)
+COMMAND_ERRORS = (
+    CommandError,
+    JournalStoreError,
+    ModelAssignmentStoreError,
+    planner.PlannerError,
+    FileSystemError,
+    VenvProvisionerError,
+)
 
 
 def safe_report(command: str, call: Callable[[], dict[str, Any]]) -> tuple[int, dict[str, Any]]:
@@ -224,6 +238,26 @@ def _parser() -> argparse.ArgumentParser:
     # its own boot shim -- never a downstream CLI's configuration.
     setup = commands.add_parser("setup", help="build Pegasus's own private venv and boot shim")
     setup.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    models = commands.add_parser("models", help="assign, remove, or list per-agent model preferences")
+    models.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    models_commands = models.add_subparsers(dest="models_command")
+
+    set_parser = models_commands.add_parser("set", help="assign a model to one agent")
+    set_parser.add_argument("--cli", required=True)
+    set_parser.add_argument("--agent", required=True)
+    set_parser.add_argument("--model", required=True, metavar="PROVIDER/MODEL")
+    set_parser.add_argument("--effort", default=None)
+    set_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    unset_parser = models_commands.add_parser("unset", help="remove one agent's model assignment")
+    unset_parser.add_argument("--cli", required=True)
+    unset_parser.add_argument("--agent", required=True)
+    unset_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    list_parser = models_commands.add_parser("list", help="show current model assignments")
+    list_parser.add_argument("--cli", default=None, help="limit to one CLI; omit to show every CLI")
+    list_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     return parser
 
 
@@ -623,6 +657,72 @@ def uninstall(cli_id: str, runtime: Runtime) -> dict[str, Any]:
     }
 
 
+def _models(arguments, runtime: Runtime) -> dict[str, Any]:
+    if arguments.models_command == "set":
+        return models_set(arguments.cli, arguments.agent, arguments.model, runtime, effort=arguments.effort)
+    if arguments.models_command == "unset":
+        return models_unset(arguments.cli, arguments.agent, runtime)
+    if arguments.models_command == "list":
+        return models_list(runtime, cli_id=arguments.cli)
+    raise CommandError("models needs a subcommand: set, unset, or list")
+
+
+def models_set(
+    cli_id: str, agent: str, model: str, runtime: Runtime, *, effort: str | None = None
+) -> dict[str, Any]:
+    """Assign a model to one agent, refusing an assignment nothing will ever read.
+
+    Peeled the same way `install` is: a plain function a future TUI screen can
+    call directly, with `_models` doing only the argparse unpacking.
+    """
+    _adapter(cli_id)
+    _require_configurable_agent(agent)
+    try:
+        assignment = ModelAssignment.parse(model, effort)
+    except ValueError as error:
+        raise CommandError(str(error)) from error
+    store = model_assignment_store(runtime)
+    assignments = store.load()
+    store.save(model_assignments_module.with_assignment(assignments, cli_id, agent, assignment))
+    return {"action": "set", "cli": cli_id, "agent": agent, "model": assignment.full_id, "effort": assignment.effort}
+
+
+def models_unset(cli_id: str, agent: str, runtime: Runtime) -> dict[str, Any]:
+    """Remove one agent's assignment. Removing one never set is success, not an error."""
+    _adapter(cli_id)
+    store = model_assignment_store(runtime)
+    assignments = store.load()
+    if model_assignments_module.get(assignments, cli_id, agent) is None:
+        return {"action": "unset", "cli": cli_id, "agent": agent, "status": "already-unset"}
+    store.save(model_assignments_module.without_assignment(assignments, cli_id, agent))
+    return {"action": "unset", "cli": cli_id, "agent": agent, "status": "unset"}
+
+
+def models_list(runtime: Runtime, *, cli_id: str | None = None) -> dict[str, Any]:
+    """Current assignments, optionally narrowed to one CLI."""
+    if cli_id is not None:
+        _adapter(cli_id)
+    assignments = model_assignment_store(runtime).load()
+    return {
+        "action": "list",
+        "assignments": [
+            {"cli": entry.cli, "agent": entry.agent, "model": entry.assignment.full_id, "effort": entry.assignment.effort}
+            for entry in assignments.entries
+            if cli_id is None or entry.cli == cli_id
+        ],
+    }
+
+
+def _require_configurable_agent(agent: str) -> None:
+    content = content_module.load()
+    for descriptor in content.agents:
+        if descriptor.name == agent:
+            if not descriptor.model_configurable:
+                raise CommandError(f"{agent!r} does not accept a model assignment")
+            return
+    raise CommandError(f"{agent!r} is not an agent this release ships")
+
+
 def _restore(arguments, runtime: Runtime) -> dict[str, Any]:
     return restore(runtime, arguments.generation)
 
@@ -899,6 +999,7 @@ COMMANDS = {
     "doctor": _doctor,
     "restore": _restore,
     "setup": _setup,
+    "models": _models,
 }
 
 
@@ -1177,11 +1278,33 @@ def _prose(report: dict[str, Any]) -> str:
         if report.get("unaccounted"):
             lines.append(f"Could not be accounted for: {', '.join(report['unaccounted'])}")
         return "\n".join(_and_retention(_and_activation(lines, report), report))
+    if command == "models":
+        return _models_prose(report)
 
     lines = [f"{report['cli']}: removed {len(report['removed'])}."]
     if report["unaccounted"]:
         lines.append(f"Could not be accounted for: {', '.join(report['unaccounted'])}")
     return "\n".join(_and_retention(_and_activation(lines, report), report))
+
+
+def _models_prose(report: dict[str, Any]) -> str:
+    action = report.get("action")
+    if action == "set":
+        effort = f", effort {report['effort']}" if report.get("effort") else ""
+        return f"{report['cli']}/{report['agent']}: assigned {report['model']}{effort}."
+    if action == "unset":
+        if report["status"] == "already-unset":
+            return f"{report['cli']}/{report['agent']}: no assignment to remove."
+        return f"{report['cli']}/{report['agent']}: assignment removed."
+    if action == "list":
+        if not report["assignments"]:
+            return "No model assignments."
+        return "\n".join(
+            f"{entry['cli']}/{entry['agent']}: {entry['model']}"
+            + (f" (effort {entry['effort']})" if entry.get("effort") else "")
+            for entry in report["assignments"]
+        )
+    return "models: nothing to report."
 
 
 def _and_activation(lines: list[str], report: dict[str, Any]) -> list[str]:

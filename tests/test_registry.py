@@ -135,21 +135,23 @@ class ManifestCoherenceTest(unittest.TestCase):
         with self.assertRaises(ManifestMismatchError):
             self.register(adapter)
 
-    def test_model_configuration_requires_every_model_method(self):
+    def test_model_configuration_requires_the_catalog_it_offers_to_choose_from(self):
+        """Which models the machine can reach is the adapter's to answer.
+        Which agent got which one is not: that lives in Pegasus's own state,
+        so declaring the capability asks the adapter for the catalog and
+        nothing else."""
+        adapter = FakeAdapter(
+            manifest=CapabilityManifest(cli_id="probe", skills=True, per_agent_model=True),
+        )
+        with self.assertRaises(ManifestMismatchError) as raised:
+            self.register(adapter)
+        self.assertIn("model_catalog", str(raised.exception))
+
+    def test_model_configuration_with_the_catalog_is_accepted(self):
         adapter = FakeAdapter(
             manifest=CapabilityManifest(cli_id="probe", skills=True, per_agent_model=True),
         )
         adapter.model_catalog = lambda environment: {}
-        with self.assertRaises(ManifestMismatchError) as raised:
-            self.register(adapter)
-        self.assertIn("read_model_assignments", str(raised.exception))
-
-    def test_model_configuration_with_every_method_is_accepted(self):
-        adapter = FakeAdapter(
-            manifest=CapabilityManifest(cli_id="probe", skills=True, per_agent_model=True),
-        )
-        for name in ("model_catalog", "read_model_assignments"):
-            setattr(adapter, name, lambda *args, **kwargs: None)
         Registry().register(adapter)
 
     def test_layout_is_probed_without_touching_the_filesystem(self):
