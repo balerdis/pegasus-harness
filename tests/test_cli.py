@@ -29,6 +29,7 @@ import stat
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -189,7 +190,10 @@ class VersionTest(unittest.TestCase):
 
 
 class ArgumentTest(RealHomeTestCase):
-    def test_no_command_is_an_error_rather_than_a_silent_success(self):
+    def test_no_command_without_a_terminal_is_an_error_rather_than_a_silent_success(self):
+        """Asking for nothing at a terminal opens the menu, but piped or
+        redirected there is no menu to show and nobody to read it — and a
+        script that reached here by mistake needs to be told."""
         self.assertNotEqual(cli.main([], runtime=self.runtime()), 0)
 
     def test_an_unknown_cli_is_refused_and_named(self):
@@ -1395,3 +1399,35 @@ class SetupTest(RealHomeTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TerminalTest(unittest.TestCase):
+    """Whether there is a person at a screen, which is what decides whether
+    asking for nothing shows a menu or a usage line."""
+
+    def test_a_closed_stream_is_nobody_rather_than_an_exception(self):
+        """`isatty` raises on a closed file, and that is an answer, not a
+        failure: a run whose input is gone has no one to show a menu to."""
+        closed = io.StringIO()
+        closed.close()
+        with mock.patch.object(cli.sys, "stdin", closed), mock.patch.object(cli.sys, "stdout", closed):
+            self.assertFalse(cli._attached_to_a_terminal())
+
+    def test_a_redirected_output_is_not_a_terminal_even_with_a_real_stdin(self):
+        both = [_Stream(True), _Stream(False)]
+        with mock.patch.object(cli.sys, "stdin", both[0]), mock.patch.object(cli.sys, "stdout", both[1]):
+            self.assertFalse(cli._attached_to_a_terminal())
+
+    def test_both_ends_at_a_terminal_is_a_person(self):
+        with mock.patch.object(cli.sys, "stdin", _Stream(True)), mock.patch.object(
+            cli.sys, "stdout", _Stream(True)
+        ):
+            self.assertTrue(cli._attached_to_a_terminal())
+
+
+class _Stream:
+    def __init__(self, terminal: bool):
+        self._terminal = terminal
+
+    def isatty(self) -> bool:
+        return self._terminal

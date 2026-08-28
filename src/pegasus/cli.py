@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +50,7 @@ from pegasus.ports.journal_store import JournalStoreError
 from pegasus.ports.npm_installer import NpmInstaller
 from pegasus.ports.snapshot_store import SnapshotStoreError
 from pegasus.ports.venv_provisioner import VenvProvisioner, VenvProvisionerError
+from pegasus.tui import app as tui_app
 
 NODE_BINARY = "node"
 
@@ -136,12 +138,17 @@ def snapshot_store(runtime: Runtime) -> FileSnapshotStore:
 
 
 def main(argv: list[str] | None = None, *, runtime: Runtime | None = None) -> int:
-    import sys
-
     runtime = runtime or default_runtime(sys.stdout)
     parser = _parser()
     arguments = parser.parse_args(argv)
     if arguments.command is None:
+        # Asking for nothing in particular, at a terminal, is asking for the
+        # menu. Piped or redirected there is no menu to show and no one to
+        # read it, so the usage line is still the honest answer -- and it is
+        # what a script that called this by mistake needs to see.
+        if _attached_to_a_terminal():
+            tui_app.main()
+            return OK
         parser.print_usage(runtime.out)
         return FAILED
 
@@ -820,6 +827,22 @@ def _setup(arguments, runtime: Runtime) -> dict[str, Any]:
         "shim": str(shim),
         "activation": [warning] if warning else [],
     }
+
+
+def _attached_to_a_terminal() -> bool:
+    """Whether there is a person at a screen to show a menu to.
+
+    Both ends are asked. Output alone would call a redirected run
+    interactive; input alone would do the same for one whose keystrokes come
+    from a file. The menu needs someone who can both see it and answer it.
+
+    A stream that has been closed cannot answer the question at all and
+    raises instead, which is its own answer: there is nobody there.
+    """
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except ValueError:
+        return False
 
 
 def _refuse_without_its_own_sources(filesystem: FileSystem, runtime: Runtime) -> None:

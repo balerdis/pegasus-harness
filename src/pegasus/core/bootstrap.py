@@ -52,4 +52,11 @@ def path_warning(bin_dir: Path, path_variable: str) -> str | None:
     entries = {Path(entry) for entry in path_variable.split(":") if entry}
     if bin_dir in entries:
         return None
-    return f"add {bin_dir} to your shell's PATH so the 'pegasus' command can be found"
+    # A new session first, and only then editing anything: several systems
+    # add this directory at login but only when it already exists, which it
+    # did not a moment ago. Someone who edits their shell's configuration
+    # instead ends up with the entry twice, and finds that out later.
+    return (
+        f"open a new shell session so {bin_dir} is picked up, and if the 'pegasus' command is "
+        f"still not found, add that directory to your shell's PATH"
+    )
