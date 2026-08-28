@@ -24,7 +24,7 @@ import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Callable, TextIO
 
 import pegasus
 from pegasus.adapters import available
@@ -32,7 +32,7 @@ from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
 from pegasus.core import ownership, planner, pointer
-from pegasus.core.journal import Install, Record
+from pegasus.core.journal import KINDS, Install, Record
 from pegasus.core.types import Codec, Environment
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import FileJournalStore
@@ -526,9 +526,27 @@ def _current_digest(filesystem: FileSystem, entry: Record) -> str | None:
     """
     if not filesystem.exists(entry.target):
         return None
-    if entry.kind == "file":
-        return ownership.digest_of_bytes(filesystem.read_bytes(entry.target))
+    return DIGEST_READERS[entry.kind](filesystem, entry)
 
+
+def _digest_of_file(filesystem: FileSystem, entry: Record) -> str | None:
+    return ownership.digest_of_bytes(filesystem.read_bytes(entry.target))
+
+
+def _digest_of_dependency_tree(filesystem: FileSystem, entry: Record) -> str | None:
+    """A tree that is there is all this can honestly report.
+
+    The digest a dependency-tree record carries is the identity of what was
+    materialized — the checksum of the archive, or the integrity the lockfile
+    pinned — not a hash of the directory as it stands. So being present is
+    the whole of what can be checked here, and answering with the recorded
+    digest says exactly that and nothing more. Telling a tampered tree from
+    an intact one needs a different check than this field can give.
+    """
+    return entry.after_digest
+
+
+def _digest_of_config_key(filesystem: FileSystem, entry: Record) -> str | None:
     document = _document(filesystem, entry)
     address = entry.pointer or ""
     if address.endswith(planner.APPEND):
@@ -540,6 +558,24 @@ def _current_digest(filesystem: FileSystem, entry: Record) -> str | None:
     if not pointer.exists_at(document, address):
         return None
     return ownership.digest_of_value(pointer.get_at(document, address))
+
+
+DIGEST_READERS: dict[str, Callable[[FileSystem, Record], str | None]] = {
+    "file": _digest_of_file,
+    "config-key": _digest_of_config_key,
+    "dependency-tree": _digest_of_dependency_tree,
+}
+"""What each kind of entry hashes to right now, keyed by `journal.KINDS`.
+
+Keyed rather than branched for the same reason retirement is: this used to
+ask whether the kind was `file` and treat everything else as a configuration
+key, so a kind added later would have had its directory opened as a
+document. A kind with no reader here fails at import instead.
+"""
+
+_UNREADABLE_KINDS = sorted(KINDS - DIGEST_READERS.keys())
+if _UNREADABLE_KINDS:
+    raise CommandError("no digest reader for kind(s): " + ", ".join(_UNREADABLE_KINDS))
 
 
 def _document(filesystem: FileSystem, entry: Record):

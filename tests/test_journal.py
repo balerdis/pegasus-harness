@@ -39,6 +39,18 @@ def config_record(**overrides) -> Record:
     return Record(**fields)
 
 
+def dependency_record(**overrides) -> Record:
+    fields = dict(
+        id="dependency:some-mcp",
+        kind="dependency-tree",
+        target=HOME / ".local" / "share" / "pegasus-harness" / "deps" / "some-mcp" / "1.2.3",
+        after_digest="sha256:" + "d" * 64,
+        created_at=AT,
+    )
+    fields.update(overrides)
+    return Record(**fields)
+
+
 def install(*entries, cli="opencode", links=()) -> Install:
     return Install(
         cli=cli,
@@ -85,6 +97,14 @@ class RoundTripTest(unittest.TestCase):
             journal_module.to_dict(self.journal), journal_module.to_dict(self.journal)
         )
 
+    def test_a_dependency_tree_entry_survives_serialization(self):
+        """A `dependency-tree` entry's target is a directory rather than a
+        file, but the journal itself treats every target the same way — as an
+        absolute path inside the home — so it round-trips like any other."""
+        journal = Journal(pegasus_version="4.0.0", installs=(install(dependency_record()),))
+        payload = journal_module.to_dict(journal)
+        self.assertEqual(journal_module.from_dict(payload, HOME), journal)
+
 
 class ValidationTest(unittest.TestCase):
     def payload(self, **overrides):
@@ -122,6 +142,10 @@ class ValidationTest(unittest.TestCase):
         payload["installs"][0]["entries"][0]["kind"] = "registry-key"
         with self.assertRaises(JournalError):
             journal_module.from_dict(payload, HOME)
+
+    def test_a_dependency_tree_kind_is_accepted(self):
+        payload = journal_module.to_dict(Journal(pegasus_version="4.0.0", installs=(install(dependency_record()),)))
+        journal_module.from_dict(payload, HOME)  # raises on failure
 
     def test_ownership_other_than_owned_is_refused(self):
         payload = self.payload()

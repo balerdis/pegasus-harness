@@ -774,6 +774,17 @@ class RetireTest(RealHomeTestCase):
         fields.update(overrides)
         return Record(**fields)
 
+    def dependency_entry(self, **overrides) -> Record:
+        fields = dict(
+            id="dependency:some-mcp",
+            kind="dependency-tree",
+            target=self.home / "deps" / "some-mcp" / "1.2.3",
+            after_digest="sha256:" + "1" * 64,
+            created_at=AT,
+        )
+        fields.update(overrides)
+        return Record(**fields)
+
     # --- Files ---
 
     def test_a_file_that_is_still_ours_is_removed(self):
@@ -847,6 +858,36 @@ class RetireTest(RealHomeTestCase):
         self.assertEqual(self.SETTINGS.read_bytes(), theirs)
         self.assertEqual(self.filesystem.writes, [])
         self.assertEqual(retired.removed, ("agent:alpha",))
+
+    # --- Dependency trees ---
+
+    def test_a_dependency_tree_that_is_still_ours_is_removed(self):
+        target = self.dependency_entry().target
+        target.mkdir(parents=True)
+        (target / "package.json").write_bytes(b"{}")
+        (target / "lib").mkdir()
+        (target / "lib" / "index.js").write_bytes(b"module.exports = {};")
+        retired = planner.retire(self.filesystem, self.install(self.dependency_entry()))
+        self.assertFalse(target.exists())
+        self.assertEqual(retired.removed, ("dependency:some-mcp",))
+
+    def test_a_dependency_tree_already_gone_counts_as_retired(self):
+        retired = planner.retire(self.filesystem, self.install(self.dependency_entry()))
+        self.assertEqual(retired.removed, ("dependency:some-mcp",))
+
+    # --- Kinds retirement does not know about ---
+
+    def test_an_entry_of_an_unrecognized_kind_cannot_vanish_silently(self):
+        """Before the kind-keyed dispatch, `retire` filtered `install.entries`
+        into a files list and a config-key list by hand; an entry whose kind
+        matched neither filter fell through both and was never removed and
+        never reported, not even as unaccounted. Building the buckets from
+        `journal.KINDS` itself means a kind the journal never validated
+        (forged here to prove the point, since real journals reject anything
+        outside `KINDS`) blows up loudly instead of disappearing quietly."""
+        mystery = self.file_entry(id="mystery:one", kind="not-a-real-kind")
+        with self.assertRaises(KeyError):
+            planner.retire(self.filesystem, self.install(mystery))
 
     # --- Links ---
 

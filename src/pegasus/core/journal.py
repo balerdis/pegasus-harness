@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "pegasus-harness/journal/v4"
-KINDS = frozenset({"file", "config-key"})
+KINDS = frozenset({"file", "config-key", "dependency-tree"})
 OWNED = "owned"
 NON_OWNING_LINK = "non-owning-link"
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -33,12 +33,31 @@ class JournalError(ValueError):
 
 @dataclass(frozen=True)
 class Record:
-    """One artifact Pegasus owns."""
+    """One artifact Pegasus owns.
+
+    ``kind`` is one of ``KINDS``: a single ``file``, a ``config-key`` inside
+    a document, or a ``dependency-tree`` — a directory Pegasus materialized
+    under its own data directory (an unpacked package, an extracted binary)
+    rather than a CLI's configuration. ``target`` is a file path for the
+    first two and a directory path for the third; retirement dispatches on
+    ``kind`` to know which.
+    """
 
     id: str
     kind: str
     target: Path
     after_digest: str
+    """For a ``file`` or ``config-key``, the digest of the bytes Pegasus wrote —
+    it proves the write happened and lets a later reinstall recognize its own
+    content. For a ``dependency-tree`` it instead identifies *what was
+    materialized*: the verified digest of the source artifact (a tarball's
+    checksum, a lockfile's integrity string), not a hash of the tree's
+    contents on disk. That is deliberate — computing a content hash would need
+    a recursive read this journal has no reason to do at record time — but it
+    means this digest cannot prove the tree is still intact. A `doctor` that
+    wants to detect a corrupted or tampered dependency tree needs a different
+    check; this field only answers "is this the version we meant to put
+    there", never "is what's on disk still what we put there"."""
     created_at: str
     pointer: str | None = None
     codec: str | None = None
