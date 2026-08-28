@@ -174,6 +174,28 @@ class CollisionTest(unittest.TestCase):
             self.build(artifacts)
         self.assertIn(".bashrc", str(raised.exception))
 
+    def test_an_artifact_inside_pegasus_own_directory_is_accepted(self):
+        """A materialized dependency lands outside the configuration root, in
+        Pegasus's own directory -- a second legitimate territory, not a leak."""
+        artifact = FileArtifact(
+            id="dep:server",
+            path=catalog_module.CANONICAL_DATA_DIR / "deps" / "server" / "1.0.0" / "bin",
+            content=b"",
+            executable=True,
+        )
+        catalog = build(one_skill(), StubAdapter(artifacts=(artifact,)))
+        self.assertEqual([entry.id for entry in catalog.entries], ["dep:server"])
+
+    def test_an_artifact_outside_every_legitimate_root_is_still_refused(self):
+        """Pegasus's own directory widens what is legitimate; it does not remove
+        the boundary. A path aiming at neither territory is still a leak."""
+        artifacts = (FileArtifact(id="rogue", path=Path("/home/probe/.bashrc"), content=b"", executable=False),)
+        with self.assertRaises(CatalogError) as raised:
+            self.build(artifacts)
+        self.assertIn(".bashrc", str(raised.exception))
+        self.assertIn(str(CONFIG), str(raised.exception))
+        self.assertIn(str(catalog_module.CANONICAL_DATA_DIR), str(raised.exception))
+
 
 class McpConventionNamespaceTest(unittest.TestCase):
     """A server id that matches a hand-authored `_shared/` convention stem must

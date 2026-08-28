@@ -113,6 +113,14 @@ def _check_own_artifacts(adapter: object, cli_id: str, layout: Layout) -> None:
     somewhere it has no business writing. The check runs at registration against
     the probe home: it reads the adapter's bundled assets, which are always
     present, but never the user's home.
+
+    This stays scoped to `layout.config_dir` alone, with no second territory,
+    even though Pegasus also has its own directory now. `own_artifacts` is what
+    an *adapter* contributes for its own CLI; a materialized dependency is
+    placed by the engine, never by an adapter, and an adapter's layout does not
+    even carry Pegasus's own directory to name it with. Widening this guard
+    would only make it accept a path no adapter has any legitimate reason to
+    produce.
     """
     if not _implements(adapter, "own_artifacts"):
         raise ManifestMismatchError(
