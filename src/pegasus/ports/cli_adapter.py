@@ -24,10 +24,8 @@ from pegasus.core.types import (
     Detection,
     Environment,
     Layout,
-    ModelAssignment,
     SupportTier,
 )
-
 
 @runtime_checkable
 class CliAdapter(Protocol):
@@ -115,7 +113,11 @@ class CliAdapter(Protocol):
     # --- Models: only when the manifest declares per_agent_model ---
 
     def model_catalog(self, environment: Environment) -> Any:
-        """Providers and models the user can actually reach on this machine."""
+        """Providers and models the user can actually reach on this machine.
 
-    def read_model_assignments(self, environment: Environment) -> dict[str, ModelAssignment]:
-        """Current per-agent assignments. Agents without one are simply absent."""
+        Only what the machine can reach is the adapter's to answer. Which
+        agent was given which model is not: that is a preference Pegasus
+        keeps in its own state, so nothing here reads it back out of the
+        CLI's configuration.
+        """
+

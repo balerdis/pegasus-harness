@@ -21,10 +21,7 @@ RENDERERS: dict[Capability, tuple[str, ...]] = {
     Capability.SUB_AGENTS: ("render_agent",),
     Capability.PROMPTS: ("render_prompt",),
     Capability.MCP: ("render_mcp",),
-    Capability.PER_AGENT_MODEL: (
-        "model_catalog",
-        "read_model_assignments",
-    ),
+    Capability.PER_AGENT_MODEL: ("model_catalog",),
 }
 
 
