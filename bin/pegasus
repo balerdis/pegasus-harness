@@ -24,10 +24,14 @@ python="$data_dir/venv/bin/python"
 # The shim can outlive its venv -- a person can delete `~/.local/share` by
 # hand, or a botched provisioning run can leave nothing behind it. `exec`ing
 # straight at a missing interpreter would fail with "No such file or
-# directory" and no hint about what to do next; this says the one thing that
-# actually helps.
+# directory" and no hint about what to do next.
+#
+# It does not point at `pegasus setup`: that command builds the venv out of a
+# checkout's lockfile and shim, and an installed Pegasus keeps neither. What
+# actually works is installing again from the release, which is safe to
+# repeat.
 if [ ! -x "$python" ]; then
-    echo "pegasus: no private virtual environment at $data_dir/venv -- run 'pegasus setup' to rebuild it" >&2
+    echo "pegasus: no private virtual environment at $data_dir/venv -- install again from the release to rebuild it" >&2
     exit 1
 fi
 

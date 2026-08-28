@@ -55,6 +55,12 @@ NODE_BINARY = "node"
 # The checkout this module itself lives in: src/pegasus/cli.py -> repo root.
 # `setup` reads its own shim from here and installs its own source from here,
 # which is what lets it run before Pegasus has ever been installed anywhere.
+#
+# It also means `setup` only works from a checkout, and that is not an
+# accident of these three lines: an installed Pegasus has neither the wheel it
+# came from nor the pinned lockfile that built its venv, so there is nothing
+# for it to rebuild that venv out of. `_refuse_without_its_own_sources` says
+# so instead of failing on a path that does not exist.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REQUIREMENTS_FILE = REPO_ROOT / "requirements.txt"
 SHIM_SOURCE = REPO_ROOT / "bin" / "pegasus"
@@ -773,6 +779,7 @@ def _setup(arguments, runtime: Runtime) -> dict[str, Any]:
     already owns costs nothing extra.
     """
     filesystem = runtime.filesystem
+    _refuse_without_its_own_sources(filesystem, runtime)
     venv = bootstrap_module.venv_dir(filesystem.data_dir(runtime.home))
     bootstrap_module.provision(
         runtime.venv_provisioner, venv=venv, requirements=runtime.requirements, source=runtime.source
@@ -789,6 +796,30 @@ def _setup(arguments, runtime: Runtime) -> dict[str, Any]:
         "shim": str(shim),
         "activation": [warning] if warning else [],
     }
+
+
+def _refuse_without_its_own_sources(filesystem: FileSystem, runtime: Runtime) -> None:
+    """Refuse when the inputs a venv is built out of are not there to read.
+
+    Provisioning needs the pinned lockfile and the shim, and both ship in the
+    checkout rather than inside the installed package. So an installed Pegasus
+    asked to rebuild its own venv has nothing to rebuild it from — the wheel
+    it came from is not kept, and neither is the lockfile that pinned what
+    went in beside it.
+
+    Failing here rather than three subprocess calls later is the difference
+    between a sentence someone can act on and a `pip` error naming a path
+    inside their own virtual environment.
+    """
+    missing = [path for path in (runtime.requirements, SHIM_SOURCE) if not filesystem.exists(path)]
+    if missing:
+        raise CommandError(
+            "setup builds the private venv out of this project's own checkout, and "
+            + " and ".join(str(path) for path in missing)
+            + " is not there. An installed Pegasus does not keep the wheel or the lockfile it "
+            "came from, so it cannot rebuild its own venv: install again from the release, "
+            "which is safe to repeat, or run this from a checkout."
+        )
 
 
 COMMANDS = {
