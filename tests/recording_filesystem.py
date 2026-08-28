@@ -57,8 +57,5 @@ class RecordingFileSystem:
 
     # --- Who is running ---
 
-    def owned_by_current_user(self, path: Path) -> bool:
-        return self._filesystem.owned_by_current_user(path)
-
-    def running_privileged(self) -> bool:
-        return self._filesystem.running_privileged()
+    def writable_on_behalf_of_owner(self, home: Path) -> bool:
+        return self._filesystem.writable_on_behalf_of_owner(home)

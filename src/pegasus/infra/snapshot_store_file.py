@@ -244,9 +244,7 @@ class FileSnapshotStore:
             raise SnapshotStoreError(f"cannot write the manifest at {folder}: {error}") from error
 
     def _refuse_wrong_writer(self) -> None:
-        if self._fs.running_privileged():
+        if not self._fs.writable_on_behalf_of_owner(self._home):
             raise SnapshotStoreError(
-                "a snapshot must be written by the user who owns the home, never by root"
+                f"a snapshot at {self._root} must be written by the user who owns {self._home}; refusing to write it"
             )
-        if not self._fs.owned_by_current_user(self._home):
-            raise SnapshotStoreError(f"{self._home} belongs to another user; refusing to write its snapshot")

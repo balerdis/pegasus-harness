@@ -7,9 +7,10 @@ including the uncomfortable ones.
 
 **Real disk, mostly.** Every test in this module runs against a throwaway home
 and the real `PosixFileSystem`, via `RealHomeTestCase`. The one exception is
-`PrivilegeAndOwnershipTest`: "running as root" and "a home owned by someone
-else" have no honest real-disk equivalent short of actually being root or
-another user, so those three cases stay on `FakeFileSystem`.
+`WriteRefusalTest`: a process that may not write on the home owner's behalf
+— running as root, or a home belonging to somebody else — has no honest
+real-disk equivalent short of actually being one of those, so those cases
+stay on `FakeFileSystem`.
 
 **Why detection is still half real.** Writing goes through the filesystem
 port, which is now real, but detection does not: an adapter answers
@@ -420,29 +421,29 @@ class InstallTest(RealHomeTestCase):
     # would only be able to prove it by counting calls.
 
 
-class PrivilegeAndOwnershipTest(FakeHomeTestCase):
-    """The three refusals `RealHomeTestCase` cannot produce: see
-    `FakeHomeTestCase`'s docstring for why they stay on the double."""
+class WriteRefusalTest(FakeHomeTestCase):
+    """The refusals `RealHomeTestCase` cannot produce: see `FakeHomeTestCase`'s
+    docstring for why they stay on the double.
 
-    def test_root_is_refused_before_a_single_artifact_is_written(self):
+    Running as root and a home belonging to somebody else used to be two
+    separate cases here. They are one answer now — the filesystem says this
+    process may not write on the owner's behalf — so what is left to prove is
+    that each command honours it before touching anything, not which of the
+    two produced it.
+    """
+
+    def test_a_home_this_process_may_not_write_is_refused_before_a_single_artifact_is_written(self):
         self.present()
-        self.filesystem.privileged = True
+        self.filesystem.writable = False
         code, report = self.run_cli("install", "--cli", CLI)
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
         self.assertEqual(self.filesystem.writes, [])
 
-    def test_a_home_owned_by_someone_else_is_refused_before_writing(self):
-        self.present()
-        self.filesystem.owner = False
-        code, _ = self.run_cli("install", "--cli", CLI)
-        self.assertNotEqual(code, 0)
-        self.assertEqual(self.filesystem.writes, [])
-
-    def test_root_is_refused_before_anything_is_taken_back(self):
+    def test_a_home_this_process_may_not_write_is_refused_before_anything_is_taken_back(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
-        self.filesystem.privileged = True
+        self.filesystem.writable = False
         before = dict(self.filesystem.files)
         code, _ = self.run_cli("uninstall", "--cli", CLI)
         self.assertNotEqual(code, 0)

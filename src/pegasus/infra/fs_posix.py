@@ -116,14 +116,13 @@ class PosixFileSystem:
 
     # --- Who is running ---
 
-    def owned_by_current_user(self, path: Path) -> bool:
+    def writable_on_behalf_of_owner(self, home: Path) -> bool:
+        if os.geteuid() == 0:
+            return False
         try:
-            return path.stat().st_uid == os.geteuid()
+            return home.stat().st_uid == os.geteuid()
         except OSError:
             return False
-
-    def running_privileged(self) -> bool:
-        return os.geteuid() == 0
 
 
 def _fsync_directory(path: Path) -> None:
