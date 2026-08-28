@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,11 +39,15 @@ from pegasus.core.types import Codec, Environment
 from pegasus.infra.downloader_http import HttpDownloader
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import FileJournalStore
+from pegasus.infra.npm_installer_subprocess import SubprocessNpmInstaller
 from pegasus.infra.snapshot_store_file import FileSnapshotStore, capture_paths
 from pegasus.ports.downloader import Downloader
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.journal_store import JournalStoreError
+from pegasus.ports.npm_installer import NpmInstaller
 from pegasus.ports.snapshot_store import SnapshotStoreError
+
+NODE_BINARY = "node"
 
 SCHEMA = "pegasus/cli-report/v1"
 
@@ -73,6 +78,7 @@ class Runtime:
     out: TextIO
     variables: dict[str, str] = field(default_factory=dict)
     downloader: Downloader = field(default_factory=HttpDownloader)
+    npm_installer: NpmInstaller = field(default_factory=SubprocessNpmInstaller)
 
     @property
     def environment(self) -> Environment:
@@ -92,6 +98,7 @@ def default_runtime(out: TextIO) -> Runtime:
         out=out,
         variables=variables,
         downloader=HttpDownloader(),
+        npm_installer=SubprocessNpmInstaller(),
     )
 
 
@@ -270,13 +277,13 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     existing = {path for path in documents if runtime.filesystem.exists(path)}
 
     # Fetched, verified and placed before anything else this run writes: a
-    # `download` server has no artifact for `plan` to have already decided
-    # the fate of, so this is the one part of an install `planner` never
-    # sees. A mismatch here raises before a single byte reaches disk, so the
-    # whole install fails exactly as cleanly as a collision would.
+    # `download` or `npm` server has no artifact for `plan` to have already
+    # decided the fate of, so this is the one part of an install `planner`
+    # never sees. A mismatch here raises before a single byte reaches disk,
+    # so the whole install fails exactly as cleanly as a collision would.
     layout = adapter.layout(environment)
     try:
-        kept_dependencies, new_dependencies = _materialize_downloads(runtime, layout, content, installed)
+        kept_dependencies, new_dependencies = _materialize_dependencies(runtime, layout, content, installed)
     except dependencies_module.MaterializeError as error:
         raise CommandError(str(error)) from error
 
@@ -406,8 +413,14 @@ def _merged(journal, adapter, environment, catalog, records, retired_ids, now: s
     )
 
 
+#: Distributions whose materialized tree lives outside the catalog pipeline
+#: entirely, so `_materialize_dependencies` and `_stale_dependencies` both
+#: have to reason about them directly.
+_MATERIALIZED_DISTRIBUTIONS = frozenset({content_module.Distribution.DOWNLOAD, content_module.Distribution.NPM})
+
+
 def _stale_dependencies(installed: Install | None, content: content_module.Content) -> tuple[Record, ...]:
-    """`download` servers this render no longer names.
+    """`download` and `npm` servers this render no longer names.
 
     The counterpart to `planner.retirements` for a kind that function never
     sees: a `dependency-tree` entry has no artifact in `artifacts` for it to
@@ -420,46 +433,44 @@ def _stale_dependencies(installed: Install | None, content: content_module.Conte
     wanted = {
         f"dependency:{item.name}"
         for item in content.mcp
-        if item.distribution is content_module.Distribution.DOWNLOAD
+        if item.distribution in _MATERIALIZED_DISTRIBUTIONS
     }
     return tuple(
         entry for entry in installed.entries if entry.kind == "dependency-tree" and entry.id not in wanted
     )
 
 
-def _materialize_downloads(
+def _materialize_dependencies(
     runtime: Runtime, layout, content: content_module.Content, installed: Install | None
 ) -> tuple[tuple[Record, ...], tuple[Record, ...]]:
-    """Fetch and place every `download` server this run still names.
+    """Fetch and place every `download` or `npm` server this run still names.
 
     Returns ``(kept, created)``: a server already materialized at exactly the
-    version and checksum this release still asks for costs no fetch at all —
+    version and digest this release still asks for costs no fetch at all —
     the record the journal already holds is reused as is. Everything else is
-    fetched, verified against its checksum, and placed fresh; a failure here
-    leaves whatever this call already placed for a *previous* server on disk,
-    which the caller cleans up alongside everything else once it knows the
-    whole install is being undone.
+    fetched, verified, and placed fresh; a failure here leaves whatever this
+    call already placed for a *previous* server on disk, which the caller
+    cleans up alongside everything else once it knows the whole install is
+    being undone.
     """
     owned = {entry.id: entry for entry in (installed.entries if installed else ())}
+    node_present = shutil.which(NODE_BINARY, path=runtime.variables.get("PATH")) is not None
     kept: list[Record] = []
     created: list[Record] = []
     for item in content.mcp:
-        if item.distribution is not content_module.Distribution.DOWNLOAD:
+        if item.distribution not in _MATERIALIZED_DISTRIBUTIONS:
             continue
+        digest = item.checksum if item.distribution is content_module.Distribution.DOWNLOAD else item.integrity
         existing = owned.get(f"dependency:{item.name}")
         if (
             existing is not None
-            and existing.after_digest == item.checksum
+            and existing.after_digest == digest
             and runtime.filesystem.exists(existing.target)
         ):
             kept.append(existing)
             continue
         try:
-            created.append(
-                dependencies_module.materialize(
-                    runtime.filesystem, runtime.downloader, layout.dependencies_dir, item, at=runtime.now
-                )
-            )
+            created.append(_materialize_one(runtime, layout, item, node_present))
         except dependencies_module.MaterializeError:
             # A later server's failure must not leave an earlier one of this
             # same run half-recorded: nothing placed here has reached the
@@ -467,6 +478,21 @@ def _materialize_downloads(
             _undo_dependencies(runtime.filesystem, tuple(created))
             raise
     return tuple(kept), tuple(created)
+
+
+def _materialize_one(runtime: Runtime, layout, item, node_present: bool) -> Record:
+    if item.distribution is content_module.Distribution.DOWNLOAD:
+        return dependencies_module.materialize(
+            runtime.filesystem, runtime.downloader, layout.dependencies_dir, item, at=runtime.now
+        )
+    return dependencies_module.materialize_npm(
+        runtime.filesystem,
+        runtime.npm_installer,
+        layout.dependencies_dir,
+        item,
+        node_present=node_present,
+        at=runtime.now,
+    )
 
 
 def _undo_dependencies(filesystem: FileSystem, created: tuple[Record, ...]) -> None:

@@ -81,6 +81,22 @@ checksum: {CHECKSUM}
 Convention body.
 """
 
+INTEGRITY = "sha512-" + "a" * 86 + "=="
+
+NPM_MCP = f"""---
+name: probe-mcp
+description: Probes an npm-distributed MCP server
+distribution: npm
+endpoint: https://registry.npmjs.org/probe-mcp/-/probe-mcp-1.2.3.tgz
+package: probe-mcp
+version: 1.2.3
+integrity: {INTEGRITY}
+entry: cli.js
+---
+
+Convention body.
+"""
+
 
 def write(root: Path, relative: str, text: str) -> Path:
     path = root / relative
@@ -551,6 +567,36 @@ class McpTest(TemporaryContent):
         with self.assertRaises(ContentError) as raised:
             self.load_mcp(MCP.replace("endpoint: https://example.test/mcp\n", "endpoint: https://example.test/mcp\nversion: 1.0.0\n"))
         self.assertIn("version", str(raised.exception))
+
+    def test_an_npm_server_reads_its_package_version_integrity_and_entry(self):
+        mcp = self.load_mcp(NPM_MCP)
+        self.assertEqual(mcp.distribution, Distribution.NPM)
+        self.assertEqual(mcp.package, "probe-mcp")
+        self.assertEqual(mcp.version, "1.2.3")
+        self.assertEqual(mcp.integrity, INTEGRITY)
+        self.assertEqual(mcp.entry, "cli.js")
+
+    def test_an_npm_server_missing_any_required_field_is_rejected(self):
+        for line in (f"package: probe-mcp\n", "version: 1.2.3\n", f"integrity: {INTEGRITY}\n", "entry: cli.js\n"):
+            with self.subTest(line=line), self.assertRaises(ContentError) as raised:
+                self.load_mcp(NPM_MCP.replace(line, ""))
+            self.assertIn(line.split(":")[0], str(raised.exception))
+
+    def test_a_malformed_integrity_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(NPM_MCP.replace(INTEGRITY, "sha256:not-sha512"))
+        self.assertIn("integrity", str(raised.exception))
+
+    def test_a_remote_server_may_not_declare_npm_fields(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(MCP.replace("endpoint: https://example.test/mcp\n", "endpoint: https://example.test/mcp\npackage: probe-mcp\n"))
+        self.assertIn("package", str(raised.exception))
+
+    def test_a_download_server_may_not_declare_npm_fields(self):
+        """`download` and `npm` each own their own extra fields."""
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(DOWNLOAD_MCP.replace(f"checksum: {CHECKSUM}\n", f"checksum: {CHECKSUM}\nintegrity: {INTEGRITY}\n"))
+        self.assertIn("integrity", str(raised.exception))
 
 
 class McpConventionPathTest(unittest.TestCase):

@@ -3,9 +3,11 @@
 The filesystem port exists so that everything above it can be proven without a
 home directory to ruin. This is the implementation that makes good on that.
 The downloader port exists so a `download` server's materialization can be
-proven the same way, without ever reaching out for real bytes -- and the
-socket patch just below makes that structural rather than a matter of every
-test remembering to use the fake: this module is already imported, at
+proven the same way, without ever reaching out for real bytes, and the npm
+installer port does the same for an `npm` server -- without ever spawning a
+real `npm` process. The socket patch just below makes that structural rather
+than a matter of every test remembering to use the fake: this module is
+already imported, at
 collection time, by several test files this suite has always had (`test_cli`,
 `test_journal_store`, `test_snapshot_store`, `test_fakes` among them), and
 `unittest discover` imports every test module before running any of them, so
@@ -18,6 +20,7 @@ from pathlib import Path
 import no_network  # noqa: F401  -- importing it is what installs the refusal
 from pegasus.ports.downloader import DownloaderError
 from pegasus.ports.filesystem import FileSystemError
+from pegasus.ports.npm_installer import NpmInstallerError
 
 DEFAULT_MODE = 0o644
 DEFAULT_DIR_MODE = 0o755
@@ -41,6 +44,24 @@ class FakeDownloader:
         if url not in self.responses:
             raise DownloaderError(f"no fake response registered for {url}")
         return self.responses[url]
+
+
+class FakeNpmInstaller:
+    """An installer that answers from a table of outcomes instead of a real `npm`.
+
+    A directory absent from ``failures`` succeeds and writes nothing further:
+    the fake never touches the filesystem, since what a real `npm ci` would
+    place there is never read back by anything this suite proves.
+    """
+
+    def __init__(self, *, failures: dict[Path, str] | None = None):
+        self.failures: dict[Path, str] = dict(failures or {})
+        self.calls: list[Path] = []
+
+    def install(self, directory: Path) -> None:
+        self.calls.append(directory)
+        if directory in self.failures:
+            raise NpmInstallerError(self.failures[directory])
 
 
 class FakeFileSystem:

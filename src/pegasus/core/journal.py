@@ -24,7 +24,9 @@ SCHEMA = "pegasus-harness/journal/v4"
 KINDS = frozenset({"file", "config-key", "dependency-tree"})
 OWNED = "owned"
 NON_OWNING_LINK = "non-owning-link"
-DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+#: `file` and `config-key` always hash to `sha256:`; a `dependency-tree` may
+#: instead carry `sha512-...`, npm's own integrity string, verbatim.
+DIGEST = re.compile(r"^(sha256:[0-9a-f]{64}|sha512-[A-Za-z0-9+/]+=*)$")
 
 
 class JournalError(ValueError):

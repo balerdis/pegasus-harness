@@ -41,7 +41,7 @@ class InstallAndRetireTest(unittest.TestCase):
         self.registry = available()
         self.cli = self.registry.ids()[0]
         self.adapter = self.registry.get(self.cli)
-        self.environment = Environment(home=self.home)
+        self.environment = Environment(home=self.home, data_dir=self.fs.data_dir(self.home))
         self.layout = self.adapter.layout(self.environment)
         self.artifacts = catalog_module.render(content_module.load(), self.adapter, self.environment)
 

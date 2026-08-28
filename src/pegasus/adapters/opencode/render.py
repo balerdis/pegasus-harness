@@ -22,7 +22,7 @@ from pegasus.core.content import (
     SystemPrompt,
     mcp_convention_path,
 )
-from pegasus.core.dependencies import binary_path
+from pegasus.core.dependencies import binary_path, npm_script_path
 from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout
 
 AGENT_FOR_ROLE: dict[RunsAs, str | None] = {
@@ -168,6 +168,13 @@ MCP_VALUE: dict[Distribution, Any] = {
         "command": [str(_download_command(layout, item))],
         "enabled": True,
     },
+    # Same path arithmetic as `download`, pointed at the script `npm ci`
+    # installs rather than a fetched binary: `render` never runs `npm`.
+    Distribution.NPM: lambda item, layout: {
+        "type": "local",
+        "command": [str(_npm_command(layout, item))],
+        "enabled": True,
+    },
 }
 """How to spell each distribution mechanism as an OpenCode server value.
 
@@ -191,6 +198,12 @@ def _download_command(layout: Layout, item: Mcp) -> Path:
     if layout.dependencies_dir is None:
         raise RenderError(f"{item.name}: this layout has no dependencies directory")
     return binary_path(layout.dependencies_dir, item)
+
+
+def _npm_command(layout: Layout, item: Mcp) -> Path:
+    if layout.dependencies_dir is None:
+        raise RenderError(f"{item.name}: this layout has no dependencies directory")
+    return npm_script_path(layout.dependencies_dir, item)
 
 
 def mcp(layout: Layout, item: Mcp) -> list[Artifact]:
