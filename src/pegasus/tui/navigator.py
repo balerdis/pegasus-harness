@@ -33,6 +33,14 @@ class Quit:
 QUIT = Quit()
 
 
+class Cancel:
+    """The target of an entry that only closes the screen it is on — a
+    confirmation's "no": opens nothing, ends nothing."""
+
+
+CANCEL = Cancel()
+
+
 @dataclass(frozen=True)
 class Placeholder:
     """A screen the doc names but this change does not build.
@@ -92,28 +100,128 @@ class InstallResultScreen:
 
 
 @dataclass(frozen=True)
+class StatusRequest:
+    """The main menu's `Status and diagnostics` entry: like `InstallTarget`,
+    running `doctor` for real is `session`'s job, not a screen of its own."""
+
+    command: str = "doctor"
+
+
+@dataclass(frozen=True)
+class StatusScreen:
+    """What `doctor` reports, rendered as-is — the exact document `doctor
+    --json` would print. Its one action asks `session` to list the
+    generations `restore` could still read: where this release reaches
+    `restore` from, since someone here has already looked at the state."""
+
+    report: dict
+
+
+@dataclass(frozen=True)
+class UninstallTarget:
+    """Chosen a CLI to take Pegasus back out of — like `InstallTarget`, this
+    only asks `session` for the preview screen."""
+
+    cli: CliOption
+    command: str = "uninstall"
+
+
+@dataclass(frozen=True)
+class UninstallConfirm:
+    """The one entry on an uninstall preview that actually calls
+    `cli.uninstall`. Kept apart from `UninstallTarget` so the preview's own
+    Cancel/Confirm can never be confused with the outer choice."""
+
+    cli: CliOption
+    command: str = "uninstall"
+
+
+@dataclass(frozen=True)
+class UninstallResultScreen:
+    """What the real uninstall left behind — the report `uninstall --json`
+    would print for the run that just happened."""
+
+    cli: CliOption
+    report: dict
+
+
+@dataclass(frozen=True)
+class RestoreTarget:
+    """Chosen a generation to look at. What going back to it would touch
+    lives in its manifest, so — like `InstallTarget` — this only asks
+    `session` for the preview screen."""
+
+    generation: int
+    command: str = "restore"
+
+
+@dataclass(frozen=True)
+class RestoreConfirm:
+    """The one entry on a restore preview that actually calls `cli.restore`,
+    kept apart from `RestoreTarget` the same way `UninstallConfirm` is."""
+
+    generation: int
+    command: str = "restore"
+
+
+@dataclass(frozen=True)
+class RestoreResultScreen:
+    """What the real restore put back — the report `restore --json` would
+    print for the run that just happened."""
+
+    report: dict
+
+
+@dataclass(frozen=True)
 class Entry:
     """One line of a menu: what it says, and where choosing it leads."""
 
     label: str
-    target: Union["Menu", Placeholder, Quit, InstallTarget]
+    target: Union[
+        "Menu",
+        Placeholder,
+        Quit,
+        Cancel,
+        InstallTarget,
+        StatusRequest,
+        UninstallTarget,
+        UninstallConfirm,
+        RestoreTarget,
+        RestoreConfirm,
+    ]
 
 
 @dataclass(frozen=True)
 class Menu:
-    """A vertical list of entries with one of them selected."""
+    """A vertical list of entries with one of them selected. `preface` is
+    read-only context shown above the entries — never itself selectable —
+    empty by default, so a menu that predates it renders exactly as before.
+    """
 
     title: str
     entries: tuple[Entry, ...]
+    preface: tuple[str, ...] = ()
 
 
-Screen = Union[Menu, Placeholder, InstallPlanScreen, InstallResultScreen]
-"""Everything a :class:`Navigator` can have open. `Quit` is never open — it
-ends the session the moment it is chosen, so it is a target, not a screen.
-Neither is `InstallTarget`: choosing it asks for a screen, real engine work
-away, rather than opening one directly."""
+Screen = Union[
+    Menu,
+    Placeholder,
+    InstallPlanScreen,
+    InstallResultScreen,
+    StatusScreen,
+    UninstallResultScreen,
+    RestoreResultScreen,
+]
+"""Everything a :class:`Navigator` can have open. `Quit` and `Cancel` are
+never open — each ends the current moment (session or screen) the instant it
+is chosen. Neither is `InstallTarget` or any of its siblings below: choosing
+one asks for a screen, real engine work away, not open one directly."""
 
 NOT_BUILT_YET = "This screen has not been built yet."
+
+#: Targets naming real engine work `Navigator` cannot do — chosen from a
+#: menu, each is a no-op here; `session.step` recognizes the type and acts.
+_ENGINE_TARGETS = (InstallTarget, StatusRequest, UninstallTarget, UninstallConfirm, RestoreTarget, RestoreConfirm)
 
 
 def install_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
@@ -132,15 +240,47 @@ def install_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
     )
 
 
-def main_menu(detections: tuple[CliOption, ...] = ()) -> Menu:
-    """The menu from the architecture doc, in the order it lists them."""
+def uninstall_menu(installed: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
+    """One entry per CLI Pegasus is recorded as installed into, regardless of
+    whether it is still detected present — uninstalling never needs that."""
+    if not installed:
+        return Placeholder("Uninstall", "Pegasus is not recorded as installed in any CLI on this machine.")
+    return Menu(
+        title="Take Pegasus back out of which CLI?",
+        entries=tuple(
+            Entry(f"{option.display_name:<18} {option.config_dir:<32} {option.tier}", UninstallTarget(option))
+            for option in installed
+        ),
+    )
+
+
+def restore_menu(generations: tuple[int, ...]) -> Union[Menu, Placeholder]:
+    """One entry per generation `restore` could still read, most recent
+    first; nothing captured yet is the same placeholder shape as elsewhere."""
+    if not generations:
+        return Placeholder("Restore", "There is no snapshot generation to restore.")
+    return Menu(
+        title="Restore which generation?",
+        entries=tuple(Entry(f"Generation {generation}", RestoreTarget(generation)) for generation in generations),
+    )
+
+
+def main_menu(detections: tuple[CliOption, ...] = (), installed: tuple[CliOption, ...] = ()) -> Menu:
+    """The menu from the architecture doc, in the order it lists them.
+
+    `restore` has no entry of its own here on purpose: the doc's menu is
+    five entries, Install through Exit, and a sixth for a command the doc
+    never lists would break that parity for no reason `restore` itself
+    needs — it is reached from the status screen instead, see
+    :class:`StatusScreen`.
+    """
     return Menu(
         title=f"Pegasus Harness {pegasus.__version__}",
         entries=(
             Entry("Install", install_menu(detections)),
             Entry("Configure models", Placeholder("Configure models", NOT_BUILT_YET)),
-            Entry("Status and diagnostics", Placeholder("Status and diagnostics", NOT_BUILT_YET)),
-            Entry("Uninstall", Placeholder("Uninstall", NOT_BUILT_YET)),
+            Entry("Status and diagnostics", StatusRequest()),
+            Entry("Uninstall", uninstall_menu(installed)),
             Entry("Exit", QUIT),
         ),
     )
@@ -161,8 +301,8 @@ class Navigator:
     quit: bool = False
 
     @staticmethod
-    def starting(detections: tuple[CliOption, ...] = ()) -> "Navigator":
-        return Navigator(_stack=(main_menu(detections),), _cursors=(0,))
+    def starting(detections: tuple[CliOption, ...] = (), installed: tuple[CliOption, ...] = ()) -> "Navigator":
+        return Navigator(_stack=(main_menu(detections, installed),), _cursors=(0,))
 
     @property
     def current(self) -> Screen:
@@ -180,9 +320,9 @@ class Navigator:
         screen = self.current
         if isinstance(screen, Menu):
             return self._handle_on_menu(screen, action)
-        if isinstance(screen, InstallResultScreen):
-            # A finished install leaves the plan beneath it stale — it
-            # described a preview of a disk that has since changed — so
+        if isinstance(screen, (InstallResultScreen, UninstallResultScreen, RestoreResultScreen)):
+            # A finished install, uninstall, or restore leaves whatever led to
+            # it stale — each described a disk that has since changed — so
             # acknowledging the result returns all the way to the main menu
             # rather than back into it.
             return replace(self, _stack=self._stack[:1], _cursors=self._cursors[:1]) if action in (
@@ -200,10 +340,12 @@ class Navigator:
             target = screen.entries[self.cursor].target
             if isinstance(target, Quit):
                 return replace(self, quit=True)
-            if isinstance(target, InstallTarget):
-                # Fetching its plan is real engine work, which only `session`
-                # can do; handled here, this would open the request itself as
-                # if it were a screen.
+            if isinstance(target, Cancel):
+                return self._pop()
+            if isinstance(target, _ENGINE_TARGETS):
+                # Fetching what it needs is real engine work, which only
+                # `session` can do; handled here, this would open the request
+                # itself as if it were a screen.
                 return self
             return self.opened(target)
         if action is Action.BACK:

@@ -62,7 +62,7 @@ def draw(window, lines: tuple[Line, ...]) -> None:
 def run(window, runtime: cli.Runtime) -> None:
     curses.curs_set(0)
     window.keypad(True)
-    navigator = Navigator.starting(session.detect_clis(runtime))
+    navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
     draw(window, render(navigator.current, navigator.cursor))
     while not navigator.quit:
         action = action_for(window.getch())

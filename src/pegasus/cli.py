@@ -574,7 +574,15 @@ def _undo_dependencies(filesystem: FileSystem, created: tuple[Record, ...]) -> N
 
 
 def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
-    adapter = _adapter(arguments.cli)
+    return uninstall(arguments.cli, runtime)
+
+
+def uninstall(cli_id: str, runtime: Runtime) -> dict[str, Any]:
+    """Take Pegasus back out of one CLI's configuration, and report what was
+    removed — same reasoning as `install`: the TUI's uninstall screen calls
+    this directly, the report it gets back the same one `--json` would.
+    """
+    adapter = _adapter(cli_id)
     store = journal_store(runtime)
     store.ensure_writable()
     snapshot = snapshot_store(runtime)
@@ -616,6 +624,15 @@ def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
 
 
 def _restore(arguments, runtime: Runtime) -> dict[str, Any]:
+    return restore(runtime, arguments.generation)
+
+
+def restore(runtime: Runtime, generation: int | None = None) -> dict[str, Any]:
+    """Undo the most recent generation, or a specific one, and report what
+    was put back — same reasoning as `install`: the TUI's restore screen
+    calls this directly, the report it gets back the same one `--json`
+    would.
+    """
     store = journal_store(runtime)
     store.ensure_writable()
     snapshot = snapshot_store(runtime)
@@ -625,7 +642,6 @@ def _restore(arguments, runtime: Runtime) -> dict[str, Any]:
     # would make "the most recent generation" resolve to the copy this very
     # call is about to take, and restore would recover its own copy of the
     # present instead of anything that came before it.
-    generation = arguments.generation
     try:
         if generation is None:
             generation = snapshot.most_recent_readable()
@@ -681,6 +697,14 @@ def _restore(arguments, runtime: Runtime) -> dict[str, Any]:
 
 
 def _doctor(arguments, runtime: Runtime) -> dict[str, Any]:
+    return doctor(runtime)
+
+
+def doctor(runtime: Runtime) -> dict[str, Any]:
+    """What is supported, what is present, and what has drifted, per CLI —
+    the TUI's status screen calls this directly, the report it gets back
+    the same one `--json` would.
+    """
     environment = runtime.environment
     registry = available()
     journal = journal_store(runtime).load()

@@ -6,10 +6,55 @@ from __future__ import annotations
 import unittest
 
 from pegasus import cli
-from pegasus.tui.navigator import CliOption, Entry, InstallPlanScreen, InstallResultScreen, Menu, Placeholder, QUIT
+from pegasus.tui.navigator import (
+    CliOption,
+    Entry,
+    InstallPlanScreen,
+    InstallResultScreen,
+    Menu,
+    Placeholder,
+    QUIT,
+    RestoreResultScreen,
+    StatusScreen,
+    UninstallResultScreen,
+)
 from pegasus.tui.view import render
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
+DOCTOR_REPORT = {
+    "schema": cli.SCHEMA,
+    "command": "doctor",
+    "pegasus_version": "4.0.0",
+    "clis": [
+        {
+            "cli": "demo",
+            "display_name": "Demo CLI",
+            "tier": "full",
+            "detected": True,
+            "config_dir": "/x/.demo",
+            "pegasus_installed": True,
+            "artifacts": 3,
+            "drifted": ["a"],
+            "missing": ["b"],
+            "unreadable": ["c"],
+            "activation": [],
+        }
+    ],
+}
+UNINSTALLED_REPORT = {
+    "schema": cli.SCHEMA, "command": "uninstall", "cli": "demo", "status": "uninstalled",
+    "activation": [], "removed": ["/x/a"], "unaccounted": [], "kept_links": [],
+}
+UNINSTALL_FAILED_REPORT = {
+    "schema": cli.SCHEMA, "command": "uninstall", "status": "failed", "error": "permission denied",
+}
+RESTORED_REPORT = {
+    "schema": cli.SCHEMA, "command": "restore", "status": "restored", "generation": 2,
+    "written": ["/x/a"], "removed": [],
+}
+RESTORE_FAILED_REPORT = {
+    "schema": cli.SCHEMA, "command": "restore", "status": "failed", "error": "generation 2 cannot be restored",
+}
 PLANNED_REPORT = {
     "schema": cli.SCHEMA, "command": "install", "cli": "demo", "status": "planned", "activation": [],
     "created": [{"id": "a", "target": "/x/a"}], "updated": [], "unchanged": [], "skipped": [], "retired": [],
@@ -54,6 +99,35 @@ class MenuRenderingTest(unittest.TestCase):
         self.assertEqual(sum(1 for line in lines if line.highlighted), 1)
 
 
+class MenuPrefaceRenderingTest(unittest.TestCase):
+    def test_preface_lines_appear_between_the_title_and_the_entries(self):
+        menu = Menu(title="Confirm?", preface=("About to remove:", "  a → /x/a"), entries=(Entry("Cancel", QUIT),))
+        lines = [line.text for line in render(menu, cursor=0)]
+        self.assertEqual(lines[0], "Confirm?")
+        self.assertIn("About to remove:", lines)
+        self.assertIn("  a → /x/a", lines)
+        self.assertLess(lines.index("  a → /x/a"), lines.index("  ▸ Cancel"))
+
+    def test_no_preface_adds_no_extra_lines(self):
+        with_preface = Menu(title="t", preface=(), entries=(Entry("a", QUIT),))
+        without_preface = Menu(title="t", entries=(Entry("a", QUIT),))
+        self.assertEqual(render(with_preface, cursor=0), render(without_preface, cursor=0))
+
+
+class StatusScreenRenderingTest(unittest.TestCase):
+    def test_it_carries_the_exact_prose_the_flags_would_print(self):
+        lines = [line.text for line in render(StatusScreen(report=DOCTOR_REPORT), cursor=0)]
+        for expected in cli.prose_for(DOCTOR_REPORT).splitlines():
+            self.assertTrue(any(expected in text for text in lines), expected)
+
+    def test_missing_and_unreadable_are_named_and_kept_apart(self):
+        prose = cli.prose_for(DOCTOR_REPORT)
+        self.assertIn("missing: b", prose)
+        self.assertIn("could not be checked: c", prose)
+        self.assertNotIn("missing: c", prose)
+        self.assertNotIn("could not be checked: b", prose)
+
+
 class PlaceholderRenderingTest(unittest.TestCase):
     def test_a_placeholder_shows_its_title_and_its_note(self):
         screen = Placeholder("Install", "This screen has not been built yet.")
@@ -93,6 +167,42 @@ class InstallResultRenderingTest(unittest.TestCase):
     def test_it_carries_the_exact_prose_the_flags_would_print(self):
         lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=INSTALLED_REPORT), cursor=0)]
         for expected in cli.prose_for(INSTALLED_REPORT).splitlines():
+            self.assertIn(expected, lines)
+
+
+class UninstallResultRenderingTest(unittest.TestCase):
+    def test_a_successful_uninstall_says_so_unmistakably(self):
+        lines = [line.text for line in render(UninstallResultScreen(cli=SAMPLE, report=UNINSTALLED_REPORT), cursor=0)]
+        self.assertIn("UNINSTALLED.", lines)
+
+    def test_a_failed_uninstall_says_so_and_carries_no_traceback(self):
+        lines = [
+            line.text for line in render(UninstallResultScreen(cli=SAMPLE, report=UNINSTALL_FAILED_REPORT), cursor=0)
+        ]
+        self.assertIn("UNINSTALL FAILED.", lines)
+        self.assertTrue(any("permission denied" in text for text in lines))
+        self.assertFalse(any("Traceback" in text for text in lines))
+
+    def test_it_carries_the_exact_prose_the_flags_would_print(self):
+        lines = [line.text for line in render(UninstallResultScreen(cli=SAMPLE, report=UNINSTALLED_REPORT), cursor=0)]
+        for expected in cli.prose_for(UNINSTALLED_REPORT).splitlines():
+            self.assertIn(expected, lines)
+
+
+class RestoreResultRenderingTest(unittest.TestCase):
+    def test_a_successful_restore_says_so_unmistakably(self):
+        lines = [line.text for line in render(RestoreResultScreen(report=RESTORED_REPORT), cursor=0)]
+        self.assertIn("RESTORED.", lines)
+
+    def test_a_failed_restore_says_so_and_carries_no_traceback(self):
+        lines = [line.text for line in render(RestoreResultScreen(report=RESTORE_FAILED_REPORT), cursor=0)]
+        self.assertIn("RESTORE FAILED.", lines)
+        self.assertTrue(any("cannot be restored" in text for text in lines))
+        self.assertFalse(any("Traceback" in text for text in lines))
+
+    def test_it_carries_the_exact_prose_the_flags_would_print(self):
+        lines = [line.text for line in render(RestoreResultScreen(report=RESTORED_REPORT), cursor=0)]
+        for expected in cli.prose_for(RESTORED_REPORT).splitlines():
             self.assertIn(expected, lines)
 
 

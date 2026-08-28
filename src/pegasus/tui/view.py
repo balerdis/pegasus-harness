@@ -10,19 +10,32 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pegasus import cli
-from pegasus.tui.navigator import InstallPlanScreen, InstallResultScreen, Menu, Placeholder, Screen
+from pegasus.tui.navigator import (
+    InstallPlanScreen,
+    InstallResultScreen,
+    Menu,
+    Placeholder,
+    RestoreResultScreen,
+    Screen,
+    StatusScreen,
+    UninstallResultScreen,
+)
 
 SELECTED = "  ▸ "
 UNSELECTED = "    "
 
 # What tells a person which side of the point of no return they are on. The
 # plan screen is a preview of `install --dry-run`'s own report and never
-# writes anything by itself; only confirming it does. The two banners are
-# deliberately unalike so this is never left to be inferred from wording that
-# could look the same by accident.
+# writes anything by itself; only confirming it does. Every banner below is
+# deliberately unalike the others so this is never left to be inferred from
+# wording that could look the same by accident.
 PREVIEW_BANNER = "PREVIEW — nothing has been written yet."
 INSTALLED_BANNER = "INSTALLED."
 FAILED_BANNER = "INSTALL FAILED."
+UNINSTALLED_BANNER = "UNINSTALLED."
+UNINSTALL_FAILED_BANNER = "UNINSTALL FAILED."
+RESTORED_BANNER = "RESTORED."
+RESTORE_FAILED_BANNER = "RESTORE FAILED."
 
 
 @dataclass(frozen=True)
@@ -43,11 +56,20 @@ def render(screen: Screen, cursor: int) -> tuple[Line, ...]:
         return _render_install_plan(screen)
     if isinstance(screen, InstallResultScreen):
         return _render_install_result(screen)
+    if isinstance(screen, StatusScreen):
+        return _render_status(screen)
+    if isinstance(screen, UninstallResultScreen):
+        return _render_uninstall_result(screen)
+    if isinstance(screen, RestoreResultScreen):
+        return _render_restore_result(screen)
     raise TypeError(f"no rendering defined for screen: {screen!r}")
 
 
 def _render_menu(screen: Menu, cursor: int) -> tuple[Line, ...]:
     lines = [Line(screen.title), Line("")]
+    if screen.preface:
+        lines.extend(Line(text) for text in screen.preface)
+        lines.append(Line(""))
     for index, entry in enumerate(screen.entries):
         selected = index == cursor
         prefix = SELECTED if selected else UNSELECTED
@@ -76,6 +98,31 @@ def _render_install_result(screen: InstallResultScreen) -> tuple[Line, ...]:
     failed = screen.report.get("status") == "failed"
     banner = FAILED_BANNER if failed else INSTALLED_BANNER
     lines = [Line(f"Install · {screen.cli.display_name}"), Line(""), Line(banner), Line("")]
+    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines += [Line(""), Line("enter/esc: back")]
+    return tuple(lines)
+
+
+def _render_status(screen: StatusScreen) -> tuple[Line, ...]:
+    lines = [Line("Status and diagnostics"), Line("")]
+    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines += [Line(""), Line("enter: view snapshot generations to restore · esc: back")]
+    return tuple(lines)
+
+
+def _render_uninstall_result(screen: UninstallResultScreen) -> tuple[Line, ...]:
+    failed = screen.report.get("status") == "failed"
+    banner = UNINSTALL_FAILED_BANNER if failed else UNINSTALLED_BANNER
+    lines = [Line(f"Uninstall · {screen.cli.display_name}"), Line(""), Line(banner), Line("")]
+    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines += [Line(""), Line("enter/esc: back")]
+    return tuple(lines)
+
+
+def _render_restore_result(screen: RestoreResultScreen) -> tuple[Line, ...]:
+    failed = screen.report.get("status") == "failed"
+    banner = RESTORE_FAILED_BANNER if failed else RESTORED_BANNER
+    lines = [Line("Restore"), Line(""), Line(banner), Line("")]
     lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
     lines += [Line(""), Line("enter/esc: back")]
     return tuple(lines)
