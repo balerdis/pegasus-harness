@@ -18,7 +18,7 @@ CONFIG = Path("/home/probe/.config/some-cli")
 
 
 def file_artifact(content: bytes = b"hello", **overrides) -> FileArtifact:
-    fields = dict(id="skill:alpha", path=CONFIG / "skills/alpha/SKILL.md", content=content)
+    fields = dict(id="skill:alpha", path=CONFIG / "skills/alpha/SKILL.md", content=content, mode=0o644)
     fields.update(overrides)
     return FileArtifact(**fields)
 

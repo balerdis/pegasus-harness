@@ -154,7 +154,13 @@ class FileArtifact:
     id: str
     path: Path
     content: bytes
-    mode: int = 0o644
+    mode: int
+    """The permission bits this artifact should be created with.
+
+    A platform decision, not a domain default: whoever renders the artifact
+    already knows whether it is a program handed to the shell or plain text,
+    and states the answer here rather than letting the engine assume one.
+    """
 
     def __post_init__(self) -> None:
         _require_absolute(self.path, "path")

@@ -863,5 +863,59 @@ class RetireTest(RealHomeTestCase):
         self.assertEqual(second.unaccounted, ())
 
 
+class _DefaultModeSpy:
+    """Records the mode an undo path actually asked for, if any.
+
+    Standing in for the one case ``mode_of`` cannot rule out today: an
+    existing file whose permission bits could not be observed even though its
+    content just was. Real disk cannot manufacture that condition on demand,
+    so this narrow double is what proves a rollback defers the choice to
+    whichever filesystem it is given instead of hard-coding one of its own —
+    its distinctive default would never be mistaken for a value planner.py
+    picked itself.
+    """
+
+    DISTINCTIVE_DEFAULT = 0o750
+
+    def __init__(self):
+        self.applied_modes: list[int] = []
+
+    def write_atomic(self, path: Path, content: bytes, *, mode: int = DISTINCTIVE_DEFAULT) -> None:
+        self.applied_modes.append(mode)
+
+    def remove(self, path: Path) -> None:
+        pass
+
+
+class RollbackDefersAnUnknownModeTest(unittest.TestCase):
+    """The three call sites that used to fall back to a bare ``0o644``."""
+
+    def test_undo_omits_the_mode_when_none_was_captured(self):
+        spy = _DefaultModeSpy()
+        planner._undo(spy, created=[], restorable={Path("/tmp/x"): (b"content", None)})
+        self.assertEqual(spy.applied_modes, [_DefaultModeSpy.DISTINCTIVE_DEFAULT])
+
+    def test_undo_still_honours_a_mode_that_was_captured(self):
+        spy = _DefaultModeSpy()
+        planner._undo(spy, created=[], restorable={Path("/tmp/x"): (b"content", 0o600)})
+        self.assertEqual(spy.applied_modes, [0o600])
+
+    def test_put_back_omits_the_mode_when_none_was_captured(self):
+        spy = _DefaultModeSpy()
+        applied = planner.Applied(records=(), skipped=(), replaced=((Path("/tmp/x"), b"content", None),))
+        planner._put_back(spy, applied)
+        self.assertEqual(spy.applied_modes, [_DefaultModeSpy.DISTINCTIVE_DEFAULT])
+
+    def test_write_document_omits_the_mode_for_a_document_created_for_the_first_time(self):
+        spy = _DefaultModeSpy()
+        planner._write_document(spy, Path("/tmp/settings.json"), {}, Codec.JSON, None)
+        self.assertEqual(spy.applied_modes, [_DefaultModeSpy.DISTINCTIVE_DEFAULT])
+
+    def test_write_document_still_honours_a_mode_that_was_observed(self):
+        spy = _DefaultModeSpy()
+        planner._write_document(spy, Path("/tmp/settings.json"), {}, Codec.JSON, 0o640)
+        self.assertEqual(spy.applied_modes, [0o640])
+
+
 if __name__ == "__main__":
     unittest.main()

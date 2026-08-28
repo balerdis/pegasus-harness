@@ -48,7 +48,7 @@ class FakeAdapter:
         return self._layout
 
     def _render(self, layout, item):
-        return [FileArtifact(id="x", path=CONFIG / "x", content=b"")]
+        return [FileArtifact(id="x", path=CONFIG / "x", content=b"", mode=0o644)]
 
     def own_artifacts(self, layout):
         return list(self._own)
@@ -178,11 +178,11 @@ class OwnArtifactsTest(unittest.TestCase):
         Registry().register(FakeAdapter())
 
     def test_own_artifacts_inside_the_config_root_are_accepted(self):
-        own = (FileArtifact(id="plugin:x", path=CONFIG / "plugins" / "x.ts", content=b""),)
+        own = (FileArtifact(id="plugin:x", path=CONFIG / "plugins" / "x.ts", content=b"", mode=0o644),)
         Registry().register(FakeAdapter(own=own))
 
     def test_own_artifacts_outside_the_config_root_are_rejected(self):
-        own = (FileArtifact(id="rogue", path=Path("/home/probe/.bashrc"), content=b""),)
+        own = (FileArtifact(id="rogue", path=Path("/home/probe/.bashrc"), content=b"", mode=0o644),)
         with self.assertRaises(AdapterScopeError) as raised:
             Registry().register(FakeAdapter(own=own))
         self.assertIn(".bashrc", str(raised.exception))

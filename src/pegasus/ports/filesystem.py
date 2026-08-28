@@ -73,7 +73,7 @@ class FileSystem(Protocol):
 
     # --- Writing ---
 
-    def write_atomic(self, path: Path, content: bytes, *, mode: int = 0o644) -> None:
+    def write_atomic(self, path: Path, content: bytes, *, mode: int) -> None:
         """Write a file so that no reader ever sees it half-written.
 
         Missing parent directories are created. On success the file holds
@@ -81,6 +81,12 @@ class FileSystem(Protocol):
         content survives untouched and no partial file is left behind. That
         guarantee is what lets an interrupted installation be rolled back
         against the journal instead of guessed at.
+
+        There is no default: what an artifact's permissions should be is a
+        decision the engine has already made by the time this is called, and
+        a port that guessed one would let a forgotten argument ship a file
+        with permissions nobody chose. An implementation is free to default
+        its own signature for calls this port does not make itself.
         """
 
     def remove(self, path: Path) -> None:
@@ -101,7 +107,7 @@ class FileSystem(Protocol):
         already cleared the folder away.
         """
 
-    def make_dir(self, path: Path, *, mode: int = 0o755) -> None:
+    def make_dir(self, path: Path, *, mode: int) -> None:
         """Create a directory and its parents. Idempotent.
 
         ``mode`` applies **only to directories this call creates**. A directory
@@ -113,6 +119,11 @@ class FileSystem(Protocol):
         Pegasus did not create in this installation would mutate something it
         does not own. Callers that need a guarantee must state it about the
         files they write, where ``write_atomic`` does enforce the mode.
+
+        There is no default: whether a directory should be private or
+        traversable is exactly the distinction this call exists to state, and
+        a port that assumed one for a caller who forgot would decide it by
+        accident.
         """
 
     # --- Who is running ---
