@@ -88,6 +88,16 @@ class FileSystem(Protocol):
         the same path.
         """
 
+    def bin_dir(self, home: Path) -> Path:
+        """Where a program installed for one person, not the whole machine, belongs on their `PATH`.
+
+        This is the same question `data_dir` answers, asked about a different
+        fact: `~/.local/bin` is a Linux convention that macOS and Windows do
+        not share, so a launcher shim cannot hard-code it any more than
+        Pegasus's own data can hard-code XDG. Two calls with the same
+        ``home`` on the same platform always answer the same path.
+        """
+
     # --- Permissions ---
 
     def mode_for(self, *, executable: bool) -> int:
