@@ -6,11 +6,17 @@ it placed is what the release declared.
 
 Nothing here names a CLI. The build walks the capabilities an adapter declares
 and asks that adapter to render each one.
+
+An artifact lands in one of two legitimate territories: a CLI's own
+configuration root, or Pegasus's own directory -- the second is where a
+materialized dependency will live, placed by the engine rather than by an
+adapter. Anything outside both is a leak regardless of which one it was
+aiming for.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import PurePosixPath
+from pathlib import PurePath, PurePosixPath
 from typing import Any
 
 from pegasus.core import ownership
@@ -119,8 +125,35 @@ def render(content: Content, adapter: Any, environment: Environment) -> list[Any
 
 #: The frame every catalog is built in. Not a real directory, and never written to.
 CANONICAL_HOME = PurePosixPath("/pegasus/catalog-build")
+
+#: The second frame alongside `CANONICAL_HOME`: the shape of Pegasus's own
+#: directory in the canonical build. Never real, and never computed through a
+#: filesystem -- for the same reason `CANONICAL_HOME` is not real either. The
+#: real path (`FileSystem.data_dir`) varies by platform and environment, which
+#: is exactly what a release digest must not depend on.
+CANONICAL_DATA_DIR = CANONICAL_HOME / ".pegasus-data"
+
 CANONICAL_PROGRAM_MODE = "0755"
 CANONICAL_TEXT_MODE = "0644"
+
+
+@dataclass(frozen=True)
+class Territory:
+    """The roots an artifact may legitimately land under.
+
+    A single root used to be enough to describe "not a leak"; a materialized
+    dependency makes that untrue, so this holds every root that counts as
+    legitimate and answers which one, if any, contains a given path.
+    """
+
+    roots: tuple[PurePath, ...]
+
+    def root_of(self, path: PurePath) -> PurePath | None:
+        """The one root that contains ``path``, or ``None`` outside every root."""
+        for root in self.roots:
+            if path.is_relative_to(root):
+                return root
+        return None
 
 
 def build(content: Content, adapter: Any) -> Catalog:
@@ -141,14 +174,21 @@ def build(content: Content, adapter: Any) -> Catalog:
 
     What a machine actually receives comes from `render` with its own
     environment, and that is what the journal records.
+
+    An artifact may also land in Pegasus's own directory rather than the CLI's
+    configuration root -- `CANONICAL_DATA_DIR` stands in for it here, the same
+    way `CANONICAL_HOME` stands in for a real home: `FileSystem.data_dir` is a
+    filesystem method, computed per platform and environment, and the digest
+    of a release must not vary with either.
     """
     # PurePosixPath end to end: `Path` takes the flavour of whatever machine runs
     # the build, and a canonical frame that spells itself differently on Windows
     # is not canonical.
     canonical = Environment(home=CANONICAL_HOME)
     artifacts = render(content, adapter, canonical)
-    root = adapter.layout(canonical).config_dir
-    return Catalog(cli=adapter.id, entries=_entries(artifacts, root, adapter.id))
+    config_root = adapter.layout(canonical).config_dir
+    territory = Territory(roots=(config_root, CANONICAL_DATA_DIR))
+    return Catalog(cli=adapter.id, entries=_entries(artifacts, territory, adapter.id))
 
 
 def _items(content: Content, attribute: str) -> tuple[Any, ...]:
@@ -159,11 +199,13 @@ def _items(content: Content, attribute: str) -> tuple[Any, ...]:
     return tuple(value) if isinstance(value, (tuple, list)) else (value,)
 
 
-def _entries(artifacts: list[Any], root: Any, cli: str) -> tuple[Entry, ...]:
+def _entries(artifacts: list[Any], territory: Territory, cli: str) -> tuple[Entry, ...]:
     entries, seen_ids, seen_addresses = [], set(), set()
     for artifact in artifacts:
-        if not artifact.path.is_relative_to(root):
-            raise CatalogError(f"{cli!r} would place {artifact.path} outside {root}")
+        root = territory.root_of(artifact.path)
+        if root is None:
+            allowed = " or ".join(str(candidate) for candidate in territory.roots)
+            raise CatalogError(f"{cli!r} would place {artifact.path} outside {allowed}")
         entry = _entry(artifact, root)
 
         if entry.id in seen_ids:
