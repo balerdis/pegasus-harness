@@ -566,6 +566,9 @@ En v3.1.2 se embarcan los 10 prompts SDD pero solo uno está cableado como agent
 
 ## Interfaz de usuario
 
+La TUI se dibuja con `curses`, de la biblioteca estándar. No agrega ninguna dependencia, y por lo tanto no agrega nada que la unidad 4 tenga que fijar con hash ni meter en el venv privado. Las pantallas que siguen son listas verticales con un cursor y teclas de una letra: no piden color, ni layout anidado, ni nada que justifique traer un paquete —y menos uno que arrastre un segundo— para dibujarlas.
+
+
 ### Menú principal
 
 ```
@@ -1167,7 +1170,6 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 | `restore` no tiene ninguna pantalla en `## Interfaz de usuario`. Es un comando entregado y testeado desde la unidad 9, y la paridad TUI es obligatoria | La unidad 5, que no puede darse por completa sin diseñarla |
 | Cinco capacidades del motor no tienen pantalla: `--dry-run` como modo distinto de la vista previa, la confirmación por MCP, los pasos de activación posteriores a instalar, el reporte de retención, y el balde `unreadable` de `doctor` | La unidad 5. Las pantallas se escribieron antes de las unidades 9 y 10, que agregaron esas capacidades |
 | El store de preferencias de modelo no existe en ninguna forma: ni archivo, ni puerto, ni la mitad de escritura de `CliAdapter`, que hoy sólo sabe leer asignaciones. El contrato `pegasus/model-assignment/v1` está nombrado en la tabla de contratos y no lo implementa nada | La unidad 6, que lo construye entero. La unidad 5 no lo necesita |
-| Ninguna librería de TUI está elegida, y cada dependencia nueva hay que fijarla con hash y meterla en el venv privado | La unidad 4, cuyo tamaño depende de esa elección |
 | `mode_of` sigue colapsando "la ruta no existe" y "no pude leer sus bits" en el mismo `None`. Los tres llamadores del planner corren justo después de una lectura que ya tuvo éxito, así que hoy es inalcanzable | Nada. Fragilidad latente, no reproducida |
 
 ---
