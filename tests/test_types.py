@@ -21,22 +21,28 @@ from pegasus.core.types import (
 
 class FileArtifactTest(unittest.TestCase):
     def test_holds_opaque_bytes(self):
-        artifact = FileArtifact(id="skill:x", path=Path("/home/u/.config/x"), content=b"body")
+        artifact = FileArtifact(id="skill:x", path=Path("/home/u/.config/x"), content=b"body", mode=0o644)
         self.assertEqual(artifact.content, b"body")
         self.assertEqual(artifact.mode, 0o644)
 
+    def test_mode_has_no_default(self):
+        """The permission an artifact is created with is a platform decision;
+        the engine must never guess one on a caller's behalf."""
+        with self.assertRaises(TypeError):
+            FileArtifact(id="a", path=Path("/tmp/a"), content=b"")
+
     def test_is_immutable(self):
-        artifact = FileArtifact(id="a", path=Path("/tmp/a"), content=b"")
+        artifact = FileArtifact(id="a", path=Path("/tmp/a"), content=b"", mode=0o644)
         with self.assertRaises(dataclasses.FrozenInstanceError):
             artifact.content = b"other"
 
     def test_relative_path_is_rejected(self):
         with self.assertRaises(ValueError):
-            FileArtifact(id="a", path=Path("relative/a"), content=b"")
+            FileArtifact(id="a", path=Path("relative/a"), content=b"", mode=0o644)
 
     def test_content_must_be_bytes(self):
         with self.assertRaises(TypeError):
-            FileArtifact(id="a", path=Path("/tmp/a"), content="text")
+            FileArtifact(id="a", path=Path("/tmp/a"), content="text", mode=0o644)
 
     def test_mode_outside_the_permission_range_is_rejected(self):
         with self.assertRaises(ValueError):

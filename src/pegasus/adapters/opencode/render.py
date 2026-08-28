@@ -57,6 +57,8 @@ def skill(layout: Layout, item: Skill) -> list[Artifact]:
             id=f"skill:{item.name}:{asset.relative_path}",
             path=layout.skills_dir / item.name / asset.relative_path,
             content=asset.content,
+        
+            mode=0o644,
         )
         for asset in item.assets
     ]
@@ -69,6 +71,8 @@ def prompt(layout: Layout, item: Agent) -> list[Artifact]:
             id=f"prompt:{item.name}",
             path=_prompt_path(layout, item),
             content=_body(layout, item.body, item.name).encode("utf-8"),
+        
+            mode=0o644,
         )
     ]
 
@@ -124,6 +128,8 @@ def command(layout: Layout, item: Command) -> list[Artifact]:
             id=f"command:{item.name}",
             path=layout.commands_dir / f"{item.name}.md",
             content=(_frontmatter(fields) + "\n" + _body(layout, item.body, item.name)).encode("utf-8"),
+        
+            mode=0o644,
         )
     ]
 
@@ -140,6 +146,8 @@ def system_prompt(layout: Layout, item: SystemPrompt) -> list[Artifact]:
             id="system-prompt",
             path=path,
             content=_body(layout, item.body, "system-prompt").encode("utf-8"),
+        
+            mode=0o644,
         ),
         ConfigKeyArtifact(
             id="system-prompt-instruction",
@@ -192,6 +200,8 @@ def mcp(layout: Layout, item: Mcp) -> list[Artifact]:
             id=f"mcp-convention:{item.name}",
             path=_convention_path(layout, item),
             content=_body(layout, item.body, item.name).encode("utf-8"),
+        
+            mode=0o644,
         ),
     ]
 

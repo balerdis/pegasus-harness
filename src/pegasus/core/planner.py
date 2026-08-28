@@ -395,7 +395,7 @@ def _undo(
             if content is None:
                 filesystem.remove(path)
             else:
-                filesystem.write_atomic(path, content, mode=mode if mode is not None else 0o644)
+                _write_back(filesystem, path, content, mode)
         except FileSystemError as failure:
             failures.append(str(failure))
     for path in reversed(created):
@@ -430,10 +430,24 @@ def _put_back(filesystem: FileSystem, applied: Applied) -> list[tuple[Path, str]
     failures: list[tuple[Path, str]] = []
     for path, content, mode in applied.replaced:
         try:
-            filesystem.write_atomic(path, content, mode=mode if mode is not None else 0o644)
+            _write_back(filesystem, path, content, mode)
         except FileSystemError as failure:
             failures.append((path, str(failure)))
     return failures
+
+
+def _write_back(filesystem: FileSystem, path: Path, content: bytes, mode: int | None) -> None:
+    """Put ``content`` back exactly where it stood, at the mode it was captured with.
+
+    A ``None`` mode is not this module's default to pick: it means the mode
+    was never observed to begin with, and the choice belongs to whichever
+    filesystem is asked to write, not to this rollback path. Omitting the
+    argument entirely is what leaves that choice where it belongs.
+    """
+    if mode is None:
+        filesystem.write_atomic(path, content)
+    else:
+        filesystem.write_atomic(path, content, mode=mode)
 
 
 def _file_record(step: Step, at: str) -> Record:
@@ -588,9 +602,15 @@ def _read_document(filesystem: FileSystem, path: Path, codec: Codec) -> Any:
 def _write_document(
     filesystem: FileSystem, path: Path, document: Any, codec: Codec, mode: int | None
 ) -> None:
-    """Write a configuration file back, keeping the permissions it had."""
+    """Write a configuration file back, keeping the permissions it had.
+
+    A document with no observed mode is one this run is creating for the
+    first time, so there is no permission of the user's to keep — the
+    argument is left out rather than guessed at here, and whichever
+    filesystem is asked to write picks the mode a brand-new file gets.
+    """
     payload = codecs.dumps(codec, document).encode("utf-8")
-    filesystem.write_atomic(path, payload, mode=mode if mode is not None else 0o644)
+    _write_back(filesystem, path, payload, mode)
 
 
 # --- Pointers that append ---------------------------------------------------

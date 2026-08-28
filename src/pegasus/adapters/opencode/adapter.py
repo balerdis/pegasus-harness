@@ -183,6 +183,7 @@ def _skill_registry_contract(layout: Layout) -> FileArtifact:
         id=f"own:{SKILL_REGISTRY_CONTRACT}",
         path=layout.config_dir / SKILL_REGISTRY_CONTRACT,
         content=body.encode("utf-8"),
+        mode=0o644,
     )
 
 
