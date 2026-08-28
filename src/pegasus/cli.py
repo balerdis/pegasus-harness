@@ -145,25 +145,37 @@ def main(argv: list[str] | None = None, *, runtime: Runtime | None = None) -> in
         parser.print_usage(runtime.out)
         return FAILED
 
-    try:
-        report = COMMANDS[arguments.command](arguments, runtime)
-        code = OK
-    except (
-        CommandError,
-        JournalStoreError,
-        planner.PlannerError,
-        FileSystemError,
-        VenvProvisionerError,
-    ) as error:
-        report = {"status": "failed", "error": str(error), **getattr(error, "report", {})}
-        code = FAILED
-
-    report = {"schema": SCHEMA, "command": arguments.command, **report}
+    code, report = safe_report(arguments.command, lambda: COMMANDS[arguments.command](arguments, runtime))
     if arguments.json:
         runtime.out.write(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     else:
         runtime.out.write(_prose(report) + "\n")
     return code
+
+
+#: Every exception a command handler is allowed to let through instead of
+#: raising past `main` — an agent's stdin has no traceback to read, only this
+#: report.
+COMMAND_ERRORS = (CommandError, JournalStoreError, planner.PlannerError, FileSystemError, VenvProvisionerError)
+
+
+def safe_report(command: str, call: Callable[[], dict[str, Any]]) -> tuple[int, dict[str, Any]]:
+    """Run one command handler and shape whatever it returns — or raises —
+    into the same versioned report either way.
+
+    This is the one piece of `main` worth calling from outside it: anything
+    that wants to reach the engine the same way the flags do — the TUI's
+    install screen, chiefly — gets the identical failure handling for free
+    instead of reimplementing it, which is what keeps a failure from ever
+    reaching a caller as a bare traceback.
+    """
+    try:
+        report = call()
+        code = OK
+    except COMMAND_ERRORS as error:
+        report = {"status": "failed", "error": str(error), **getattr(error, "report", {})}
+        code = FAILED
+    return code, {"schema": SCHEMA, "command": command, **report}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -212,7 +224,19 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _install(arguments, runtime: Runtime) -> dict[str, Any]:
-    adapter = _adapter(arguments.cli)
+    return install(arguments.cli, runtime, dry_run=arguments.dry_run, mcp=arguments.mcp)
+
+
+def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[str] | None = None) -> dict[str, Any]:
+    """Place Pegasus into one CLI's configuration, and report what happened.
+
+    This is the engine path itself, parsed flags peeled away: `_install`
+    exists only to unpack an `argparse.Namespace` into these three plain
+    values, so anything else that wants the same installation — the TUI's
+    install screen, not a second implementation of it — calls this directly
+    and renders the report it gets back, the same report `--json` would.
+    """
+    adapter = _adapter(cli_id)
     environment = runtime.environment
     _require_present(adapter, environment)
 
@@ -234,7 +258,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     # two of each. `build` and `render` walk the same content, and reloading
     # for the second would risk handing them two objects that could in
     # principle differ, for no reason beyond having asked disk twice.
-    content = _select_mcp(arguments.mcp)
+    content = _select_mcp(mcp)
     catalog = catalog_module.build(content, adapter)
     artifacts = catalog_module.render(content, adapter, environment)
     installed = journal_module.install_for(journal, adapter.id)
@@ -258,7 +282,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
         _stale_dependencies(installed, content)
     )
 
-    if arguments.dry_run:
+    if dry_run:
         return {
             "cli": adapter.id,
             "status": "planned",
@@ -1136,6 +1160,12 @@ def _and_retention(lines: list[str], report: dict[str, Any]) -> list[str]:
     if not failed:
         return lines
     return [*lines, "Old snapshot generations could not be cleaned up:", *(f"  {reason}" for reason in failed)]
+
+
+#: The public name for `_prose`, for a caller outside this module — the TUI's
+#: install screen, chiefly. Kept as an alias rather than a rename so the
+#: existing tests that reach `cli._prose` directly stay untouched.
+prose_for = _prose
 
 
 def _cli_prose(entry: dict[str, Any]) -> str:
