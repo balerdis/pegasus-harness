@@ -226,7 +226,7 @@ def _file_step(
         # own: a physical impossibility, not a judgement about whose bytes
         # those are.
         return Step(artifact=artifact, action=SKIP, digest=digest, reason=COLLISION)
-    if current == digest and filesystem.mode_of(artifact.path) == artifact.mode:
+    if current == digest and filesystem.mode_of(artifact.path) == filesystem.mode_for(executable=artifact.executable):
         # Both halves, because a fingerprint is of content and a permission is
         # not content. A program whose bit was wrong ships identical bytes.
         return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
@@ -322,10 +322,14 @@ def apply(filesystem: FileSystem, plan: Plan, *, at: str) -> Applied:
                         step.artifact.path,
                         (filesystem.read_bytes(step.artifact.path), filesystem.mode_of(step.artifact.path)),
                     )
-                filesystem.write_atomic(step.artifact.path, step.artifact.content, mode=step.artifact.mode)
+                filesystem.write_atomic(
+                    step.artifact.path,
+                    step.artifact.content,
+                    mode=filesystem.mode_for(executable=step.artifact.executable),
+                )
                 if step.action == CREATE:
                     created.append(step.artifact.path)
-                records.append(_file_record(step, at))
+                records.append(_file_record(filesystem, step, at))
         for path, steps in _by_file(plan.placements).items():
             codec = _codec(steps)
             document = _read_document(filesystem, path, codec)
@@ -450,7 +454,7 @@ def _write_back(filesystem: FileSystem, path: Path, content: bytes, mode: int | 
         filesystem.write_atomic(path, content, mode=mode)
 
 
-def _file_record(step: Step, at: str) -> Record:
+def _file_record(filesystem: FileSystem, step: Step, at: str) -> Record:
     """The record for what was just written, keeping what only the old one knew."""
     entry = step.entry
     return Record(
@@ -459,7 +463,7 @@ def _file_record(step: Step, at: str) -> Record:
         target=step.artifact.path,
         after_digest=step.digest,
         created_at=entry.created_at if entry else at,
-        mode=f"{step.artifact.mode:04o}",
+        mode=f"{filesystem.mode_for(executable=step.artifact.executable):04o}",
     )
 
 

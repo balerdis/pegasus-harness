@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -101,11 +102,18 @@ class NoPermissionOctalLiteralsTest(unittest.TestCase):
     through or it makes the code worse to satisfy itself. Prose that
     mentions a mode is one: reading the source as a syntax tree means a
     docstring is a string and never a number, so it cannot be mistaken for
-    a value. A bound in a comparison is the other — `0 <= mode <= 0o777`
-    does not choose a permission, it refuses the values that are not one,
-    and deleting that check to keep this test quiet would trade a real
-    guarantee for a green light. So a literal is only an offender when it
-    is not standing inside a comparison.
+    a value. A range bound is the other — `0 <= mode <= 0o777` does not
+    choose a permission, it refuses the values that are not one, and
+    deleting that check to keep this test quiet would trade a real
+    guarantee for a green light. So a literal standing in a range bound
+    (`<`, `<=`, `>`, `>=`) is not an offender.
+
+    An equality is not a bound, and this test does not treat it as one: `if
+    filesystem.mode_of(path) == 0o644` chooses a permission exactly as much
+    as `mode = 0o644` does, just spelled as a question. Exempting every
+    literal beside a comparison operator, of any kind, would have reopened
+    the leak this test exists to close the moment `mode` stopped being an
+    `int` the engine could assign directly.
     """
 
     def test_permission_free_packages_are_scanned(self):
@@ -123,6 +131,28 @@ class NoPermissionOctalLiteralsTest(unittest.TestCase):
             "a permission octal literal leaked into core/ or ports/:\n" + "\n".join(offenders),
         )
 
+    def test_a_range_bound_is_not_flagged(self):
+        offenders = _chosen_permissions(_write_probe(self, "assert 0 <= mode <= 0o777\n"))
+        self.assertEqual(offenders, [])
+
+    def test_an_equality_against_a_chosen_permission_is_flagged(self):
+        """The gap a naive `it's inside a comparison` exemption would reopen:
+        asking `mode_of(path) == 0o644` chooses 0o644 exactly as much as
+        assigning it would, so this must still be caught."""
+        offenders = _chosen_permissions(_write_probe(self, "chosen = mode_of(path) == 0o644\n"))
+        self.assertEqual([text for _, text in offenders], ["0o644"])
+
+
+def _write_probe(test: unittest.TestCase, source: str) -> Path:
+    directory = tempfile.TemporaryDirectory()
+    test.addCleanup(directory.cleanup)
+    probe = Path(directory.name) / "probe.py"
+    probe.write_text(source, encoding="utf-8")
+    return probe
+
+
+_RANGE_OPS = (ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+
 
 def _chosen_permissions(path: Path) -> list[tuple[int, str]]:
     """Every octal literal in the file that names a permission it chose."""
@@ -131,7 +161,7 @@ def _chosen_permissions(path: Path) -> list[tuple[int, str]]:
     bounds = {
         id(literal)
         for node in ast.walk(tree)
-        if isinstance(node, ast.Compare)
+        if isinstance(node, ast.Compare) and all(isinstance(op, _RANGE_OPS) for op in node.ops)
         for literal in (node.left, *node.comparators)
     }
     found = []

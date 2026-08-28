@@ -11,6 +11,7 @@ from pegasus.ports.filesystem import FileSystemError
 
 DEFAULT_MODE = 0o644
 DEFAULT_DIR_MODE = 0o755
+EXECUTABLE_MODE = 0o755
 
 
 class FakeFileSystem:
@@ -84,6 +85,11 @@ class FakeFileSystem:
             if candidate != path and path in candidate.parents
         }
         return sorted(names)
+
+    # --- Permissions ---
+
+    def mode_for(self, *, executable: bool) -> int:
+        return EXECUTABLE_MODE if executable else DEFAULT_MODE
 
     # --- Writing ---
 

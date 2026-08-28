@@ -67,9 +67,15 @@ class RealHomeTestCase(_RealHomeTestCase):
             path.chmod((modes or {}).get(path, 0o644))
 
     def a_file(
-        self, identifier: str = "skill:alpha", path: Path | None = None, content: bytes = b"hello", mode: int = 0o644
+        self,
+        identifier: str = "skill:alpha",
+        path: Path | None = None,
+        content: bytes = b"hello",
+        executable: bool = False,
     ) -> FileArtifact:
-        return FileArtifact(id=identifier, path=self.SKILL if path is None else path, content=content, mode=mode)
+        return FileArtifact(
+            id=identifier, path=self.SKILL if path is None else path, content=content, executable=executable
+        )
 
     def a_key(
         self, identifier: str = "agent:alpha", ptr: str = "/agent/alpha", value=None, path: Path | None = None
@@ -446,13 +452,13 @@ class UpdateTest(RealHomeTestCase):
         the bit in the tree has to reach a home that already has the file, and
         the content there is byte-identical.
         """
-        step = self.plan_with(self.record(), artifact=self.a_file(content=self.previous, mode=0o755)).steps[0]
+        step = self.plan_with(self.record(), artifact=self.a_file(content=self.previous, executable=True)).steps[0]
         self.assertEqual(step.action, planner.UPDATE)
 
     def test_the_new_mode_reaches_the_disk(self):
-        plan = self.plan_with(self.record(), artifact=self.a_file(content=self.previous, mode=0o755))
+        plan = self.plan_with(self.record(), artifact=self.a_file(content=self.previous, executable=True))
         planner.apply(self.filesystem, plan, at=AT)
-        self.assertEqual(self.filesystem.mode_of(self.SKILL), 0o755)
+        self.assertEqual(self.filesystem.mode_of(self.SKILL), self.filesystem.mode_for(executable=True))
 
     def test_an_update_is_recorded_with_the_new_fingerprint(self):
         applied = planner.apply(self.filesystem, self.plan_with(self.record()), at=AT)
@@ -612,9 +618,9 @@ class KeyUpdateTest(RealHomeTestCase):
 
 class ApplyTest(RealHomeTestCase):
     def test_a_file_is_written_with_its_content_and_mode(self):
-        planner.apply(self.filesystem, self.plan_for(self.a_file(content=b"body", mode=0o600)), at=AT)
+        planner.apply(self.filesystem, self.plan_for(self.a_file(content=b"body", executable=True)), at=AT)
         self.assertEqual(self.SKILL.read_bytes(), b"body")
-        self.assertEqual(self.filesystem.mode_of(self.SKILL), 0o600)
+        self.assertEqual(self.filesystem.mode_of(self.SKILL), self.filesystem.mode_for(executable=True))
 
     def test_several_keys_in_one_file_cost_a_single_write(self):
         artifacts = (self.a_key(), self.a_key(identifier="agent:beta", ptr="/agent/beta"))
@@ -726,8 +732,8 @@ class RollbackThatCannotFinishTest(RealHomeTestCase):
             self.filesystem,
             cli=CLI,
             artifacts=[
-                FileArtifact(id="skill:alpha", path=self.SKILL, content=b"hello", mode=0o644),
-                FileArtifact(id="skill:beta", path=doomed, content=b"never lands", mode=0o644),
+                FileArtifact(id="skill:alpha", path=self.SKILL, content=b"hello", executable=False),
+                FileArtifact(id="skill:beta", path=doomed, content=b"never lands", executable=False),
             ],
         )
         with self.assertRaises(planner.PlannerError) as caught:

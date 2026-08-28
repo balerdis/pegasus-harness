@@ -70,6 +70,11 @@ class PosixFileSystem:
         except OSError as error:
             raise FileSystemError(f"cannot list {path}: {error}") from error
 
+    # --- Permissions ---
+
+    def mode_for(self, *, executable: bool) -> int:
+        return 0o755 if executable else 0o644
+
     # --- Writing ---
 
     def write_atomic(self, path: Path, content: bytes, *, mode: int = 0o644) -> None:

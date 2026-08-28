@@ -38,6 +38,11 @@ class RecordingFileSystem:
     def list_dir(self, path: Path) -> list[str]:
         return self._filesystem.list_dir(path)
 
+    # --- Permissions ---
+
+    def mode_for(self, *, executable: bool) -> int:
+        return self._filesystem.mode_for(executable=executable)
+
     # --- Writing ---
 
     def write_atomic(self, path: Path, content: bytes, *, mode: int = 0o644) -> None:

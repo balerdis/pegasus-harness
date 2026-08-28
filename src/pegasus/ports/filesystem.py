@@ -71,6 +71,18 @@ class FileSystem(Protocol):
         nothing is there when the truth is only that it could not be seen.
         """
 
+    # --- Permissions ---
+
+    def mode_for(self, *, executable: bool) -> int:
+        """The permission bits a file this platform creates should carry.
+
+        The engine states one fact about an artifact — whether it is a
+        program or plain text — and never a permission number; turning that
+        fact into the bits a real filesystem understands is exactly the
+        platform decision this method exists to answer. Two artifacts asking
+        the same question always get the same answer here, on one platform.
+        """
+
     # --- Writing ---
 
     def write_atomic(self, path: Path, content: bytes, *, mode: int) -> None:

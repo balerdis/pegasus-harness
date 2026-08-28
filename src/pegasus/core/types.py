@@ -154,20 +154,22 @@ class FileArtifact:
     id: str
     path: Path
     content: bytes
-    mode: int
-    """The permission bits this artifact should be created with.
+    executable: bool
+    """Whether this artifact is a program handed to the shell, or plain text.
 
-    A platform decision, not a domain default: whoever renders the artifact
-    already knows whether it is a program handed to the shell or plain text,
-    and states the answer here rather than letting the engine assume one.
+    This is the one distinction the engine actually needs to make about a
+    file's permissions, and it is a fact about the artifact, not a mode the
+    engine chooses: whoever renders the artifact already knows which of the
+    two it is. Turning that fact into the permission bits a real filesystem
+    understands is a platform decision, made where the artifact is written.
     """
 
     def __post_init__(self) -> None:
         _require_absolute(self.path, "path")
         if not isinstance(self.content, bytes):
             raise TypeError("artifact content must be bytes; the adapter encodes it")
-        if not 0 <= self.mode <= 0o777:
-            raise ValueError(f"mode is outside the permission range: {self.mode:o}")
+        if not isinstance(self.executable, bool):
+            raise TypeError("executable must be a bool; it is a fact, not a mode to interpret")
 
 
 @dataclass(frozen=True)

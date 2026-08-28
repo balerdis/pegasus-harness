@@ -372,7 +372,7 @@ class OwnArtifactsTest(unittest.TestCase):
     def test_only_the_assets_the_tree_marks_executable_become_executable(self):
         """The tree already records which file is a program; nothing else earns the bit."""
         executable = {
-            item.path.name for item in only(self.artifacts, FileArtifact) if item.mode & 0o111
+            item.path.name for item in only(self.artifacts, FileArtifact) if item.executable
         }
         self.assertEqual(executable, {"pegasus-skill-registry"})
 
@@ -439,7 +439,7 @@ class SkillRegistryContractTest(unittest.TestCase):
         binary = self.files[
             self.layout.config_dir / "pegasus/skill-registry/pegasus-skill-registry"
         ]
-        self.assertTrue(binary.mode & 0o111, f"mode is {binary.mode:o}")
+        self.assertTrue(binary.executable, f"executable is {binary.executable}")
 
     def test_no_placeholder_example_is_shipped_any_more(self):
         stray = [path for path in self.files if path.name.endswith(".example")]

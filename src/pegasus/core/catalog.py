@@ -119,6 +119,8 @@ def render(content: Content, adapter: Any, environment: Environment) -> list[Any
 
 #: The frame every catalog is built in. Not a real directory, and never written to.
 CANONICAL_HOME = PurePosixPath("/pegasus/catalog-build")
+CANONICAL_PROGRAM_MODE = "0755"
+CANONICAL_TEXT_MODE = "0644"
 
 
 def build(content: Content, adapter: Any) -> Catalog:
@@ -131,6 +133,11 @@ def build(content: Content, adapter: Any) -> Catalog:
     `core.placeholders` -- would end that quietly, giving every user a different
     digest for the same release. Taking the environment away makes the property
     structural instead of accidental.
+
+    The permission a program and a plain file are written with is spelled
+    here as a constant of the format, the same way the home is: what a given
+    platform would really choose is a question for the machine that installs,
+    and asking it here would make the digest depend on where it was built.
 
     What a machine actually receives comes from `render` with its own
     environment, and that is what the journal records.
@@ -183,7 +190,7 @@ def _entry(artifact: Any, root: Any) -> Entry:
             kind="file",
             target=target,
             digest=ownership.digest(artifact),
-            mode=f"{artifact.mode:04o}",
+            mode=CANONICAL_PROGRAM_MODE if artifact.executable else CANONICAL_TEXT_MODE,
         )
     if isinstance(artifact, ConfigKeyArtifact):
         return Entry(
