@@ -30,7 +30,18 @@ TEMPORARY_SUFFIX = ".partial"
 
 
 class PosixFileSystem:
-    """A filesystem backed by the real one, on Linux and other POSIX systems."""
+    """A filesystem backed by the real one, on Linux and other POSIX systems.
+
+    ``variables`` is the machine's environment, handed in rather than read
+    here. The composition root is the one place that knows what the real
+    environment is; a filesystem that reached for it directly would answer
+    `data_dir` from outside whatever home it was asked about, and a test
+    would write into the machine running it instead of into the throwaway
+    home it built. Constructed without them, it answers from the home alone.
+    """
+
+    def __init__(self, variables: dict[str, str] | None = None):
+        self._variables = dict(variables or {})
 
     # --- Reading ---
 
@@ -69,6 +80,17 @@ class PosixFileSystem:
             return sorted(entry.name for entry in path.iterdir())
         except OSError as error:
             raise FileSystemError(f"cannot list {path}: {error}") from error
+
+    # --- Locating ---
+
+    def data_dir(self, home: Path) -> Path:
+        # Only an absolute setting is honoured, the same rule an adapter's
+        # layout applies to its own variable: a relative one would name a
+        # directory whose meaning depends on where the process was started.
+        configured = self._variables.get("XDG_DATA_HOME", "").strip()
+        if configured and Path(configured).is_absolute():
+            return Path(configured) / "pegasus-harness"
+        return home / ".local" / "share" / "pegasus-harness"
 
     # --- Permissions ---
 

@@ -78,12 +78,13 @@ class Runtime:
 def default_runtime(out: TextIO) -> Runtime:
     import os
 
+    variables = dict(os.environ)
     return Runtime(
-        filesystem=PosixFileSystem(),
+        filesystem=PosixFileSystem(variables),
         home=Path.home(),
         now=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         out=out,
-        variables=dict(os.environ),
+        variables=variables,
     )
 
 

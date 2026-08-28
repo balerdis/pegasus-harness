@@ -10,6 +10,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.ports.filesystem import FileSystem, FileSystemError
@@ -29,6 +30,35 @@ class PosixFileSystemTest(unittest.TestCase):
 
     def test_the_posix_implementation_satisfies_the_port(self):
         self.assertIsInstance(self.fs, FileSystem)
+
+    # --- Locating ---
+
+    def test_data_dir_falls_back_to_local_share_when_xdg_data_home_is_empty(self):
+        filesystem = PosixFileSystem({"XDG_DATA_HOME": ""})
+        home = Path("/home/probe")
+        self.assertEqual(filesystem.data_dir(home), home / ".local" / "share" / "pegasus-harness")
+
+    def test_data_dir_honours_xdg_data_home_when_set(self):
+        filesystem = PosixFileSystem({"XDG_DATA_HOME": "/mnt/data"})
+        self.assertEqual(filesystem.data_dir(Path("/home/probe")), Path("/mnt/data/pegasus-harness"))
+
+    def test_data_dir_ignores_a_relative_xdg_data_home(self):
+        """A relative setting names a directory that depends on where the
+        process was started, which is not a home anyone chose."""
+        filesystem = PosixFileSystem({"XDG_DATA_HOME": "somewhere"})
+        self.assertEqual(
+            filesystem.data_dir(Path("/home/probe")), Path("/home/probe/.local/share/pegasus-harness")
+        )
+
+    def test_data_dir_stays_inside_the_home_when_no_environment_was_handed_in(self):
+        """The guarantee every test in this suite leans on: a filesystem built
+        without an environment answers from the home it was asked about, so a
+        machine that exports the variable cannot pull a test's writes out of
+        the throwaway home it made."""
+        self.assertEqual(
+            PosixFileSystem().data_dir(Path("/home/probe")),
+            Path("/home/probe/.local/share/pegasus-harness"),
+        )
 
     # --- Permissions ---
 

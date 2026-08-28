@@ -71,6 +71,23 @@ class FileSystem(Protocol):
         nothing is there when the truth is only that it could not be seen.
         """
 
+    # --- Locating ---
+
+    def data_dir(self, home: Path) -> Path:
+        """Where Pegasus keeps everything it manages of its own.
+
+        The journal, snapshot generations, and anything else Pegasus itself
+        needs to remember — as opposed to what it installs into a CLI's own
+        configuration, which lives wherever that CLI already keeps its
+        configuration. Where "its own" means on a given platform is exactly
+        the question this method answers; Linux, macOS and Windows each put
+        an application's private data somewhere different, and none of that
+        disagreement belongs above this port.
+
+        Two calls with the same ``home`` on the same platform always answer
+        the same path.
+        """
+
     # --- Permissions ---
 
     def mode_for(self, *, executable: bool) -> int:

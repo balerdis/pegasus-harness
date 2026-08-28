@@ -52,15 +52,17 @@ def store(filesystem: FakeFileSystem) -> FileJournalStore:
 
 
 class JournalPathTest(unittest.TestCase):
-    def test_the_path_is_pure_arithmetic_on_the_home(self):
+    def test_the_path_is_arithmetic_on_the_filesystems_own_data_dir(self):
+        filesystem = FakeFileSystem()
+        home = Path("/nonexistent/pegasus-probe")
         self.assertEqual(
-            journal_path(Path("/nonexistent/pegasus-probe")),
-            Path("/nonexistent/pegasus-probe/.local/share/pegasus-harness/journal-v4.json"),
+            journal_path(filesystem, home),
+            filesystem.data_dir(home) / "journal-v4.json",
         )
 
     def test_the_v4_journal_does_not_share_a_name_with_the_v3_one(self):
         """v4 is a clean install next to v3, not a rewrite of its state."""
-        self.assertNotIn("journal-v3", journal_path(HOME).name)
+        self.assertNotIn("journal-v3", journal_path(FakeFileSystem(), HOME).name)
 
 
 class FileJournalStoreTest(unittest.TestCase):
@@ -87,13 +89,13 @@ class FileJournalStoreTest(unittest.TestCase):
 
     def test_unreadable_json_is_refused_rather_than_treated_as_empty(self):
         """Silently starting over would orphan everything already installed."""
-        filesystem = FakeFileSystem(files={journal_path(HOME): b"{ not json"})
+        filesystem = FakeFileSystem(files={journal_path(FakeFileSystem(), HOME): b"{ not json"})
         with self.assertRaises(JournalStoreError):
             store(filesystem).load()
 
     def test_a_journal_the_core_rejects_is_refused(self):
         payload = json.dumps({"schema": "pegasus-harness/journal/v3", "pegasus_version": VERSION}).encode("utf-8")
-        filesystem = FakeFileSystem(files={journal_path(HOME): payload})
+        filesystem = FakeFileSystem(files={journal_path(FakeFileSystem(), HOME): payload})
         with self.assertRaises(JournalStoreError):
             store(filesystem).load()
 
@@ -103,7 +105,7 @@ class FileJournalStoreTest(unittest.TestCase):
             journal_module.with_install(journal_module.empty(VERSION), install())
         )))
         payload["installs"][0]["entries"][0]["target"] = "/etc/passwd"
-        filesystem = FakeFileSystem(files={journal_path(HOME): json.dumps(payload).encode("utf-8")})
+        filesystem = FakeFileSystem(files={journal_path(FakeFileSystem(), HOME): json.dumps(payload).encode("utf-8")})
         with self.assertRaises(JournalStoreError):
             store(filesystem).load()
 
@@ -124,7 +126,7 @@ class FileJournalStoreTest(unittest.TestCase):
         installing would vanish from this call's point of view, and every
         command built on top of it would proceed as if none of it happened.
         This runs before anything is written, so refusing costs nothing."""
-        filesystem = FakeFileSystem(fail_exists={journal_path(HOME)})
+        filesystem = FakeFileSystem(fail_exists={journal_path(FakeFileSystem(), HOME)})
         with self.assertRaises(FileSystemError):
             store(filesystem).load()
 
@@ -133,22 +135,22 @@ class FileJournalStoreTest(unittest.TestCase):
     def test_saving_writes_to_the_journal_path(self):
         filesystem = FakeFileSystem()
         store(filesystem).save(journal_module.empty(VERSION))
-        self.assertIn(journal_path(HOME), filesystem.files)
+        self.assertIn(journal_path(FakeFileSystem(), HOME), filesystem.files)
 
     def test_saving_keeps_the_journal_private_to_its_owner(self):
         filesystem = FakeFileSystem()
         store(filesystem).save(journal_module.empty(VERSION))
-        self.assertEqual(filesystem.modes[journal_path(HOME)], 0o600)
+        self.assertEqual(filesystem.modes[journal_path(FakeFileSystem(), HOME)], 0o600)
 
     def test_saving_creates_the_data_directory_first(self):
         filesystem = FakeFileSystem()
         store(filesystem).save(journal_module.empty(VERSION))
-        self.assertIn(journal_path(HOME).parent, filesystem.directories)
+        self.assertIn(journal_path(FakeFileSystem(), HOME).parent, filesystem.directories)
 
     def test_the_written_file_is_readable_json_ending_in_a_newline(self):
         filesystem = FakeFileSystem()
         store(filesystem).save(journal_module.with_install(journal_module.empty(VERSION), install()))
-        written = filesystem.files[journal_path(HOME)].decode("utf-8")
+        written = filesystem.files[journal_path(FakeFileSystem(), HOME)].decode("utf-8")
         self.assertTrue(written.endswith("\n"))
         self.assertEqual(json.loads(written)["schema"], journal_module.SCHEMA)
 
@@ -222,7 +224,8 @@ class FileJournalStoreOnRealDiskTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.home = Path(self.directory.name)
-        self.store = FileJournalStore(PosixFileSystem(), home=self.home, pegasus_version=VERSION)
+        self.filesystem = PosixFileSystem()
+        self.store = FileJournalStore(self.filesystem, home=self.home, pegasus_version=VERSION)
 
     def real_install(self) -> Install:
         config = self.home / ".config" / "some-cli"
@@ -245,7 +248,7 @@ class FileJournalStoreOnRealDiskTest(unittest.TestCase):
 
     def test_an_absent_journal_reads_as_empty_without_creating_anything(self):
         self.assertEqual(self.store.load(), journal_module.empty(VERSION))
-        self.assertFalse(journal_path(self.home).exists())
+        self.assertFalse(journal_path(self.filesystem, self.home).exists())
 
     def test_a_journal_survives_a_round_trip_through_the_real_filesystem(self):
         original = journal_module.with_install(journal_module.empty(VERSION), self.real_install())
@@ -254,7 +257,7 @@ class FileJournalStoreOnRealDiskTest(unittest.TestCase):
 
     def test_the_stored_file_is_private_and_leaves_no_partial_behind(self):
         self.store.save(journal_module.empty(VERSION))
-        stored = journal_path(self.home)
+        stored = journal_path(self.filesystem, self.home)
         self.assertEqual(stat.S_IMODE(stored.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(stored.parent.stat().st_mode), 0o700)
         self.assertEqual([item.name for item in stored.parent.iterdir()], [stored.name])

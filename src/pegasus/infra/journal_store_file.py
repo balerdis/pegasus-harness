@@ -26,19 +26,23 @@ from pegasus.core.types import Codec
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.journal_store import JournalStoreError
 
-DATA_DIR = Path(".local") / "share" / "pegasus-harness"
 FILENAME = "journal-v4.json"
 DATA_DIR_MODE = 0o700
 FILE_MODE = 0o600
 
 
-def journal_path(home: Path) -> Path:
-    """Where the journal lives for a given home. Pure path arithmetic.
+def journal_path(filesystem: FileSystem, home: Path) -> Path:
+    """Where the journal lives for a given home.
+
+    The directory is the platform's own answer — see
+    :meth:`FileSystem.data_dir` — and this is only the arithmetic on top of
+    it: the journal's own filename, hung off wherever that call says Pegasus
+    keeps its own state.
 
     The name carries the schema version. v4 is a clean install alongside v3, not
     a rewrite of it, so it must not open — let alone overwrite — v3's file.
     """
-    return home / DATA_DIR / FILENAME
+    return filesystem.data_dir(home) / FILENAME
 
 
 class FileJournalStore:
@@ -48,7 +52,7 @@ class FileJournalStore:
         self._fs = filesystem
         self._home = home
         self._version = pegasus_version
-        self._path = journal_path(home)
+        self._path = journal_path(filesystem, home)
 
     @property
     def path(self) -> Path:

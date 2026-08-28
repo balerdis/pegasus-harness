@@ -86,6 +86,11 @@ class FakeFileSystem:
         }
         return sorted(names)
 
+    # --- Locating ---
+
+    def data_dir(self, home: Path) -> Path:
+        return home / ".local" / "share" / "pegasus-harness"
+
     # --- Permissions ---
 
     def mode_for(self, *, executable: bool) -> int:

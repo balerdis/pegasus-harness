@@ -38,6 +38,11 @@ class RecordingFileSystem:
     def list_dir(self, path: Path) -> list[str]:
         return self._filesystem.list_dir(path)
 
+    # --- Locating ---
+
+    def data_dir(self, home: Path) -> Path:
+        return self._filesystem.data_dir(home)
+
     # --- Permissions ---
 
     def mode_for(self, *, executable: bool) -> int:
