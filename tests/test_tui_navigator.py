@@ -8,7 +8,18 @@ from __future__ import annotations
 import unittest
 
 import pegasus
-from pegasus.tui.navigator import Action, Menu, Navigator, Placeholder
+from pegasus.tui.navigator import (
+    Action,
+    CliOption,
+    InstallPlanScreen,
+    InstallResultScreen,
+    InstallTarget,
+    Menu,
+    Navigator,
+    Placeholder,
+)
+
+SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
 
 
 class MainMenuTest(unittest.TestCase):
@@ -110,6 +121,62 @@ class QuittingTest(unittest.TestCase):
     def test_a_quit_session_ignores_further_keys(self):
         quit_navigator = Navigator.starting().handle(Action.QUIT)
         self.assertEqual(quit_navigator.handle(Action.MOVE_DOWN), quit_navigator)
+
+
+class InstallMenuTest(unittest.TestCase):
+    """The `¿Dónde instalar Pegasus?` screen: built from whichever CLIs were
+    detected present, with nothing here doing any of that detecting."""
+
+    def test_a_detected_cli_opens_a_menu_naming_it(self):
+        navigator = Navigator.starting(detections=(SAMPLE,)).handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Menu)
+        self.assertEqual(navigator.current.entries[0].target, InstallTarget(SAMPLE))
+
+    def test_the_entry_names_the_install_command(self):
+        navigator = Navigator.starting(detections=(SAMPLE,)).handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.entries[0].target.command, "install")
+
+    def test_no_detected_cli_still_shows_a_placeholder_that_says_why(self):
+        navigator = Navigator.starting(detections=()).handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Placeholder)
+        self.assertIn("No supported CLI", navigator.current.note)
+
+    def test_going_back_from_the_cli_choice_returns_to_the_main_menu(self):
+        navigator = Navigator.starting(detections=(SAMPLE,)).handle(Action.CHOOSE).handle(Action.BACK)
+        self.assertIsInstance(navigator.current, Menu)
+        self.assertEqual(navigator.current, Navigator.starting(detections=(SAMPLE,)).current)
+
+    def test_choosing_a_cli_directly_does_nothing_by_itself(self):
+        """Fetching a plan is real engine work only `session` can do; asking
+        `Navigator` alone for it must never invent a screen to stand in for
+        the report it cannot fetch."""
+        navigator = Navigator.starting(detections=(SAMPLE,)).handle(Action.CHOOSE)
+        before = navigator
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator, before)
+
+
+class InstallPlanAndResultScreensTest(unittest.TestCase):
+    """Once `session` has fetched a report, `Navigator` treats the screen it
+    becomes like any other leaf: an acknowledgement returns to whatever
+    opened it."""
+
+    def plan(self) -> Navigator:
+        return Navigator.starting(detections=(SAMPLE,)).handle(Action.CHOOSE).opened(
+            InstallPlanScreen(cli=SAMPLE, report={"status": "planned"})
+        )
+
+    def result(self) -> Navigator:
+        return self.plan().opened(InstallResultScreen(cli=SAMPLE, report={"status": "installed"}))
+
+    def test_backing_out_of_a_plan_returns_to_the_cli_choice(self):
+        navigator = self.plan().handle(Action.BACK)
+        self.assertIsInstance(navigator.current, Menu)
+        self.assertEqual(navigator.current.entries[0].target, InstallTarget(SAMPLE))
+
+    def test_acknowledging_a_result_leaves_it(self):
+        navigator = self.result().handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Menu)
 
 
 if __name__ == "__main__":

@@ -46,11 +46,57 @@ class Placeholder:
 
 
 @dataclass(frozen=True)
+class CliOption:
+    """One CLI this release supports, found present on this machine.
+
+    Carries exactly what the doc's `¿Dónde instalar Pegasus?` row shows —
+    name, where it lives, how complete its support is — plus the `id` the
+    engine needs to act on it. Built once, outside the pure layer, from a
+    real probe of the machine; nothing here does that probing itself.
+    """
+
+    id: str
+    display_name: str
+    config_dir: str
+    tier: str
+
+
+@dataclass(frozen=True)
+class InstallTarget:
+    """Chosen a detected CLI to install into. Fetching its plan is a real
+    engine call, so choosing this is not itself a new screen — it is a
+    request for one, which is why it is not a member of `Screen`."""
+
+    cli: CliOption
+    command: str = "install"
+
+
+@dataclass(frozen=True)
+class InstallPlanScreen:
+    """What `pegasus install --dry-run` would report, shown before anything
+    is written. `report` is the exact document the flag produces — this
+    screen renders it, it does not recompute it."""
+
+    cli: CliOption
+    report: dict
+
+
+@dataclass(frozen=True)
+class InstallResultScreen:
+    """What the real install left behind — or, on failure, what was rolled
+    back and what was not. Same report shape either way, the one `install
+    --json` would print for the run that just happened."""
+
+    cli: CliOption
+    report: dict
+
+
+@dataclass(frozen=True)
 class Entry:
     """One line of a menu: what it says, and where choosing it leads."""
 
     label: str
-    target: Union["Menu", Placeholder, Quit]
+    target: Union["Menu", Placeholder, Quit, InstallTarget]
 
 
 @dataclass(frozen=True)
@@ -61,19 +107,37 @@ class Menu:
     entries: tuple[Entry, ...]
 
 
-Screen = Union[Menu, Placeholder]
+Screen = Union[Menu, Placeholder, InstallPlanScreen, InstallResultScreen]
 """Everything a :class:`Navigator` can have open. `Quit` is never open — it
-ends the session the moment it is chosen, so it is a target, not a screen."""
+ends the session the moment it is chosen, so it is a target, not a screen.
+Neither is `InstallTarget`: choosing it asks for a screen, real engine work
+away, rather than opening one directly."""
 
 NOT_BUILT_YET = "This screen has not been built yet."
 
 
-def main_menu() -> Menu:
+def install_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
+    """The doc's `¿Dónde instalar Pegasus?` screen: one entry per detected
+    CLI, selection of one. A machine with none detected gets the same
+    placeholder shape every other unbuilt entry gets, worded for the actual
+    reason there is nothing to choose from."""
+    if not detections:
+        return Placeholder("Install", "No supported CLI was detected on this machine.")
+    return Menu(
+        title="Where would you like to install Pegasus?",
+        entries=tuple(
+            Entry(f"{option.display_name:<18} {option.config_dir:<32} {option.tier}", InstallTarget(option))
+            for option in detections
+        ),
+    )
+
+
+def main_menu(detections: tuple[CliOption, ...] = ()) -> Menu:
     """The menu from the architecture doc, in the order it lists them."""
     return Menu(
         title=f"Pegasus Harness {pegasus.__version__}",
         entries=(
-            Entry("Install", Placeholder("Install", NOT_BUILT_YET)),
+            Entry("Install", install_menu(detections)),
             Entry("Configure models", Placeholder("Configure models", NOT_BUILT_YET)),
             Entry("Status and diagnostics", Placeholder("Status and diagnostics", NOT_BUILT_YET)),
             Entry("Uninstall", Placeholder("Uninstall", NOT_BUILT_YET)),
@@ -97,8 +161,8 @@ class Navigator:
     quit: bool = False
 
     @staticmethod
-    def starting() -> "Navigator":
-        return Navigator(_stack=(main_menu(),), _cursors=(0,))
+    def starting(detections: tuple[CliOption, ...] = ()) -> "Navigator":
+        return Navigator(_stack=(main_menu(detections),), _cursors=(0,))
 
     @property
     def current(self) -> Screen:
@@ -116,6 +180,14 @@ class Navigator:
         screen = self.current
         if isinstance(screen, Menu):
             return self._handle_on_menu(screen, action)
+        if isinstance(screen, InstallResultScreen):
+            # A finished install leaves the plan beneath it stale — it
+            # described a preview of a disk that has since changed — so
+            # acknowledging the result returns all the way to the main menu
+            # rather than back into it.
+            return replace(self, _stack=self._stack[:1], _cursors=self._cursors[:1]) if action in (
+                Action.BACK, Action.CHOOSE
+            ) else self
         return self._handle_on_placeholder(action)
 
     def _handle_on_menu(self, screen: Menu, action: Action) -> "Navigator":
@@ -128,10 +200,22 @@ class Navigator:
             target = screen.entries[self.cursor].target
             if isinstance(target, Quit):
                 return replace(self, quit=True)
-            return replace(self, _stack=self._stack + (target,), _cursors=self._cursors + (0,))
+            if isinstance(target, InstallTarget):
+                # Fetching its plan is real engine work, which only `session`
+                # can do; handled here, this would open the request itself as
+                # if it were a screen.
+                return self
+            return self.opened(target)
         if action is Action.BACK:
             return self._pop() if len(self._stack) > 1 else self
         return self
+
+    def opened(self, screen: Screen) -> "Navigator":
+        """Push a screen fetched from outside the pure layer — the plan or
+        the result of an install — on top of the one that led to it. Public
+        because whoever ran the engine call `session` holds no `Navigator`
+        internals of its own to build the next state from."""
+        return replace(self, _stack=self._stack + (screen,), _cursors=self._cursors + (0,))
 
     def _handle_on_placeholder(self, action: Action) -> "Navigator":
         # There is nothing to do here yet but leave: both keys acknowledge the

@@ -13,7 +13,10 @@ above is what carries the coverage instead.
 from __future__ import annotations
 
 import curses
+import io
 
+from pegasus import cli
+from pegasus.tui import session
 from pegasus.tui.navigator import Action, Navigator
 from pegasus.tui.view import Line, render
 
@@ -56,18 +59,19 @@ def draw(window, lines: tuple[Line, ...]) -> None:
     window.refresh()
 
 
-def run(window) -> None:
+def run(window, runtime: cli.Runtime) -> None:
     curses.curs_set(0)
     window.keypad(True)
-    navigator = Navigator.starting()
+    navigator = Navigator.starting(session.detect_clis(runtime))
     draw(window, render(navigator.current, navigator.cursor))
     while not navigator.quit:
         action = action_for(window.getch())
         if action is None:
             continue
-        navigator = navigator.handle(action)
+        navigator = session.step(navigator, runtime, action)
         draw(window, render(navigator.current, navigator.cursor))
 
 
 def main() -> None:
-    curses.wrapper(run)
+    runtime = cli.default_runtime(io.StringIO())
+    curses.wrapper(lambda window: run(window, runtime))

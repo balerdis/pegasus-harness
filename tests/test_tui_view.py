@@ -5,8 +5,19 @@ from __future__ import annotations
 
 import unittest
 
-from pegasus.tui.navigator import Entry, Menu, Placeholder, QUIT
+from pegasus import cli
+from pegasus.tui.navigator import CliOption, Entry, InstallPlanScreen, InstallResultScreen, Menu, Placeholder, QUIT
 from pegasus.tui.view import render
+
+SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
+PLANNED_REPORT = {
+    "schema": cli.SCHEMA, "command": "install", "cli": "demo", "status": "planned", "activation": [],
+    "created": [{"id": "a", "target": "/x/a"}], "updated": [], "unchanged": [], "skipped": [], "retired": [],
+}
+INSTALLED_REPORT = {**PLANNED_REPORT, "status": "installed", "placed": 1, "unaccounted": [], "journal": "/x/j"}
+FAILED_REPORT = {
+    "schema": cli.SCHEMA, "command": "install", "status": "failed", "error": "disk is full", "rolled_back": True,
+}
 
 
 class MenuRenderingTest(unittest.TestCase):
@@ -54,6 +65,35 @@ class PlaceholderRenderingTest(unittest.TestCase):
         screen = Placeholder("Install", "This screen has not been built yet.")
         lines = render(screen, cursor=0)
         self.assertFalse(any(line.highlighted for line in lines))
+
+
+class InstallPlanRenderingTest(unittest.TestCase):
+    def test_it_says_nothing_has_been_written_yet(self):
+        lines = [line.text for line in render(InstallPlanScreen(cli=SAMPLE, report=PLANNED_REPORT), cursor=0)]
+        self.assertIn("PREVIEW — nothing has been written yet.", lines)
+
+    def test_it_carries_the_exact_prose_the_flags_would_print(self):
+        lines = [line.text for line in render(InstallPlanScreen(cli=SAMPLE, report=PLANNED_REPORT), cursor=0)]
+        for expected in cli.prose_for(PLANNED_REPORT).splitlines():
+            self.assertIn(expected, lines)
+
+
+class InstallResultRenderingTest(unittest.TestCase):
+    def test_a_successful_install_says_so_unmistakably(self):
+        lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=INSTALLED_REPORT), cursor=0)]
+        self.assertIn("INSTALLED.", lines)
+        self.assertNotIn("PREVIEW — nothing has been written yet.", lines)
+
+    def test_a_failed_install_says_so_and_carries_no_traceback(self):
+        lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=FAILED_REPORT), cursor=0)]
+        self.assertIn("INSTALL FAILED.", lines)
+        self.assertTrue(any("disk is full" in text for text in lines))
+        self.assertFalse(any("Traceback" in text for text in lines))
+
+    def test_it_carries_the_exact_prose_the_flags_would_print(self):
+        lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=INSTALLED_REPORT), cursor=0)]
+        for expected in cli.prose_for(INSTALLED_REPORT).splitlines():
+            self.assertIn(expected, lines)
 
 
 if __name__ == "__main__":

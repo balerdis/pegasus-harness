@@ -9,10 +9,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pegasus.tui.navigator import Menu, Placeholder, Screen
+from pegasus import cli
+from pegasus.tui.navigator import InstallPlanScreen, InstallResultScreen, Menu, Placeholder, Screen
 
 SELECTED = "  ▸ "
 UNSELECTED = "    "
+
+# What tells a person which side of the point of no return they are on. The
+# plan screen is a preview of `install --dry-run`'s own report and never
+# writes anything by itself; only confirming it does. The two banners are
+# deliberately unalike so this is never left to be inferred from wording that
+# could look the same by accident.
+PREVIEW_BANNER = "PREVIEW — nothing has been written yet."
+INSTALLED_BANNER = "INSTALLED."
+FAILED_BANNER = "INSTALL FAILED."
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,10 @@ def render(screen: Screen, cursor: int) -> tuple[Line, ...]:
         return _render_menu(screen, cursor)
     if isinstance(screen, Placeholder):
         return _render_placeholder(screen)
+    if isinstance(screen, InstallPlanScreen):
+        return _render_install_plan(screen)
+    if isinstance(screen, InstallResultScreen):
+        return _render_install_result(screen)
     raise TypeError(f"no rendering defined for screen: {screen!r}")
 
 
@@ -49,3 +63,19 @@ def _render_placeholder(screen: Placeholder) -> tuple[Line, ...]:
         Line(""),
         Line("enter/esc: back"),
     )
+
+
+def _render_install_plan(screen: InstallPlanScreen) -> tuple[Line, ...]:
+    lines = [Line(f"Install · {screen.cli.display_name}"), Line(""), Line(PREVIEW_BANNER), Line("")]
+    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines += [Line(""), Line("enter: install now · esc: back, nothing written")]
+    return tuple(lines)
+
+
+def _render_install_result(screen: InstallResultScreen) -> tuple[Line, ...]:
+    failed = screen.report.get("status") == "failed"
+    banner = FAILED_BANNER if failed else INSTALLED_BANNER
+    lines = [Line(f"Install · {screen.cli.display_name}"), Line(""), Line(banner), Line("")]
+    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines += [Line(""), Line("enter/esc: back")]
+    return tuple(lines)
