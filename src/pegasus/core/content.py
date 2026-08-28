@@ -110,11 +110,12 @@ class Distribution(str, Enum):
     """How an MCP server reaches the user's machine.
 
     One member per mechanism the installer can actually execute, so a descriptor
-    cannot declare a mechanism nothing can carry out. (Two more members arrive
+    cannot declare a mechanism nothing can carry out. (One more member arrives
     in a later unit.)
     """
 
     REMOTE = "remote"
+    DOWNLOAD = "download"
 
 
 @dataclass(frozen=True)
@@ -184,12 +185,21 @@ class Command:
 
 @dataclass(frozen=True)
 class Mcp:
+    """``endpoint`` is where this distribution reaches: a service URL for
+    ``remote``, the asset to fetch for ``download``. ``version`` and
+    ``checksum`` exist only for ``download`` -- a reader who wants to know
+    what will land on disk needs the exact release that was verified, and
+    what proves the bytes that arrived are the ones that were meant to.
+    """
+
     name: str
     description: str
     body: str
     distribution: Distribution
     endpoint: str
     source: PurePosixPath
+    version: str | None = None
+    checksum: str | None = None
 
 
 @dataclass(frozen=True)
@@ -404,21 +414,57 @@ def _load_commands(directory: Path, root: Path) -> tuple[Command, ...]:
     return tuple(commands)
 
 
+_CHECKSUM = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
 def _load_mcp(directory: Path, root: Path) -> tuple[Mcp, ...]:
     servers = []
     for path in _markdown_files(directory):
         fields, body, source = _descriptor(path, root)
+        distribution = _choice(fields, "distribution", Distribution, source)
+        version, checksum = _download_form(fields, distribution, source)
         servers.append(
             Mcp(
                 name=path.stem,
                 description=_text(fields, "description", source),
                 body=body,
-                distribution=_choice(fields, "distribution", Distribution, source),
+                distribution=distribution,
                 endpoint=_text(fields, "endpoint", source),
                 source=source,
+                version=version,
+                checksum=checksum,
             )
         )
     return tuple(servers)
+
+
+def _download_form(
+    fields: dict[str, Any], distribution: Distribution, source: PurePosixPath
+) -> tuple[str | None, str | None]:
+    """The extra fields the `download` form needs, all declared or none.
+
+    A version with no checksum -- or the reverse -- would let a descriptor
+    pin what it fetches without ever proving what arrived, which is worse
+    than not declaring the form at all: it looks verified and is not. Every
+    other distribution refuses both fields outright rather than silently
+    ignoring them, so a stray `version:` left over from a copy-pasted
+    descriptor is a refusal, not a value nothing ever reads.
+    """
+    if distribution is not Distribution.DOWNLOAD:
+        present = [key for key in ("version", "checksum") if key in fields]
+        if present:
+            raise ContentError(
+                f"{source}: {', '.join(present)} only apply to the 'download' distribution, "
+                f"not {distribution.value!r}"
+            )
+        return None, None
+    version = _text(fields, "version", source)
+    checksum = _text(fields, "checksum", source)
+    if not _CHECKSUM.fullmatch(checksum):
+        raise ContentError(
+            f"{source}: 'checksum' must be 'sha256:' followed by 64 hex characters, got {checksum!r}"
+        )
+    return version, checksum
 
 
 def _load_system_prompt(directory: Path, root: Path) -> SystemPrompt | None:

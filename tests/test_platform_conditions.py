@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import no_network
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.ports.filesystem import FileSystemError
 from platform_conditions import (
@@ -135,3 +136,23 @@ class PlatformConditionsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoNetworkTest(unittest.TestCase):
+    """The refusal has to be provably in place, not merely imported somewhere.
+
+    It is installed by importing a module, which means it lives or dies by an
+    import chain no test would otherwise assert. Left unwatched, deleting the
+    module that happens to pull it in would take the refusal with it and
+    nothing would say so — the suite would simply start being able to call
+    out again.
+    """
+
+    def test_the_refusal_is_installed(self):
+        self.assertTrue(no_network.installed())
+
+    def test_opening_a_connection_is_refused(self):
+        import socket
+
+        with self.assertRaises(RuntimeError):
+            socket.socket().connect(("example.com", 80))

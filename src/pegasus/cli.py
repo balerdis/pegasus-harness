@@ -30,13 +30,16 @@ import pegasus
 from pegasus.adapters import available
 from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
+from pegasus.core import dependencies as dependencies_module
 from pegasus.core import journal as journal_module
 from pegasus.core import ownership, planner, pointer
 from pegasus.core.journal import KINDS, Install, Record
 from pegasus.core.types import Codec, Environment
+from pegasus.infra.downloader_http import HttpDownloader
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import FileJournalStore
 from pegasus.infra.snapshot_store_file import FileSnapshotStore, capture_paths
+from pegasus.ports.downloader import Downloader
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.journal_store import JournalStoreError
 from pegasus.ports.snapshot_store import SnapshotStoreError
@@ -69,10 +72,13 @@ class Runtime:
     now: str
     out: TextIO
     variables: dict[str, str] = field(default_factory=dict)
+    downloader: Downloader = field(default_factory=HttpDownloader)
 
     @property
     def environment(self) -> Environment:
-        return Environment(home=self.home, variables=self.variables)
+        return Environment(
+            home=self.home, variables=self.variables, data_dir=self.filesystem.data_dir(self.home)
+        )
 
 
 def default_runtime(out: TextIO) -> Runtime:
@@ -85,6 +91,7 @@ def default_runtime(out: TextIO) -> Runtime:
         now=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         out=out,
         variables=variables,
+        downloader=HttpDownloader(),
     )
 
 
@@ -190,6 +197,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     content = _select_mcp(arguments.mcp)
     catalog = catalog_module.build(content, adapter)
     artifacts = catalog_module.render(content, adapter, environment)
+    installed = journal_module.install_for(journal, adapter.id)
     plan = planner.plan(
         runtime.filesystem,
         cli=adapter.id,
@@ -197,7 +205,17 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
         # Already loaded for the preflight. It is what separates an address
         # Pegasus wrote from one the user did, so a reinstall can update its own
         # work instead of colliding with it.
-        installed=journal_module.install_for(journal, adapter.id),
+        installed=installed,
+    )
+    # A `dependency-tree` entry has no artifact of its own for `plan` to
+    # compare against -- it is materialized outside the catalog pipeline
+    # entirely, below -- so `plan.retirements` cannot tell a server `--mcp`
+    # still names from one it does not, and marks every existing one stale
+    # regardless. Its answer for every other kind is still the right one, so
+    # only that kind is replaced with the answer computed against the
+    # servers this run actually kept.
+    retirements = tuple(entry for entry in plan.retirements if entry.kind != "dependency-tree") + (
+        _stale_dependencies(installed, content)
     )
 
     if arguments.dry_run:
@@ -209,7 +227,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
             "updated": [_placed(step) for step in plan.updates],
             "unchanged": [_placed(step) for step in plan.unchanged],
             "skipped": [_left(step) for step in plan.collisions],
-            "retired": [_recorded(record) for record in plan.retirements],
+            "retired": [_recorded(record) for record in retirements],
         }
 
     # Taken before a single byte of this run reaches disk, and never for a dry
@@ -226,9 +244,14 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     # updated agent grants, but `context7-convention.md` shares an address
     # with nothing else this run touches. Without naming it here, a `restore`
     # after a retiring reinstall would give back the key and not the file.
+    #
+    # A `dependency-tree` target is a directory, not a file -- `capture_paths`
+    # reads a path's bytes whole, and a directory has none to read. `restore`
+    # could not have put a whole tree back either way, so leaving one out of
+    # what this snapshot covers gives up nothing `restore` already promised.
     touched = sorted(
         {step.artifact.path for step in plan.placements}
-        | {record.target for record in plan.retirements}
+        | {record.target for record in retirements if record.kind != "dependency-tree"}
         | {store.path},
         key=str,
     )
@@ -246,8 +269,21 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     documents = {step.artifact.path for step in plan.placements if step.artifact.id and _is_key(step)}
     existing = {path for path in documents if runtime.filesystem.exists(path)}
 
+    # Fetched, verified and placed before anything else this run writes: a
+    # `download` server has no artifact for `plan` to have already decided
+    # the fate of, so this is the one part of an install `planner` never
+    # sees. A mismatch here raises before a single byte reaches disk, so the
+    # whole install fails exactly as cleanly as a collision would.
+    layout = adapter.layout(environment)
+    try:
+        kept_dependencies, new_dependencies = _materialize_downloads(runtime, layout, content, installed)
+    except dependencies_module.MaterializeError as error:
+        raise CommandError(str(error)) from error
+
     applied = planner.apply(runtime.filesystem, plan, at=runtime.now)
-    config_dir = adapter.layout(environment).config_dir
+    config_dir = layout.config_dir
+    dependency_records = kept_dependencies + new_dependencies
+    all_records = applied.records + dependency_records
 
     # Two views of the same install, and confusing them is expensive. The merged
     # one is what gets recorded: everything this CLI owns, old and new. The
@@ -255,7 +291,7 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     # may touch — undoing the merged view would delete a working installation
     # that this run never even created.
     placed = Install(
-        cli=adapter.id, installed_at=runtime.now, config_dir=config_dir, release={}, entries=applied.records
+        cli=adapter.id, installed_at=runtime.now, config_dir=config_dir, release={}, entries=all_records
     )
 
     # What this render no longer asks for goes back out now: after `apply`,
@@ -276,9 +312,10 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     # retiring the rest — there is nothing here for `unplace` to undo except
     # this run's own placements.
     try:
-        stale = planner.retire(runtime.filesystem, replace(placed, entries=plan.retirements))
+        stale = planner.retire(runtime.filesystem, replace(placed, entries=retirements))
     except (FileSystemError, planner.PlannerError) as error:
         removed, failures = _undo_placements(runtime.filesystem, applied, placed)
+        _undo_dependencies(runtime.filesystem, new_dependencies)
         left = _left_behind(runtime.filesystem, documents - existing)
         raise _unretirable(
             error,
@@ -289,11 +326,12 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
             removed=removed,
         ) from error
 
-    merged = _merged(journal, adapter, environment, catalog, applied.records, stale.removed, runtime.now)
+    merged = _merged(journal, adapter, environment, catalog, all_records, stale.removed, runtime.now)
     try:
         store.save(journal_module.with_install(journal, merged))
     except JournalStoreError as error:
         removed, failures = _undo_placements(runtime.filesystem, applied, placed)
+        _undo_dependencies(runtime.filesystem, new_dependencies)
         left = _left_behind(runtime.filesystem, documents - existing)
         raise _unrecordable(
             error,
@@ -305,22 +343,27 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
             retired=list(stale.removed),
         ) from error
 
-    created_ids = {step.artifact.id for step in plan.creations}
+    # `kept_dependencies` were not touched this run at all -- the version and
+    # checksum already on disk are the ones this release still asks for, so
+    # they are reported alongside everything else that needed no write,
+    # never as an "update" that did not happen.
+    reported = applied.records + new_dependencies
+    created_ids = {step.artifact.id for step in plan.creations} | {record.id for record in new_dependencies}
     retired_ids = set(stale.removed)
     return {
         "cli": adapter.id,
         "status": "installed",
         "activation": activation,
-        "placed": len(applied.records),
-        "created": [_recorded(record) for record in applied.records if record.id in created_ids],
-        "updated": [_recorded(record) for record in applied.records if record.id not in created_ids],
-        "unchanged": [_placed(step) for step in applied.unchanged],
+        "placed": len(all_records),
+        "created": [_recorded(record) for record in reported if record.id in created_ids],
+        "updated": [_recorded(record) for record in reported if record.id not in created_ids],
+        "unchanged": [_placed(step) for step in applied.unchanged] + [_recorded(r) for r in kept_dependencies],
         "skipped": [_left(step) for step in applied.skipped],
         # Filtered to what `retire` actually confirmed removed, not the intent
-        # `plan.retirements` describes — an unaccounted entry belongs in
+        # `retirements` describes — an unaccounted entry belongs in
         # `unaccounted`, not here, or the report would claim a removal that
         # never happened.
-        "retired": [_recorded(record) for record in plan.retirements if record.id in retired_ids],
+        "retired": [_recorded(record) for record in retirements if record.id in retired_ids],
         "unaccounted": list(stale.unaccounted),
         "journal": str(store.path),
         "retention": _retain(snapshot),
@@ -363,6 +406,83 @@ def _merged(journal, adapter, environment, catalog, records, retired_ids, now: s
     )
 
 
+def _stale_dependencies(installed: Install | None, content: content_module.Content) -> tuple[Record, ...]:
+    """`download` servers this render no longer names.
+
+    The counterpart to `planner.retirements` for a kind that function never
+    sees: a `dependency-tree` entry has no artifact in `artifacts` for it to
+    compare against, so this asks the same question directly against the
+    servers `--mcp` chose for this run instead — already filtered to exactly
+    those by `select_mcp`.
+    """
+    if installed is None:
+        return ()
+    wanted = {
+        f"dependency:{item.name}"
+        for item in content.mcp
+        if item.distribution is content_module.Distribution.DOWNLOAD
+    }
+    return tuple(
+        entry for entry in installed.entries if entry.kind == "dependency-tree" and entry.id not in wanted
+    )
+
+
+def _materialize_downloads(
+    runtime: Runtime, layout, content: content_module.Content, installed: Install | None
+) -> tuple[tuple[Record, ...], tuple[Record, ...]]:
+    """Fetch and place every `download` server this run still names.
+
+    Returns ``(kept, created)``: a server already materialized at exactly the
+    version and checksum this release still asks for costs no fetch at all —
+    the record the journal already holds is reused as is. Everything else is
+    fetched, verified against its checksum, and placed fresh; a failure here
+    leaves whatever this call already placed for a *previous* server on disk,
+    which the caller cleans up alongside everything else once it knows the
+    whole install is being undone.
+    """
+    owned = {entry.id: entry for entry in (installed.entries if installed else ())}
+    kept: list[Record] = []
+    created: list[Record] = []
+    for item in content.mcp:
+        if item.distribution is not content_module.Distribution.DOWNLOAD:
+            continue
+        existing = owned.get(f"dependency:{item.name}")
+        if (
+            existing is not None
+            and existing.after_digest == item.checksum
+            and runtime.filesystem.exists(existing.target)
+        ):
+            kept.append(existing)
+            continue
+        try:
+            created.append(
+                dependencies_module.materialize(
+                    runtime.filesystem, runtime.downloader, layout.dependencies_dir, item, at=runtime.now
+                )
+            )
+        except dependencies_module.MaterializeError:
+            # A later server's failure must not leave an earlier one of this
+            # same run half-recorded: nothing placed here has reached the
+            # journal yet, so this is the only chance to take it back out.
+            _undo_dependencies(runtime.filesystem, tuple(created))
+            raise
+    return tuple(kept), tuple(created)
+
+
+def _undo_dependencies(filesystem: FileSystem, created: tuple[Record, ...]) -> None:
+    """Take back a dependency tree this run just materialized, best-effort.
+
+    Called from inside a handler that is already reporting a first failure —
+    same posture as `_left_behind`: a second failure here must never replace
+    that report with a worse one, so it is swallowed rather than raised.
+    """
+    for record in created:
+        try:
+            filesystem.remove_dir(record.target)
+        except FileSystemError:
+            continue
+
+
 def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
     adapter = _adapter(arguments.cli)
     store = journal_store(runtime)
@@ -379,8 +499,11 @@ def _uninstall(arguments, runtime: Runtime) -> dict[str, Any]:
     # Same reasoning as install, in reverse: retiring overwrites what the
     # journal claims without asking, and the journal itself is captured
     # alongside the targets being retired for the same reason it is on the
-    # way in.
-    touched = sorted({entry.target for entry in install.entries} | {store.path}, key=str)
+    # way in. A `dependency-tree` target is a directory -- see the matching
+    # note in `_install` -- so it is excluded here for the same reason.
+    touched = sorted(
+        {entry.target for entry in install.entries if entry.kind != "dependency-tree"} | {store.path}, key=str
+    )
     try:
         snapshot.save(capture_paths(runtime.filesystem, touched), taken_at=runtime.now)
     except SnapshotStoreError as error:

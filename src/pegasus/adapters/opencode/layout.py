@@ -37,4 +37,7 @@ def build(environment: Environment) -> Layout:
         # Not the user's own AGENTS.md: Pegasus ships its own file and points
         # OpenCode at it through the instructions list, so nothing collides.
         system_prompt_file=root / SYSTEM_PROMPT,
+        # Pegasus's own directory, not OpenCode's -- `None` when this frame has
+        # no answer for it, the same as every other environment-derived fact.
+        dependencies_dir=(environment.data_dir / "mcp") if environment.data_dir is not None else None,
     )

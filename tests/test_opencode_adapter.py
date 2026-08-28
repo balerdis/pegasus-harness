@@ -341,6 +341,50 @@ class McpRenderTest(unittest.TestCase):
         self.assertIn("context7", str(raised.exception))
 
 
+class DownloadMcpRenderTest(unittest.TestCase):
+    def setUp(self):
+        self.adapter = Adapter()
+        self.environment = Environment(home=HOME, data_dir=HOME / ".local" / "share" / "pegasus-harness")
+        self.layout = self.adapter.layout(self.environment)
+        self.mcp = Mcp(
+            name="probe",
+            description="d",
+            body="# Probe Convention\n",
+            distribution=Distribution.DOWNLOAD,
+            endpoint="https://example.test/releases/probe-linux-x64",
+            source=PurePosixPath("mcp/probe.md"),
+            version="1.2.3",
+            checksum="sha256:" + "a" * 64,
+        )
+        self.artifacts = self.adapter.render_mcp(self.layout, self.mcp)
+
+    def test_the_server_points_at_a_local_command(self):
+        key = only(self.artifacts, ConfigKeyArtifact)[0]
+        self.assertEqual(key.pointer, "/mcp/probe")
+        self.assertEqual(
+            key.value,
+            {
+                "type": "local",
+                "command": [
+                    str(
+                        self.environment.data_dir
+                        / "mcp"
+                        / "probe"
+                        / "1.2.3"
+                        / "probe-linux-x64"
+                    )
+                ],
+                "enabled": True,
+            },
+        )
+
+    def test_a_layout_without_a_dependencies_directory_refuses(self):
+        layout = Layout(config_dir=CONFIG, settings_file=CONFIG / "opencode.json", skills_dir=CONFIG / "skills")
+        with self.assertRaises(render_module.RenderError) as raised:
+            render_module.mcp(layout, self.mcp)
+        self.assertIn("probe", str(raised.exception))
+
+
 class OwnArtifactsTest(unittest.TestCase):
     def setUp(self):
         self.layout = Adapter().layout(ENVIRONMENT)

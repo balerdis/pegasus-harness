@@ -184,7 +184,7 @@ def build(content: Content, adapter: Any) -> Catalog:
     # PurePosixPath end to end: `Path` takes the flavour of whatever machine runs
     # the build, and a canonical frame that spells itself differently on Windows
     # is not canonical.
-    canonical = Environment(home=CANONICAL_HOME)
+    canonical = Environment(home=CANONICAL_HOME, data_dir=CANONICAL_DATA_DIR)
     artifacts = render(content, adapter, canonical)
     config_root = adapter.layout(canonical).config_dir
     territory = Territory(roots=(config_root, CANONICAL_DATA_DIR))
