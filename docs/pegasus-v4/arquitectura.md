@@ -791,7 +791,7 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 8b | Directorio propio, formas `npm` y `download` | Los MCPs que traen binario quedan disponibles sin vendorizar ni compilar ninguno, con versión fija e integridad verificada | Pendiente |
 | 9 | El digest deja de ser permiso; snapshot, `restore` y retención | Instalar y desinstalar pisan lo que el journal reclama, y `restore` devuelve el estado exacto anterior al último comando | Entregada |
 | 10 | El puerto de filesystem puede decir "no puedo saberlo" | Una ruta que existe y no se puede leer deja de hacerse pasar por ausente: `exists` y `list_dir`, y los trece sitios que les creen | Entregada |
-| 11 | Los permisos dejan de ser un octal en el núcleo | Ningún literal octal de permisos bajo `core/` ni `ports/`; el bit de ejecución y el estado privado se dicen como lo que son, y un guard que falla cerrado lo declara | Esbozada, sin medir |
+| 11 | Los permisos dejan de ser un octal en el núcleo | `FileArtifact` dice `executable`, no un modo; los bits nacen en `mode_for` del lado de la plataforma; un solo guard `writable_on_behalf_of_owner` reemplaza los dos duplicados; un test guardián sostiene que ningún literal de permiso vuelva a `core/` ni `ports/` | Entregada |
 
 La unidad 1b genera el catálogo **del contenido presente**, no del contenido final: los descriptores de los 10 agentes SDD y las categorías `mcp/` y `policies/` llegan en unidades posteriores.
 
@@ -1164,6 +1164,11 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 | El orquestador tiene prohibición absoluta de ejecutar —"never by running the phase work yourself"— sin umbral, y no tiene `write` ni `edit`. Prosa y herramientas están de acuerdo, así que no es un bug: es un diseño que hay que cambiar en las dos mitades a la vez | Nada. Cambiar sólo la prosa le nombraría una capacidad que no tiene |
 | Dos gates defensivos —el del protocolo de memoria en el prompt de sistema y el de `cbm-convention.md`— no tienen ningún test que los proteja, y no se pueden afirmar sin afirmar prosa | La unidad 8b: cuando cada convención viva en el cuerpo de su descriptor, la ausencia significará ausencia y los dos gates se borran en vez de necesitar protección |
 | `tools/check_docs_links.py` reporta 13 links rotos, 6 de ellos reales y preexistentes | Nada |
+| `restore` no tiene ninguna pantalla en `## Interfaz de usuario`. Es un comando entregado y testeado desde la unidad 9, y la paridad TUI es obligatoria | La unidad 5, que no puede darse por completa sin diseñarla |
+| Cinco capacidades del motor no tienen pantalla: `--dry-run` como modo distinto de la vista previa, la confirmación por MCP, los pasos de activación posteriores a instalar, el reporte de retención, y el balde `unreadable` de `doctor` | La unidad 5. Las pantallas se escribieron antes de las unidades 9 y 10, que agregaron esas capacidades |
+| El store de preferencias de modelo no existe en ninguna forma: ni archivo, ni puerto, ni la mitad de escritura de `CliAdapter`, que hoy sólo sabe leer asignaciones. El contrato `pegasus/model-assignment/v1` está nombrado en la tabla de contratos y no lo implementa nada | La unidad 6, que lo construye entero. La unidad 5 no lo necesita |
+| Ninguna librería de TUI está elegida, y cada dependencia nueva hay que fijarla con hash y meterla en el venv privado | La unidad 4, cuyo tamaño depende de esa elección |
+| `mode_of` sigue colapsando "la ruta no existe" y "no pude leer sus bits" en el mismo `None`. Los tres llamadores del planner corren justo después de una lectura que ya tuvo éxito, así que hoy es inalcanzable | Nada. Fragilidad latente, no reproducida |
 
 ---
 
