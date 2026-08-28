@@ -9,14 +9,26 @@ import unittest
 
 import pegasus
 from pegasus.tui.navigator import (
+    CANCEL,
     Action,
     CliOption,
+    Entry,
     InstallPlanScreen,
     InstallResultScreen,
     InstallTarget,
     Menu,
     Navigator,
     Placeholder,
+    RestoreConfirm,
+    RestoreResultScreen,
+    RestoreTarget,
+    StatusRequest,
+    UninstallConfirm,
+    UninstallResultScreen,
+    UninstallTarget,
+    main_menu,
+    restore_menu,
+    uninstall_menu,
 )
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
@@ -177,6 +189,108 @@ class InstallPlanAndResultScreensTest(unittest.TestCase):
     def test_acknowledging_a_result_leaves_it(self):
         navigator = self.result().handle(Action.CHOOSE)
         self.assertIsInstance(navigator.current, Menu)
+
+
+class StatusEntryTest(unittest.TestCase):
+    """`Status and diagnostics` always leads somewhere real — `doctor` never
+    needs a CLI detected first the way `install` does — but building its
+    report is real engine work, so `Navigator` alone treats choosing it the
+    same inert way it treats an `InstallTarget`."""
+
+    def test_the_main_menu_names_a_status_request(self):
+        self.assertIsInstance(main_menu().entries[2].target, StatusRequest)
+
+    def test_choosing_it_directly_does_nothing_by_itself(self):
+        navigator = Navigator.starting()
+        for _ in range(2):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        before = navigator
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator, before)
+
+
+class UninstallMenuTest(unittest.TestCase):
+    def test_nothing_installed_shows_a_placeholder_that_says_why(self):
+        navigator = Navigator.starting(installed=()).handle(Action.MOVE_DOWN).handle(Action.MOVE_DOWN).handle(
+            Action.MOVE_DOWN
+        )
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Placeholder)
+
+    def test_an_installed_cli_opens_a_menu_naming_it(self):
+        menu = uninstall_menu(installed=(SAMPLE,))
+        self.assertIsInstance(menu, Menu)
+        self.assertEqual(menu.entries[0].target, UninstallTarget(SAMPLE))
+
+    def test_choosing_an_installed_cli_directly_does_nothing_by_itself(self):
+        navigator = Navigator.starting(installed=(SAMPLE,))
+        for _ in range(3):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        navigator = navigator.handle(Action.CHOOSE)
+        before = navigator
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator, before)
+
+
+class RestoreMenuTest(unittest.TestCase):
+    def test_no_generation_shows_a_placeholder_that_says_why(self):
+        self.assertIsInstance(restore_menu(generations=()), Placeholder)
+
+    def test_a_generation_opens_a_menu_naming_it(self):
+        menu = restore_menu(generations=(3, 2, 1))
+        self.assertIsInstance(menu, Menu)
+        self.assertEqual([entry.target for entry in menu.entries], [RestoreTarget(3), RestoreTarget(2), RestoreTarget(1)])
+
+    def test_choosing_a_generation_directly_does_nothing_by_itself(self):
+        navigator = Navigator.starting().opened(restore_menu(generations=(1,)))
+        before = navigator
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator, before)
+
+
+class ConfirmTargetsTest(unittest.TestCase):
+    """`UninstallConfirm` and `RestoreConfirm` name real engine work too,
+    just like their outer counterparts — choosing either directly is inert
+    until `session` acts on it."""
+
+    def confirm_menu(self, target) -> Menu:
+        return Menu(title="Confirm?", entries=(Entry("Cancel", CANCEL), Entry("Confirm", target)))
+
+    def test_choosing_a_confirm_target_directly_does_nothing_by_itself(self):
+        for target in (UninstallConfirm(SAMPLE), RestoreConfirm(1)):
+            navigator = Navigator.starting().opened(self.confirm_menu(target)).handle(Action.MOVE_DOWN)
+            before = navigator
+            navigator = navigator.handle(Action.CHOOSE)
+            self.assertEqual(navigator, before)
+
+    def test_choosing_cancel_leaves_the_screen_without_touching_anything(self):
+        navigator = Navigator.starting().opened(self.confirm_menu(UninstallConfirm(SAMPLE)))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Menu)
+        self.assertEqual(navigator.current, Navigator.starting().current)
+
+    def test_the_default_cursor_on_a_confirm_menu_sits_on_cancel(self):
+        navigator = Navigator.starting().opened(self.confirm_menu(UninstallConfirm(SAMPLE)))
+        self.assertEqual(navigator.cursor, 0)
+        self.assertEqual(navigator.current.entries[navigator.cursor].label, "Cancel")
+
+
+class ResultScreensReturnToTheMainMenuTest(unittest.TestCase):
+    def test_acknowledging_an_uninstall_result_leaves_it(self):
+        navigator = Navigator.starting().opened(UninstallResultScreen(cli=SAMPLE, report={"status": "uninstalled"}))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Menu)
+
+    def test_acknowledging_a_restore_result_leaves_it(self):
+        navigator = Navigator.starting().opened(RestoreResultScreen(report={"status": "restored"}))
+        navigator = navigator.handle(Action.BACK)
+        self.assertIsInstance(navigator.current, Menu)
+
+
+class MenuPrefaceTest(unittest.TestCase):
+    def test_a_menu_with_no_preface_behaves_exactly_as_before(self):
+        menu = Menu(title="t", entries=(Entry("a", CANCEL),))
+        self.assertEqual(menu.preface, ())
 
 
 if __name__ == "__main__":

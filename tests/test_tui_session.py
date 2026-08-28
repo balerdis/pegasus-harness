@@ -25,7 +25,13 @@ from pegasus.tui.navigator import (
     Action,
     InstallPlanScreen,
     InstallResultScreen,
+    Menu,
     Navigator,
+    Placeholder,
+    RestoreResultScreen,
+    StatusRequest,
+    StatusScreen,
+    UninstallResultScreen,
 )
 from platform_conditions import make_unwritable
 from real_home import RealHomeTestCase
@@ -179,5 +185,181 @@ class InstallFailureThroughTheTuiTest(SessionTestCase):
         self.assertIn("taken back out", prose)
 
 
+class DetectInstalledTest(SessionTestCase):
+    def test_nothing_installed_is_offered_nothing(self):
+        self.assertEqual(session.detect_installed(self.runtime()), ())
+
+    def test_an_installed_cli_is_offered_even_once_no_longer_detected(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        self.assertEqual([option.id for option in session.detect_installed(runtime)], [CLI])
+
+
+class StatusScreenTest(SessionTestCase):
+    def test_choosing_status_from_the_main_menu_matches_doctor(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
+        for _ in range(2):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        self.assertIsInstance(navigator.current.entries[navigator.cursor].target, StatusRequest)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertIsInstance(navigator.current, StatusScreen)
+        _, expected = cli.safe_report("doctor", lambda: cli.doctor(runtime))
+        self.assertEqual(_sans(navigator.current.report, str(self.home)), _sans(expected, str(self.home)))
+
+    def test_choosing_restore_from_status_with_nothing_captured_says_so(self):
+        runtime = self.runtime()
+        navigator = Navigator.starting()
+        navigator = navigator.handle(Action.MOVE_DOWN).handle(Action.MOVE_DOWN)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # StatusScreen
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # asks for the restore menu
+        self.assertIsInstance(navigator.current, Placeholder)
+
+
+class UninstallThroughTheTuiTest(SessionTestCase):
+    def to_preview(self, runtime) -> "Navigator":
+        navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
+        for _ in range(3):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the CLI choice
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the preview
+        return navigator
+
+    def test_the_default_cursor_sits_on_cancel_not_confirm(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        navigator = self.to_preview(runtime)
+        self.assertEqual(navigator.cursor, 0)
+        self.assertIn("Cancel", navigator.current.entries[0].label)
+
+    def test_a_person_who_does_not_confirm_leaves_the_home_untouched(self):
+        """The preview shows what would be removed — `preface` is not
+        empty — but only ever reads, and a person who does not move onto
+        Confirm before pressing enter leaves the home exactly as it was."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        before = _tree(self.home)
+        navigator = self.to_preview(runtime)
+        self.assertTrue(navigator.current.preface)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # cursor still on Cancel
+        self.assertIsInstance(navigator.current, Menu)  # back on the CLI choice
+        self.assertEqual(_tree(self.home), before)
+        self.assertEqual([option.id for option in session.detect_installed(runtime)], [CLI])
+
+    def test_confirming_matches_the_equivalent_cli_uninstall_on_a_separate_home(self):
+        with tempfile.TemporaryDirectory(dir=self.home.parent) as other:
+            other_home = Path(other)
+            for home in (self.home, other_home):
+                _present(home)
+                cli.install(CLI, self.runtime(home))
+
+            cli_runtime = self.runtime(self.home)
+            cli_code = cli.main(["uninstall", "--cli", CLI, "--json"], runtime=cli_runtime)
+            cli_report = json.loads(cli_runtime.out.getvalue())
+
+            tui_runtime = self.runtime(other_home)
+            navigator = self.to_preview(tui_runtime)
+            navigator = navigator.handle(Action.MOVE_DOWN)  # onto Confirm
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)
+
+            self.assertEqual(cli_code, 0)
+            self.assertIsInstance(navigator.current, UninstallResultScreen)
+            self.assertEqual(navigator.current.report["status"], "uninstalled")
+            self.assertEqual(_sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home)))
+
+    def test_acknowledging_the_result_returns_to_the_main_menu(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        navigator = self.to_preview(runtime)
+        navigator = navigator.handle(Action.MOVE_DOWN)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Menu)
+        self.assertEqual(navigator.current.title, Navigator.starting().current.title)
+
+
+class RestoreThroughTheTuiTest(SessionTestCase):
+    def _installed_then_uninstalled(self, home: Path) -> cli.Runtime:
+        _present(home)
+        runtime = self.runtime(home)
+        cli.install(CLI, runtime)
+        cli.uninstall(CLI, runtime)  # leaves exactly one readable generation behind
+        return runtime
+
+    def to_generation_preview(self, runtime) -> "Navigator":
+        navigator = Navigator.starting()
+        navigator = navigator.handle(Action.MOVE_DOWN).handle(Action.MOVE_DOWN)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # StatusScreen
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # RestoreMenuScreen
+        self.assertIsInstance(navigator.current, Menu)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # generation preview
+        return navigator
+
+    def test_the_default_cursor_sits_on_cancel_not_confirm(self):
+        runtime = self._installed_then_uninstalled(self.home)
+        navigator = self.to_generation_preview(runtime)
+        self.assertEqual(navigator.cursor, 0)
+        self.assertIn("Cancel", navigator.current.entries[0].label)
+
+    def test_a_person_who_does_not_confirm_leaves_the_home_untouched(self):
+        """The preview names the generation and what going back to it would
+        touch — `preface` is not empty — but only ever reads it back."""
+        runtime = self._installed_then_uninstalled(self.home)
+        before = _tree(self.home)
+        navigator = self.to_generation_preview(runtime)
+        self.assertTrue(navigator.current.preface)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # cursor still on Cancel
+        self.assertIsInstance(navigator.current, Menu)  # back on the generation choice
+        self.assertEqual(_tree(self.home), before)
+
+    def test_confirming_matches_the_equivalent_cli_restore_on_a_separate_home(self):
+        with tempfile.TemporaryDirectory(dir=self.home.parent) as other:
+            other_home = Path(other)
+            cli_runtime = self._installed_then_uninstalled(self.home)
+            tui_runtime = self._installed_then_uninstalled(other_home)
+
+            cli_code = cli.main(["restore", "--json"], runtime=cli_runtime)
+            cli_report = json.loads(cli_runtime.out.getvalue())
+
+            navigator = self.to_generation_preview(tui_runtime)
+            navigator = navigator.handle(Action.MOVE_DOWN)  # onto Confirm
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)
+
+            self.assertEqual(cli_code, 0)
+            self.assertIsInstance(navigator.current, RestoreResultScreen)
+            self.assertEqual(navigator.current.report["status"], "restored")
+            self.assertEqual(_sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home)))
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfirmationFitsOnAScreenTest(RealHomeTestCase):
+    """A question with a hundred lines above it is a question nobody can see.
+
+    `draw` clamps to the window, so a preface longer than the terminal pushes
+    the answers off the bottom — and the one screen where that matters most is
+    the one asking whether to remove everything.
+    """
+
+    def test_a_long_list_is_counted_rather_than_listed(self):
+        lines = tuple(f"item {number}" for number in range(106))
+        preface = session._summarised("About to remove", lines, "nothing")
+        self.assertLessEqual(len(preface), session.SHOWN_AT_MOST + 2)
+        self.assertIn("106", preface[0])
+        self.assertIn("and 100 more", preface[-1])
+
+    def test_a_short_list_is_shown_whole_without_a_tail(self):
+        preface = session._summarised("About to remove", ("one", "two"), "nothing")
+        self.assertEqual(preface, ("About to remove 2:", "  one", "  two"))
+
+    def test_nothing_to_do_says_so_instead_of_counting_zero(self):
+        self.assertEqual(session._summarised("About to remove", (), "Nothing recorded to remove."),
+                         ("Nothing recorded to remove.",))

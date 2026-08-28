@@ -9,7 +9,20 @@ from __future__ import annotations
 import unittest
 
 from pegasus import cli
-from pegasus.tui.navigator import CliOption, InstallTarget, Menu, Placeholder, main_menu
+from pegasus.tui.navigator import (
+    CliOption,
+    InstallTarget,
+    Menu,
+    Placeholder,
+    RestoreConfirm,
+    RestoreTarget,
+    StatusRequest,
+    UninstallConfirm,
+    UninstallTarget,
+    main_menu,
+    restore_menu,
+    uninstall_menu,
+)
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
 
@@ -22,12 +35,42 @@ class TuiNamesAnExistingCommandTest(unittest.TestCase):
             self.assertIsInstance(entry.target, InstallTarget)
             self.assertIn(entry.target.command, cli.COMMANDS)
 
-    def test_every_entry_still_marked_unbuilt_says_so_rather_than_naming_a_command(self):
-        menu = main_menu(detections=(SAMPLE,))
-        unbuilt = {"Configure models", "Status and diagnostics", "Uninstall"}
+    def test_the_status_entry_names_the_doctor_command(self):
+        target = main_menu().entries[2].target
+        self.assertIsInstance(target, StatusRequest)
+        self.assertIn(target.command, cli.COMMANDS)
+
+    def test_every_uninstall_choice_names_a_command_the_flags_expose(self):
+        menu = uninstall_menu(installed=(SAMPLE,))
+        self.assertIsInstance(menu, Menu)
+        for entry in menu.entries:
+            self.assertIsInstance(entry.target, UninstallTarget)
+            self.assertIn(entry.target.command, cli.COMMANDS)
+
+    def test_the_uninstall_confirm_entry_names_a_command_the_flags_expose(self):
+        confirm = UninstallConfirm(SAMPLE)
+        self.assertIn(confirm.command, cli.COMMANDS)
+
+    def test_every_restore_choice_names_a_command_the_flags_expose(self):
+        menu = restore_menu(generations=(2, 1))
+        self.assertIsInstance(menu, Menu)
+        for entry in menu.entries:
+            self.assertIsInstance(entry.target, RestoreTarget)
+            self.assertIn(entry.target.command, cli.COMMANDS)
+
+    def test_the_restore_confirm_entry_names_a_command_the_flags_expose(self):
+        confirm = RestoreConfirm(1)
+        self.assertIn(confirm.command, cli.COMMANDS)
+
+    def test_the_only_entry_still_marked_unbuilt_says_so_rather_than_naming_a_command(self):
+        menu = main_menu(detections=(SAMPLE,), installed=(SAMPLE,))
+        unbuilt = {"Configure models"}
+        built = {"Install", "Status and diagnostics", "Uninstall"}
         for entry in menu.entries:
             if entry.label in unbuilt:
                 self.assertIsInstance(entry.target, Placeholder)
+            elif entry.label in built:
+                self.assertNotIsInstance(entry.target, Placeholder)
 
 
 if __name__ == "__main__":
