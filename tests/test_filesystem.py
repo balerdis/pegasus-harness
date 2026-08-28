@@ -30,6 +30,14 @@ class PosixFileSystemTest(unittest.TestCase):
     def test_the_posix_implementation_satisfies_the_port(self):
         self.assertIsInstance(self.fs, FileSystem)
 
+    # --- Permissions ---
+
+    def test_an_executable_artifact_gets_a_program_mode(self):
+        self.assertEqual(self.fs.mode_for(executable=True), 0o755)
+
+    def test_a_non_executable_artifact_gets_a_text_mode(self):
+        self.assertEqual(self.fs.mode_for(executable=False), 0o644)
+
     # --- Writing ---
 
     def test_write_atomic_creates_the_file_with_its_content(self):

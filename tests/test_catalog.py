@@ -28,6 +28,10 @@ ENVIRONMENT = Environment(home=HOME)
 CONFIG = Path("/home/probe/.config/probe")
 
 
+def build(content, adapter):
+    return catalog_module.build(content, adapter)
+
+
 class StubAdapter:
     """An adapter that returns exactly the artifacts a test hands it."""
 
@@ -69,31 +73,31 @@ def one_skill():
 
 class BuildTest(unittest.TestCase):
     def test_renders_the_declared_capability(self):
-        artifact = FileArtifact(id="skill:alpha", path=CONFIG / "skills/alpha/SKILL.md", content=b"body", mode=0o644)
-        catalog = catalog_module.build(one_skill(), StubAdapter(artifacts=(artifact,)))
+        artifact = FileArtifact(id="skill:alpha", path=CONFIG / "skills/alpha/SKILL.md", content=b"body", executable=False)
+        catalog = build(one_skill(), StubAdapter(artifacts=(artifact,)))
         self.assertEqual([entry.id for entry in catalog.entries], ["skill:alpha"])
 
     def test_includes_what_the_adapter_ships_itself(self):
-        own = (FileArtifact(id="own:plugin", path=CONFIG / "plugins/x.ts", content=b"x", mode=0o644),)
-        catalog = catalog_module.build(Content(), StubAdapter(own=own))
+        own = (FileArtifact(id="own:plugin", path=CONFIG / "plugins/x.ts", content=b"x", executable=False),)
+        catalog = build(Content(), StubAdapter(own=own))
         self.assertEqual([entry.id for entry in catalog.entries], ["own:plugin"])
 
     def test_targets_are_relative_to_the_configuration_root(self):
-        artifact = FileArtifact(id="a", path=CONFIG / "skills/alpha/SKILL.md", content=b"body", mode=0o644)
-        catalog = catalog_module.build(one_skill(), StubAdapter(artifacts=(artifact,)))
+        artifact = FileArtifact(id="a", path=CONFIG / "skills/alpha/SKILL.md", content=b"body", executable=False)
+        catalog = build(one_skill(), StubAdapter(artifacts=(artifact,)))
         self.assertEqual(catalog.entries[0].target, PurePosixPath("skills/alpha/SKILL.md"))
 
     def test_entries_are_sorted_by_id(self):
         artifacts = tuple(
-            FileArtifact(id=name, path=CONFIG / name, content=b"x", mode=0o644) for name in ("zeta", "alpha", "mu")
+            FileArtifact(id=name, path=CONFIG / name, content=b"x", executable=False) for name in ("zeta", "alpha", "mu")
         )
-        catalog = catalog_module.build(one_skill(), StubAdapter(artifacts=artifacts))
+        catalog = build(one_skill(), StubAdapter(artifacts=artifacts))
         self.assertEqual([entry.id for entry in catalog.entries], ["alpha", "mu", "zeta"])
 
     def test_a_capability_configured_after_installing_contributes_nothing(self):
         manifest = CapabilityManifest(cli_id="probe", skills=True, per_agent_model=True)
         adapter = StubAdapter(manifest=manifest)
-        self.assertEqual(len(catalog_module.build(Content(), adapter)), 0)
+        self.assertEqual(len(build(Content(), adapter)), 0)
 
     def test_every_non_interactive_capability_has_a_content_source(self):
         non_interactive = set(Capability) - catalog_module.INTERACTIVE
@@ -102,8 +106,8 @@ class BuildTest(unittest.TestCase):
 
 class DigestTest(unittest.TestCase):
     def file_catalog(self, content_bytes):
-        artifact = FileArtifact(id="a", path=CONFIG / "a", content=content_bytes, mode=0o644)
-        return catalog_module.build(one_skill(), StubAdapter(artifacts=(artifact,)))
+        artifact = FileArtifact(id="a", path=CONFIG / "a", content=content_bytes, executable=False)
+        return build(one_skill(), StubAdapter(artifacts=(artifact,)))
 
     def test_a_file_digest_covers_its_bytes(self):
         self.assertTrue(self.file_catalog(b"body").entries[0].digest.startswith("sha256:"))
@@ -116,7 +120,7 @@ class DigestTest(unittest.TestCase):
     def test_a_configuration_digest_ignores_key_order(self):
         def digest(value):
             artifact = ConfigKeyArtifact(id="k", path=CONFIG / "settings.json", pointer="/a", value=value)
-            return catalog_module.build(Content(), StubAdapter(own=(artifact,))).entries[0].digest
+            return build(Content(), StubAdapter(own=(artifact,))).entries[0].digest
 
         self.assertEqual(digest({"a": 1, "b": 2}), digest({"b": 2, "a": 1}))
 
@@ -129,12 +133,12 @@ class DigestTest(unittest.TestCase):
 
 class CollisionTest(unittest.TestCase):
     def build(self, artifacts):
-        return catalog_module.build(one_skill(), StubAdapter(artifacts=artifacts))
+        return build(one_skill(), StubAdapter(artifacts=artifacts))
 
     def test_two_files_at_one_path_are_refused(self):
         artifacts = (
-            FileArtifact(id="a", path=CONFIG / "same", content=b"one", mode=0o644),
-            FileArtifact(id="b", path=CONFIG / "same", content=b"two", mode=0o644),
+            FileArtifact(id="a", path=CONFIG / "same", content=b"one", executable=False),
+            FileArtifact(id="b", path=CONFIG / "same", content=b"two", executable=False),
         )
         with self.assertRaises(CatalogError) as raised:
             self.build(artifacts)
@@ -142,8 +146,8 @@ class CollisionTest(unittest.TestCase):
 
     def test_two_artifacts_with_one_id_are_refused(self):
         artifacts = (
-            FileArtifact(id="same", path=CONFIG / "a", content=b"one", mode=0o644),
-            FileArtifact(id="same", path=CONFIG / "b", content=b"two", mode=0o644),
+            FileArtifact(id="same", path=CONFIG / "a", content=b"one", executable=False),
+            FileArtifact(id="same", path=CONFIG / "b", content=b"two", executable=False),
         )
         with self.assertRaises(CatalogError):
             self.build(artifacts)
@@ -165,7 +169,7 @@ class CollisionTest(unittest.TestCase):
         self.assertEqual(len(self.build(artifacts)), 2)
 
     def test_an_artifact_outside_the_configuration_root_is_refused(self):
-        artifacts = (FileArtifact(id="rogue", path=Path("/home/probe/.bashrc"), content=b"", mode=0o644),)
+        artifacts = (FileArtifact(id="rogue", path=Path("/home/probe/.bashrc"), content=b"", executable=False),)
         with self.assertRaises(CatalogError) as raised:
             self.build(artifacts)
         self.assertIn(".bashrc", str(raised.exception))
@@ -206,7 +210,7 @@ class McpConventionNamespaceTest(unittest.TestCase):
     def test_two_colliding_ids_load_and_render_without_a_catalog_error(self):
         with tempfile.TemporaryDirectory() as directory:
             content = self.build_content(Path(directory))
-        catalog = catalog_module.build(content, Adapter())
+        catalog = build(content, Adapter())
         targets = {str(entry.target) for entry in catalog.entries if entry.kind == "file"}
         self.assertIn("skills/_shared/cbm-convention.md", targets)
         self.assertIn("skills/_shared/engram-convention.md", targets)
@@ -251,7 +255,7 @@ class TwoTopLevelAgentsTest(unittest.TestCase):
 
     def build(self):
         content = Content(agents=(self.agent(self.STARTS), self.agent("beta")))
-        return catalog_module.build(content, Adapter())
+        return build(content, Adapter())
 
     def test_two_primary_agents_build_a_catalog(self):
         """Membership, not equality: a future per-agent artifact is not this test's business."""
@@ -271,7 +275,7 @@ class ShippedCatalogTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.content = content_module.load()
-        cls.catalog = catalog_module.build(cls.content, Adapter())
+        cls.catalog = build(cls.content, Adapter())
 
     def test_produces_the_whole_payload(self):
         files = [entry for entry in self.catalog.entries if entry.kind == "file"]
@@ -292,12 +296,12 @@ class ShippedCatalogTest(unittest.TestCase):
             self.assertTrue(entry.digest.startswith("sha256:"), entry.id)
 
     def test_building_twice_produces_the_same_digest(self):
-        again = catalog_module.build(content_module.load(), Adapter())
+        again = build(content_module.load(), Adapter())
         self.assertEqual(again.digest, self.catalog.digest)
 
     def test_the_catalog_does_not_depend_on_the_home_directory(self):
         """Targets are relative to the config root, so the same content travels anywhere."""
-        elsewhere = catalog_module.build(self.content, Adapter())
+        elsewhere = build(self.content, Adapter())
         self.assertEqual(elsewhere.digest, self.catalog.digest)
 
     def test_no_entry_carries_an_absolute_home(self):
@@ -328,7 +332,7 @@ class ShippedCatalogTest(unittest.TestCase):
         digests = set()
         for home in ("/home/one", "/home/two"):
             with mock.patch.dict(os.environ, {"HOME": home, "XDG_CONFIG_HOME": f"{home}/cfg"}):
-                digests.add(catalog_module.build(content, Adapter()).digest)
+                digests.add(build(content, Adapter()).digest)
         self.assertEqual(len(digests), 1, "the build home reached release identity")
 
         # Varying two variables only catches a build that reads those two. Refusing

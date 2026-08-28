@@ -18,7 +18,7 @@ CONFIG = Path("/home/probe/.config/some-cli")
 
 
 def file_artifact(content: bytes = b"hello", **overrides) -> FileArtifact:
-    fields = dict(id="skill:alpha", path=CONFIG / "skills/alpha/SKILL.md", content=content, mode=0o644)
+    fields = dict(id="skill:alpha", path=CONFIG / "skills/alpha/SKILL.md", content=content, executable=False)
     fields.update(overrides)
     return FileArtifact(**fields)
 
@@ -78,6 +78,7 @@ class DigestAgreementTest(unittest.TestCase):
 
     def test_the_catalog_and_the_journal_hash_a_file_the_same_way(self):
         from pegasus.core import catalog
+        from pegasus.infra.fs_posix import PosixFileSystem
 
         artifact = file_artifact(b"hello")
         entry = catalog._entry(artifact, CONFIG)
@@ -85,6 +86,7 @@ class DigestAgreementTest(unittest.TestCase):
 
     def test_the_catalog_and_the_journal_hash_a_configuration_value_the_same_way(self):
         from pegasus.core import catalog
+        from pegasus.infra.fs_posix import PosixFileSystem
 
         artifact = config_artifact()
         entry = catalog._entry(artifact, CONFIG)

@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from pegasus.ports.filesystem import FileSystemError
-from fakes import DEFAULT_DIR_MODE, FakeFileSystem
+from fakes import DEFAULT_DIR_MODE, DEFAULT_MODE, FakeFileSystem
 
 ROOT = Path("/home/probe")
 
@@ -69,6 +69,14 @@ class FakeFileSystemMakeDirTest(unittest.TestCase):
         filesystem.make_dir(ROOT, mode=0o700)
         filesystem.write_atomic(target, b"hello")
         self.assertEqual(filesystem.mode_of(ROOT), 0o700)
+
+
+class FakeFileSystemModeForTest(unittest.TestCase):
+    def test_an_executable_artifact_gets_a_program_mode(self):
+        self.assertEqual(FakeFileSystem().mode_for(executable=True), 0o755)
+
+    def test_a_non_executable_artifact_gets_the_default_mode(self):
+        self.assertEqual(FakeFileSystem().mode_for(executable=False), DEFAULT_MODE)
 
 
 class FakeFileSystemFailExistsTest(unittest.TestCase):
