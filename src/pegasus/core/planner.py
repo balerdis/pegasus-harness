@@ -28,10 +28,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from pegasus.core import codecs, ownership, pointer
-from pegasus.core.journal import Install, Record
+from pegasus.core.journal import KINDS, Install, Record
 from pegasus.core.types import Artifact, Codec, ConfigKeyArtifact, FileArtifact
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 
@@ -499,6 +499,66 @@ def _key_record(step: Step, at: str) -> Record:
 # --- Retiring --------------------------------------------------------------
 
 
+def _retire_files(filesystem: FileSystem, entries: list[Record], outcomes: dict[str, list[str]]) -> None:
+    for entry in entries:
+        if filesystem.exists(entry.target):
+            filesystem.remove(entry.target)
+        outcomes["removed"].append(entry.id)
+
+
+def _retire_config_keys(filesystem: FileSystem, entries: list[Record], outcomes: dict[str, list[str]]) -> None:
+    for path, group in _group(entries, lambda entry: entry.target).items():
+        codec = Codec(group[0].codec or Codec.JSON.value)
+        document = _read_document(filesystem, path, codec)
+        if document is None:
+            # The file the user deleted takes every key in it with it, appended
+            # items included: nothing survives that could be a changed version
+            # of ours, so there is nothing ambiguous to report.
+            outcomes["removed"].extend(entry.id for entry in group)
+            continue
+        mode = filesystem.mode_of(path)
+        original = document
+        for entry in group:
+            document, outcome = _retire_key(document, entry)
+            outcomes[outcome].append(entry.id)
+        if document != original:
+            # Rewriting an unchanged file would reformat it for nothing. The
+            # user's spacing is theirs, and we only spend it when we must.
+            _write_document(filesystem, path, document, codec, mode)
+
+
+def _retire_dependency_trees(filesystem: FileSystem, entries: list[Record], outcomes: dict[str, list[str]]) -> None:
+    """A dependency tree is a directory Pegasus materialized, not a file it
+    wrote — taking it back means removing the whole tree, unconditionally,
+    with the same "already gone counts as done" posture `remove` gives a
+    single file. `filesystem.remove` is file-only by contract; a tree needs
+    `remove_dir`."""
+    for entry in entries:
+        filesystem.remove_dir(entry.target)
+        outcomes["removed"].append(entry.id)
+
+
+RETIRE_HANDLERS: dict[str, Callable[[FileSystem, list[Record], dict[str, list[str]]], None]] = {
+    "file": _retire_files,
+    "config-key": _retire_config_keys,
+    "dependency-tree": _retire_dependency_trees,
+}
+"""How to take back each kind of journal entry, keyed by `journal.KINDS`.
+
+The old shape of this function filtered `install.entries` twice, once per
+kind it knew about; an entry whose kind matched neither filter fell into
+neither list, and was never removed, and never reported — not even as
+`unaccounted`. Keying the handlers by kind and checking the result against
+`KINDS` below turns that into an import-time failure instead: a kind added
+to the journal without a handler here stops this module from importing at
+all, rather than leaking silently on whichever machine is the first to
+produce one."""
+
+_UNHANDLED_KINDS = sorted(KINDS - RETIRE_HANDLERS.keys())
+if _UNHANDLED_KINDS:
+    raise PlannerError("no retirement handler for kind(s): " + ", ".join(_UNHANDLED_KINDS))
+
+
 def retire(filesystem: FileSystem, install: Install) -> Retired:
     """Take back what the journal records, and only that.
 
@@ -510,40 +570,18 @@ def retire(filesystem: FileSystem, install: Install) -> Retired:
     the second time, so an interrupted uninstall is finished by running it
     again.
     """
-    removed: list[str] = []
-    unaccounted: list[str] = []
-    outcomes = {"removed": removed, "unaccounted": unaccounted}
+    outcomes: dict[str, list[str]] = {"removed": [], "unaccounted": []}
 
-    files = [entry for entry in install.entries if entry.kind == "file"]
-    keys = [entry for entry in install.entries if entry.kind == "config-key"]
+    by_kind: dict[str, list[Record]] = {kind: [] for kind in KINDS}
+    for entry in install.entries:
+        by_kind[entry.kind].append(entry)
 
-    for entry in files:
-        if filesystem.exists(entry.target):
-            filesystem.remove(entry.target)
-        removed.append(entry.id)
-
-    for path, entries in _group(keys, lambda entry: entry.target).items():
-        codec = Codec(entries[0].codec or Codec.JSON.value)
-        document = _read_document(filesystem, path, codec)
-        if document is None:
-            # The file the user deleted takes every key in it with it, appended
-            # items included: nothing survives that could be a changed version
-            # of ours, so there is nothing ambiguous to report.
-            removed.extend(entry.id for entry in entries)
-            continue
-        mode = filesystem.mode_of(path)
-        original = document
-        for entry in entries:
-            document, outcome = _retire_key(document, entry)
-            outcomes[outcome].append(entry.id)
-        if document != original:
-            # Rewriting an unchanged file would reformat it for nothing. The
-            # user's spacing is theirs, and we only spend it when we must.
-            _write_document(filesystem, path, document, codec, mode)
+    for kind in sorted(KINDS):
+        RETIRE_HANDLERS[kind](filesystem, by_kind[kind], outcomes)
 
     return Retired(
-        removed=tuple(removed),
-        unaccounted=tuple(unaccounted),
+        removed=tuple(outcomes["removed"]),
+        unaccounted=tuple(outcomes["unaccounted"]),
         kept_links=tuple(link.id for link in install.links),
     )
 

@@ -39,6 +39,7 @@ from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
+from pegasus.core import ownership
 from pegasus.core.types import Environment
 from pegasus.infra.journal_store_file import journal_path
 from pegasus.infra.snapshot_store_file import snapshots_root
@@ -817,6 +818,56 @@ class DoctorTest(RealHomeTestCase):
         self.assertGreater(entry["artifacts"], 0)
         self.assertEqual(entry["drifted"], [])
         self.assertEqual(entry["missing"], [])
+
+    def claim_a_dependency_tree(self, target: Path) -> None:
+        """Put a record for a materialized dependency into the journal.
+
+        Nothing materializes one yet, so the record is written by hand — but
+        the kind is real, and `doctor` reads whatever the journal claims.
+        """
+        store = self.store()
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        claimed = journal_module.Record(
+            id="dependency:probe",
+            kind="dependency-tree",
+            target=target,
+            after_digest=ownership.digest_of_bytes(b"whatever the archive hashed to"),
+            created_at=AT,
+        )
+        grown = replace(install, entries=(*install.entries, claimed))
+        store.save(journal_module.with_install(journal, grown))
+
+    def test_doctor_reports_a_dependency_tree_that_is_there_as_healthy(self):
+        """A tree that is present is healthy, not undeterminable.
+
+        The digest a tree carries names what was materialized, not what is on
+        disk now, so being there is the whole of what can be checked. Read as
+        a configuration document instead — which is what happens to any kind
+        the reader does not know — a directory refuses to be read at all, and
+        the entry lands in `unreadable`: a report that Pegasus could not tell,
+        about something it can tell perfectly well.
+        """
+        self.install()
+        tree = self.home / "deps" / "probe" / "1.0.0"
+        tree.mkdir(parents=True)
+        self.claim_a_dependency_tree(tree)
+
+        code, report = self.run_cli("doctor")
+
+        self.assertEqual(code, 0)
+        entry = report["clis"][0]
+        self.assertNotIn("dependency:probe", entry["unreadable"])
+        self.assertNotIn("dependency:probe", entry["drifted"])
+        self.assertNotIn("dependency:probe", entry["missing"])
+
+    def test_doctor_reports_a_dependency_tree_that_is_gone_as_missing(self):
+        self.install()
+        self.claim_a_dependency_tree(self.home / "deps" / "probe" / "1.0.0")
+
+        _, report = self.run_cli("doctor")
+
+        self.assertIn("dependency:probe", report["clis"][0]["missing"])
 
     def test_doctor_names_an_artifact_the_user_edited(self):
         self.install()
