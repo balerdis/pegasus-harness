@@ -152,14 +152,8 @@ class FileJournalStoreTest(unittest.TestCase):
         self.assertTrue(written.endswith("\n"))
         self.assertEqual(json.loads(written)["schema"], journal_module.SCHEMA)
 
-    def test_root_must_not_write_the_journal(self):
-        filesystem = FakeFileSystem(privileged=True)
-        with self.assertRaises(JournalStoreError):
-            store(filesystem).save(journal_module.empty(VERSION))
-        self.assertEqual(filesystem.files, {})
-
-    def test_a_home_owned_by_someone_else_must_not_be_written_to(self):
-        filesystem = FakeFileSystem(owner=False)
+    def test_a_home_that_is_not_writable_on_behalf_of_its_owner_must_not_get_a_journal(self):
+        filesystem = FakeFileSystem(writable=False)
         with self.assertRaises(JournalStoreError):
             store(filesystem).save(journal_module.empty(VERSION))
         self.assertEqual(filesystem.files, {})
@@ -169,16 +163,12 @@ class FileJournalStoreTest(unittest.TestCase):
     def test_ensure_writable_passes_when_saving_would_work(self):
         store(FakeFileSystem()).ensure_writable()
 
-    def test_ensure_writable_refuses_root_before_anything_is_written(self):
+    def test_ensure_writable_refuses_a_home_that_is_not_writable_on_behalf_of_its_owner(self):
         """The refusal must arrive before an install, not after it."""
-        filesystem = FakeFileSystem(privileged=True)
+        filesystem = FakeFileSystem(writable=False)
         with self.assertRaises(JournalStoreError):
             store(filesystem).ensure_writable()
         self.assertEqual(filesystem.files, {})
-
-    def test_ensure_writable_refuses_a_home_owned_by_someone_else(self):
-        with self.assertRaises(JournalStoreError):
-            store(FakeFileSystem(owner=False)).ensure_writable()
 
     def test_ensure_writable_writes_nothing_of_its_own(self):
         filesystem = FakeFileSystem()

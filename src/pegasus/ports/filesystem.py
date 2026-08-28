@@ -117,17 +117,15 @@ class FileSystem(Protocol):
 
     # --- Who is running ---
 
-    def owned_by_current_user(self, path: Path) -> bool:
-        """Whether this process's user owns the path. False when it does not exist.
+    def writable_on_behalf_of_owner(self, home: Path) -> bool:
+        """Whether this process may write into ``home`` as the person who owns it.
 
-        Stated as a question rather than as a user id because the answer, not
-        the number behind it, is what the engine acts on.
-        """
-
-    def running_privileged(self) -> bool:
-        """Whether this process holds administrative privileges.
-
-        Pegasus installs into one person's home. Running privileged means every
-        file it creates risks belonging to someone other than that person, so
-        the engine refuses instead of leaving a home its owner cannot manage.
+        ``False`` collapses three different facts into one, deliberately:
+        this process is not the home's owner; this process holds
+        administrative privileges, so anything it creates risks belonging to
+        someone other than the owner even if the home happens to be theirs;
+        or ownership could not be determined at all. Pegasus installs into
+        one person's home, and every one of those three cases is a reason to
+        refuse rather than to write — so the engine only ever needs the
+        single bit, never which of the three produced it.
         """

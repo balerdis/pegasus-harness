@@ -83,12 +83,10 @@ class FileJournalStore:
             raise JournalStoreError(f"the journal at {self._path} cannot be written: {error}") from error
 
     def _refuse_wrong_writer(self) -> None:
-        if self._fs.running_privileged():
+        if not self._fs.writable_on_behalf_of_owner(self._home):
             raise JournalStoreError(
-                "the journal must be written by the user who owns the home, never by root"
+                f"the journal at {self._path} must be written by the user who owns {self._home}; refusing to write it"
             )
-        if not self._fs.owned_by_current_user(self._home):
-            raise JournalStoreError(f"{self._home} belongs to another user; refusing to write its journal")
 
     def _serialize(self, journal: Journal) -> bytes:
         """Render the journal, re-validating it on the way out.

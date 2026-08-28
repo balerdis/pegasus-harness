@@ -28,8 +28,7 @@ class FakeFileSystem:
         *,
         files: dict[Path, bytes] | None = None,
         modes: dict[Path, int] | None = None,
-        owner: bool = True,
-        privileged: bool = False,
+        writable: bool = True,
         fail_on: set[Path] | None = None,
         fail_always: set[Path] | None = None,
         fail_remove: set[Path] | None = None,
@@ -42,8 +41,7 @@ class FakeFileSystem:
         self.modes: dict[Path, int] = dict(modes or {})
         self.directories: set[Path] = set()
         self.directory_modes: dict[Path, int] = {}
-        self.owner = owner
-        self.privileged = privileged
+        self.writable = writable
         self.fail_on: set[Path] = set(fail_on or ())
         self.fail_always: set[Path] = set(fail_always or ())
         self.fail_remove: set[Path] = set(fail_remove or ())
@@ -143,8 +141,5 @@ class FakeFileSystem:
 
     # --- Who is running ---
 
-    def owned_by_current_user(self, path: Path) -> bool:
-        return self.owner
-
-    def running_privileged(self) -> bool:
-        return self.privileged
+    def writable_on_behalf_of_owner(self, home: Path) -> bool:
+        return self.writable

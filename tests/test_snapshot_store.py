@@ -90,27 +90,17 @@ class FileSnapshotStoreTest(unittest.TestCase):
     def test_ensure_writable_passes_when_saving_would_work(self):
         store(FakeFileSystem()).ensure_writable()
 
-    def test_ensure_writable_refuses_root(self):
+    def test_ensure_writable_refuses_a_home_that_is_not_writable_on_behalf_of_its_owner(self):
         with self.assertRaises(SnapshotStoreError):
-            store(FakeFileSystem(privileged=True)).ensure_writable()
-
-    def test_ensure_writable_refuses_a_home_owned_by_someone_else(self):
-        with self.assertRaises(SnapshotStoreError):
-            store(FakeFileSystem(owner=False)).ensure_writable()
+            store(FakeFileSystem(writable=False)).ensure_writable()
 
     def test_ensure_writable_writes_nothing_of_its_own(self):
         filesystem = FakeFileSystem()
         store(filesystem).ensure_writable()
         self.assertEqual(filesystem.writes, [])
 
-    def test_saving_as_root_is_refused(self):
-        filesystem = FakeFileSystem(privileged=True)
-        with self.assertRaises(SnapshotStoreError):
-            store(filesystem).save([one_capture()], taken_at=AT)
-        self.assertEqual(filesystem.files, {})
-
-    def test_saving_into_a_home_owned_by_someone_else_is_refused(self):
-        filesystem = FakeFileSystem(owner=False)
+    def test_saving_into_a_home_that_is_not_writable_on_behalf_of_its_owner_is_refused(self):
+        filesystem = FakeFileSystem(writable=False)
         with self.assertRaises(SnapshotStoreError):
             store(filesystem).save([one_capture()], taken_at=AT)
         self.assertEqual(filesystem.files, {})

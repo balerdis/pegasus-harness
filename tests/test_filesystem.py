@@ -203,14 +203,11 @@ class PosixFileSystemTest(unittest.TestCase):
 
     # --- Who is running ---
 
-    def test_a_directory_this_process_created_is_owned_by_this_user(self):
-        self.assertTrue(self.fs.owned_by_current_user(self.root))
+    def test_a_directory_this_process_created_is_writable_on_behalf_of_its_owner(self):
+        self.assertEqual(self.fs.writable_on_behalf_of_owner(self.root), os.geteuid() != 0)
 
-    def test_ownership_of_a_missing_path_is_false_rather_than_an_error(self):
-        self.assertFalse(self.fs.owned_by_current_user(self.root / "absent"))
-
-    def test_running_privileged_answers_for_the_current_process(self):
-        self.assertEqual(self.fs.running_privileged(), os.geteuid() == 0)
+    def test_a_missing_home_is_not_writable_on_behalf_of_its_owner(self):
+        self.assertFalse(self.fs.writable_on_behalf_of_owner(self.root / "absent"))
 
     # --- Listing ---
 
