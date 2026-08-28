@@ -57,9 +57,17 @@ class Environment:
     home: PurePath
     variables: dict[str, str] = field(default_factory=dict)
     platform: str = "linux"
+    data_dir: PurePath | None = None
+    """Where Pegasus's own directory sits in this frame -- the same fact
+    `FileSystem.data_dir` answers for a real home, and `CANONICAL_DATA_DIR`
+    stands in for in the canonical one. `None` means this frame has no
+    answer, which is only ever true of a test that never renders anything
+    reaching for it."""
 
     def __post_init__(self) -> None:
         _require_absolute(self.home, "home")
+        if self.data_dir is not None:
+            _require_absolute(self.data_dir, "data_dir")
 
 
 @dataclass(frozen=True)
@@ -125,6 +133,12 @@ class Layout:
     prompts_dir: Path | None = None
     plugins_dir: Path | None = None  # uso interno del adapter, no es una capacidad
     system_prompt_file: Path | None = None
+    dependencies_dir: Path | None = None
+    """Where a materialized `download` server's tree lands, inside Pegasus's
+    own directory rather than this CLI's configuration root. Not a
+    capability's dedicated anchor -- every adapter shares one Pegasus-owned
+    tree, so there is nothing here for `anchor()` to disambiguate between
+    CLIs."""
 
     def __post_init__(self) -> None:
         _require_absolute(self.config_dir, "config_dir")

@@ -67,6 +67,20 @@ endpoint: https://example.test/mcp
 Convention body.
 """
 
+CHECKSUM = "sha256:" + "a" * 64
+
+DOWNLOAD_MCP = f"""---
+name: probe-mcp
+description: Probes a downloaded MCP server
+distribution: download
+endpoint: https://example.test/probe-mcp-linux-x64
+version: 1.2.3
+checksum: {CHECKSUM}
+---
+
+Convention body.
+"""
+
 
 def write(root: Path, relative: str, text: str) -> Path:
     path = root / relative
@@ -509,6 +523,34 @@ class McpTest(TemporaryContent):
             )
         self.assertIn("mcp/probe-mcp.md", str(raised.exception))
         self.assertIn("endpoint", str(raised.exception))
+
+    def test_a_download_server_reads_its_version_and_checksum(self):
+        mcp = self.load_mcp(DOWNLOAD_MCP)
+        self.assertEqual(mcp.distribution, Distribution.DOWNLOAD)
+        self.assertEqual(mcp.version, "1.2.3")
+        self.assertEqual(mcp.checksum, CHECKSUM)
+
+    def test_a_download_server_missing_its_version_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(DOWNLOAD_MCP.replace("version: 1.2.3\n", ""))
+        self.assertIn("version", str(raised.exception))
+
+    def test_a_download_server_missing_its_checksum_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(DOWNLOAD_MCP.replace(f"checksum: {CHECKSUM}\n", ""))
+        self.assertIn("checksum", str(raised.exception))
+
+    def test_a_malformed_checksum_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(DOWNLOAD_MCP.replace(CHECKSUM, "sha256:not-hex"))
+        self.assertIn("checksum", str(raised.exception))
+
+    def test_a_remote_server_may_not_declare_a_version(self):
+        """A stray `version:` left on a `remote` descriptor would suggest a
+        pin that nothing reads -- refused instead of silently ignored."""
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(MCP.replace("endpoint: https://example.test/mcp\n", "endpoint: https://example.test/mcp\nversion: 1.0.0\n"))
+        self.assertIn("version", str(raised.exception))
 
 
 class McpConventionPathTest(unittest.TestCase):

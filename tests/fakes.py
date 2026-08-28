@@ -2,16 +2,45 @@
 
 The filesystem port exists so that everything above it can be proven without a
 home directory to ruin. This is the implementation that makes good on that.
+The downloader port exists so a `download` server's materialization can be
+proven the same way, without ever reaching out for real bytes -- and the
+socket patch just below makes that structural rather than a matter of every
+test remembering to use the fake: this module is already imported, at
+collection time, by several test files this suite has always had (`test_cli`,
+`test_journal_store`, `test_snapshot_store`, `test_fakes` among them), and
+`unittest discover` imports every test module before running any of them, so
+the patch is in place before a single test method executes.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+import no_network  # noqa: F401  -- importing it is what installs the refusal
+from pegasus.ports.downloader import DownloaderError
 from pegasus.ports.filesystem import FileSystemError
 
 DEFAULT_MODE = 0o644
 DEFAULT_DIR_MODE = 0o755
 EXECUTABLE_MODE = 0o755
+
+
+class FakeDownloader:
+    """A downloader that answers from a fixed table instead of the network.
+
+    A URL absent from the table fails exactly the way a real fetch of a wrong
+    URL would -- there is no fallback to an actual request, because there is
+    no network code in this class at all for a fallback to reach.
+    """
+
+    def __init__(self, responses: dict[str, bytes] | None = None):
+        self.responses: dict[str, bytes] = dict(responses or {})
+        self.calls: list[str] = []
+
+    def fetch(self, url: str) -> bytes:
+        self.calls.append(url)
+        if url not in self.responses:
+            raise DownloaderError(f"no fake response registered for {url}")
+        return self.responses[url]
 
 
 class FakeFileSystem:
