@@ -5,11 +5,13 @@ operating system itself, so the numbering and refusal policy below is
 provable without a real home directory.
 
 Generations live in a folder numbered with an ever-increasing integer, hung
-off the same directory the journal already lives in — ``snapshots_root``
-derives that location from :mod:`pegasus.infra.journal_store_file` instead of
-restating it, so the two stores can never drift apart on where "home" means.
-Inside a generation's folder sits ``manifest.json`` plus one blob file per
-captured entry that existed.
+off the same directory the journal already lives in — ``snapshots_root`` asks
+the filesystem port's own :meth:`~pegasus.ports.filesystem.FileSystem.data_dir`
+for that location instead of restating it, the same call
+:func:`pegasus.infra.journal_store_file.journal_path` makes, so the two
+stores can never drift apart on where "home" means. Inside a generation's
+folder sits ``manifest.json`` plus one blob file per captured entry that
+existed.
 
 The refusal mirrors the journal store's: root may not write it, and only the
 home's owner may.
@@ -22,7 +24,7 @@ from typing import Iterable, Sequence
 from pegasus.core import codecs, snapshot as snapshot_module
 from pegasus.core.snapshot import Entry, Manifest, SnapshotError
 from pegasus.core.types import Codec
-from pegasus.infra.journal_store_file import DATA_DIR, DATA_DIR_MODE, FILE_MODE
+from pegasus.infra.journal_store_file import DATA_DIR_MODE, FILE_MODE
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.snapshot_store import Capture, Retention, SnapshotStoreError
 
@@ -32,9 +34,13 @@ GENERATION_WIDTH = 6
 BLOB_WIDTH = 4
 
 
-def snapshots_root(home: Path) -> Path:
-    """Where snapshot generations live for a given home. Pure path arithmetic."""
-    return home / DATA_DIR / SNAPSHOTS_DIRNAME
+def snapshots_root(filesystem: FileSystem, home: Path) -> Path:
+    """Where snapshot generations live for a given home.
+
+    Hung off :meth:`FileSystem.data_dir`, the same platform answer the
+    journal's own path is arithmetic on top of.
+    """
+    return filesystem.data_dir(home) / SNAPSHOTS_DIRNAME
 
 
 def capture_paths(filesystem: FileSystem, paths: Iterable[Path]) -> list[Capture]:
@@ -85,8 +91,8 @@ class FileSnapshotStore:
     def __init__(self, filesystem: FileSystem, *, home: Path):
         self._fs = filesystem
         self._home = home
-        self._data_dir = home / DATA_DIR
-        self._root = snapshots_root(home)
+        self._data_dir = filesystem.data_dir(home)
+        self._root = snapshots_root(filesystem, home)
 
     @property
     def root(self) -> Path:

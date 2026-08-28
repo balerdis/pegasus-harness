@@ -16,7 +16,7 @@ from pathlib import Path
 from fakes import FakeFileSystem
 from pegasus.core.snapshot import Entry, Manifest, SnapshotError
 from pegasus.infra.fs_posix import PosixFileSystem
-from pegasus.infra.journal_store_file import DATA_DIR, DATA_DIR_MODE
+from pegasus.infra.journal_store_file import DATA_DIR_MODE
 from pegasus.infra.snapshot_store_file import (
     MANIFEST_FILENAME,
     FileSnapshotStore,
@@ -45,7 +45,8 @@ def one_capture(**overrides) -> Capture:
 class SnapshotsRootTest(unittest.TestCase):
     def test_the_root_hangs_off_the_same_directory_as_the_journal(self):
         """Derived from the journal's own location, not a restated literal."""
-        self.assertEqual(snapshots_root(HOME), HOME / DATA_DIR / "snapshots")
+        filesystem = FakeFileSystem()
+        self.assertEqual(snapshots_root(filesystem, HOME), filesystem.data_dir(HOME) / "snapshots")
 
 
 class CapturePathsTest(unittest.TestCase):
@@ -127,7 +128,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
         claims it. Reading still demands a manifest: an unfinished generation
         occupies its number without ever being restorable.
         """
-        root = snapshots_root(HOME)
+        root = snapshots_root(FakeFileSystem(), HOME)
         filesystem = FakeFileSystem()
         filesystem.make_dir(root / "000001")
         filesystem.files[root / "000001" / "0001.blob"] = b"leftover"
@@ -143,14 +144,14 @@ class FileSnapshotStoreTest(unittest.TestCase):
         folder called after a person would be.
         """
         filesystem = FakeFileSystem()
-        filesystem.make_dir(snapshots_root(HOME) / "\u00b2")
+        filesystem.make_dir(snapshots_root(FakeFileSystem(), HOME) / "\u00b2")
         self.assertEqual(store(filesystem).save([one_capture()], taken_at=AT), 1)
 
     def test_a_root_that_cannot_be_listed_is_reported_as_a_store_failure(self):
         """A save that cannot count what is already there fails as this store's
         own error, never as the filesystem's: a caller that catches the store's
         error type would otherwise miss it entirely."""
-        root = snapshots_root(HOME)
+        root = snapshots_root(FakeFileSystem(), HOME)
         filesystem = FakeFileSystem(fail_list={root})
         with self.assertRaises(SnapshotStoreError):
             store(filesystem).save([one_capture()], taken_at=AT)
@@ -172,21 +173,21 @@ class FileSnapshotStoreTest(unittest.TestCase):
     def test_saving_writes_a_blob_for_an_existing_file(self):
         filesystem = FakeFileSystem()
         generation = store(filesystem).save([one_capture(content=b"hand-edited")], taken_at=AT)
-        folder = snapshots_root(HOME) / f"{generation:06d}"
+        folder = snapshots_root(FakeFileSystem(), HOME) / f"{generation:06d}"
         blobs = [content for path, content in filesystem.files.items() if path.parent == folder and path.suffix == ".blob"]
         self.assertIn(b"hand-edited", blobs)
 
     def test_saving_writes_no_blob_for_an_absent_file(self):
         filesystem = FakeFileSystem()
         generation = store(filesystem).save([one_capture(existed=False, mode=None, content=None)], taken_at=AT)
-        folder = snapshots_root(HOME) / f"{generation:06d}"
+        folder = snapshots_root(FakeFileSystem(), HOME) / f"{generation:06d}"
         blobs = [path for path in filesystem.files if path.parent == folder and path.suffix == ".blob"]
         self.assertEqual(blobs, [])
 
     def test_saving_captures_the_journal_alongside_the_other_files(self):
         """The journal is just another address to the store; nothing special-cases it."""
         filesystem = FakeFileSystem()
-        journal_capture = one_capture(path=HOME / DATA_DIR / "journal-v4.json", content=b"{}")
+        journal_capture = one_capture(path=FakeFileSystem().data_dir(HOME) / "journal-v4.json", content=b"{}")
         generation = store(filesystem).save([one_capture(), journal_capture], taken_at=AT)
         manifest = store(filesystem).read(generation)
         paths = {entry.path for entry in manifest.entries}
@@ -217,14 +218,14 @@ class FileSnapshotStoreTest(unittest.TestCase):
         filesystem = FakeFileSystem()
         subject = store(filesystem)
         generation = subject.save([one_capture()], taken_at=AT)
-        manifest_path = snapshots_root(HOME) / f"{generation:06d}" / MANIFEST_FILENAME
+        manifest_path = snapshots_root(FakeFileSystem(), HOME) / f"{generation:06d}" / MANIFEST_FILENAME
         filesystem.fail_exists.add(manifest_path)
         with self.assertRaises(FileSystemError):
             subject.read(generation)
 
     def test_reading_a_generation_with_a_corrupt_manifest_raises(self):
         filesystem = FakeFileSystem()
-        folder = snapshots_root(HOME) / "000001"
+        folder = snapshots_root(FakeFileSystem(), HOME) / "000001"
         filesystem.make_dir(folder)
         filesystem.files[folder / "manifest.json"] = b"{ not json"
         with self.assertRaises(SnapshotStoreError):
@@ -232,7 +233,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
 
     def test_reading_a_generation_whose_manifest_is_structurally_invalid_raises(self):
         filesystem = FakeFileSystem()
-        folder = snapshots_root(HOME) / "000001"
+        folder = snapshots_root(FakeFileSystem(), HOME) / "000001"
         filesystem.make_dir(folder)
         filesystem.files[folder / "manifest.json"] = json.dumps({"taken_at": ""}).encode("utf-8")
         with self.assertRaises(SnapshotStoreError):
@@ -243,7 +244,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
     def test_a_corrupt_old_generation_does_not_prevent_writing_a_new_one(self):
         filesystem = FakeFileSystem()
         subject = store(filesystem)
-        folder = snapshots_root(HOME) / "000001"
+        folder = snapshots_root(FakeFileSystem(), HOME) / "000001"
         filesystem.make_dir(folder)
         filesystem.files[folder / "manifest.json"] = b"{ not json"
 
@@ -257,7 +258,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
         """Writing tolerates the damage; reading that generation back does not."""
         filesystem = FakeFileSystem()
         subject = store(filesystem)
-        folder = snapshots_root(HOME) / "000001"
+        folder = snapshots_root(FakeFileSystem(), HOME) / "000001"
         filesystem.make_dir(folder)
         filesystem.files[folder / "manifest.json"] = b"{ not json"
 
@@ -273,8 +274,8 @@ class FileSnapshotStoreTest(unittest.TestCase):
         as private as the journal store does; the two must never disagree."""
         filesystem = FakeFileSystem()
         generation = store(filesystem).save([one_capture()], taken_at=AT)
-        data_dir = HOME / DATA_DIR
-        root = snapshots_root(HOME)
+        data_dir = FakeFileSystem().data_dir(HOME)
+        root = snapshots_root(FakeFileSystem(), HOME)
         folder = root / f"{generation:06d}"
         self.assertEqual(filesystem.mode_of(data_dir), DATA_DIR_MODE)
         self.assertEqual(filesystem.mode_of(root), DATA_DIR_MODE)
@@ -309,7 +310,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
         gap in the sequence.
         """
         filesystem = FakeFileSystem()
-        dead_folder = snapshots_root(HOME) / "000001"
+        dead_folder = snapshots_root(FakeFileSystem(), HOME) / "000001"
         filesystem.make_dir(dead_folder)
         dead_blob_one = dead_folder / "0001.blob"
         dead_blob_two = dead_folder / "0002.blob"
@@ -319,7 +320,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
         generation = store(filesystem).save([one_capture()], taken_at=AT)
 
         self.assertEqual(generation, 2)
-        self.assertIn(snapshots_root(HOME) / "000002" / "manifest.json", filesystem.files)
+        self.assertIn(snapshots_root(FakeFileSystem(), HOME) / "000002" / "manifest.json", filesystem.files)
         self.assertNotIn(dead_folder / "manifest.json", filesystem.files)
         self.assertEqual(filesystem.files[dead_blob_one], b"dead-attempt-file-one")
         self.assertEqual(filesystem.files[dead_blob_two], b"dead-attempt-file-two")
@@ -327,7 +328,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
     def test_a_dead_generation_is_still_not_readable(self):
         """Spending its number does not make an unfinished generation real."""
         filesystem = FakeFileSystem()
-        filesystem.make_dir(snapshots_root(HOME) / "000001")
+        filesystem.make_dir(snapshots_root(FakeFileSystem(), HOME) / "000001")
         with self.assertRaises(SnapshotStoreError):
             store(filesystem).read(1)
 
@@ -346,7 +347,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
         filesystem = FakeFileSystem()
         subject = store(filesystem)
         subject.save([one_capture()], taken_at=AT)
-        filesystem.make_dir(snapshots_root(HOME) / "000002")
+        filesystem.make_dir(snapshots_root(FakeFileSystem(), HOME) / "000002")
         self.assertEqual(subject.readable_generations(), [1])
 
     def test_readable_generations_is_empty_for_a_fresh_store(self):
@@ -361,7 +362,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
         subject = store(filesystem)
         subject.save([one_capture()], taken_at=AT)
         subject.save([one_capture()], taken_at=AT)
-        unreadable_manifest = snapshots_root(HOME) / "000001" / MANIFEST_FILENAME
+        unreadable_manifest = snapshots_root(FakeFileSystem(), HOME) / "000001" / MANIFEST_FILENAME
         filesystem.fail_exists.add(unreadable_manifest)
 
         self.assertEqual(subject.readable_generations(), [2])
@@ -378,7 +379,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
         filesystem = FakeFileSystem()
         subject = store(filesystem)
         subject.save([one_capture()], taken_at=AT)
-        filesystem.make_dir(snapshots_root(HOME) / "000002")
+        filesystem.make_dir(snapshots_root(FakeFileSystem(), HOME) / "000002")
         self.assertEqual(subject.most_recent_readable(), 1)
 
     def test_most_recent_readable_is_none_for_a_fresh_store(self):
@@ -420,7 +421,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
 
         subject.retain(keep=5)
 
-        folder = snapshots_root(HOME) / "000001"
+        folder = snapshots_root(FakeFileSystem(), HOME) / "000001"
         self.assertEqual(filesystem.list_dir(folder), [])
         self.assertFalse(filesystem.exists(folder))
 
@@ -452,7 +453,7 @@ class FileSnapshotStoreTest(unittest.TestCase):
         subject = store(filesystem)
         for _ in range(6):
             subject.save([one_capture()], taken_at=AT)
-        filesystem.fail_remove_dir.add(snapshots_root(HOME) / "000001")
+        filesystem.fail_remove_dir.add(snapshots_root(FakeFileSystem(), HOME) / "000001")
 
         outcome = subject.retain(keep=5)
 
@@ -471,15 +472,16 @@ class FileSnapshotStoreOnRealDiskTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.home = Path(self.directory.name)
-        self.store = FileSnapshotStore(PosixFileSystem(), home=self.home)
+        self.filesystem = PosixFileSystem()
+        self.store = FileSnapshotStore(self.filesystem, home=self.home)
 
     def test_every_directory_level_is_private_even_when_created_from_scratch(self):
         """The snapshot store is routinely the first thing to create the shared
         data directory on a fresh machine, so it alone must not leave it wide
         open while blobs are written underneath it."""
         generation = self.store.save([one_capture()], taken_at=AT)
-        data_dir = self.home / DATA_DIR
-        root = snapshots_root(self.home)
+        data_dir = self.filesystem.data_dir(self.home)
+        root = snapshots_root(self.filesystem, self.home)
         folder = root / f"{generation:06d}"
         for created in (data_dir, root, folder):
             self.assertEqual(stat.S_IMODE(created.stat().st_mode), DATA_DIR_MODE, created)

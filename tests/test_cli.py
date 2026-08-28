@@ -106,8 +106,8 @@ class RealHomeTestCase(_RealHomeTestCase):
         """Nothing this command could have written reached disk at all: no
         artifact, no journal, no snapshot generation."""
         self.assert_no_artifacts_written()
-        self.assertFalse(journal_path(self.home).exists())
-        self.assertFalse(snapshots_root(self.home).exists())
+        self.assertFalse(journal_path(self.filesystem, self.home).exists())
+        self.assertFalse(snapshots_root(self.filesystem, self.home).exists())
 
     def make_journal_unwritable(self) -> Callable[[], None]:
         """Make the directory holding the journal refuse a write — the
@@ -125,7 +125,7 @@ class RealHomeTestCase(_RealHomeTestCase):
         write inside it untouched, and only refuses a new entry directly in
         the parent — which is exactly the journal file.
         """
-        snapshots_root(self.home).mkdir(parents=True, exist_ok=True)
+        snapshots_root(self.filesystem, self.home).mkdir(parents=True, exist_ok=True)
         return make_unwritable(self.store().path.parent)
 
     def refuse_to_write_the_journal(self) -> None:
@@ -137,8 +137,8 @@ class RealHomeTestCase(_RealHomeTestCase):
         the one a journal failure produces after the artifacts are already
         placed.
         """
-        snapshots_root(self.home).mkdir(parents=True, exist_ok=True)
-        data_dir = journal_path(self.home).parent
+        snapshots_root(self.filesystem, self.home).mkdir(parents=True, exist_ok=True)
+        data_dir = journal_path(self.filesystem, self.home).parent
         self.addCleanup(make_unwritable(data_dir))
 
     def refuse_to_probe_once_it_exists(self, path: Path) -> None:
@@ -384,7 +384,7 @@ class InstallTest(RealHomeTestCase):
         # appeared, because taking one is this run's own behaviour rather than a
         # mutation of the earlier install, and excluding only that leaves the
         # original claim — that a failed reinstall adds nothing else — intact.
-        root = snapshots_root(self.home)
+        root = snapshots_root(self.filesystem, self.home)
 
         def outside_the_snapshots(files):
             return {path: content for path, content in files.items() if not path.is_relative_to(root)}
@@ -901,13 +901,13 @@ class SnapshotTest(RealHomeTestCase):
     def test_a_dry_run_writes_no_snapshot(self):
         self.present()
         self.run_cli("install", "--cli", CLI, "--dry-run")
-        self.assertEqual(self.filesystem.list_dir(snapshots_root(self.home)), [])
+        self.assertEqual(self.filesystem.list_dir(snapshots_root(self.filesystem, self.home)), [])
 
     def test_installing_writes_a_snapshot_before_the_first_artifact_reaches_disk(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
         snapshot_index = next(
-            i for i, path in enumerate(self.filesystem.writes) if path.is_relative_to(snapshots_root(self.home))
+            i for i, path in enumerate(self.filesystem.writes) if path.is_relative_to(snapshots_root(self.filesystem, self.home))
         )
         artifact_index = next(
             i for i, path in enumerate(self.filesystem.writes) if path.is_relative_to(self.layout().config_dir)
@@ -953,7 +953,7 @@ class SnapshotTest(RealHomeTestCase):
 
     def test_when_the_snapshot_store_refuses_install_writes_nothing(self):
         self.present()
-        root = snapshots_root(self.home)
+        root = snapshots_root(self.filesystem, self.home)
         root.mkdir(parents=True, exist_ok=True)
         restore = make_unreadable(root)
         self.addCleanup(restore)
@@ -964,7 +964,7 @@ class SnapshotTest(RealHomeTestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
         self.assert_no_artifacts_written()
-        self.assertFalse(journal_path(self.home).exists())
+        self.assertFalse(journal_path(self.filesystem, self.home).exists())
         self.assertEqual(self.filesystem.list_dir(root), [])
 
     def test_a_path_the_snapshot_cannot_probe_refuses_the_install_before_writing_anything(self):
@@ -988,7 +988,7 @@ class SnapshotTest(RealHomeTestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
         self.assert_no_artifacts_written()
-        self.assertEqual(self.filesystem.list_dir(snapshots_root(self.home)), [])
+        self.assertEqual(self.filesystem.list_dir(snapshots_root(self.filesystem, self.home)), [])
 
     def test_when_the_snapshot_store_refuses_uninstall_removes_nothing(self):
         """The way out needs the same guard as the way in.
@@ -1001,7 +1001,7 @@ class SnapshotTest(RealHomeTestCase):
         self.present()
         self.run_cli("install", "--cli", CLI)
         surviving = self.snapshot()
-        restore = make_unreadable(snapshots_root(self.home))
+        restore = make_unreadable(snapshots_root(self.filesystem, self.home))
         self.addCleanup(restore)
 
         code, report = self.run_cli("uninstall", "--cli", CLI)
@@ -1110,7 +1110,7 @@ class RestoreTest(RealHomeTestCase):
         self.present()
         self.run_cli("install", "--cli", CLI)
         before = self.snapshot()
-        restore = make_unreadable(snapshots_root(self.home))
+        restore = make_unreadable(snapshots_root(self.filesystem, self.home))
         self.addCleanup(restore)
 
         code, report = self.run_cli("restore")
@@ -1123,7 +1123,7 @@ class RestoreTest(RealHomeTestCase):
     def test_restoring_an_unreadable_generation_is_refused(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
-        self.filesystem.make_dir(snapshots_root(self.home) / "000002")
+        self.filesystem.make_dir(snapshots_root(self.filesystem, self.home) / "000002")
 
         code, report = self.run_cli("restore", "2")
 
@@ -1177,7 +1177,7 @@ class RetentionOnTheDoubleTest(FakeHomeTestCase):
         self.present()
         for _ in range(5):
             self.run_cli("install", "--cli", CLI)
-        self.filesystem.fail_remove_dir.add(snapshots_root(self.home) / "000001")
+        self.filesystem.fail_remove_dir.add(snapshots_root(self.filesystem, self.home) / "000001")
 
         code, report = self.run_cli("install", "--cli", CLI)
 
