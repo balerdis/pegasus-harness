@@ -12,6 +12,8 @@ from pegasus.core.types import Environment, Layout
 
 SETTINGS = "opencode.json"
 SYSTEM_PROMPT = "pegasus-AGENTS.md"
+MODELS_CATALOG = "models.json"
+CREDENTIALS = "auth.json"
 
 
 def config_dir(environment: Environment) -> Path:
@@ -20,6 +22,30 @@ def config_dir(environment: Environment) -> Path:
     if configured and Path(configured).is_absolute():
         return Path(configured) / "opencode"
     return environment.home / ".config" / "opencode"
+
+
+def models_catalog_file(environment: Environment) -> Path:
+    """Where the CLI keeps what it knows about providers and models.
+
+    Honours XDG_CACHE_HOME the same way `config_dir` honours XDG_CONFIG_HOME:
+    only an absolute setting counts, because a relative one would name a
+    directory whose meaning depends on where the process was started.
+    """
+    configured = environment.variables.get("XDG_CACHE_HOME", "").strip()
+    if configured and Path(configured).is_absolute():
+        return Path(configured) / "opencode" / MODELS_CATALOG
+    return environment.home / ".cache" / "opencode" / MODELS_CATALOG
+
+
+def credentials_file(environment: Environment) -> Path:
+    """Where the CLI keeps which providers have a session -- key names only.
+
+    Same XDG discipline as `models_catalog_file`, honouring XDG_DATA_HOME.
+    """
+    configured = environment.variables.get("XDG_DATA_HOME", "").strip()
+    if configured and Path(configured).is_absolute():
+        return Path(configured) / "opencode" / CREDENTIALS
+    return environment.home / ".local" / "share" / "opencode" / CREDENTIALS
 
 
 def build(environment: Environment) -> Layout:

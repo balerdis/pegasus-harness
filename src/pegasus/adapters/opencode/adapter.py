@@ -11,8 +11,10 @@ from pathlib import Path, PurePosixPath
 
 from pegasus.adapters.opencode import layout as layout_module
 from pegasus.adapters.opencode import manifest as manifest_module
+from pegasus.adapters.opencode import models as models_module
 from pegasus.adapters.opencode import render
 from pegasus.core.content import Agent, Command, Mcp, Skill, SystemPrompt
+from pegasus.core.model_catalog import ModelCatalog
 from pegasus.core.types import (
     Artifact,
     CapabilityManifest,
@@ -107,6 +109,11 @@ class Adapter:
 
     def render_mcp(self, layout: Layout, mcp: Mcp) -> list[Artifact]:
         return render.mcp(layout, mcp)
+
+    # --- Models ---
+
+    def model_catalog(self, environment: Environment) -> ModelCatalog:
+        return models_module.read(environment)
 
     # --- What this adapter ships on its own ---
 
