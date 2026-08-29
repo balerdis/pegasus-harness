@@ -13,6 +13,7 @@ from pegasus.tui.navigator import (
     CliOption,
     InstallTarget,
     Menu,
+    ModelsTarget,
     Placeholder,
     RestoreConfirm,
     RestoreTarget,
@@ -20,6 +21,7 @@ from pegasus.tui.navigator import (
     UninstallConfirm,
     UninstallTarget,
     main_menu,
+    models_menu,
     restore_menu,
     uninstall_menu,
 )
@@ -62,15 +64,17 @@ class TuiNamesAnExistingCommandTest(unittest.TestCase):
         confirm = RestoreConfirm(1)
         self.assertIn(confirm.command, cli.COMMANDS)
 
-    def test_the_only_entry_still_marked_unbuilt_says_so_rather_than_naming_a_command(self):
-        menu = main_menu(detections=(SAMPLE,), installed=(SAMPLE,))
-        unbuilt = {"Configure models"}
-        built = {"Install", "Status and diagnostics", "Uninstall"}
+    def test_every_models_choice_names_a_command_the_flags_expose(self):
+        menu = models_menu(detections=(SAMPLE,))
+        self.assertIsInstance(menu, Menu)
         for entry in menu.entries:
-            if entry.label in unbuilt:
-                self.assertIsInstance(entry.target, Placeholder)
-            elif entry.label in built:
-                self.assertNotIsInstance(entry.target, Placeholder)
+            self.assertIsInstance(entry.target, ModelsTarget)
+            self.assertIn(entry.target.command, cli.COMMANDS)
+
+    def test_no_menu_entry_still_claims_to_be_unbuilt(self):
+        menu = main_menu(detections=(SAMPLE,), installed=(SAMPLE,))
+        for entry in menu.entries:
+            self.assertNotIsInstance(entry.target, Placeholder)
 
 
 if __name__ == "__main__":

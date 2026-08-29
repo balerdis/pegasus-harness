@@ -16,6 +16,8 @@ from pathlib import Path
 
 from pegasus import cli
 from pegasus.adapters import available
+from pegasus.core import content as content_module
+from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core.types import Environment
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import journal_path
@@ -26,6 +28,8 @@ from pegasus.tui.navigator import (
     InstallPlanScreen,
     InstallResultScreen,
     Menu,
+    ModelsScreen,
+    ModelsTarget,
     Navigator,
     Placeholder,
     RestoreResultScreen,
@@ -33,12 +37,18 @@ from pegasus.tui.navigator import (
     StatusScreen,
     UninstallResultScreen,
 )
+from pegasus.tui.view import render
 from platform_conditions import make_unwritable
 from real_home import RealHomeTestCase
 
 AT = "2026-08-14T00:00:00+00:00"
 CLI = available().ids()[0]
 NO_BINARY = {"PATH": ""}
+CONFIGURABLE_AGENT = "sdd-apply"
+
+
+def _configurable_agent_names() -> frozenset[str]:
+    return frozenset(agent.name for agent in content_module.load().agents if agent.model_configurable)
 
 
 def _layout(home: Path):
@@ -335,6 +345,150 @@ class RestoreThroughTheTuiTest(SessionTestCase):
             self.assertIsInstance(navigator.current, RestoreResultScreen)
             self.assertEqual(navigator.current.report["status"], "restored")
             self.assertEqual(_sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home)))
+
+
+def _write_catalog(home: Path, payload: dict) -> None:
+    path = home / ".cache" / "opencode" / "models.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_credentials(home: Path, payload: dict) -> None:
+    path = home / ".local" / "share" / "opencode" / "auth.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+ONE_PLAIN_MODEL = {"anthropic": {"builtin": True, "models": {"fast-model": {"tool_call": True}}}}
+ONE_REASONING_MODEL = {"anthropic": {"builtin": True, "models": {"deep-thinker": {"tool_call": True, "reasoning": True}}}}
+
+
+class ModelsScreenTestCase(SessionTestCase):
+    def to_models_screen(self, runtime: cli.Runtime) -> Navigator:
+        _present(self.home)
+        navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
+        navigator = navigator.handle(Action.MOVE_DOWN)  # onto "Configure models"
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # the per-CLI choice, pure
+        return session.step(navigator, runtime, Action.CHOOSE)  # fetches the catalog
+
+
+class EmptyCatalogTest(ModelsScreenTestCase):
+    def test_no_catalog_yet_is_explained_not_an_error(self):
+        navigator = self.to_models_screen(self.runtime())
+        self.assertIsInstance(navigator.current, Placeholder)
+        self.assertNotIn("Traceback", navigator.current.note)
+
+
+class AssignmentListTest(ModelsScreenTestCase):
+    def test_every_configurable_agent_is_listed_starting_with_no_model(self):
+        _write_catalog(self.home, ONE_PLAIN_MODEL)
+        navigator = self.to_models_screen(self.runtime())
+        self.assertIsInstance(navigator.current, ModelsScreen)
+        self.assertEqual({row.agent for row in navigator.current.rows}, _configurable_agent_names())
+        self.assertTrue(all(row.current is None for row in navigator.current.rows))
+
+    def test_only_the_reachable_providers_and_their_models_are_offered(self):
+        _write_catalog(self.home, ONE_PLAIN_MODEL)
+        navigator = self.to_models_screen(self.runtime())
+        self.assertEqual([provider.id for provider in navigator.current.providers], ["anthropic"])
+        self.assertEqual([model.id for model in navigator.current.providers[0].models], ["fast-model"])
+
+
+class WalkTheFourStepsTest(ModelsScreenTestCase):
+    def _to_agent_row(self, navigator: Navigator) -> Navigator:
+        rows = navigator.current.rows
+        index = next(i for i, row in enumerate(rows) if row.agent == CONFIGURABLE_AGENT)
+        for _ in range(index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        return navigator.handle(Action.CHOOSE)
+
+    def test_a_plain_model_is_assigned_immediately_and_matches_models_set(self):
+        _write_catalog(self.home, ONE_PLAIN_MODEL)
+        runtime = self.runtime()
+        navigator = self.to_models_screen(runtime)
+        navigator = self._to_agent_row(navigator)  # agent chosen
+        navigator = navigator.handle(Action.CHOOSE)  # the one provider
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # the one, plain, model: commits
+
+        self.assertIsInstance(navigator.current, ModelsScreen)
+        self.assertIsNone(navigator.current.agent)  # back at the rows step, refreshed
+        assignments = cli.model_assignment_store(runtime).load()
+        assignment = model_assignments_module.get(assignments, CLI, CONFIGURABLE_AGENT)
+        self.assertEqual(assignment.full_id, "anthropic/fast-model")
+        self.assertIsNone(assignment.effort)
+        row = next(row for row in navigator.current.rows if row.agent == CONFIGURABLE_AGENT)
+        self.assertEqual(row.current, "anthropic/fast-model")
+
+    def test_a_reasoning_model_asks_for_effort_before_it_is_assigned(self):
+        _write_catalog(self.home, ONE_REASONING_MODEL)
+        runtime = self.runtime()
+        navigator = self.to_models_screen(runtime)
+        navigator = self._to_agent_row(navigator)
+        navigator = navigator.handle(Action.CHOOSE)  # the one provider
+        navigator = navigator.handle(Action.CHOOSE)  # the one, reasoning, model: only narrows
+        self.assertEqual(navigator.current.model_id, "deep-thinker")
+
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # the first effort offered: commits
+        self.assertIsInstance(navigator.current, ModelsScreen)
+        self.assertIsNone(navigator.current.agent)
+        assignments = cli.model_assignment_store(runtime).load()
+        assignment = model_assignments_module.get(assignments, CLI, CONFIGURABLE_AGENT)
+        self.assertEqual(assignment.full_id, "anthropic/deep-thinker")
+        self.assertIsNotNone(assignment.effort)
+
+
+class RemovingAnAssignmentTest(ModelsScreenTestCase):
+    def test_d_unsets_the_assignment_and_matches_models_unset(self):
+        _write_catalog(self.home, ONE_PLAIN_MODEL)
+        runtime = self.runtime()
+        cli.models_set(CLI, CONFIGURABLE_AGENT, "anthropic/fast-model", runtime)
+
+        navigator = self.to_models_screen(runtime)
+        index = next(i for i, row in enumerate(navigator.current.rows) if row.agent == CONFIGURABLE_AGENT)
+        for _ in range(index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        self.assertEqual(navigator.current.rows[navigator.cursor].current, "anthropic/fast-model")
+
+        navigator = session.step(navigator, runtime, Action.REMOVE)
+        self.assertIsInstance(navigator.current, ModelsScreen)
+        assignments = cli.model_assignment_store(runtime).load()
+        self.assertIsNone(model_assignments_module.get(assignments, CLI, CONFIGURABLE_AGENT))
+        row = next(row for row in navigator.current.rows if row.agent == CONFIGURABLE_AGENT)
+        self.assertIsNone(row.current)
+
+
+class NoCredentialReachesARenderedLineTest(ModelsScreenTestCase):
+    """The same guarantee `model_catalog` already proves for itself, proven
+    again at the screen level: nothing this screen renders may repeat a
+    credential's own value, wherever in the walk it is shown."""
+
+    SECRET = "top-secret-oauth-token"
+
+    def test_a_credential_value_never_appears_in_a_rendered_line(self):
+        _write_catalog(self.home, ONE_REASONING_MODEL)
+        _write_credentials(self.home, {"anthropic": {"type": "oauth", "access": self.SECRET}})
+        runtime = self.runtime()
+        navigator = self.to_models_screen(runtime)
+        self._assert_secret_free(navigator)
+
+        navigator = self._to_agent_row(navigator)
+        self._assert_secret_free(navigator)
+        navigator = navigator.handle(Action.CHOOSE)  # the provider
+        self._assert_secret_free(navigator)
+        navigator = navigator.handle(Action.CHOOSE)  # the model: only narrows, it is a reasoning one
+        self._assert_secret_free(navigator)
+
+    def _to_agent_row(self, navigator: Navigator) -> Navigator:
+        rows = navigator.current.rows
+        index = next(i for i, row in enumerate(rows) if row.agent == CONFIGURABLE_AGENT)
+        for _ in range(index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        return navigator.handle(Action.CHOOSE)
+
+    def _assert_secret_free(self, navigator: Navigator) -> None:
+        lines = render(navigator.current, navigator.cursor)
+        for line in lines:
+            self.assertNotIn(self.SECRET, line.text)
 
 
 if __name__ == "__main__":

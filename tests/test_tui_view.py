@@ -7,12 +7,16 @@ import unittest
 
 from pegasus import cli
 from pegasus.tui.navigator import (
+    AgentRow,
     CliOption,
     Entry,
     InstallPlanScreen,
     InstallResultScreen,
     Menu,
+    ModelOption,
+    ModelsScreen,
     Placeholder,
+    ProviderOption,
     QUIT,
     RestoreResultScreen,
     StatusScreen,
@@ -204,6 +208,85 @@ class RestoreResultRenderingTest(unittest.TestCase):
         lines = [line.text for line in render(RestoreResultScreen(report=RESTORED_REPORT), cursor=0)]
         for expected in cli.prose_for(RESTORED_REPORT).splitlines():
             self.assertIn(expected, lines)
+
+
+PROVIDERS = (
+    ProviderOption(id="anthropic", models=(ModelOption(id="deep-thinker", reasoning=True),)),
+    ProviderOption(id="openai", models=(ModelOption(id="fast-model", reasoning=False),)),
+)
+
+
+def _models_screen(**overrides) -> ModelsScreen:
+    fields = {
+        "cli": SAMPLE,
+        "providers": PROVIDERS,
+        "rows": (AgentRow(agent="sdd-apply", current=None), AgentRow(agent="sdd-verify", current="anthropic/x")),
+    }
+    fields.update(overrides)
+    return ModelsScreen(**fields)
+
+
+class ModelsRowsRenderingTest(unittest.TestCase):
+    def test_an_agent_with_no_model_says_so_plainly(self):
+        lines = [line.text for line in render(_models_screen(), cursor=0)]
+        self.assertTrue(any("sdd-apply" in text and "(no model)" in text for text in lines))
+
+    def test_an_agent_with_a_model_shows_it(self):
+        lines = [line.text for line in render(_models_screen(), cursor=1)]
+        self.assertTrue(any("sdd-verify" in text and "anthropic/x" in text for text in lines))
+
+    def test_the_footer_names_both_configuring_and_removing(self):
+        lines = [line.text for line in render(_models_screen(), cursor=0)]
+        self.assertIn("enter: configure · d: remove current model · esc: back", lines)
+
+    def test_no_configurable_agent_is_explained_not_shown_as_an_empty_table(self):
+        lines = [line.text for line in render(_models_screen(rows=()), cursor=0)]
+        self.assertTrue(any("no agent" in text.lower() for text in lines))
+
+
+class ModelsProviderStepRenderingTest(unittest.TestCase):
+    def test_every_reachable_provider_is_offered(self):
+        lines = [line.text for line in render(_models_screen(agent="sdd-apply"), cursor=0)]
+        self.assertTrue(any("anthropic" in text for text in lines))
+        self.assertTrue(any("openai" in text for text in lines))
+
+
+class ModelsModelStepRenderingTest(unittest.TestCase):
+    def test_only_the_chosen_providers_models_are_offered(self):
+        lines = [line.text for line in render(_models_screen(agent="sdd-apply", provider_id="anthropic"), cursor=0)]
+        self.assertTrue(any("deep-thinker" in text for text in lines))
+        self.assertFalse(any("fast-model" in text for text in lines))
+
+
+class ModelsEffortStepRenderingTest(unittest.TestCase):
+    def test_the_effort_step_only_shows_up_once_a_model_is_chosen(self):
+        lines = [
+            line.text
+            for line in render(
+                _models_screen(agent="sdd-apply", provider_id="anthropic", model_id="deep-thinker"), cursor=0
+            )
+        ]
+        self.assertTrue(any("low" in text for text in lines))
+        self.assertTrue(any("medium" in text for text in lines))
+        self.assertTrue(any("high" in text for text in lines))
+
+
+class ModelsLongListRenderingTest(unittest.TestCase):
+    def test_a_long_list_of_choices_stays_navigable_instead_of_spilling_past_the_terminal(self):
+        many_rows = tuple(AgentRow(agent=f"agent-{i}", current=None) for i in range(40))
+        lines = render(_models_screen(rows=many_rows), cursor=0)
+        self.assertLess(len(lines), 40)
+
+    def test_the_cursor_stays_inside_the_visible_window_as_it_moves(self):
+        many_rows = tuple(AgentRow(agent=f"agent-{i}", current=None) for i in range(40))
+        lines = render(_models_screen(rows=many_rows), cursor=39)
+        highlighted = [line for line in lines if line.highlighted]
+        self.assertEqual(len(highlighted), 1)
+        self.assertIn("agent-39", highlighted[0].text)
+
+    def test_a_short_list_names_no_more_above_or_below(self):
+        lines = [line.text for line in render(_models_screen(), cursor=0)]
+        self.assertFalse(any("more" in text for text in lines))
 
 
 if __name__ == "__main__":

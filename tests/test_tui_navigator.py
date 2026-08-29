@@ -11,14 +11,19 @@ import pegasus
 from pegasus.tui.navigator import (
     CANCEL,
     Action,
+    AgentRow,
     CliOption,
     Entry,
     InstallPlanScreen,
     InstallResultScreen,
     InstallTarget,
     Menu,
+    ModelOption,
+    ModelsScreen,
+    ModelsTarget,
     Navigator,
     Placeholder,
+    ProviderOption,
     RestoreConfirm,
     RestoreResultScreen,
     RestoreTarget,
@@ -27,11 +32,26 @@ from pegasus.tui.navigator import (
     UninstallResultScreen,
     UninstallTarget,
     main_menu,
+    models_menu,
     restore_menu,
     uninstall_menu,
 )
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
+
+REASONING_MODEL = ModelOption(id="deep-thinker", reasoning=True)
+PLAIN_MODEL = ModelOption(id="fast-model", reasoning=False)
+PROVIDERS = (
+    ProviderOption(id="anthropic", models=(REASONING_MODEL,)),
+    ProviderOption(id="openai", models=(PLAIN_MODEL,)),
+)
+ROWS = (AgentRow(agent="sdd-apply", current=None), AgentRow(agent="sdd-verify", current="anthropic/claude-sonnet-5"))
+
+
+def _models_screen(**overrides) -> ModelsScreen:
+    fields = {"cli": SAMPLE, "providers": PROVIDERS, "rows": ROWS}
+    fields.update(overrides)
+    return ModelsScreen(**fields)
 
 
 class MainMenuTest(unittest.TestCase):
@@ -291,6 +311,93 @@ class MenuPrefaceTest(unittest.TestCase):
     def test_a_menu_with_no_preface_behaves_exactly_as_before(self):
         menu = Menu(title="t", entries=(Entry("a", CANCEL),))
         self.assertEqual(menu.preface, ())
+
+
+class ModelsMenuTest(unittest.TestCase):
+    def test_a_detected_cli_opens_a_menu_naming_it(self):
+        menu = models_menu(detections=(SAMPLE,))
+        self.assertIsInstance(menu, Menu)
+        self.assertIsInstance(menu.entries[0].target, ModelsTarget)
+        self.assertEqual(menu.entries[0].target.cli, SAMPLE)
+
+    def test_no_detected_cli_still_shows_a_placeholder_that_says_why(self):
+        menu = models_menu(detections=())
+        self.assertIsInstance(menu, Placeholder)
+
+    def test_choosing_a_cli_directly_does_nothing_by_itself(self):
+        navigator = Navigator(_stack=(models_menu(detections=(SAMPLE,)),), _cursors=(0,))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Menu)
+
+
+class ModelsWizardRowsStepTest(unittest.TestCase):
+    def test_moving_the_cursor_wraps_across_rows(self):
+        navigator = Navigator(_stack=(_models_screen(),), _cursors=(1,))
+        navigator = navigator.handle(Action.MOVE_DOWN)
+        self.assertEqual(navigator.cursor, 0)
+
+    def test_choosing_a_row_fills_in_the_agent(self):
+        navigator = Navigator(_stack=(_models_screen(),), _cursors=(0,))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.agent, "sdd-apply")
+        self.assertEqual(navigator.cursor, 0)
+
+    def test_removing_an_assignment_does_nothing_by_itself(self):
+        navigator = Navigator(_stack=(_models_screen(),), _cursors=(0,))
+        navigator = navigator.handle(Action.REMOVE)
+        self.assertIsNone(navigator.current.agent)
+
+    def test_back_at_the_rows_step_leaves_the_wizard(self):
+        navigator = Navigator.starting().opened(_models_screen())
+        navigator = navigator.handle(Action.BACK)
+        self.assertIsInstance(navigator.current, Menu)
+
+
+class ModelsWizardProviderStepTest(unittest.TestCase):
+    def test_choosing_an_agent_then_a_provider_fills_in_both(self):
+        navigator = Navigator(_stack=(_models_screen(agent="sdd-apply"),), _cursors=(1,))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.provider_id, "openai")
+        self.assertEqual(navigator.cursor, 0)
+
+    def test_back_clears_the_agent_rather_than_leaving_the_wizard(self):
+        navigator = Navigator(_stack=(_models_screen(agent="sdd-apply"),), _cursors=(0,))
+        navigator = navigator.handle(Action.BACK)
+        self.assertIsInstance(navigator.current, ModelsScreen)
+        self.assertIsNone(navigator.current.agent)
+
+
+class ModelsWizardModelStepTest(unittest.TestCase):
+    def test_choosing_a_reasoning_model_moves_to_the_effort_step(self):
+        navigator = Navigator(_stack=(_models_screen(agent="sdd-apply", provider_id="anthropic"),), _cursors=(0,))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.model_id, "deep-thinker")
+
+    def test_choosing_a_plain_model_is_a_commit_left_to_session(self):
+        navigator = Navigator(_stack=(_models_screen(agent="sdd-apply", provider_id="openai"),), _cursors=(0,))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertIsNone(navigator.current.model_id)
+
+    def test_back_clears_the_provider_rather_than_leaving_the_wizard(self):
+        navigator = Navigator(_stack=(_models_screen(agent="sdd-apply", provider_id="anthropic"),), _cursors=(0,))
+        navigator = navigator.handle(Action.BACK)
+        self.assertIsNone(navigator.current.provider_id)
+        self.assertEqual(navigator.current.agent, "sdd-apply")
+
+
+class ModelsWizardEffortStepTest(unittest.TestCase):
+    def test_choosing_an_effort_is_a_commit_left_to_session(self):
+        screen = _models_screen(agent="sdd-apply", provider_id="anthropic", model_id="deep-thinker")
+        navigator = Navigator(_stack=(screen,), _cursors=(0,))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertIs(navigator.current, screen)
+
+    def test_back_clears_the_model_rather_than_leaving_the_wizard(self):
+        screen = _models_screen(agent="sdd-apply", provider_id="anthropic", model_id="deep-thinker")
+        navigator = Navigator(_stack=(screen,), _cursors=(0,))
+        navigator = navigator.handle(Action.BACK)
+        self.assertIsNone(navigator.current.model_id)
+        self.assertEqual(navigator.current.provider_id, "anthropic")
 
 
 if __name__ == "__main__":
