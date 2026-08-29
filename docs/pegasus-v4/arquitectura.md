@@ -571,14 +571,16 @@ La TUI se dibuja con `curses`, de la biblioteca estándar. No agrega ninguna dep
 
 ### Menú principal
 
+La pantalla se dibuja en inglés — el idioma de todo el texto de la TUI, sin excepción para esta pantalla ni ninguna otra.
+
 ```
 Pegasus Harness 4.0.0
 
-  ▸ Instalar
-    Configurar modelos
-    Estado y diagnóstico
-    Desinstalar
-    Salir
+  ▸ Install
+    Configure models
+    Status and diagnostics
+    Uninstall
+    Exit
 ```
 
 ### Instalar
@@ -586,12 +588,46 @@ Pegasus Harness 4.0.0
 Detecta CLIs soportados y presentes. Selección de a uno.
 
 ```
-¿Dónde instalar Pegasus?
+Where would you like to install Pegasus?
 
-  ▸ OpenCode          ~/.config/opencode        soporte completo
+  ▸ OpenCode          ~/.config/opencode        full
 ```
 
-Luego muestra el plan (qué se crea, qué se saltea por colisión, qué dependencias requieren confirmación) y pide confirmación por dependencia, igual que hoy.
+Elegido el CLI, muestra la vista previa —el mismo reporte que produce `install --dry-run`, con un aviso explícito de que todavía no se escribió nada— y sólo confirmarla cruza el punto sin retorno:
+
+```
+Install · OpenCode
+
+PREVIEW — nothing has been written yet.
+
+...
+
+enter: install now · esc: back, nothing written
+```
+
+No hay confirmación por dependencia individual dentro de la TUI: qué servidores MCP entran ya se decidió con `--mcp` antes de llegar a esta pantalla (ver "Paridad con flags").
+
+### Estado y diagnóstico
+
+Muestra el mismo reporte que `doctor --json`. Desde acá, y sólo acá, se llega a `restore`: elegir la única acción de esta pantalla abre la lista de generaciones de snapshot que todavía se pueden leer. No hay una entrada de `restore` en el menú principal — es una acción sobre lo que el diagnóstico ya mostró, no una entrada propia.
+
+### Desinstalar
+
+Selecciona, de los CLIs donde el journal registra una instalación propia, cuál desinstalar. La confirmación es una vista previa de qué se va a borrar (resumida si son muchos ítems), con el cursor abierto por defecto sobre "Cancel": la opción destructiva nunca es la que queda seleccionada al entrar a la pantalla.
+
+```
+Uninstall · OpenCode
+
+About to remove 3:
+  skill:sdd-apply → ...
+  agent:sdd-apply → ...
+  ...
+
+  ▸ Cancel — leave it installed
+    Confirm — remove it
+```
+
+`restore`, alcanzado desde "Estado y diagnóstico", pide la misma confirmación con el cursor sobre "Cancel".
 
 ### Configurar modelos
 
@@ -602,15 +638,15 @@ CLI → agente → proveedor → modelo → [esfuerzo]
 ```
 
 ```
-Modelos · OpenCode
+Models · OpenCode
 
-  Agente                  Modelo actual
-  ▸ pegasus-orchestrator  (sin modelo)
-    sdd-apply             anthropic/claude-sonnet-5 · high
-    sdd-verify            (sin modelo)
+  Agent                    Current model
+  ▸ pegasus-orchestrator   (no model)
+    sdd-apply              anthropic/claude-sonnet-5 · high
+    sdd-verify             (no model)
     …
 
-  enter: configurar · d: quitar modelo · esc: volver
+  enter: configure · d: remove current model · esc: back
 ```
 
 `d` devuelve el agente a "sin modelo": borra la preferencia de su propio store y se renderiza el default. No toca el journal, porque la asignación de modelo nunca vivió ahí.
@@ -621,7 +657,7 @@ La TUI no puede hacer nada que los flags no puedan. Esta regla protege `INSTALL_
 
 ```bash
 pegasus                                          # TUI
-pegasus install --cli opencode --confirm cbm --decline playwright
+pegasus install --cli opencode --mcp context7 --mcp engram
 pegasus models set --cli opencode --agent sdd-apply --model anthropic/claude-sonnet-5 --effort high
 pegasus models unset --cli opencode --agent sdd-apply
 pegasus uninstall --cli opencode
@@ -632,9 +668,7 @@ Un test de contrato verifica que cada acción de la TUI tenga su comando equival
 
 #### Qué existe hoy
 
-`install`, `uninstall` y `doctor`, los tres con `--json`, más `--dry-run` en install. Cada reporte declara su esquema `pegasus/cli-report/v1`.
-
-Todavía no existen `--confirm`/`--decline` —no hay descriptores MCP en el núcleo ni `DependencyFetcher`, así que no hay dependencias que confirmar— ni `models set`/`unset`, que llegan con la configuración de modelos.
+`install`, `uninstall`, `doctor`, `restore` y `setup`, con `--json` en los primeros cuatro y `--dry-run` en install. `install` acepta `--mcp ID` (repetible): un servidor no nombrado no se instala. `models set` y `models unset` asignan y quitan el modelo de un agente. Cada reporte declara su esquema `pegasus/cli-report/v1`.
 
 Tres cosas que la CLI hace y conviene no perder:
 
@@ -757,6 +791,7 @@ Explícitamente fuera de alcance, para que el corte sea revisable:
 - **Adapters de Claude Code y Codex.** El esqueleto `_template/` queda listo; los adapters reales no.
 - **Migración automática desde v3.1.x.** El camino es desinstalar v3 e instalar v4.
 - **Skills personales del autor.** Siguen fuera del payload, como hoy.
+- **CBM y Playwright como MCPs instalables.** 4.0.0 embarca `context7` y `engram`; los dos quedan para 4.1.0, y por razones distintas. La forma `npm` existe en el motor y tiene tests propios (unidad 8b5), pero ningún descriptor real la declara: el lockfile que sintetiza fija un solo paquete, y el de Playwright de verdad trae cinco entradas —`playwright-core` entre ellas— cada una con su propio `sha512`; publicarlo con el lockfile sintetizado dejaría el servidor incompleto. CBM no tiene ningún descriptor tampoco, por un motivo distinto: su única fuente en este repo es un tarball vendorizado, y no hay ninguna URL publicada para él en ningún lado.
 
 ---
 
@@ -785,17 +820,17 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 1b | Carga de contenido, adapter OpenCode y catálogo | Genera en memoria el catálogo del contenido presente, con digests deterministas | Entregada |
 | 2 | Motor de instalación, journal v4, rollback | Paridad funcional con v3.1.2 en modo desatendido | Entregada |
 | 3 | Los 12 agentes cableados con sus prompts, y el contenido normalizado | Los 10 SDD existen como subagentes reales | Entregada |
-| 4 | Launcher, venv privado, empaquetado | `pegasus` disponible en el PATH tras instalar | Pendiente |
-| 5 | TUI: menú principal e instalación | Instalación completa sin escribir un flag | Pendiente |
-| 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con la preferencia guardada en el estado propio de Pegasus | Pendiente |
+| 4 | Launcher, venv privado, empaquetado | `pegasus` disponible en el PATH tras instalar: el shim `bin/pegasus`, `pegasus setup` para levantar el venv desde un checkout, y `tools/build_release_evidence.py` atando wheel, lockfile y shim al commit que los produjo. `INSTALL.md` documenta el recorrido de punta a punta y deja constancia de qué se corrió en esta verificación y qué no —el único paso no ejecutado es el `pip install` con red real, prohibida en este entorno | Entregada |
+| 5 | TUI: menú principal e instalación | Instalación completa sin escribir un flag: menú de cinco entradas (`Install`, `Configure models`, `Status and diagnostics`, `Uninstall`, `Exit`), instalación con vista previa (`InstallPlanScreen`, el mismo reporte de `install --dry-run`) separada del punto sin retorno | Entregada |
+| 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con la preferencia guardada en el estado propio de Pegasus: la caminata de cuatro pasos (`ModelsScreen`) llama a `cli.models_set`/`cli.models_unset`, que escriben en el store real de asignaciones | Entregada |
 | 7 | Actualización de una instalación existente | Reinstalar sobre una instalación propia actualiza el payload. La segunda mitad de lo entregado —preservar y reportar lo que el usuario reescribió— la reemplazó la unidad 9 | Entregada |
 | 8a1 | Categoría `mcp/`, descriptor y render del servidor | Un MCP remoto se instala de verdad, con su convención embarcada y su permiso concedido | Entregada |
 | 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira. El retiro salió genérico: alcanza a cualquier artefacto que el journal reclame y el render ya no produzca | Entregada |
-| 8b1 | El directorio propio de Pegasus y su resolutor | El journal, los snapshots y lo que venga cuelgan de un único lugar que la plataforma decide, y la unidad 4 lo adopta | Pendiente |
-| 8b2 | Contención: el registry y el catálogo aprenden el segundo territorio | Un artefacto en el directorio propio deja de parecer una fuga | Pendiente |
-| 8b3 | El journal sabe reclamar una dependencia materializada | `uninstall` deja de poder olvidarse un binario en silencio | Pendiente |
-| 8b4 | La forma `download` | Un servidor que publica binario queda disponible, con SHA-256 propio verificado antes de que el archivo llegue a su lugar | Pendiente |
-| 8b5 | La forma `npm` | Un servidor npm queda disponible con `npm ci` contra un lockfile fijado, y las convenciones de CBM y engram pasan a viajar con su descriptor | Pendiente |
+| 8b1 | El directorio propio de Pegasus y su resolutor | El journal, los snapshots y lo que venga cuelgan de un único lugar que la plataforma decide (`FileSystem.data_dir`), y la unidad 4 lo adopta: `bin/pegasus` y `journal_store_file.py` resuelven el mismo directorio, `bootstrap.venv_dir` cuelga el venv de ahí | Entregada |
+| 8b2 | Contención: el registry y el catálogo aprenden el segundo territorio | Un artefacto en el directorio propio deja de parecer una fuga: `catalog.Territory` reconoce `config_dir` y `CANONICAL_DATA_DIR` al calcular el catálogo. El chequeo de `registry` sobre `own_artifacts` queda a propósito ceñido al `config_dir` del adapter —una dependencia la coloca el motor, nunca un adapter, así que ensanchar ese guard no cerraría ningún hueco real | Entregada |
+| 8b3 | El journal sabe reclamar una dependencia materializada | `uninstall` deja de poder olvidarse un binario en silencio: `journal.KINDS` suma `dependency-tree`, y `planner._retire_dependency_trees` lo retira al desinstalar | Entregada |
+| 8b4 | La forma `download` | Un servidor que publica binario queda disponible, con SHA-256 propio verificado antes de que el archivo llegue a su lugar (`core/dependencies.materialize`). También extrae un `.tar.gz` con guarda contra miembros que se escapan del directorio (`tarfile.data_filter`): `engram` ya se instala así, con checksum y `archive_members` fijados en su descriptor | Entregada |
+| 8b5 | La forma `npm` | El motor sabe correr `npm ci` contra un lockfile que sintetiza para un único paquete (`core/dependencies.materialize_npm`), con tests propios. Pero ningún descriptor real la usa todavía: `engram` viajó por `download`, no por `npm`, y CBM sigue sin descriptor —su única fuente en este repo es un tarball vendorizado sin URL publicada. La forma existe; lo que promete su nombre —un servidor npm instalado de verdad— no tiene todavía a quién aplicarse | Entregada |
 | 9 | El digest deja de ser permiso; snapshot, `restore` y retención | Instalar y desinstalar pisan lo que el journal reclama, y `restore` devuelve el estado exacto anterior al último comando | Entregada |
 | 10 | El puerto de filesystem puede decir "no puedo saberlo" | Una ruta que existe y no se puede leer deja de hacerse pasar por ausente: `exists` y `list_dir`, y los trece sitios que les creen | Entregada |
 | 11 | Los permisos dejan de ser un octal en el núcleo | `FileArtifact` dice `executable`, no un modo; los bits nacen en `mode_for` del lado de la plataforma; un solo guard `writable_on_behalf_of_owner` reemplaza los dos duplicados; un test guardián sostiene que ningún literal de permiso vuelva a `core/` ni `ports/` | Entregada |
@@ -1178,13 +1213,11 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 | Dos gates defensivos —el del protocolo de memoria en el prompt de sistema y el de `cbm-convention.md`— no tienen ningún test que los proteja, y no se pueden afirmar sin afirmar prosa | La unidad 8b: cuando cada convención viva en el cuerpo de su descriptor, la ausencia significará ausencia y los dos gates se borran en vez de necesitar protección |
 | `tools/check_docs_links.py` reporta 13 links rotos, 6 de ellos reales y preexistentes | Nada |
 | `restore` no puede devolver un árbol de dependencias. El snapshot excluye esos destinos porque `capture_paths` lee bytes y un árbol es un directorio, así que un install que materializó una dependencia y falló no la deshace | La 8b, cuando el snapshot sepa capturar un directorio. Hasta entonces `restore` devuelve todo lo demás exacto y esto no |
-| La forma `download` materializa **un binario suelto**, no un archivo comprimido. Un servidor que publica un `.tar.gz` todavía no se puede instalar, y extraer uno necesita además su propia guarda contra miembros con rutas que se escapan del directorio | La 8b, si algún servidor a instalar lo pide. `engram` publica tarball |
+| `--effort` se guarda y se ofrece en el asistente de la TUI, pero no llega a la configuración renderizada. Ninguna configuración real de OpenCode que se haya podido mirar tiene una clave de esfuerzo, así que renderizarlo sería adivinar dónde cae | Saber cómo ese CLI recibe el esfuerzo de razonamiento. Hasta entonces son dos caminos: renderizarlo donde corresponda, o dejar de ofrecerlo — un control que no hace nada es la clase de defecto que la unidad 6 sacó del producto |
 | El digest de un árbol de dependencias es la identidad de lo que se materializó, no un hash de lo que quedó en disco, así que `doctor` no puede detectar un árbol corrompido ni manipulado | Nada. Es la consecuencia elegida a conciencia, y necesitaría una verificación distinta de este campo |
 | La forma `npm` sintetiza un lockfile de un solo paquete, así que fija la versión y la integridad del paquete de arriba y no de sus dependencias. El lockfile real de playwright tiene cinco entradas —`playwright-core` entre ellas, que es el driver— cada una con su propio `sha512`. Un `npm ci` contra el lockfile sintetizado dejaría el servidor incompleto, y la integridad verificada cubriría una de cuatro | Que el lockfile completo viaje con el descriptor en vez de sintetizarse. Hasta entonces la forma existe y no hay ningún descriptor real que la declare |
-| El borrado de los dos gates defensivos sigue bloqueado. El de memoria necesita un descriptor de `engram`, que publica `.tar.gz` y espera la extracción de archivos; el de CBM necesita uno de `cbm`, cuya única fuente en este repo es el tarball vendorizado y no tiene ninguna URL publicada | La extracción de archivos, y para `cbm` además saber dónde está publicado |
-| `restore` no tiene ninguna pantalla en `## Interfaz de usuario`. Es un comando entregado y testeado desde la unidad 9, y la paridad TUI es obligatoria | La unidad 5, que no puede darse por completa sin diseñarla |
-| Cinco capacidades del motor no tienen pantalla: `--dry-run` como modo distinto de la vista previa, la confirmación por MCP, los pasos de activación posteriores a instalar, el reporte de retención, y el balde `unreadable` de `doctor` | La unidad 5. Las pantallas se escribieron antes de las unidades 9 y 10, que agregaron esas capacidades |
-| El store de preferencias de modelo no existe en ninguna forma: ni archivo, ni puerto, ni la mitad de escritura de `CliAdapter`, que hoy sólo sabe leer asignaciones. El contrato `pegasus/model-assignment/v1` está nombrado en la tabla de contratos y no lo implementa nada | La unidad 6, que lo construye entero. La unidad 5 no lo necesita |
+| Queda un gate defensivo, el de `cbm-convention.md`: la convención de CBM viaja a toda instalación con una frase que avisa que no aplica si las herramientas no están. El de memoria ya se borró cuando `engram` pasó a ser descriptor | Un descriptor de `cbm`, que necesita una URL publicada. No hay ninguna en este repo: su única fuente es el tarball vendorizado que el diseño prohíbe |
+| La TUI no ofrece elegir qué servidores MCP instalar. `--mcp` decide desde los flags y la pantalla siempre instala el conjunto por defecto, así que la paridad obligatoria no se cumple para esa decisión | Una pantalla de selección en el flujo de instalar. Las otras cuatro capacidades que faltaban —el `--dry-run` distinguido, los pasos de activación, el reporte de retención y el balde `unreadable`— ya tienen pantalla |
 | `mode_of` sigue colapsando "la ruta no existe" y "no pude leer sus bits" en el mismo `None`. Los tres llamadores del planner corren justo después de una lectura que ya tuvo éxito, así que hoy es inalcanzable | Nada. Fragilidad latente, no reproducida |
 
 ---
@@ -1212,16 +1245,10 @@ Tests que fallan si el diseño se degrada:
 
 ## Próximo paso
 
-Siguen dos trabajos que salieron de la unidad 10 y que no estaban en el corte original. **Van en este orden**, y la razón es evitar trabajo doble: la unidad 11 toca catorce archivos de producción y va a reescribir sus tests igual, así que hacerlo primero contra el doble y después otra vez al migrar sería pagar dos veces por los mismos archivos.
+El corte numerado quedó completo: las catorce unidades de la tabla de arriba —0 a 11, con la partición 8a/8b— llegaron a `Entregada`, y los 1040 tests de la suite lo sostienen. Ya no queda, dentro de este corte, una unidad siguiente en el sentido en que las hubo hasta acá.
 
-**La migración de los tests a filesystem real sobre home descartable.** El doble en memoria acumuló siete hooks de falla, uno por cada cosa que el sistema operativo sabe hacer y él no, y los cuatro defectos de la unidad 9 más el de `unplace` en la 10 vivieron todos en esa grieta. Medido: 35 tests contra directorios temporales reales tardan 0,2 segundos, así que la velocidad nunca fue el argumento. La unidad 10 deja la clase base y el patrón; falta medir el resto —cinco archivos de test— y costear los que hoy afirman sobre `writes`/`removals` del doble en vez de sobre el resultado en disco. Incluye el módulo de helpers de plataforma que produce las condiciones, que es el hexágono aplicado al setup de los tests.
+Lo que sigue es publicar el release. `INSTALL.md` describe el recorrido completo —descargar, verificar, armar el venv privado, dejar el lanzador en el PATH— pero todavía no hay ningún tag `v4.0.0` real: el ejemplo usa ese nombre a falta de uno publicado, y el único tramo que esta verificación no pudo ejercer fue el `pip install` contra el índice de paquetes real, porque este entorno de trabajo no tiene red. Cortar el tag, construir el wheel, generar su evidencia con `tools/build_release_evidence.py` y repetir esa guía contra una cuenta limpia con red de verdad es lo que falta antes de llamar a esto una versión publicada.
 
-**La unidad 11**, que dejó de ser "que `mode_of` pueda decir no puedo saberlo" y ahora es que **los permisos dejen de ser un octal dentro del núcleo**. Medido sobre un install real de 108 artefactos: `{'0644': 89, '0755': 1, None: 18}` —los 18 `None` son claves de configuración, que no tienen archivo detrás—, así que el octal transporta un bit y esconde tres necesidades sin relación entre sí.
+Antes de eso sigue abierta la migración de tests que la unidad 10 dejó a medio camino: `tests/test_journal_store.py` y `tests/test_snapshot_store.py` ya tienen, al lado de sus clases sobre `FakeFileSystem`, una clase `...OnRealDiskTest` que ejercita lo mismo contra disco real; `tests/test_dependencies.py` y `tests/test_model_assignment_store.py` todavía no tienen esa contraparte y siguen enteros sobre el doble en memoria. No bloquea publicar el release, pero es trabajo que ya se sabe pendiente y no una unidad más del corte.
 
-Su test guardián es mecánico, y hay que escribirlo con una distinción que un `grep` crudo no hace. De los ocho literales octales que hoy viven bajo `core/` y `ports/`, **seis son valores de permiso** —el default de `FileArtifact`, los tres `else 0o644` de `planner.py`, y los dos defaults de firma de `write_atomic` y `make_dir`— y ésos son los que la unidad tiene que hacer desaparecer. Los otros dos no lo son: `0o777` en `core/types.py` es una **cota de validación** que muere sola cuando muere el campo `mode: int`, y el `0o700` de `ports/filesystem.py` está **dentro de un docstring**. La regla, entonces, es sobre valores de permiso en código y no sobre cualquier octal en cualquier parte del archivo — si el guardián escanea texto crudo arranca con dos falsos positivos y quien lo escriba va a tener que decidirlos a mano, que es exactamente lo que un guardián objetivo evita.
-
-De su esbozo conviene retener una corrección: el `else 0o644` de `_put_back` **no es un defecto alcanzable hoy** —para llegar ahí habría que no poder leer los permisos de un archivo que se acaba de leer con éxito—, así que la unidad no se justifica por una pérdida de confidencialidad viva sino por el octal en el núcleo. Se llegó a afirmar lo contrario sin reproducirlo, y la regla que sale de eso es que un defecto no se afirma sin correrlo.
-
-Después **8b**, y con ella el resolutor de directorio propio que la unidad 4 necesita. Es la que borra los dos gates defensivos sin test y la que destraba el caso wildcard contra wildcard.
-
-Después la **unidad 4**, que es el cuello de botella de todo lo que queda: sin launcher ni venv privado no hay `pegasus` en el PATH, y las dos unidades de TUI están bloqueadas detrás de ella.
+Lo demás que se sabe pendiente no es una unidad más de este corte: vive en "Deudas sin unidad asignada", acarreado a propósito, y en "Qué queda fuera de 4.0.0", diferido sin fecha salvo CBM y Playwright, que apuntan a 4.1.0.
