@@ -470,6 +470,37 @@ class DownloadMcpRenderTest(unittest.TestCase):
         self.assertIn("probe", str(raised.exception))
 
 
+class ArchiveDownloadMcpRenderTest(unittest.TestCase):
+    """An archive's own asset, the `.tar.gz` itself, is never what a CLI's
+    configuration should point at -- the command has to name the member
+    inside it that is the program, not the fetched file's own name."""
+
+    def setUp(self):
+        self.adapter = Adapter()
+        self.environment = Environment(home=HOME, data_dir=HOME / ".local" / "share" / "pegasus-harness")
+        self.layout = self.adapter.layout(self.environment)
+        self.mcp = Mcp(
+            name="probe",
+            description="d",
+            body="# Probe Convention\n",
+            distribution=Distribution.DOWNLOAD,
+            endpoint="https://example.test/releases/probe-linux-x64.tar.gz",
+            source=PurePosixPath("mcp/probe.md"),
+            version="1.2.3",
+            checksum="sha256:" + "a" * 64,
+            archive_members=("CHANGELOG.md", "probe"),
+            archive_executable="probe",
+        )
+        self.artifacts = self.adapter.render_mcp(self.layout, self.mcp)
+
+    def test_the_server_points_at_the_declared_executable_member(self):
+        key = only(self.artifacts, ConfigKeyArtifact)[0]
+        self.assertEqual(
+            key.value["command"],
+            [str(self.environment.data_dir / "mcp" / "probe" / "1.2.3" / "probe")],
+        )
+
+
 class NpmMcpRenderTest(unittest.TestCase):
     def setUp(self):
         self.adapter = Adapter()

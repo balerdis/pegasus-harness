@@ -23,7 +23,9 @@ one thing this ordering exists to rule out.
 """
 from __future__ import annotations
 
+import io
 import json
+import tarfile
 from pathlib import Path, PurePosixPath
 
 from pegasus.core import ownership
@@ -49,8 +51,27 @@ def target_dir(dependencies_dir: Path, item: Mcp) -> Path:
 
 
 def binary_path(dependencies_dir: Path, item: Mcp) -> Path:
-    """Where the fetched asset itself lands, inside its version's directory."""
+    """Where the fetched asset itself lands, inside its version's directory.
+
+    Only meaningful for a `download` server that fetches a bare binary: an
+    archive's own asset -- the `.tar.gz` itself -- is never placed on disk at
+    all, only the members inside it, so a caller after the program to run
+    wants :func:`program_path` instead.
+    """
     return target_dir(dependencies_dir, item) / PurePosixPath(item.endpoint).name
+
+
+def program_path(dependencies_dir: Path, item: Mcp) -> Path:
+    """Where the program a `download` server runs lands, whichever form it took.
+
+    A bare binary places itself there directly, so this is `binary_path`; an
+    archive places its declared `archive_executable` member there instead --
+    the one file, of everything the archive held, that a CLI's configuration
+    should point at.
+    """
+    if item.archive_executable is not None:
+        return target_dir(dependencies_dir, item) / PurePosixPath(item.archive_executable)
+    return binary_path(dependencies_dir, item)
 
 
 def npm_script_path(dependencies_dir: Path, item: Mcp) -> Path:
@@ -71,7 +92,11 @@ def materialize(
 
     Raises :class:`MaterializeError` naming what was expected and what
     arrived, without ever calling `write_atomic` -- so a mismatch is refused
-    with nothing left behind for a caller to clean up.
+    with nothing left behind for a caller to clean up. Extraction, when
+    ``item`` declares an archive, happens only after that verification, for
+    the same reason: a digest proves the bytes are the ones that were
+    pinned, never that placing them is safe, so verification comes first and
+    extraction's own refusals come after it, not instead of it.
     """
     if item.distribution is not Distribution.DOWNLOAD:
         raise MaterializeError(f"{item.name}: not a 'download' server")
@@ -84,20 +109,77 @@ def materialize(
         raise MaterializeError(
             f"{item.name}: expected {item.checksum} but {item.endpoint} hashed to {digest}"
         )
-    target = binary_path(dependencies_dir, item)
-    try:
-        filesystem.write_atomic(target, fetched, mode=filesystem.mode_for(executable=True))
-    except FileSystemError as error:
-        raise MaterializeError(
-            f"{item.name}: fetched and verified, but could not be placed: {error}"
-        ) from error
+    target_root = target_dir(dependencies_dir, item)
+    if item.archive_members:
+        _extract_archive(filesystem, fetched, target_root, item)
+    else:
+        try:
+            filesystem.write_atomic(
+                binary_path(dependencies_dir, item), fetched, mode=filesystem.mode_for(executable=True)
+            )
+        except FileSystemError as error:
+            raise MaterializeError(
+                f"{item.name}: fetched and verified, but could not be placed: {error}"
+            ) from error
     return Record(
         id=f"dependency:{item.name}",
         kind="dependency-tree",
-        target=target_dir(dependencies_dir, item),
+        target=target_root,
         after_digest=digest,
         created_at=at,
     )
+
+
+def _extract_archive(filesystem: FileSystem, archive_bytes: bytes, target_root: Path, item: Mcp) -> None:
+    """Place every member ``item.archive_members`` names, inside ``target_root``.
+
+    Every member is read and checked before the first byte is written: the
+    same posture `materialize` already holds between fetching and placing --
+    a refusal must never share a run with a partial write. `tarfile.data_filter`
+    is what checks each member, chosen over `tar_filter` and
+    `fully_trusted_filter` because it is the one PEP 706 wrote for exactly
+    this case -- extracting an archive whose contents are not trusted. It
+    refuses a member whose own path would resolve outside the destination
+    (an absolute path or a `..` escape), and refuses a symbolic or hard link
+    whose *target* resolves outside it, even when the member's own name is
+    innocent -- exactly the class of escape this exists to close. Calling it
+    here, against a destination that never has to exist on disk, is what
+    makes that check provable without a real filesystem: only `write_atomic`,
+    called afterwards for a member the filter already accepted, ever
+    actually places a byte.
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:*") as archive:
+            payloads = list(_verified_members(archive, target_root, item))
+    except tarfile.TarError as error:
+        raise MaterializeError(f"{item.name}: could not open its archive: {error}") from error
+    try:
+        for name, content in payloads:
+            executable = name == item.archive_executable
+            filesystem.write_atomic(
+                target_root / PurePosixPath(name), content, mode=filesystem.mode_for(executable=executable)
+            )
+    except FileSystemError as error:
+        _clean_up(filesystem, target_root)
+        raise MaterializeError(
+            f"{item.name}: extracted and verified, but could not be placed: {error}"
+        ) from error
+
+
+def _verified_members(archive: tarfile.TarFile, target_root: Path, item: Mcp):
+    for name in item.archive_members:
+        try:
+            info = archive.getmember(name)
+        except KeyError as error:
+            raise MaterializeError(f"{item.name}: its archive has no member named {name!r}") from error
+        try:
+            tarfile.data_filter(info, str(target_root))
+        except tarfile.FilterError as error:
+            raise MaterializeError(f"{item.name}: refused to extract {name!r}: {error}") from error
+        if not info.isfile():
+            raise MaterializeError(f"{item.name}: declared member {name!r} is not a regular file")
+        extracted = archive.extractfile(info)
+        yield name, extracted.read() if extracted is not None else b""
 
 
 def materialize_npm(
