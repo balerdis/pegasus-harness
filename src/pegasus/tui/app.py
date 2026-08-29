@@ -30,6 +30,7 @@ KEYS: dict[int, Action] = {
     ord("\r"): Action.CHOOSE,  # what Enter sends on a terminal in raw mode.
     27: Action.BACK,  # ESC has no curses constant of its own.
     ord("q"): Action.QUIT,
+    ord("d"): Action.REMOVE,
 }
 
 

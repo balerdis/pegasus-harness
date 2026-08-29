@@ -14,17 +14,26 @@ from __future__ import annotations
 
 from pegasus import cli
 from pegasus.adapters import available
+from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
+from pegasus.core import model_assignments as model_assignments_module
 from pegasus.tui.navigator import (
     CANCEL,
+    EFFORT_OPTIONS,
     Action,
+    AgentRow,
     CliOption,
     Entry,
     InstallPlanScreen,
     InstallResultScreen,
     InstallTarget,
     Menu,
+    ModelOption,
+    ModelsScreen,
+    ModelsTarget,
     Navigator,
+    Placeholder,
+    ProviderOption,
     RestoreConfirm,
     RestoreResultScreen,
     RestoreTarget,
@@ -122,6 +131,83 @@ def _restore_preview(generation: int, runtime: cli.Runtime) -> Menu:
     )
 
 
+def _configurable_agents() -> tuple[str, ...]:
+    """Every agent this release lets a person assign a model to, in the order
+    the content core ships them. The engine already refuses the rest through
+    `_require_configurable_agent`; reading the same fact here is what keeps
+    this screen from ever offering what a write to it would refuse."""
+    return tuple(agent.name for agent in content_module.load().agents if agent.model_configurable)
+
+
+def _current_assignment(cli_id: str, agent: str, runtime: cli.Runtime) -> str | None:
+    assignment = model_assignments_module.get(cli.model_assignment_store(runtime).load(), cli_id, agent)
+    if assignment is None:
+        return None
+    return assignment.full_id + (f" · {assignment.effort}" if assignment.effort else "")
+
+
+def _models_screen(cli_option: CliOption, runtime: cli.Runtime) -> Menu | Placeholder | ModelsScreen:
+    """The doc's `Modelos · CLI` step, or the explanation for why there is
+    nothing to show yet -- read fresh every time this is called, the same
+    reasoning `_uninstall_preview` and `_restore_preview` already follow for
+    their own read-only screens."""
+    catalog = available().get(cli_option.id).model_catalog(runtime.environment)
+    if not catalog.providers:
+        return Placeholder(
+            f"Configure models · {cli_option.display_name}",
+            f"{cli_option.display_name} has no model catalog to read yet -- open it at least once so "
+            "it can build one, or sign in to a provider, then come back.",
+        )
+    providers = tuple(
+        ProviderOption(
+            id=provider.id,
+            models=tuple(ModelOption(id=model.id, reasoning=model.reasoning) for model in provider.models),
+        )
+        for provider in catalog.providers
+    )
+    rows = tuple(
+        AgentRow(agent=agent, current=_current_assignment(cli_option.id, agent, runtime))
+        for agent in _configurable_agents()
+    )
+    return ModelsScreen(cli=cli_option, providers=providers, rows=rows)
+
+
+def _models_write(screen: ModelsScreen, navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigator | None:
+    """The three moments in the wizard that are a real write rather than a
+    pure narrowing: removing an assignment, and committing a plain model or
+    an effort. `Navigator` leaves each of these as a no-op on purpose --
+    see `ModelsScreen`'s own docstring -- so this is where they actually
+    happen. Returns `None` for every other action, which tells `step` to
+    fall through to `navigator.handle` as usual.
+    """
+    if action is Action.REMOVE and screen.agent is None and screen.rows:
+        agent = screen.rows[navigator.cursor].agent
+        cli.safe_report("models", lambda: cli.models_unset(screen.cli.id, agent, runtime))
+        return navigator.replaced(_models_screen(screen.cli, runtime))
+    if action is not Action.CHOOSE:
+        return None
+    if screen.model_id is not None:
+        effort = EFFORT_OPTIONS[navigator.cursor]
+        cli.safe_report(
+            "models",
+            lambda: cli.models_set(
+                screen.cli.id, screen.agent, f"{screen.provider_id}/{screen.model_id}", runtime, effort=effort
+            ),
+        )
+        return navigator.replaced(_models_screen(screen.cli, runtime))
+    if screen.provider_id is not None:
+        provider = next(provider for provider in screen.providers if provider.id == screen.provider_id)
+        if not provider.models or provider.models[navigator.cursor].reasoning:
+            return None  # a reasoning model: `Navigator` narrows to the effort step itself.
+        model_id = provider.models[navigator.cursor].id
+        cli.safe_report(
+            "models",
+            lambda: cli.models_set(screen.cli.id, screen.agent, f"{screen.provider_id}/{model_id}", runtime, effort=None),
+        )
+        return navigator.replaced(_models_screen(screen.cli, runtime))
+    return None
+
+
 def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigator:
     """One key's worth of navigation, running whichever engine call it needs.
 
@@ -150,6 +236,12 @@ def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigato
         if isinstance(target, RestoreConfirm):
             _, report = cli.safe_report(target.command, lambda: cli.restore(runtime, target.generation))
             return navigator.opened(RestoreResultScreen(report=report))
+        if isinstance(target, ModelsTarget):
+            return navigator.opened(_models_screen(target.cli, runtime))
+    if isinstance(screen, ModelsScreen):
+        stepped = _models_write(screen, navigator, runtime, action)
+        if stepped is not None:
+            return stepped
     if isinstance(screen, InstallPlanScreen) and action is Action.CHOOSE:
         _, report = cli.safe_report("install", lambda: cli.install(screen.cli.id, runtime))
         return navigator.opened(InstallResultScreen(cli=screen.cli, report=report))

@@ -30,6 +30,9 @@ class KeyMappingTest(unittest.TestCase):
     def test_q_quits(self):
         self.assertEqual(action_for(ord("q")), Action.QUIT)
 
+    def test_d_removes(self):
+        self.assertEqual(action_for(ord("d")), Action.REMOVE)
+
     def test_an_unmapped_key_means_nothing(self):
         self.assertIsNone(action_for(ord("z")))
 
