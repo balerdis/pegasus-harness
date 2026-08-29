@@ -23,7 +23,7 @@ from pegasus.core.content import (
     mcp_convention_path,
 )
 from pegasus.core.dependencies import npm_script_path, program_path
-from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout
+from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout, ModelAssignment
 
 AGENT_FOR_ROLE: dict[RunsAs, str | None] = {
     RunsAs.ORCHESTRATOR: "pegasus-orchestrator",
@@ -76,17 +76,25 @@ def prompt(layout: Layout, item: Agent) -> list[Artifact]:
     ]
 
 
-def agent(layout: Layout, item: Agent, model: str | None = None, separate_prompt: bool = True) -> list[Artifact]:
+def agent(
+    layout: Layout, item: Agent, assignment: ModelAssignment | None = None, separate_prompt: bool = True
+) -> list[Artifact]:
     """One entry under the settings file's agent map, plus the default when it is one.
 
     `mode` and `default` say different things: `primary` says the agent can run at top
     level, `default_agent` says which single one a session opens in.
 
-    `model` is a fact about one machine -- a preference from Pegasus's own state,
-    already resolved and validated against what this machine can actually reach --
-    never a fact the content core carries. Absent, the key is omitted entirely and
-    OpenCode falls back to whatever it would have chosen anyway, exactly as if this
-    agent had never been assigned a model at all.
+    `assignment` is a fact about one machine -- a preference from Pegasus's own
+    state, its model already resolved and validated against what this machine can
+    actually reach -- never a fact the content core carries. Absent, both keys are
+    omitted entirely and OpenCode falls back to whatever it would have chosen
+    anyway, exactly as if this agent had never been assigned a model at all.
+
+    An effort is spelled here as ``variant``: OpenCode's own schema names a
+    per-agent reasoning effort that way, and this is the one place that
+    translation is allowed to happen. It is written only alongside a model,
+    matching the schema's own caveat that a variant "applies only when using
+    the agent's configured model".
     """
     value: dict[str, Any] = {"description": item.description, "mode": MODE_NAME[item.mode]}
     if item.hidden:
@@ -99,8 +107,10 @@ def agent(layout: Layout, item: Agent, model: str | None = None, separate_prompt
         )
     value["tools"] = _tools(item)
     value["permission"] = {"task": {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}}
-    if model is not None:
-        value["model"] = model
+    if assignment is not None:
+        value["model"] = assignment.full_id
+        if assignment.effort is not None:
+            value["variant"] = assignment.effort
 
     artifacts: list[Artifact] = [
         ConfigKeyArtifact(

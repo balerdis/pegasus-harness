@@ -24,7 +24,7 @@ from pegasus.core.content import (
 )
 from pegasus.core import registry as registry_module
 from pegasus.core.registry import Registry
-from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileArtifact, Layout
+from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileArtifact, Layout, ModelAssignment
 
 HOME = Path("/home/probe")
 ENVIRONMENT = Environment(home=HOME, data_dir=HOME / ".local" / "share" / "pegasus-harness")
@@ -309,9 +309,28 @@ class AgentRenderTest(unittest.TestCase):
         self.assertNotIn("model", self.value(self.agent()))
 
     def test_a_resolved_model_is_written_into_the_agent_entry(self):
-        artifacts = self.adapter.render_agent(self.layout, self.agent(), "anthropic/claude-sonnet-5")
+        artifacts = self.adapter.render_agent(
+            self.layout, self.agent(), ModelAssignment("anthropic", "claude-sonnet-5")
+        )
         value = only(artifacts, ConfigKeyArtifact)[0].value
         self.assertEqual(value["model"], "anthropic/claude-sonnet-5")
+
+    def test_no_variant_key_when_the_assignment_carries_no_effort(self):
+        artifacts = self.adapter.render_agent(
+            self.layout, self.agent(), ModelAssignment("anthropic", "claude-sonnet-5")
+        )
+        value = only(artifacts, ConfigKeyArtifact)[0].value
+        self.assertNotIn("variant", value)
+
+    def test_an_effort_is_written_as_this_clis_own_variant_key(self):
+        """`variant` is OpenCode's own schema word for a model's reasoning effort --
+        this adapter's job to spell, never the engine's."""
+        artifacts = self.adapter.render_agent(
+            self.layout, self.agent(), ModelAssignment("anthropic", "claude-sonnet-5", effort="high")
+        )
+        value = only(artifacts, ConfigKeyArtifact)[0].value
+        self.assertEqual(value["model"], "anthropic/claude-sonnet-5")
+        self.assertEqual(value["variant"], "high")
 
 
 class CommandRenderTest(unittest.TestCase):

@@ -24,6 +24,7 @@ from pegasus.core.types import (
     Detection,
     Environment,
     Layout,
+    ModelAssignment,
     SupportTier,
 )
 
@@ -60,10 +61,13 @@ class CliAdapter(Protocol):
 
     def render_skill(self, layout: Layout, skill: Any) -> list[Artifact]: ...
 
-    def render_agent(self, layout: Layout, agent: Any, model: str | None = None) -> list[Artifact]:
-        """`model`, when given, is an already-resolved ``provider/model`` string --
-        a preference from Pegasus's own state, validated against what this
-        machine can reach, never a fact the content core itself carries."""
+    def render_agent(self, layout: Layout, agent: Any, assignment: ModelAssignment | None = None) -> list[Artifact]:
+        """`assignment`, when given, is an already-resolved model and effort --
+        a preference from Pegasus's own state, its model validated against
+        what this machine can reach, never a fact the content core itself
+        carries. Naming the model and spelling an effort in this CLI's own
+        vocabulary (its ``variant``, say) is this adapter's job, not the
+        engine's."""
 
     def render_command(self, layout: Layout, command: Any) -> list[Artifact]: ...
 
