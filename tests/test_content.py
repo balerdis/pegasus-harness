@@ -97,6 +97,8 @@ Convention body.
 
 INTEGRITY = "sha512-" + "a" * 86 + "=="
 
+NPM_LOCKFILE_NAME = "probe-mcp-package-lock.json"
+
 NPM_MCP = f"""---
 name: probe-mcp
 description: Probes an npm-distributed MCP server
@@ -106,9 +108,25 @@ package: probe-mcp
 version: 1.2.3
 integrity: {INTEGRITY}
 entry: cli.js
+lockfile: {NPM_LOCKFILE_NAME}
 ---
 
 Convention body.
+"""
+
+NPM_LOCKFILE = f"""{{
+  "name": "pegasus-probe-mcp",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {{
+    "": {{"name": "pegasus-probe-mcp", "dependencies": {{"probe-mcp": "1.2.3"}}}},
+    "node_modules/probe-mcp": {{
+      "version": "1.2.3",
+      "resolved": "https://registry.npmjs.org/probe-mcp/-/probe-mcp-1.2.3.tgz",
+      "integrity": "{INTEGRITY}"
+    }}
+  }}
+}}
 """
 
 
@@ -522,8 +540,9 @@ class CommandTest(TemporaryContent):
 
 
 class McpTest(TemporaryContent):
-    def load_mcp(self, text):
+    def load_mcp(self, text, lockfile=NPM_LOCKFILE):
         write(self.root, "mcp/probe-mcp.md", text)
+        write(self.root, f"mcp/{NPM_LOCKFILE_NAME}", lockfile)
         return content.load(self.root).mcp[0]
 
     def test_reads_every_declared_field(self):
@@ -591,7 +610,13 @@ class McpTest(TemporaryContent):
         self.assertEqual(mcp.entry, "cli.js")
 
     def test_an_npm_server_missing_any_required_field_is_rejected(self):
-        for line in (f"package: probe-mcp\n", "version: 1.2.3\n", f"integrity: {INTEGRITY}\n", "entry: cli.js\n"):
+        for line in (
+            "package: probe-mcp\n",
+            "version: 1.2.3\n",
+            f"integrity: {INTEGRITY}\n",
+            "entry: cli.js\n",
+            f"lockfile: {NPM_LOCKFILE_NAME}\n",
+        ):
             with self.subTest(line=line), self.assertRaises(ContentError) as raised:
                 self.load_mcp(NPM_MCP.replace(line, ""))
             self.assertIn(line.split(":")[0], str(raised.exception))
@@ -600,6 +625,64 @@ class McpTest(TemporaryContent):
         with self.assertRaises(ContentError) as raised:
             self.load_mcp(NPM_MCP.replace(INTEGRITY, "sha256:not-sha512"))
         self.assertIn("integrity", str(raised.exception))
+
+    def test_an_npm_server_reads_the_real_lockfile_beside_it_verbatim(self):
+        mcp = self.load_mcp(NPM_MCP)
+        self.assertEqual(mcp.npm_lockfile, NPM_LOCKFILE.encode("utf-8"))
+
+    def test_an_npm_server_reads_the_lockfiles_own_root_name(self):
+        """The root name is read from the lockfile itself, not derived from
+        the descriptor's own file stem (`probe-mcp` here) -- the two happen
+        to differ in this fixture precisely so a re-derivation would be
+        caught rather than passing by coincidence.
+        """
+        mcp = self.load_mcp(NPM_MCP, lockfile=NPM_LOCKFILE.replace("pegasus-probe-mcp", "totally-different-name"))
+        self.assertEqual(mcp.npm_package_name, "totally-different-name")
+
+    def test_a_lockfile_with_no_root_name_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(NPM_MCP, lockfile=NPM_LOCKFILE.replace('"name": "pegasus-probe-mcp", ', ""))
+        self.assertIn("name", str(raised.exception))
+
+    def test_a_lockfile_naming_a_file_that_does_not_exist_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(NPM_MCP.replace(NPM_LOCKFILE_NAME, "ghost-lock.json"))
+        self.assertIn("ghost-lock.json", str(raised.exception))
+
+    def test_a_lockfile_naming_a_path_outside_its_directory_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(NPM_MCP.replace(NPM_LOCKFILE_NAME, f"../{NPM_LOCKFILE_NAME}"))
+        self.assertIn("lockfile", str(raised.exception))
+
+    def test_a_lockfile_that_is_not_valid_json_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(NPM_MCP, lockfile="not json at all")
+        self.assertIn("JSON", str(raised.exception))
+
+    def test_a_lockfile_whose_root_package_pins_a_different_version_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(NPM_MCP, lockfile=NPM_LOCKFILE.replace('"probe-mcp": "1.2.3"', '"probe-mcp": "9.9.9"'))
+        self.assertIn("probe-mcp@1.2.3", str(raised.exception))
+
+    def test_a_lockfile_whose_pinned_integrity_disagrees_with_the_descriptor_is_rejected(self):
+        other_integrity = "sha512-" + "b" * 86 + "=="
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(NPM_MCP, lockfile=NPM_LOCKFILE.replace(INTEGRITY, other_integrity))
+        self.assertIn("integrity", str(raised.exception))
+
+    def test_a_lockfile_whose_pinned_resolved_url_disagrees_with_the_descriptor_is_rejected(self):
+        other_lockfile = NPM_LOCKFILE.replace(
+            "https://registry.npmjs.org/probe-mcp/-/probe-mcp-1.2.3.tgz",
+            "https://example.test/somewhere-else.tgz",
+        )
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(NPM_MCP, lockfile=other_lockfile)
+        self.assertIn("resolved", str(raised.exception))
+
+    def test_a_lockfile_with_no_entry_for_the_pinned_package_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(NPM_MCP, lockfile=NPM_LOCKFILE.replace("node_modules/probe-mcp", "node_modules/other"))
+        self.assertIn("node_modules/probe-mcp", str(raised.exception))
 
     def test_a_remote_server_may_not_declare_npm_fields(self):
         with self.assertRaises(ContentError) as raised:
@@ -699,7 +782,7 @@ class ShippedContentTest(unittest.TestCase):
 
     def test_mcp_servers_load(self):
         self.assertEqual(
-            [server.name for server in self.content.mcp], ["cbm", "context7", "engram"]
+            [server.name for server in self.content.mcp], ["cbm", "context7", "engram", "playwright"]
         )
 
     def test_every_shipped_server_declares_a_mechanism_and_a_convention(self):

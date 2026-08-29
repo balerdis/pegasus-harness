@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tarfile
 import unittest
 from pathlib import Path, PurePosixPath
@@ -227,6 +228,22 @@ class MaterializeArchiveTest(unittest.TestCase):
         )
 
 
+#: A real lockfile pins more than the top package alone -- ``probe-core`` here
+#: stands in for the driver a synthesized, single-package lockfile could never
+#: have named, which is exactly the gap `materialize_npm` must not reintroduce.
+NPM_LOCKFILE = (
+    b'{"name": "pegasus-probe", "lockfileVersion": 3, "requires": true, "packages": {'
+    b'"": {"name": "pegasus-probe", "dependencies": {"probe-mcp": "1.2.3"}}, '
+    b'"node_modules/probe-mcp": {"version": "1.2.3", '
+    b'"resolved": "https://registry.npmjs.org/probe-mcp/-/probe-mcp-1.2.3.tgz", '
+    b'"integrity": "' + INTEGRITY.encode("ascii") + b'", '
+    b'"dependencies": {"probe-core": "9.9.9"}}, '
+    b'"node_modules/probe-core": {"version": "9.9.9", '
+    b'"resolved": "https://registry.npmjs.org/probe-core/-/probe-core-9.9.9.tgz", '
+    b'"integrity": "sha512-' + (b"c" * 86) + b'=="}}}'
+)
+
+
 def npm_server(**overrides) -> Mcp:
     fields = dict(
         name="probe",
@@ -239,6 +256,8 @@ def npm_server(**overrides) -> Mcp:
         package="probe-mcp",
         integrity=INTEGRITY,
         entry="cli.js",
+        npm_lockfile=NPM_LOCKFILE,
+        npm_package_name="pegasus-probe",
     )
     fields.update(overrides)
     return Mcp(**fields)
@@ -275,16 +294,57 @@ class MaterializeNpmTest(unittest.TestCase):
         target = dependencies.target_dir(DEPENDENCIES_DIR, item)
         self.assertEqual(installer.calls, [target])
 
-    def test_the_lockfile_pins_the_descriptors_own_resolved_url_and_integrity(self):
+    def test_the_lockfile_is_written_verbatim_from_the_descriptor(self):
+        item = npm_server()
+        installer = FakeNpmInstaller()
+        self.materialize(item, installer)
+        target = dependencies.target_dir(DEPENDENCIES_DIR, item)
+        self.assertEqual(self.filesystem.files[target / "package-lock.json"], item.npm_lockfile)
+
+    def test_the_written_lockfile_still_pins_a_package_the_descriptor_never_names(self):
+        """`probe-core` is a transitive dependency, not anything `npm_server`
+        declares as its own `package` -- proof this is the real, shipped
+        lockfile and not one synthesized from the descriptor's own fields,
+        which could only ever have named the one package it does declare.
+        """
         item = npm_server()
         installer = FakeNpmInstaller()
         self.materialize(item, installer)
         target = dependencies.target_dir(DEPENDENCIES_DIR, item)
         lock = self.filesystem.files[target / "package-lock.json"].decode("utf-8")
-        self.assertIn(item.endpoint, lock)
-        self.assertIn(item.integrity, lock)
-        self.assertIn(item.package, lock)
-        self.assertIn(item.version, lock)
+        self.assertIn("probe-core", lock)
+
+    def test_a_missing_lockfile_is_refused_before_anything_is_written(self):
+        item = npm_server(npm_lockfile=None)
+        with self.assertRaises(dependencies.MaterializeError) as raised:
+            self.materialize(item, FakeNpmInstaller())
+        self.assertIn("lockfile", str(raised.exception).lower())
+        self.assertEqual(self.filesystem.files, {})
+        self.assertEqual(self.filesystem.writes, [])
+
+    def test_a_missing_package_name_is_refused_before_anything_is_written(self):
+        item = npm_server(npm_package_name=None)
+        with self.assertRaises(dependencies.MaterializeError) as raised:
+            self.materialize(item, FakeNpmInstaller())
+        self.assertIn("lockfile", str(raised.exception).lower())
+        self.assertEqual(self.filesystem.files, {})
+        self.assertEqual(self.filesystem.writes, [])
+
+    def test_package_json_names_itself_after_the_lockfiles_own_name_not_the_descriptors_stem(self):
+        """The descriptor's file stem (``item.name``, here ``probe``) and the
+        real, npm-generated lockfile's own root name need not agree -- the
+        shipped `playwright.md` descriptor and its `pegasus-playwright-mcp`
+        lockfile are exactly such a pair. `package.json`'s own `name` has to
+        come from the lockfile `npm ci` will check it against, not from the
+        stem, or the two would disagree on any descriptor whose file is not
+        named after its lockfile's own package.
+        """
+        item = npm_server(npm_package_name="totally-different-from-the-stem")
+        installer = FakeNpmInstaller()
+        self.materialize(item, installer)
+        target = dependencies.target_dir(DEPENDENCIES_DIR, item)
+        manifest = json.loads(self.filesystem.files[target / "package.json"])
+        self.assertEqual(manifest["name"], "totally-different-from-the-stem")
 
     def test_the_record_identifies_what_was_installed(self):
         item = npm_server()
