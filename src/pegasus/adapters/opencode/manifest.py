@@ -25,6 +25,7 @@ MANIFEST = CapabilityManifest(
     # The mcp/ content category and render_mcp both exist now: OpenCode's
     # servers are declared in content, not in manifests/release-contract.json.
     mcp=True,
-    # Model assignment arrives with the configuration menu.
-    per_agent_model=False,
+    # `model_catalog` now reads the CLI's real catalog, credentials, and
+    # configuration files, which is what this capability was waiting on.
+    per_agent_model=True,
 )

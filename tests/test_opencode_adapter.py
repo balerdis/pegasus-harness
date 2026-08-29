@@ -1,7 +1,9 @@
 """The OpenCode adapter: the only place OpenCode's own names are allowed."""
 from __future__ import annotations
 
+import json
 import re
+import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 
@@ -75,12 +77,24 @@ class RegistrationTest(unittest.TestCase):
         manifest = Adapter().capabilities()
         self.assertEqual(
             sorted(item.value for item in manifest.enabled),
-            ["mcp", "prompts", "skills", "slash_commands", "sub_agents", "system_prompt"],
+            [
+                "mcp",
+                "per_agent_model",
+                "prompts",
+                "skills",
+                "slash_commands",
+                "sub_agents",
+                "system_prompt",
+            ],
         )
 
     def test_mcp_is_declared_now_that_its_content_exists(self):
         self.assertTrue(Adapter().capabilities().mcp)
         self.assertTrue(callable(getattr(Adapter(), "render_mcp", None)))
+
+    def test_per_agent_model_is_declared_now_that_model_catalog_is_implemented(self):
+        self.assertTrue(Adapter().capabilities().per_agent_model)
+        self.assertTrue(callable(getattr(Adapter(), "model_catalog", None)))
 
 
 class DetectionTest(unittest.TestCase):
@@ -93,6 +107,77 @@ class DetectionTest(unittest.TestCase):
         detection = Adapter().detect(Environment(home=HOME, variables={"PATH": ""}))
         self.assertFalse(detection.installed)
         self.assertIsNone(detection.binary_path)
+
+
+class ModelCatalogTest(unittest.TestCase):
+    """`model_catalog` reads three real files, but only ever ones this test made.
+
+    Every path below is rooted in a throwaway directory this test creates and
+    tears down itself, through XDG variables the adapter already honours
+    elsewhere. Nothing here ever names the real machine's home.
+    """
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.environment = Environment(
+            home=root / "home",
+            variables={
+                "XDG_CACHE_HOME": str(root / "cache"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_CONFIG_HOME": str(root / "config"),
+            },
+        )
+
+    def _write(self, relative: str, payload: object) -> None:
+        path = Path(self.scratch.name) / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_a_missing_catalog_file_is_an_empty_catalog_not_an_error(self):
+        catalog = Adapter().model_catalog(self.environment)
+        self.assertEqual(catalog.providers, ())
+
+    def test_a_credentialed_provider_offers_its_tool_capable_models(self):
+        self._write(
+            "cache/opencode/models.json",
+            {
+                "anthropic": {
+                    "models": {
+                        "claude-sonnet-5": {"tool_call": True},
+                        "no-tools": {"tool_call": False},
+                    }
+                }
+            },
+        )
+        self._write("data/opencode/auth.json", {"anthropic": {"type": "oauth", "access": "leak-me-not"}})
+        catalog = Adapter().model_catalog(self.environment)
+        self.assertEqual([p.id for p in catalog.providers], ["anthropic"])
+        self.assertEqual([m.id for m in catalog.providers[0].models], ["claude-sonnet-5"])
+
+    def test_a_provider_declared_in_the_users_own_config_is_offered(self):
+        self._write("cache/opencode/models.json", {"custom-llm": {"models": {"m": {"tool_call": True}}}})
+        self._write("config/opencode/opencode.json", {"provider": {"custom-llm": {}}})
+        catalog = Adapter().model_catalog(self.environment)
+        self.assertEqual([p.id for p in catalog.providers], ["custom-llm"])
+
+    def test_a_provider_with_no_session_no_env_and_no_declaration_is_absent(self):
+        self._write("cache/opencode/models.json", {"anthropic": {"models": {"m": {"tool_call": True}}}})
+        catalog = Adapter().model_catalog(self.environment)
+        self.assertEqual(catalog.providers, ())
+
+    def test_a_credential_value_never_appears_anywhere_in_the_result(self):
+        self._write(
+            "cache/opencode/models.json",
+            {"anthropic": {"models": {"claude-sonnet-5": {"tool_call": True}}}},
+        )
+        self._write(
+            "data/opencode/auth.json",
+            {"anthropic": {"type": "oauth", "access": "top-secret-oauth-token"}},
+        )
+        catalog = Adapter().model_catalog(self.environment)
+        self.assertNotIn("top-secret-oauth-token", repr(catalog))
 
 
 class SkillRenderTest(unittest.TestCase):
