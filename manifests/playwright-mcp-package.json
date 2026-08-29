@@ -1,7 +1,0 @@
-{
-  "name": "pegasus-playwright-mcp",
-  "private": true,
-  "dependencies": {
-    "@playwright/mcp": "0.0.79"
-  }
-}
