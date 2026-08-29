@@ -60,7 +60,10 @@ class CliAdapter(Protocol):
 
     def render_skill(self, layout: Layout, skill: Any) -> list[Artifact]: ...
 
-    def render_agent(self, layout: Layout, agent: Any) -> list[Artifact]: ...
+    def render_agent(self, layout: Layout, agent: Any, model: str | None = None) -> list[Artifact]:
+        """`model`, when given, is an already-resolved ``provider/model`` string --
+        a preference from Pegasus's own state, validated against what this
+        machine can reach, never a fact the content core itself carries."""
 
     def render_command(self, layout: Layout, command: Any) -> list[Artifact]: ...
 

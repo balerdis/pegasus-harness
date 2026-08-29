@@ -42,6 +42,7 @@ class StubAdapter:
         self._artifacts = artifacts
         self._own = own
         self._manifest = manifest or CapabilityManifest(cli_id="probe", skills=True)
+        self.agent_calls = []
 
     def capabilities(self):
         return self._manifest
@@ -51,6 +52,10 @@ class StubAdapter:
 
     def render_skill(self, layout, skill):
         return list(self._artifacts)
+
+    def render_agent(self, layout, agent, model=None):
+        self.agent_calls.append((agent.name, model))
+        return []
 
     def own_artifacts(self, layout):
         return list(self._own)
@@ -102,6 +107,48 @@ class BuildTest(unittest.TestCase):
     def test_every_non_interactive_capability_has_a_content_source(self):
         non_interactive = set(Capability) - catalog_module.INTERACTIVE
         self.assertEqual(non_interactive, set(catalog_module.SOURCES))
+
+
+def one_agent(name="probe-agent"):
+    from pegasus.core.content import Agent, AgentMode
+
+    return Content(
+        agents=(
+            Agent(
+                name=name,
+                description="d",
+                body="body",
+                mode=content_module.AgentMode.SUBAGENT,
+                source=PurePosixPath("agents/probe-agent.md"),
+                model_configurable=True,
+            ),
+        )
+    )
+
+
+class RenderModelOverrideTest(unittest.TestCase):
+    def test_render_agent_receives_the_matching_override(self):
+        manifest = CapabilityManifest(cli_id="probe", sub_agents=True)
+        adapter = StubAdapter(manifest=manifest)
+        catalog_module.render(
+            one_agent("probe-agent"), adapter, ENVIRONMENT, model_overrides={"probe-agent": "anthropic/x"}
+        )
+        self.assertEqual(adapter.agent_calls, [("probe-agent", "anthropic/x")])
+
+    def test_an_agent_with_no_override_gets_none(self):
+        manifest = CapabilityManifest(cli_id="probe", sub_agents=True)
+        adapter = StubAdapter(manifest=manifest)
+        catalog_module.render(one_agent("probe-agent"), adapter, ENVIRONMENT)
+        self.assertEqual(adapter.agent_calls, [("probe-agent", None)])
+
+    def test_build_never_forwards_a_model_override(self):
+        """`build` has no `model_overrides` parameter at all, so an assignment
+        cannot enter the canonical render that produces release identity."""
+        self.assertNotIn("model_overrides", inspect.signature(catalog_module.build).parameters)
+        manifest = CapabilityManifest(cli_id="probe", sub_agents=True)
+        adapter = StubAdapter(manifest=manifest)
+        build(one_agent("probe-agent"), adapter)
+        self.assertEqual(adapter.agent_calls, [("probe-agent", None)])
 
 
 class DigestTest(unittest.TestCase):

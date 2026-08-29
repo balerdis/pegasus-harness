@@ -9,6 +9,7 @@ import unittest
 
 from pegasus.core import model_assignments as module
 from pegasus.core.model_assignments import Entry, ModelAssignmentError, ModelAssignments
+from pegasus.core.model_catalog import Model, ModelCatalog, Provider
 from pegasus.core.types import ModelAssignment
 
 
@@ -66,6 +67,52 @@ class RoundTripTest(unittest.TestCase):
         assignments = module.with_assignment(module.empty(), "opencode", "sdd-apply", assignment())
         payload = module.to_dict(assignments)
         self.assertNotIn("effort", payload["assignments"][0])
+
+
+def catalog(provider="anthropic", model="claude-sonnet-5") -> ModelCatalog:
+    return ModelCatalog(providers=(Provider(id=provider, models=(Model(id=model, tool_call=True),)),))
+
+
+class ResolveForRenderTest(unittest.TestCase):
+    def test_a_reachable_assignment_is_honored(self):
+        assignments = module.with_assignment(module.empty(), "opencode", "sdd-apply", assignment())
+        honored, warnings = module.resolve_for_render(assignments, "opencode", frozenset({"sdd-apply"}), catalog())
+        self.assertEqual(honored, {"sdd-apply": "anthropic/claude-sonnet-5"})
+        self.assertEqual(warnings, ())
+
+    def test_no_assignments_is_a_clean_no_op(self):
+        honored, warnings = module.resolve_for_render(module.empty(), "opencode", frozenset(), catalog())
+        self.assertEqual((honored, warnings), ({}, ()))
+
+    def test_an_assignment_for_another_cli_is_ignored(self):
+        assignments = module.with_assignment(module.empty(), "claude-code", "sdd-apply", assignment())
+        honored, warnings = module.resolve_for_render(assignments, "opencode", frozenset({"sdd-apply"}), catalog())
+        self.assertEqual((honored, warnings), ({}, ()))
+
+    def test_an_agent_no_longer_configurable_is_dropped_with_a_warning(self):
+        assignments = module.with_assignment(module.empty(), "opencode", "retired-agent", assignment())
+        honored, warnings = module.resolve_for_render(assignments, "opencode", frozenset(), catalog())
+        self.assertEqual(honored, {})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("retired-agent", warnings[0])
+
+    def test_an_unreachable_provider_is_dropped_with_a_warning(self):
+        assignments = module.with_assignment(module.empty(), "opencode", "sdd-apply", assignment())
+        honored, warnings = module.resolve_for_render(
+            assignments, "opencode", frozenset({"sdd-apply"}), ModelCatalog()
+        )
+        self.assertEqual(honored, {})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("anthropic", warnings[0])
+
+    def test_a_model_no_longer_listed_is_dropped_with_a_warning(self):
+        assignments = module.with_assignment(module.empty(), "opencode", "sdd-apply", assignment("retired-model"))
+        honored, warnings = module.resolve_for_render(
+            assignments, "opencode", frozenset({"sdd-apply"}), catalog(model="claude-sonnet-5")
+        )
+        self.assertEqual(honored, {})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("retired-model", warnings[0])
 
 
 class FromDictValidationTest(unittest.TestCase):

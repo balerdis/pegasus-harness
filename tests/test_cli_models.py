@@ -90,6 +90,14 @@ class SetTest(RealHomeTestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
 
+    def test_setting_says_the_installation_does_not_carry_it_yet(self):
+        code, report = self.run_cli(
+            "models", "set", "--cli", CLI, "--agent", CONFIGURABLE_AGENT, "--model", "anthropic/claude-sonnet-5",
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(report["activation"])
+        self.assertIn(CLI, report["activation"][0])
+
 
 class UnsetTest(RealHomeTestCase):
     def test_unsetting_something_never_set_is_a_no_op_not_an_error(self):
@@ -109,6 +117,14 @@ class UnsetTest(RealHomeTestCase):
 
         loaded = cli.model_assignment_store(self.runtime()).load()
         self.assertIsNone(model_assignments_module.get(loaded, CLI, CONFIGURABLE_AGENT))
+
+    def test_unsetting_also_says_the_installation_does_not_carry_the_removal_yet(self):
+        self.run_cli(
+            "models", "set", "--cli", CLI, "--agent", CONFIGURABLE_AGENT, "--model", "anthropic/claude-sonnet-5",
+        )
+        code, report = self.run_cli("models", "unset", "--cli", CLI, "--agent", CONFIGURABLE_AGENT)
+        self.assertEqual(code, 0)
+        self.assertTrue(report["activation"])
 
 
 class ListTest(RealHomeTestCase):

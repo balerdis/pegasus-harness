@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
+from pegasus.core.model_catalog import ModelCatalog
 from pegasus.core.types import ModelAssignment
 
 SCHEMA = "pegasus/model-assignment/v1"
@@ -66,6 +67,59 @@ def without_assignment(assignments: ModelAssignments, cli: str, agent: str) -> M
     """Drop the preference for one agent on one CLI. A no-op if it was never set."""
     remaining = tuple(entry for entry in assignments.entries if not (entry.cli == cli and entry.agent == agent))
     return replace(assignments, entries=remaining)
+
+
+# --- Resolution for rendering: soft failure lives here -----------------------
+
+
+def resolve_for_render(
+    assignments: ModelAssignments, cli: str, configurable_agents: frozenset[str], catalog: ModelCatalog
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Which of this CLI's assignments can be honoured right now, and why the rest cannot.
+
+    A stored preference can go stale in three ways, none of which may break an
+    install: the agent it names is no longer one this release ships as
+    configurable, the provider it names is no longer reachable on this machine
+    (a revoked credential, most often), or the model it names is no longer in
+    that provider's catalog. Each of those degrades to "rendered without a
+    model" rather than raising, but never silently: every dropped assignment
+    produces one warning naming the agent and the reason, so a preference that
+    cannot be honoured is always visible somewhere a person reads.
+
+    Returns ``(honored, warnings)``: ``honored`` maps an agent name to the
+    ``provider/model`` string ready to hand a renderer, and ``warnings`` is
+    prose for everything this run could not carry out.
+    """
+    available: dict[str, frozenset[str]] = {
+        provider.id: frozenset(model.id for model in provider.models) for provider in catalog.providers
+    }
+    honored: dict[str, str] = {}
+    warnings: list[str] = []
+    for entry in assignments.entries:
+        if entry.cli != cli:
+            continue
+        assignment = entry.assignment
+        if entry.agent not in configurable_agents:
+            warnings.append(
+                f"{entry.agent}: assigned {assignment.full_id}, but this release has no configurable "
+                f"agent named {entry.agent!r}; rendered without a model"
+            )
+            continue
+        models = available.get(assignment.provider_id)
+        if models is None:
+            warnings.append(
+                f"{entry.agent}: assigned {assignment.full_id}, but provider {assignment.provider_id!r} "
+                f"is not reachable on this machine; rendered without a model"
+            )
+            continue
+        if assignment.model_id not in models:
+            warnings.append(
+                f"{entry.agent}: assigned {assignment.full_id}, but {assignment.provider_id!r} no "
+                f"longer lists that model; rendered without a model"
+            )
+            continue
+        honored[entry.agent] = assignment.full_id
+    return honored, tuple(warnings)
 
 
 # --- Serialization -------------------------------------------------------------
