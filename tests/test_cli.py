@@ -512,6 +512,46 @@ class InstallMcpTest(RealHomeTestCase):
             },
         )
 
+    def test_choosing_nothing_ships_no_engram_memory_protocol_anywhere(self):
+        """The memory protocol now lives entirely in engram's own convention
+        body: naming no server must leave no trace of it, neither as a
+        convention file nor inlined into the shipped system prompt."""
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertNotIn("mcp", self.settings())
+        self.assertFalse(self.filesystem.exists(self.convention_path("engram")))
+        prompt_text = self.layout().system_prompt_file.read_text(encoding="utf-8")
+        self.assertNotIn("Engram Persistent Memory", prompt_text)
+        self.assertNotIn("PROACTIVE SAVE TRIGGERS", prompt_text)
+        self.assertNotIn("Session Close Protocol", prompt_text)
+        self.assertNotIn("mem_search", prompt_text)
+        self.assertNotIn("mem_context", prompt_text)
+        # The delivery guarantee is not engram-specific, so it ships either way,
+        # `mem_save` and friends included as its own worked example.
+        self.assertIn("DELIVERY GUARANTEE", prompt_text)
+
+    def test_choosing_engram_plans_its_key_and_its_convention_file(self):
+        """`download` servers materialize real dependencies on a real install,
+        which this test suite must never trigger over the network. `--dry-run`
+        computes the same plan without fetching anything, which is exactly
+        what proves the convention travels with the server once it is named."""
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "engram", "--dry-run")
+        self.assertEqual(code, 0)
+        created_ids = {item["id"] for item in report["created"]}
+        self.assertIn("mcp:engram", created_ids)
+        self.assertIn("mcp-convention:engram", created_ids)
+
+    def test_choosing_engram_ships_the_delivery_guarantee_too(self):
+        """Selecting a server changes what conventions ship; it must never
+        change whether the universal system prompt ships."""
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "engram", "--dry-run")
+        self.assertEqual(code, 0)
+        created_ids = {item["id"] for item in report["created"]}
+        self.assertIn("system-prompt", created_ids)
+
     def test_an_unknown_server_id_fails_cleanly_and_places_nothing(self):
         self.present()
         code, report = self.run_cli("install", "--cli", CLI, "--mcp", "bogus")

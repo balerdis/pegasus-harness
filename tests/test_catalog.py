@@ -307,7 +307,11 @@ class ShippedCatalogTest(unittest.TestCase):
         # 90, not 89: `_shared/context7-convention.md` is the mcp category's own
         # shared file, now that render_mcp exists and mcp is a declared capability.
         # 18, not 17: `/mcp/context7` is the one shipped MCP server's settings key.
-        self.assertEqual((len(files), len(keys)), (90, 18))
+        # 91, not 90: `_shared/mcp/engram-convention.md` is the second shipped
+        # MCP server's convention file, now that `engram` is a `download`-form
+        # descriptor of its own instead of prose inlined into AGENTS.md.
+        # 19, not 18: `/mcp/engram` is that second server's settings key.
+        self.assertEqual((len(files), len(keys)), (91, 19))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:
