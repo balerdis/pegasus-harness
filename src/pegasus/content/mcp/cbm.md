@@ -1,8 +1,15 @@
-# Codebase Memory Convention (reference documentation)
+---
+name: cbm
+description: Knowledge graph of the codebase for structural code discovery
+distribution: download
+endpoint: https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.10.8/codebase-memory-mcp-linux-amd64.tar.gz
+version: 0.10.8
+checksum: sha256:e5cba4cad6ca8254a85f45041fc8a831908d7d5cb64f98fc3f8eb70a58671793
+archive_members: [codebase-memory-mcp, LICENSE, install.sh, THIRD_PARTY_NOTICES.md]
+archive_executable: codebase-memory-mcp
+---
 
-This convention applies only when the `codebase-memory` MCP tools are present in your
-session. If they are absent, do not attempt them, do not claim graph evidence, and
-proceed with direct file and text search instead.
+# Codebase Memory Convention (reference documentation)
 
 This project uses `codebase-memory-mcp` to maintain a knowledge graph of the codebase.
 ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery: structural

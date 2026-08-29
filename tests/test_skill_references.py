@@ -41,6 +41,8 @@ import re
 import unittest
 from pathlib import Path
 
+from pegasus.core import content as content_module
+
 SKILLS = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content" / "skills"
 
 #: Any path that names a markdown file, in whatever syntax. Gating only inline code
@@ -106,11 +108,29 @@ def is_example(reference: str) -> bool:
     return any(token in reference for token in PLACEHOLDERS)
 
 
+def rendered_not_shipped() -> set[str]:
+    """A server's convention resolves to nothing here on purpose.
+
+    It is not a shipped asset but a file rendered from the server's own
+    descriptor body at install time, so it exists on disk only once that
+    server is selected. Derived from the shipped servers rather than listed,
+    so a second server needs nobody to remember it here -- see the identical
+    exclusion in `test_cbm_convention.py`'s `AgentPointerResolutionTest`.
+    """
+    return {
+        str(content_module.mcp_convention_path(server.name))
+        for server in content_module.load().mcp
+    }
+
+
 def offenders() -> list[str]:
     found = []
+    excluded = rendered_not_shipped()
     for document in skill_documents():
         for number, reference in references(document):
             if is_project_artifact(reference) or is_example(reference):
+                continue
+            if reference in excluded:
                 continue
             if not (SKILLS / reference).is_file():
                 found.append(f"{document.relative_to(SKILLS)}:{number} -> {reference}")

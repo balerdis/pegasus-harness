@@ -200,7 +200,7 @@ Ready for tasks (sdd-tasks).
 <!-- pegasus-local:cbm-protocol -->
 ## Local Codebase Memory Protocol for Design
 
-Use CBM to validate design decisions when the change touches non-trivial coupling, shared abstractions, public APIs, routes, persistence flows, or cross-module behavior. Follow the tool priority order and the index-repair rule in `_shared/cbm-convention.md`. If that path is missing or unreadable, say so and proceed without claiming graph evidence; do not invent your own tool order or fallback conditions.
+Use CBM to validate design decisions when the change touches non-trivial coupling, shared abstractions, public APIs, routes, persistence flows, or cross-module behavior. Follow the tool priority order and the index-repair rule in `_shared/mcp/cbm-convention.md`. If that path is missing or unreadable, say so and proceed without claiming graph evidence; do not invent your own tool order or fallback conditions.
 
 Skip CBM for isolated UI/copy/docs/config-only design where graph relationships do not matter.
 <!-- /pegasus-local:cbm-protocol -->
