@@ -1,7 +1,8 @@
 """Materializing a `download`- or `npm`-distributed MCP server.
 
-`download` fetches, verifies, and places one binary; `npm` writes a lockfile
-pinning one package and asks npm's own chain to fetch and verify it. Both
+`download` fetches, verifies, and places one binary; `npm` writes the
+descriptor's own lockfile -- shipped with it, never synthesized here -- and
+asks npm's own chain to fetch and verify everything that lockfile pins. Both
 share the one thing that makes either safe to retry: `target_dir` is named
 by id and version, so a version already materialized costs no work at all.
 
@@ -191,7 +192,7 @@ def materialize_npm(
     node_present: bool,
     at: str,
 ) -> Record:
-    """Write a lockfile pinning ``item`` alone, then run `npm ci --ignore-scripts` against it.
+    """Write the descriptor's own lockfile, then run `npm ci --ignore-scripts` against it.
 
     Node is a precondition, never something this materializes: ``node_present``
     is asked before a single byte reaches disk, so a missing Node is refused
@@ -199,6 +200,16 @@ def materialize_npm(
     nothing written, nothing to clean up. `npm ci` itself refuses a tarball
     that does not match the lockfile's own `integrity`, which is npm's chain
     rather than a hash Pegasus recomputes.
+
+    `package-lock.json` is written verbatim from ``item.npm_lockfile`` -- the
+    real lockfile the descriptor shipped, pinning every package the one it
+    names actually depends on -- never synthesized here. `package.json` is
+    still built from the descriptor's own fields, but its own `name` comes
+    from ``item.npm_package_name`` -- the lockfile's own root name, not the
+    descriptor's file stem -- because the loader already checked, at load
+    time, that the lockfile's root entry pins the exact same name, package,
+    and version this produces; deriving the name from the file stem instead
+    would agree with the lockfile only by coincidence.
     """
     if item.distribution is not Distribution.NPM:
         raise MaterializeError(f"{item.name}: not an 'npm' server")
@@ -207,10 +218,12 @@ def materialize_npm(
             f"{item.name}: node is not on PATH; installing Node is the user's own responsibility, "
             f"Pegasus does not materialize a runtime"
         )
+    if item.npm_lockfile is None or item.npm_package_name is None:
+        raise MaterializeError(f"{item.name}: has no lockfile to install from")
     target = target_dir(dependencies_dir, item)
     try:
         filesystem.write_atomic(target / "package.json", _package_json(item))
-        filesystem.write_atomic(target / "package-lock.json", _package_lock_json(item))
+        filesystem.write_atomic(target / "package-lock.json", item.npm_lockfile)
     except FileSystemError as error:
         raise MaterializeError(f"{item.name}: could not write its lockfile: {error}") from error
     try:
@@ -243,28 +256,18 @@ def _clean_up(filesystem: FileSystem, target: Path) -> None:
 
 
 def _package_json(item: Mcp) -> bytes:
-    """A minimal manifest naming exactly the one package this tree installs."""
-    document = {"name": f"pegasus-{item.name}", "private": True, "dependencies": {item.package: item.version}}
-    return (json.dumps(document, indent=2) + "\n").encode("utf-8")
+    """A minimal manifest naming exactly the one package this tree installs.
 
-
-def _package_lock_json(item: Mcp) -> bytes:
-    """The lockfile `npm ci` reads its version pin and integrity from.
-
-    `resolved` and `integrity` are copied verbatim from the descriptor, which
-    copies them verbatim from the registry's own metadata in turn.
+    ``name`` is ``item.npm_package_name`` -- the shipped lockfile's own root
+    name -- rather than something derived from ``item.name``, the descriptor's
+    file stem: the two need not match (`playwright.md` ships a lockfile whose
+    root package is named `pegasus-playwright-mcp`), and `npm ci` checks this
+    field against the lockfile's own, so only the lockfile's own value is
+    guaranteed to agree with it.
     """
     document = {
-        "name": f"pegasus-{item.name}",
-        "lockfileVersion": 3,
-        "requires": True,
-        "packages": {
-            "": {"name": f"pegasus-{item.name}", "dependencies": {item.package: item.version}},
-            f"node_modules/{item.package}": {
-                "version": item.version,
-                "resolved": item.endpoint,
-                "integrity": item.integrity,
-            },
-        },
+        "name": item.npm_package_name,
+        "private": True,
+        "dependencies": {item.package: item.version},
     }
     return (json.dumps(document, indent=2) + "\n").encode("utf-8")

@@ -9,6 +9,7 @@ and letting an adapter guess.
 """
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
@@ -192,10 +193,17 @@ class Mcp:
     ``version`` and ``checksum`` exist only for ``download`` -- what proves
     the bytes that arrived are the ones that were meant to.
 
-    ``package``, ``integrity`` and ``entry`` exist only for ``npm``, the same
-    idea through npm's own chain: ``package`` and ``version`` are what gets
-    installed, ``integrity`` is the hash npm verifies the tarball against,
-    and ``entry`` is the script inside it a CLI ends up pointing at.
+    ``package``, ``integrity``, ``entry``, ``npm_lockfile`` and
+    ``npm_package_name`` exist only for ``npm``, the same idea through npm's
+    own chain: ``package`` and ``version`` are what gets installed,
+    ``integrity`` is the hash npm verifies the tarball against, ``entry`` is
+    the script inside it a CLI ends up pointing at, ``npm_lockfile`` is the
+    real lockfile the descriptor's ``lockfile`` field names -- the bytes
+    `npm ci` reads verbatim, pinning every transitive package the top one
+    actually needs, not just the one this descriptor names -- and
+    ``npm_package_name`` is that same lockfile's own root package name,
+    which the synthesized `package.json` reuses verbatim rather than
+    deriving from the descriptor's file stem.
 
     ``archive_members`` and ``archive_executable`` exist only for a `download`
     server whose asset is a compressed archive rather than a bare binary:
@@ -215,6 +223,8 @@ class Mcp:
     package: str | None = None
     integrity: str | None = None
     entry: str | None = None
+    npm_lockfile: bytes | None = None
+    npm_package_name: str | None = None
     archive_members: tuple[str, ...] = ()
     archive_executable: str | None = None
 
@@ -437,7 +447,7 @@ _INTEGRITY = re.compile(r"^sha512-[A-Za-z0-9+/]+=*$")
 _FORM_FIELDS: dict[Distribution, tuple[str, ...]] = {
     Distribution.REMOTE: (),
     Distribution.DOWNLOAD: ("version", "checksum", "archive_members", "archive_executable"),
-    Distribution.NPM: ("package", "version", "integrity", "entry"),
+    Distribution.NPM: ("package", "version", "integrity", "entry", "lockfile"),
 }
 """Which extra fields each distribution's form declares.
 
@@ -455,7 +465,9 @@ def _load_mcp(directory: Path, root: Path) -> tuple[Mcp, ...]:
         distribution = _choice(fields, "distribution", Distribution, source)
         _refuse_foreign_form_fields(fields, distribution, source)
         version, checksum = _download_form(fields, distribution, source)
-        package, npm_version, integrity, entry = _npm_form(fields, distribution, source)
+        package, npm_version, integrity, entry, npm_lockfile, npm_package_name = _npm_form(
+            fields, distribution, path, source
+        )
         archive_members, archive_executable = _archive_form(fields, distribution, source)
         servers.append(
             Mcp(
@@ -470,6 +482,8 @@ def _load_mcp(directory: Path, root: Path) -> tuple[Mcp, ...]:
                 package=package,
                 integrity=integrity,
                 entry=entry,
+                npm_lockfile=npm_lockfile,
+                npm_package_name=npm_package_name,
                 archive_members=archive_members,
                 archive_executable=archive_executable,
             )
@@ -548,25 +562,99 @@ def _archive_form(
 
 
 def _npm_form(
-    fields: dict[str, Any], distribution: Distribution, source: PurePosixPath
-) -> tuple[str | None, str | None, str | None, str | None]:
+    fields: dict[str, Any], distribution: Distribution, path: Path, source: PurePosixPath
+) -> tuple[str | None, str | None, str | None, str | None, bytes | None, str | None]:
     """The extra fields the `npm` form needs, all declared or none.
 
     `package` and `version` are what npm installs, `entry` is the script a
-    CLI's configuration ends up pointing at, and `integrity` is the hash npm
-    itself verifies the fetched tarball against.
+    CLI's configuration ends up pointing at, `integrity` is the hash npm
+    itself verifies the fetched tarball against, and `lockfile` names the
+    real lockfile that ships beside the descriptor -- a plain file, read the
+    same way a skill's own `Asset` is: the loader does the reading so nothing
+    downstream ever has to.
+
+    A synthesized lockfile pinning only ``package`` would prove nothing about
+    whatever ``package`` itself depends on -- exactly the gap that let a
+    driverless install through before this field existed. Requiring the real
+    lockfile, and checking it here against the very fields it must agree
+    with, is what closes that gap at load time instead of at `npm ci`.
     """
     if distribution is not Distribution.NPM:
-        return None, None, None, None
+        return None, None, None, None, None, None
     package = _text(fields, "package", source)
     version = _text(fields, "version", source)
     integrity = _text(fields, "integrity", source)
     entry = _text(fields, "entry", source)
+    endpoint = _text(fields, "endpoint", source)
     if not _INTEGRITY.fullmatch(integrity):
         raise ContentError(
             f"{source}: 'integrity' must be 'sha512-' followed by base64, got {integrity!r}"
         )
-    return package, version, integrity, entry
+    lockfile_name = _text(fields, "lockfile", source)
+    if PurePosixPath(lockfile_name).name != lockfile_name:
+        raise ContentError(
+            f"{source}: 'lockfile' must be a bare filename beside the descriptor, got {lockfile_name!r}"
+        )
+    lockfile_path = path.parent / lockfile_name
+    if not lockfile_path.is_file():
+        raise ContentError(f"{source}: 'lockfile' names {lockfile_name!r}, which does not exist beside it")
+    npm_lockfile = lockfile_path.read_bytes()
+    npm_package_name = _require_lockfile_pins(package, version, integrity, endpoint, npm_lockfile, source)
+    return package, version, integrity, entry, npm_lockfile, npm_package_name
+
+
+def _require_lockfile_pins(
+    package: str, version: str, integrity: str, endpoint: str, npm_lockfile: bytes, source: PurePosixPath
+) -> str:
+    """The shipped lockfile has to pin the very package the descriptor names,
+    and returns the root package's own ``name`` -- the value the synthesized
+    `package.json` must use for its own ``name``, not the descriptor's file
+    stem.
+
+    `npm ci` itself refuses `package.json` and its lockfile when the two
+    disagree, and that disagreement is not only about dependencies: recent
+    npm releases check the root package's own `name` too, comparing it
+    against `package.json`'s. Pegasus synthesizes `package.json` from
+    ``package`` and ``version`` alone -- it never reads the lockfile to build
+    it -- so deriving that name from the descriptor's own file stem, as a
+    naive synthesis would, only agrees with the lockfile by coincidence: a
+    lockfile whose real npm-generated root name is ``pegasus-playwright-mcp``
+    would disagree with a descriptor named ``playwright.md``, exactly the
+    mismatch `npm ci` exists to refuse. Returning the lockfile's own name
+    here, for `package.json` to reuse verbatim, is what keeps the two in
+    agreement by construction instead of by luck.
+    """
+    try:
+        document = json.loads(npm_lockfile)
+    except json.JSONDecodeError as error:
+        raise ContentError(f"{source}: 'lockfile' is not valid JSON: {error}") from error
+    packages = document.get("packages")
+    if not isinstance(packages, dict):
+        raise ContentError(f"{source}: 'lockfile' has no top-level 'packages' object")
+    root = packages.get("", {})
+    if not isinstance(root, dict) or root.get("dependencies", {}).get(package) != version:
+        raise ContentError(
+            f"{source}: 'lockfile' root package does not pin {package}@{version}, "
+            f"the same pair the descriptor itself declares"
+        )
+    root_name = root.get("name")
+    if not isinstance(root_name, str) or not root_name.strip():
+        raise ContentError(f"{source}: 'lockfile' root package has no non-empty 'name'")
+    key = f"node_modules/{package}"
+    entry = packages.get(key)
+    if not isinstance(entry, dict):
+        raise ContentError(f"{source}: 'lockfile' has no {key!r} entry")
+    mismatched = [
+        field
+        for field, expected in (("version", version), ("integrity", integrity), ("resolved", endpoint))
+        if entry.get(field) != expected
+    ]
+    if mismatched:
+        raise ContentError(
+            f"{source}: 'lockfile' entry {key!r} disagrees with the descriptor on "
+            f"{', '.join(mismatched)}"
+        )
+    return root_name
 
 
 def _load_system_prompt(directory: Path, root: Path) -> SystemPrompt | None:
