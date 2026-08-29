@@ -103,21 +103,33 @@ class Catalog:
         return len(self.entries)
 
 
-def render(content: Content, adapter: Any, environment: Environment) -> list[Any]:
+def render(
+    content: Content, adapter: Any, environment: Environment, model_overrides: dict[str, str] | None = None
+) -> list[Any]:
     """Everything the adapter declares it supports, plus what it ships itself.
 
     This is the output of the adapt-and-decorate steps: finished artifacts,
     addressed at real paths for this environment. The catalog turns them into a
     portable manifest; an installation hands them to the planner instead.
+
+    `model_overrides` maps an agent's name to an already-resolved
+    ``provider/model`` string -- a fact about one machine, never about the
+    release, which is exactly why `build` below never passes one. Only
+    `render_agent` ever receives it: every other capability's renderer keeps
+    its original two-argument shape.
     """
     layout = adapter.layout(environment)
     manifest = adapter.capabilities()
+    overrides = model_overrides or {}
     artifacts: list[Any] = []
 
     for capability in sorted(manifest.enabled - INTERACTIVE, key=lambda item: item.value):
         attribute, renderer = SOURCES[capability]
         for item in _items(content, attribute):
-            artifacts.extend(getattr(adapter, renderer)(layout, item))
+            if capability is Capability.SUB_AGENTS:
+                artifacts.extend(getattr(adapter, renderer)(layout, item, overrides.get(item.name)))
+            else:
+                artifacts.extend(getattr(adapter, renderer)(layout, item))
 
     artifacts.extend(adapter.own_artifacts(layout))
     return artifacts

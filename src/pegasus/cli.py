@@ -38,7 +38,7 @@ from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core import ownership, planner, pointer
 from pegasus.core.journal import KINDS, Install, Record
-from pegasus.core.types import Codec, Environment, ModelAssignment
+from pegasus.core.types import Capability, Codec, Environment, ModelAssignment
 from pegasus.infra.downloader_http import HttpDownloader
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import FileJournalStore
@@ -301,7 +301,8 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
     # principle differ, for no reason beyond having asked disk twice.
     content = _select_mcp(mcp)
     catalog = catalog_module.build(content, adapter)
-    artifacts = catalog_module.render(content, adapter, environment)
+    model_overrides, model_warnings = _resolve_model_overrides(runtime, adapter, environment, content)
+    artifacts = catalog_module.render(content, adapter, environment, model_overrides=model_overrides)
     installed = journal_module.install_for(journal, adapter.id)
     plan = planner.plan(
         runtime.filesystem,
@@ -333,6 +334,7 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
             "unchanged": [_placed(step) for step in plan.unchanged],
             "skipped": [_left(step) for step in plan.collisions],
             "retired": [_recorded(record) for record in retirements],
+            "model_warnings": list(model_warnings),
         }
 
     # Taken before a single byte of this run reaches disk, and never for a dry
@@ -472,7 +474,27 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
         "unaccounted": list(stale.unaccounted),
         "journal": str(store.path),
         "retention": _retain(snapshot),
+        "model_warnings": list(model_warnings),
     }
+
+
+def _resolve_model_overrides(
+    runtime: Runtime, adapter, environment: Environment, content: content_module.Content
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Which stored model preferences this install can actually honour.
+
+    Soft failure lives entirely in `model_assignments.resolve_for_render`; this
+    is only the plumbing that gathers what it needs. An adapter that never
+    declared `per_agent_model` has nothing to resolve and nothing to warn
+    about -- the capability was never offered, so a preference for it could
+    never have been set through `models set` in the first place.
+    """
+    if not adapter.capabilities().declares(Capability.PER_AGENT_MODEL):
+        return {}, ()
+    assignments = model_assignment_store(runtime).load()
+    configurable = frozenset(agent.name for agent in content.agents if agent.model_configurable)
+    catalog = adapter.model_catalog(environment)
+    return model_assignments_module.resolve_for_render(assignments, adapter.id, configurable, catalog)
 
 
 def _merged(journal, adapter, environment, catalog, records, retired_ids, now: str) -> Install:
@@ -684,7 +706,14 @@ def models_set(
     store = model_assignment_store(runtime)
     assignments = store.load()
     store.save(model_assignments_module.with_assignment(assignments, cli_id, agent, assignment))
-    return {"action": "set", "cli": cli_id, "agent": agent, "model": assignment.full_id, "effort": assignment.effort}
+    return {
+        "action": "set",
+        "cli": cli_id,
+        "agent": agent,
+        "model": assignment.full_id,
+        "effort": assignment.effort,
+        "activation": (_NOT_INSTALLED_YET.format(cli=cli_id),),
+    }
 
 
 def models_unset(cli_id: str, agent: str, runtime: Runtime) -> dict[str, Any]:
@@ -695,7 +724,19 @@ def models_unset(cli_id: str, agent: str, runtime: Runtime) -> dict[str, Any]:
     if model_assignments_module.get(assignments, cli_id, agent) is None:
         return {"action": "unset", "cli": cli_id, "agent": agent, "status": "already-unset"}
     store.save(model_assignments_module.without_assignment(assignments, cli_id, agent))
-    return {"action": "unset", "cli": cli_id, "agent": agent, "status": "unset"}
+    return {
+        "action": "unset",
+        "cli": cli_id,
+        "agent": agent,
+        "status": "unset",
+        "activation": (_NOT_INSTALLED_YET.format(cli=cli_id),),
+    }
+
+
+_NOT_INSTALLED_YET = (
+    "The current installation at {cli} does not carry this yet; reinstall "
+    "(`pegasus install --cli {cli}`) to write it into the rendered configuration."
+)
 
 
 def models_list(runtime: Runtime, *, cli_id: str | None = None) -> dict[str, Any]:
@@ -1277,6 +1318,9 @@ def _prose(report: dict[str, Any]) -> str:
         # what it could not account for. Only a run that happened can.
         if report.get("unaccounted"):
             lines.append(f"Could not be accounted for: {', '.join(report['unaccounted'])}")
+        if report.get("model_warnings"):
+            lines.append("Model assignments that could not be honoured:")
+            lines.extend(f"  {warning}" for warning in report["model_warnings"])
         return "\n".join(_and_retention(_and_activation(lines, report), report))
     if command == "models":
         return _models_prose(report)
@@ -1291,11 +1335,13 @@ def _models_prose(report: dict[str, Any]) -> str:
     action = report.get("action")
     if action == "set":
         effort = f", effort {report['effort']}" if report.get("effort") else ""
-        return f"{report['cli']}/{report['agent']}: assigned {report['model']}{effort}."
+        line = f"{report['cli']}/{report['agent']}: assigned {report['model']}{effort}."
+        return "\n".join(_and_activation([line], report))
     if action == "unset":
         if report["status"] == "already-unset":
             return f"{report['cli']}/{report['agent']}: no assignment to remove."
-        return f"{report['cli']}/{report['agent']}: assignment removed."
+        line = f"{report['cli']}/{report['agent']}: assignment removed."
+        return "\n".join(_and_activation([line], report))
     if action == "list":
         if not report["assignments"]:
             return "No model assignments."

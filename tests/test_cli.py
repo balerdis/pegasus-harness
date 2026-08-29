@@ -40,8 +40,9 @@ from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
+from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core import ownership
-from pegasus.core.types import Environment
+from pegasus.core.types import Environment, ModelAssignment
 from pegasus.infra.journal_store_file import journal_path
 from pegasus.infra.snapshot_store_file import snapshots_root
 from platform_conditions import (
@@ -453,6 +454,103 @@ class WriteRefusalTest(FakeHomeTestCase):
         code, _ = self.run_cli("uninstall", "--cli", CLI)
         self.assertNotEqual(code, 0)
         self.assertEqual(self.filesystem.files, before)
+
+
+class InstallModelAssignmentTest(RealHomeTestCase):
+    """A stored preference reaching the rendered agent, and its soft-failure posture.
+
+    `sdd-apply` is `CONFIGURABLE_AGENT` in `test_cli_models.py`, but this module
+    never imports that one to stay independent of it -- the name is repeated
+    here on purpose.
+    """
+
+    AGENT = "sdd-apply"
+
+    def write_models_catalog(self, providers: dict) -> None:
+        path = self.home / ".cache" / "opencode" / "models.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(providers), encoding="utf-8")
+
+    def rendered_agent_value(self) -> dict:
+        document = json.loads((self.layout().settings_file).read_text(encoding="utf-8"))
+        return document["agent"][self.AGENT]
+
+    def test_an_honoured_assignment_is_written_into_the_rendered_agent(self):
+        self.present()
+        self.write_models_catalog(
+            {"anthropic": {"builtin": True, "models": {"claude-sonnet-5": {"tool_call": True}}}}
+        )
+        self.run_cli(
+            "models", "set", "--cli", CLI, "--agent", self.AGENT, "--model", "anthropic/claude-sonnet-5",
+        )
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["model_warnings"], [])
+        self.assertEqual(self.rendered_agent_value()["model"], "anthropic/claude-sonnet-5")
+
+    def test_no_assignment_renders_exactly_what_it_renders_today(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.assertNotIn("model", self.rendered_agent_value())
+
+    def test_an_unreachable_provider_does_not_break_the_install(self):
+        self.present()
+        # No models.json at all: no provider is reachable on this machine.
+        self.run_cli(
+            "models", "set", "--cli", CLI, "--agent", self.AGENT, "--model", "anthropic/claude-sonnet-5",
+        )
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertNotIn("model", self.rendered_agent_value())
+        self.assertEqual(len(report["model_warnings"]), 1)
+        self.assertIn(self.AGENT, report["model_warnings"][0])
+        self.assertIn("anthropic", report["model_warnings"][0])
+
+    def test_a_model_the_catalog_no_longer_lists_does_not_break_the_install(self):
+        self.present()
+        self.write_models_catalog(
+            {"anthropic": {"builtin": True, "models": {"claude-sonnet-5": {"tool_call": True}}}}
+        )
+        self.run_cli(
+            "models", "set", "--cli", CLI, "--agent", self.AGENT, "--model", "anthropic/retired-model",
+        )
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertNotIn("model", self.rendered_agent_value())
+        self.assertEqual(len(report["model_warnings"]), 1)
+        self.assertIn("retired-model", report["model_warnings"][0])
+
+    def test_an_agent_this_release_no_longer_ships_does_not_break_the_install(self):
+        self.present()
+        self.write_models_catalog(
+            {"anthropic": {"builtin": True, "models": {"claude-sonnet-5": {"tool_call": True}}}}
+        )
+        store = cli.model_assignment_store(self.runtime())
+        store.save(
+            model_assignments_module.with_assignment(
+                store.load(), CLI, "no-longer-shipped", ModelAssignment("anthropic", "claude-sonnet-5")
+            )
+        )
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(report["model_warnings"]), 1)
+        self.assertIn("no-longer-shipped", report["model_warnings"][0])
+
+    def test_the_catalog_digest_is_the_same_with_or_without_an_assignment(self):
+        """Release identity must not move because of a fact about one machine."""
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        without = journal_module.install_for(self.store().load(), CLI).release["catalog_digest"]
+
+        self.write_models_catalog(
+            {"anthropic": {"builtin": True, "models": {"claude-sonnet-5": {"tool_call": True}}}}
+        )
+        self.run_cli(
+            "models", "set", "--cli", CLI, "--agent", self.AGENT, "--model", "anthropic/claude-sonnet-5",
+        )
+        self.run_cli("install", "--cli", CLI)
+        with_assignment = journal_module.install_for(self.store().load(), CLI).release["catalog_digest"]
+        self.assertEqual(without, with_assignment)
 
 
 class InstallMcpTest(RealHomeTestCase):

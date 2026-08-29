@@ -76,11 +76,17 @@ def prompt(layout: Layout, item: Agent) -> list[Artifact]:
     ]
 
 
-def agent(layout: Layout, item: Agent, separate_prompt: bool = True) -> list[Artifact]:
+def agent(layout: Layout, item: Agent, model: str | None = None, separate_prompt: bool = True) -> list[Artifact]:
     """One entry under the settings file's agent map, plus the default when it is one.
 
     `mode` and `default` say different things: `primary` says the agent can run at top
     level, `default_agent` says which single one a session opens in.
+
+    `model` is a fact about one machine -- a preference from Pegasus's own state,
+    already resolved and validated against what this machine can actually reach --
+    never a fact the content core carries. Absent, the key is omitted entirely and
+    OpenCode falls back to whatever it would have chosen anyway, exactly as if this
+    agent had never been assigned a model at all.
     """
     value: dict[str, Any] = {"description": item.description, "mode": MODE_NAME[item.mode]}
     if item.hidden:
@@ -93,6 +99,8 @@ def agent(layout: Layout, item: Agent, separate_prompt: bool = True) -> list[Art
         )
     value["tools"] = _tools(item)
     value["permission"] = {"task": {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}}
+    if model is not None:
+        value["model"] = model
 
     artifacts: list[Artifact] = [
         ConfigKeyArtifact(

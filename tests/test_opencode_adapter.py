@@ -305,6 +305,14 @@ class AgentRenderTest(unittest.TestCase):
         self.assertEqual(artifact.path, CONFIG / "prompts/sdd-verify.md")
         self.assertEqual(artifact.content, b"# Verify\n\nProve it.\n")
 
+    def test_no_model_key_when_nothing_was_assigned(self):
+        self.assertNotIn("model", self.value(self.agent()))
+
+    def test_a_resolved_model_is_written_into_the_agent_entry(self):
+        artifacts = self.adapter.render_agent(self.layout, self.agent(), "anthropic/claude-sonnet-5")
+        value = only(artifacts, ConfigKeyArtifact)[0].value
+        self.assertEqual(value["model"], "anthropic/claude-sonnet-5")
+
 
 class CommandRenderTest(unittest.TestCase):
     def setUp(self):
