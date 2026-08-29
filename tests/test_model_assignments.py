@@ -77,7 +77,18 @@ class ResolveForRenderTest(unittest.TestCase):
     def test_a_reachable_assignment_is_honored(self):
         assignments = module.with_assignment(module.empty(), "opencode", "sdd-apply", assignment())
         honored, warnings = module.resolve_for_render(assignments, "opencode", frozenset({"sdd-apply"}), catalog())
-        self.assertEqual(honored, {"sdd-apply": "anthropic/claude-sonnet-5"})
+        self.assertEqual(honored, {"sdd-apply": assignment()})
+        self.assertEqual(warnings, ())
+
+    def test_a_reachable_assignment_carries_its_effort_along_unchecked(self):
+        """The catalog records only whether a model reasons, never which variants it
+        offers, so an effort has nothing to validate against. It rides along with
+        the model it was set alongside, honoured exactly as stored."""
+        assignments = module.with_assignment(
+            module.empty(), "opencode", "sdd-apply", assignment(effort="high")
+        )
+        honored, warnings = module.resolve_for_render(assignments, "opencode", frozenset({"sdd-apply"}), catalog())
+        self.assertEqual(honored, {"sdd-apply": assignment(effort="high")})
         self.assertEqual(warnings, ())
 
     def test_no_assignments_is_a_clean_no_op(self):

@@ -104,7 +104,7 @@ class Catalog:
 
 
 def render(
-    content: Content, adapter: Any, environment: Environment, model_overrides: dict[str, str] | None = None
+    content: Content, adapter: Any, environment: Environment, model_overrides: dict[str, Any] | None = None
 ) -> list[Any]:
     """Everything the adapter declares it supports, plus what it ships itself.
 
@@ -113,10 +113,12 @@ def render(
     portable manifest; an installation hands them to the planner instead.
 
     `model_overrides` maps an agent's name to an already-resolved
-    ``provider/model`` string -- a fact about one machine, never about the
-    release, which is exactly why `build` below never passes one. Only
-    `render_agent` ever receives it: every other capability's renderer keeps
-    its original two-argument shape.
+    ``ModelAssignment`` -- model and effort together, a fact about one
+    machine, never about the release, which is exactly why `build` below
+    never passes one. This function never looks inside the value: it is
+    opaque here, and only the adapter's `render_agent` knows what to do with
+    it. Only `render_agent` ever receives it: every other capability's
+    renderer keeps its original two-argument shape.
     """
     layout = adapter.layout(environment)
     manifest = adapter.capabilities()

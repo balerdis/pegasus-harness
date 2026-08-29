@@ -74,7 +74,7 @@ def without_assignment(assignments: ModelAssignments, cli: str, agent: str) -> M
 
 def resolve_for_render(
     assignments: ModelAssignments, cli: str, configurable_agents: frozenset[str], catalog: ModelCatalog
-) -> tuple[dict[str, str], tuple[str, ...]]:
+) -> tuple[dict[str, ModelAssignment], tuple[str, ...]]:
     """Which of this CLI's assignments can be honoured right now, and why the rest cannot.
 
     A stored preference can go stale in three ways, none of which may break an
@@ -86,14 +86,21 @@ def resolve_for_render(
     produces one warning naming the agent and the reason, so a preference that
     cannot be honoured is always visible somewhere a person reads.
 
+    An effort is checked against nothing: the catalog records only whether a
+    model reasons, never which variants it offers, so there is no fact here to
+    validate it against. It is carried through exactly as stored whenever its
+    model is honoured, and dropped along with everything else when it is not
+    -- never held to a standard this module has no way to state.
+
     Returns ``(honored, warnings)``: ``honored`` maps an agent name to the
-    ``provider/model`` string ready to hand a renderer, and ``warnings`` is
-    prose for everything this run could not carry out.
+    ``ModelAssignment`` -- model and effort together -- ready to hand a
+    renderer, and ``warnings`` is prose for everything this run could not
+    carry out.
     """
     available: dict[str, frozenset[str]] = {
         provider.id: frozenset(model.id for model in provider.models) for provider in catalog.providers
     }
-    honored: dict[str, str] = {}
+    honored: dict[str, ModelAssignment] = {}
     warnings: list[str] = []
     for entry in assignments.entries:
         if entry.cli != cli:
@@ -118,7 +125,7 @@ def resolve_for_render(
                 f"longer lists that model; rendered without a model"
             )
             continue
-        honored[entry.agent] = assignment.full_id
+        honored[entry.agent] = assignment
     return honored, tuple(warnings)
 
 

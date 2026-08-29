@@ -23,6 +23,7 @@ from pegasus.core.types import (
     Environment,
     FileArtifact,
     Layout,
+    ModelAssignment,
     SupportTier,
 )
 
@@ -95,8 +96,8 @@ class Adapter:
     def render_skill(self, layout: Layout, skill: Skill) -> list[Artifact]:
         return render.skill(layout, skill)
 
-    def render_agent(self, layout: Layout, agent: Agent, model: str | None = None) -> list[Artifact]:
-        return render.agent(layout, agent, model)
+    def render_agent(self, layout: Layout, agent: Agent, assignment: ModelAssignment | None = None) -> list[Artifact]:
+        return render.agent(layout, agent, assignment)
 
     def render_prompt(self, layout: Layout, agent: Agent) -> list[Artifact]:
         return render.prompt(layout, agent)

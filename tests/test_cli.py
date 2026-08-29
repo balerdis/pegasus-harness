@@ -493,6 +493,33 @@ class InstallModelAssignmentTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI)
         self.assertNotIn("model", self.rendered_agent_value())
 
+    def test_an_effort_reaches_the_rendered_agent_as_this_clis_variant(self):
+        self.present()
+        self.write_models_catalog(
+            {"anthropic": {"builtin": True, "models": {"claude-sonnet-5": {"tool_call": True, "reasoning": True}}}}
+        )
+        self.run_cli(
+            "models", "set", "--cli", CLI, "--agent", self.AGENT,
+            "--model", "anthropic/claude-sonnet-5", "--effort", "high",
+        )
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["model_warnings"], [])
+        value = self.rendered_agent_value()
+        self.assertEqual(value["model"], "anthropic/claude-sonnet-5")
+        self.assertEqual(value["variant"], "high")
+
+    def test_no_effort_stored_renders_no_variant_key(self):
+        self.present()
+        self.write_models_catalog(
+            {"anthropic": {"builtin": True, "models": {"claude-sonnet-5": {"tool_call": True}}}}
+        )
+        self.run_cli(
+            "models", "set", "--cli", CLI, "--agent", self.AGENT, "--model", "anthropic/claude-sonnet-5",
+        )
+        self.run_cli("install", "--cli", CLI)
+        self.assertNotIn("variant", self.rendered_agent_value())
+
     def test_an_unreachable_provider_does_not_break_the_install(self):
         self.present()
         # No models.json at all: no provider is reachable on this machine.
