@@ -698,7 +698,7 @@ class ShippedContentTest(unittest.TestCase):
         self.assertEqual(len(self.content.commands), 16)
 
     def test_mcp_servers_load(self):
-        self.assertEqual([server.name for server in self.content.mcp], ["context7"])
+        self.assertEqual([server.name for server in self.content.mcp], ["context7", "engram"])
 
     def test_every_shipped_server_declares_a_mechanism_and_a_convention(self):
         """A server nothing can carry out is not installable.

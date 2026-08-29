@@ -32,6 +32,7 @@ from pegasus.core import content as content_module
 ROOT = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content"
 BASELINE = ROOT / "system-prompt" / "AGENTS.md"
 PERSONA = ROOT / "agents" / "king-pegasus.md"
+ENGRAM = ROOT / "mcp" / "engram.md"
 
 HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 FENCE = re.compile(r"^\s*(```|~~~)")
@@ -54,10 +55,7 @@ BASELINE_HEADINGS = (
     ("##", "Persona Scope"),
     ("##", "Language"),
     ("##", "Contextual Skill Loading"),
-    ("##", "Engram Persistent Memory"),
-    ("###", "DELIVERY GUARANTEE"),
-    ("###", "SESSION CLOSE PROTOCOL"),
-    ("###", "AFTER COMPACTION"),
+    ("##", "DELIVERY GUARANTEE"),
 )
 
 #: The voice sections. `## Persona Scope` in the baseline promises a persona has
@@ -171,11 +169,17 @@ class BaselineContentTest(SharedContentRules, unittest.TestCase):
             "the baseline has no title of its own; nothing in it may claim `#`",
         )
 
-    def test_the_session_summary_template_is_a_fenced_payload(self):
-        """Written with `##`, so unfenced it reads as six top-level document sections."""
-        self.assertIn("## Goal", self.text)
-        for line in ("## Goal", "## Discoveries", "## Accomplished", "## Next Steps"):
-            self.assertNotIn(line, self.headings, f"{line!r} is being read as a real heading")
+    def test_the_session_summary_template_moved_to_the_engram_convention(self):
+        """The memory protocol -- session-summary template included -- now ships
+        only as engram's own convention body, not inlined into the baseline
+        every install gets regardless of which servers it chose. The delivery
+        guarantee legitimately still names `mem_save` as its worked example,
+        so this checks for the protocol's own machinery, not the bare word."""
+        self.assertNotIn("## Goal", self.text)
+        self.assertNotIn("PROACTIVE SAVE TRIGGERS", self.text)
+        self.assertNotIn("Session Close Protocol", self.text)
+        self.assertNotIn("mem_search", self.text)
+        self.assertNotIn("mem_context", self.text)
 
     def test_the_baseline_forbids_nothing_a_shipped_skill_requires(self):
         """`sdd-verify` has to run the build; a universal ban on building contradicts it."""
@@ -271,6 +275,27 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
             if not declares(found, level, prefix)
         ]
         self.assertEqual(missing, [], f"the persona lost sections; it has {found}")
+
+
+class EngramConventionTest(unittest.TestCase):
+    """Where the memory protocol -- session-summary template included -- landed
+    once it left the baseline: engram's own convention body, shipped only when
+    that server is selected."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = ENGRAM.read_text(encoding="utf-8")
+        cls.headings = headings(cls.text)
+
+    def test_the_memory_protocol_lives_here_now(self):
+        self.assertIn("mem_save", self.text)
+        self.assertIn("## Session Close Protocol", self.text)
+
+    def test_the_session_summary_template_is_a_fenced_payload(self):
+        """Written with `##`, so unfenced it reads as six top-level document sections."""
+        self.assertIn("## Goal", self.text)
+        for line in ("## Goal", "## Discoveries", "## Accomplished", "## Next Steps"):
+            self.assertNotIn(line, self.headings, f"{line!r} is being read as a real heading")
 
 
 if __name__ == "__main__":
