@@ -84,8 +84,7 @@ improvisar una instalación parcial. El segundo no necesita red: instala el whee
 
 *Ejecutados los tres comandos tal cual en esta verificación. `python3 -m venv` y el `pip install
 --no-deps` contra el wheel terminaron en `0`, éste último con `Successfully installed
-pegasus-harness-4.0.0.dev0` (el wheel `.dev0` que construye este checkout; no hay todavía un `4.0.0`
-publicado). El `pip install --require-hashes -r requirements.txt` no se pudo completar sin red — se
+pegasus-harness-4.0.0` (publicado). El `pip install --require-hashes -r requirements.txt` no se pudo completar sin red — se
 intentó forzarlo íntegramente offline y no hay wheel de `PyYAML` fijado por hash disponible en este
 disco; queda documentado como el paso que un agente real debe reportar sin poder saltear.*
 
