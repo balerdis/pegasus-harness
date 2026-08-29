@@ -3,7 +3,7 @@ name: sdd-design
 description: Technical design executor for one change; captures architecture decisions and the implementation approach
 mode: subagent
 requires_tools: [read, write, edit, grep, glob]
-optional_mcp: [context7]
+optional_mcp: [cbm, context7]
 model_configurable: true
 ---
 
@@ -23,7 +23,7 @@ It owns the full design procedure: what you receive, the execution and persisten
 
 If that required path is missing or unreadable, STOP and return `blocked` naming the unreadable path. Do not infer the procedure, do not search for substitutes, and do not proceed from this prompt alone.
 
-CBM tool priority and the index-repair rule live in `{{skills_root}}/_shared/cbm-convention.md`. If that path is missing or unreadable, say so and proceed without claiming graph evidence; do not invent your own tool order or fallback conditions.
+CBM tool priority and the index-repair rule live in `{{skills_root}}/_shared/mcp/cbm-convention.md`. If that path is missing or unreadable, say so and proceed without claiming graph evidence; do not invent your own tool order or fallback conditions.
 
 Current documentation for third-party libraries, frameworks, SDKs and CLIs lives behind context7. Follow `{{skills_root}}/_shared/mcp/context7-convention.md` for tool order, query budget, and the rule against sending secrets in a query. If that path is missing or unreadable, say so and proceed without claiming documentation evidence; do not invent your own tool order.
 

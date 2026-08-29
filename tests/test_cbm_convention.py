@@ -3,9 +3,13 @@
 Codebase Memory (`codebase-memory-mcp`) protocol prose used to be restated in
 every phase that touches it -- the same tool priority order and index-repair
 rule, paraphrased six or seven times, with two of those paraphrases landing on
-opposite advice for a stale or missing index. `_shared/cbm-convention.md` is
-the single place that names CBM tools and states the rule; every other file
-that used to restate it now points there instead.
+opposite advice for a stale or missing index. `_shared/cbm-convention.md`
+used to be the single hand-authored place that named CBM tools and stated the
+rule, shipped to every install regardless of whether anyone chose CBM. Naming
+`cbm` as a real MCP server moved that same prose into the server's own
+descriptor body (`mcp/cbm.md`): the canonical place is now the descriptor, and
+it travels only when `cbm` is selected, the same move `engram` went through
+when it stopped being an unconditional part of the system prompt.
 
 This file cannot check that the paraphrases said the same thing -- that is a
 judgment about English, and this repository's tests never make one. What it
@@ -25,7 +29,9 @@ from pegasus.core import content as content_module
 CONTENT = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content"
 SKILLS = CONTENT / "skills"
 AGENTS = CONTENT / "agents"
-SHARED_CBM = SKILLS / "_shared" / "cbm-convention.md"
+MCP = CONTENT / "mcp"
+CBM_DESCRIPTOR = MCP / "cbm.md"
+OLD_SHARED_CBM = SKILLS / "_shared" / "cbm-convention.md"
 
 #: The MCP tool identifiers that make up the CBM protocol. Naming any of these
 #: is naming the protocol, however the surrounding sentence is worded.
@@ -48,8 +54,10 @@ IDENTIFIER_PATTERN = re.compile(r"\b(?:%s)\b" % "|".join(CBM_TOOL_IDENTIFIERS))
 #: that names one still carries the protocol inline instead of pointing at it.
 ALLOWED_IDENTIFIER_FILES = frozenset(
     {
-        # The canonical convention itself -- the one place the tools are named.
-        "skills/_shared/cbm-convention.md",
+        # The canonical convention itself -- the one place the tools are named,
+        # now the server's own descriptor body instead of a hand-authored file
+        # shipped unconditionally.
+        "mcp/cbm.md",
         # The post-apply Index Coherence Gate: apply-exclusive trigger derivation,
         # moderate-to-full reindex escalation, and apply-progress reporting. It
         # consumes the generic convention, it does not restate it.
@@ -66,17 +74,26 @@ def relative(path: Path) -> str:
     return path.relative_to(CONTENT).as_posix()
 
 
-class SharedFileExistsTest(unittest.TestCase):
-    def test_the_shared_convention_file_exists(self):
-        self.assertTrue(SHARED_CBM.is_file(), f"missing: {SHARED_CBM}")
+class DescriptorExistsTest(unittest.TestCase):
+    """The convention now lives in the server's own descriptor, not a shared asset."""
 
-    def test_the_shared_convention_ships_as_a_skill_asset(self):
-        """Existing on disk is not enough -- the loader has to pick it up."""
-        loaded = content_module.load()
-        shared = next((skill for skill in loaded.skills if skill.name == "_shared"), None)
-        self.assertIsNotNone(shared, "_shared is not among the loaded skills")
-        names = [str(asset.relative_path) for asset in shared.assets]
-        self.assertIn("cbm-convention.md", names)
+    def test_the_cbm_descriptor_exists(self):
+        self.assertTrue(CBM_DESCRIPTOR.is_file(), f"missing: {CBM_DESCRIPTOR}")
+
+    def test_the_old_unconditional_shared_file_is_gone(self):
+        """It shipped to every install before `cbm` had a descriptor of its own.
+
+        Leaving it behind would mean the convention ships twice: once always,
+        once only when `cbm` is selected.
+        """
+        self.assertFalse(OLD_SHARED_CBM.is_file(), f"still present: {OLD_SHARED_CBM}")
+
+    def test_cbm_loads_as_a_real_mcp_server_with_a_convention_body(self):
+        server = next(
+            (server for server in content_module.load().mcp if server.name == "cbm"), None
+        )
+        self.assertIsNotNone(server, "cbm is not among the loaded mcp servers")
+        self.assertTrue(server.body.strip())
 
 
 class IdentifierAllowlistTest(unittest.TestCase):
@@ -112,15 +129,19 @@ class AgentPointerResolutionTest(unittest.TestCase):
 
     REFERENCE = re.compile(r"\{\{skills_root\}\}/([\w./-]+\.md)")
 
-    #: Agents documented to use CBM, and therefore expected to point at the
-    #: shared convention rather than restate it.
+    #: Agents that declare `optional_mcp: [cbm, ...]`, and therefore point at
+    #: the server's own rendered convention rather than restate it.
+    #:
+    #: `pegasus-orchestrator` and `king-pegasus` are deliberately absent: both
+    #: are pending a reformulation that decides what they may act on, so
+    #: neither declares `cbm` and neither may reference its convention path --
+    #: `_require_mcp_convention_referenced` in `content.py` requires the two
+    #: sets to match exactly.
     CBM_AGENTS = (
-        "pegasus-orchestrator.md",
         "sdd-explore.md",
         "sdd-design.md",
         "sdd-apply.md",
         "sdd-verify.md",
-        "king-pegasus.md",
     )
 
     def test_every_placeholder_reference_resolves_from_the_skills_root(self):
@@ -148,19 +169,33 @@ class AgentPointerResolutionTest(unittest.TestCase):
                     offenders.append(f"{path.name} -> {match.group(1)}")
         self.assertEqual(offenders, [])
 
-    def test_every_cbm_agent_points_at_the_shared_convention(self):
+    def test_every_cbm_agent_points_at_the_rendered_convention(self):
         missing = [
             name
             for name in self.CBM_AGENTS
-            if "{{skills_root}}/_shared/cbm-convention.md" not in (AGENTS / name).read_text(
+            if "{{skills_root}}/_shared/mcp/cbm-convention.md" not in (AGENTS / name).read_text(
                 encoding="utf-8"
             )
         ]
         self.assertEqual(missing, [], f"agents missing the CBM pointer: {missing}")
 
+    def test_no_agent_still_names_the_old_unconditional_path(self):
+        offenders = [
+            path.name
+            for path in sorted(AGENTS.glob("*.md"))
+            if "_shared/cbm-convention.md" in path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual(offenders, [])
+
 
 class SkillPointerTest(unittest.TestCase):
-    """The skill-side counterpart: `_shared/cbm-convention.md`, no placeholder."""
+    """The skill-side counterpart: `_shared/mcp/cbm-convention.md`, no placeholder.
+
+    A skill body ships verbatim, with no `{{skills_root}}` substitution, so it
+    names the rendered path directly. That path only exists on disk once `cbm`
+    is selected -- `test_skill_references.py` carries the same rendered-not-
+    shipped exclusion the agent-side check above relies on.
+    """
 
     CBM_SKILLS = (
         "sdd-explore/SKILL.md",
@@ -169,17 +204,17 @@ class SkillPointerTest(unittest.TestCase):
         "sdd-verify/SKILL.md",
     )
 
-    def test_every_cbm_skill_points_at_the_shared_convention(self):
+    def test_every_cbm_skill_points_at_the_rendered_convention(self):
         missing = [
             name
             for name in self.CBM_SKILLS
-            if "_shared/cbm-convention.md" not in (SKILLS / name).read_text(encoding="utf-8")
+            if "_shared/mcp/cbm-convention.md" not in (SKILLS / name).read_text(encoding="utf-8")
         ]
         self.assertEqual(missing, [], f"skills missing the CBM pointer: {missing}")
 
 
 class KingPegasusToolsTest(unittest.TestCase):
-    """king-pegasus joins the CBM users: structural reading only, never write/edit/bash."""
+    """king-pegasus stays out of the CBM users: structural reading only, never write/edit/bash."""
 
     @classmethod
     def setUpClass(cls):
@@ -188,12 +223,12 @@ class KingPegasusToolsTest(unittest.TestCase):
         )
 
     def test_gains_no_mcp_yet(self):
-        # No MCP is declared here yet. `codebase-memory` has no descriptor, so
-        # no agent may name it, and this voice is pending a reformulation that
-        # decides what it is allowed to act on before it is granted a server.
+        # `cbm` has a descriptor now, but this voice still declares none of it
+        # on purpose: it is pending a reformulation that decides what it is
+        # allowed to act on before it is granted any server.
         self.assertEqual(self.agent.optional_tools, ())
         self.assertEqual(self.agent.optional_mcp, ())
-        self.assertNotIn("codebase-memory", self.agent.requires_tools)
+        self.assertNotIn("cbm", self.agent.optional_mcp)
 
     def test_gains_nothing_else(self):
         for forbidden in ("write", "edit", "bash"):
