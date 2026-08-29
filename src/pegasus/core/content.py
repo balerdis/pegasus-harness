@@ -196,6 +196,12 @@ class Mcp:
     idea through npm's own chain: ``package`` and ``version`` are what gets
     installed, ``integrity`` is the hash npm verifies the tarball against,
     and ``entry`` is the script inside it a CLI ends up pointing at.
+
+    ``archive_members`` and ``archive_executable`` exist only for a `download`
+    server whose asset is a compressed archive rather than a bare binary:
+    ``archive_members`` names every file the archive is expected to hold, and
+    ``archive_executable`` names which one of those is the program to run. A
+    plain `download` server -- one asset, one file -- leaves both empty.
     """
 
     name: str
@@ -209,6 +215,8 @@ class Mcp:
     package: str | None = None
     integrity: str | None = None
     entry: str | None = None
+    archive_members: tuple[str, ...] = ()
+    archive_executable: str | None = None
 
 
 @dataclass(frozen=True)
@@ -428,7 +436,7 @@ _INTEGRITY = re.compile(r"^sha512-[A-Za-z0-9+/]+=*$")
 
 _FORM_FIELDS: dict[Distribution, tuple[str, ...]] = {
     Distribution.REMOTE: (),
-    Distribution.DOWNLOAD: ("version", "checksum"),
+    Distribution.DOWNLOAD: ("version", "checksum", "archive_members", "archive_executable"),
     Distribution.NPM: ("package", "version", "integrity", "entry"),
 }
 """Which extra fields each distribution's form declares.
@@ -448,6 +456,7 @@ def _load_mcp(directory: Path, root: Path) -> tuple[Mcp, ...]:
         _refuse_foreign_form_fields(fields, distribution, source)
         version, checksum = _download_form(fields, distribution, source)
         package, npm_version, integrity, entry = _npm_form(fields, distribution, source)
+        archive_members, archive_executable = _archive_form(fields, distribution, source)
         servers.append(
             Mcp(
                 name=path.stem,
@@ -461,6 +470,8 @@ def _load_mcp(directory: Path, root: Path) -> tuple[Mcp, ...]:
                 package=package,
                 integrity=integrity,
                 entry=entry,
+                archive_members=archive_members,
+                archive_executable=archive_executable,
             )
         )
     return tuple(servers)
@@ -496,6 +507,44 @@ def _download_form(
             f"{source}: 'checksum' must be 'sha256:' followed by 64 hex characters, got {checksum!r}"
         )
     return version, checksum
+
+
+def _archive_form(
+    fields: dict[str, Any], distribution: Distribution, source: PurePosixPath
+) -> tuple[tuple[str, ...], str | None]:
+    """The extra fields a `download` server declares when its asset is an
+    archive rather than a bare binary, all declared or none.
+
+    ``archive_members`` without ``archive_executable`` -- or the reverse --
+    would leave the installer either not knowing what to run or promising a
+    listing it never checks, so the two are required together exactly like
+    `version` and `checksum` are.
+    """
+    if distribution is not Distribution.DOWNLOAD:
+        return (), None
+    declares_members = "archive_members" in fields
+    declares_executable = "archive_executable" in fields
+    if not declares_members and not declares_executable:
+        return (), None
+    if declares_members != declares_executable:
+        raise ContentError(
+            f"{source}: 'archive_members' and 'archive_executable' must be declared together"
+        )
+    members = _names(fields, "archive_members", source)
+    if not members:
+        raise ContentError(f"{source}: 'archive_members' must name at least one file")
+    for member in members:
+        if PurePosixPath(member).is_absolute() or ".." in PurePosixPath(member).parts:
+            raise ContentError(
+                f"{source}: 'archive_members' entry {member!r} must be a relative path "
+                f"inside the archive, with no '..' segment"
+            )
+    executable = _text(fields, "archive_executable", source)
+    if executable not in members:
+        raise ContentError(
+            f"{source}: 'archive_executable' {executable!r} must be one of 'archive_members'"
+        )
+    return members, executable
 
 
 def _npm_form(

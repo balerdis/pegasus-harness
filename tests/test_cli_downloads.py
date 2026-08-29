@@ -17,6 +17,8 @@ from pathlib import PurePosixPath
 from unittest.mock import patch
 
 from fakes import FakeDownloader
+from test_dependencies import make_archive
+
 from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import journal as journal_module
@@ -170,6 +172,78 @@ class UninstallDownloadTest(RealHomeTestCase):
         self.assertIn("dependency:probe", [item["id"] for item in report["retired"]])
         self.assertNotIn("dependency:probe", [e.id for e in self.installed_entries()])
         self.assertTrue(self.layout().config_dir.is_dir())
+
+
+ARCHIVE_BYTES = make_archive({"probe": b"the real program bytes", "README.md": b"read me"})
+ARCHIVE_CHECKSUM = ownership.digest_of_bytes(ARCHIVE_BYTES)
+
+ARCHIVE_PROBE = Mcp(
+    name="probe",
+    description="An archived probe server",
+    body="Convention body.",
+    distribution=Distribution.DOWNLOAD,
+    endpoint="https://example.test/releases/probe-linux-x64.tar.gz",
+    source=PurePosixPath("mcp/probe.md"),
+    version="1.2.3",
+    checksum=ARCHIVE_CHECKSUM,
+    archive_members=("probe", "README.md"),
+    archive_executable="probe",
+)
+ARCHIVE_CONTENT = Content(mcp=(ARCHIVE_PROBE,))
+
+
+@patch("pegasus.core.content.load", return_value=ARCHIVE_CONTENT)
+class InstallArchiveDownloadTest(RealHomeTestCase):
+    """The same install path, proven against a real archive on the real
+    POSIX filesystem: `tarfile`'s extraction and the real executable bit are
+    outside what a fake filesystem can promise, so this is proven here."""
+
+    def runtime(self, downloader=None) -> cli.Runtime:
+        return cli.Runtime(
+            filesystem=self.filesystem,
+            home=self.home,
+            now=AT,
+            out=io.StringIO(),
+            variables=NO_BINARY,
+            downloader=downloader or FakeDownloader({ARCHIVE_PROBE.endpoint: ARCHIVE_BYTES}),
+        )
+
+    def target(self):
+        return self.layout().dependencies_dir / "probe" / "1.2.3"
+
+    def test_every_declared_member_is_extracted(self, _load):
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.assertEqual(code, cli.OK)
+        self.assertEqual((self.target() / "probe").read_bytes(), b"the real program bytes")
+        self.assertEqual((self.target() / "README.md").read_bytes(), b"read me")
+
+    def test_only_the_declared_executable_is_executable(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.assertTrue((self.target() / "probe").stat().st_mode & 0o111)
+        self.assertFalse((self.target() / "README.md").stat().st_mode & 0o111)
+
+    def test_a_checksum_mismatch_leaves_nothing_behind(self, _load):
+        self.present()
+        code, report = self.run_cli(
+            "install",
+            "--cli",
+            CLI,
+            "--mcp",
+            "probe",
+            downloader=FakeDownloader({ARCHIVE_PROBE.endpoint: b"not the archive anyone pinned"}),
+        )
+        self.assertEqual(code, cli.FAILED)
+        self.assertFalse(self.target().exists())
+
+    def test_uninstalling_removes_the_whole_extracted_tree(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        code, report = self.run_cli("uninstall", "--cli", CLI)
+        self.assertEqual(code, cli.OK)
+        self.assertFalse(self.target().exists())
+        self.assertIn("dependency:probe", report["removed"])
 
 
 if __name__ == "__main__":

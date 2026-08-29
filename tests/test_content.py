@@ -81,6 +81,20 @@ checksum: {CHECKSUM}
 Convention body.
 """
 
+ARCHIVE_MCP = f"""---
+name: probe-mcp
+description: Probes an archived MCP server
+distribution: download
+endpoint: https://example.test/probe-mcp-linux-x64.tar.gz
+version: 1.2.3
+checksum: {CHECKSUM}
+archive_members: [CHANGELOG.md, LICENSE, probe-mcp]
+archive_executable: probe-mcp
+---
+
+Convention body.
+"""
+
 INTEGRITY = "sha512-" + "a" * 86 + "=="
 
 NPM_MCP = f"""---
@@ -597,6 +611,54 @@ class McpTest(TemporaryContent):
         with self.assertRaises(ContentError) as raised:
             self.load_mcp(DOWNLOAD_MCP.replace(f"checksum: {CHECKSUM}\n", f"checksum: {CHECKSUM}\nintegrity: {INTEGRITY}\n"))
         self.assertIn("integrity", str(raised.exception))
+
+    def test_a_plain_download_server_declares_no_archive(self):
+        """A single-binary `download` server is unaffected by the archive form."""
+        mcp = self.load_mcp(DOWNLOAD_MCP)
+        self.assertEqual(mcp.archive_members, ())
+        self.assertIsNone(mcp.archive_executable)
+
+    def test_an_archive_server_reads_its_members_and_executable(self):
+        mcp = self.load_mcp(ARCHIVE_MCP)
+        self.assertEqual(mcp.archive_members, ("CHANGELOG.md", "LICENSE", "probe-mcp"))
+        self.assertEqual(mcp.archive_executable, "probe-mcp")
+
+    def test_archive_members_without_an_executable_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(ARCHIVE_MCP.replace("archive_executable: probe-mcp\n", ""))
+        self.assertIn("archive_executable", str(raised.exception))
+
+    def test_an_executable_without_archive_members_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(
+                ARCHIVE_MCP.replace("archive_members: [CHANGELOG.md, LICENSE, probe-mcp]\n", "")
+            )
+        self.assertIn("archive_members", str(raised.exception))
+
+    def test_an_executable_not_among_the_members_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(ARCHIVE_MCP.replace("archive_executable: probe-mcp\n", "archive_executable: ghost\n"))
+        self.assertIn("ghost", str(raised.exception))
+
+    def test_an_archive_member_that_escapes_its_directory_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(ARCHIVE_MCP.replace("LICENSE", "../LICENSE"))
+        self.assertIn("../LICENSE", str(raised.exception))
+
+    def test_an_archive_member_with_an_absolute_path_is_rejected(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(ARCHIVE_MCP.replace("LICENSE", "/etc/LICENSE"))
+        self.assertIn("/etc/LICENSE", str(raised.exception))
+
+    def test_a_remote_server_may_not_declare_archive_fields(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(
+                MCP.replace(
+                    "endpoint: https://example.test/mcp\n",
+                    "endpoint: https://example.test/mcp\narchive_members: [a]\narchive_executable: a\n",
+                )
+            )
+        self.assertIn("archive_members", str(raised.exception))
 
 
 class McpConventionPathTest(unittest.TestCase):

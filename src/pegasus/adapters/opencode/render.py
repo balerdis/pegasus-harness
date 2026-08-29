@@ -22,7 +22,7 @@ from pegasus.core.content import (
     SystemPrompt,
     mcp_convention_path,
 )
-from pegasus.core.dependencies import binary_path, npm_script_path
+from pegasus.core.dependencies import npm_script_path, program_path
 from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout
 
 AGENT_FOR_ROLE: dict[RunsAs, str | None] = {
@@ -159,10 +159,11 @@ MCP_VALUE: dict[Distribution, Any] = {
     # No `headers`: this server needs no authentication, and a secret would
     # never travel in a repository descriptor anyway.
     Distribution.REMOTE: lambda item, layout: {"type": "remote", "url": item.endpoint, "enabled": True},
-    # The command points at where the fetched binary will land, not where it
-    # is right now: `render` never fetches, so this is the same path
+    # The command points at where the fetched program will land, not where
+    # it is right now: `render` never fetches, so this is the same path
     # arithmetic `materialize` uses to place it, computed here without ever
-    # touching a filesystem.
+    # touching a filesystem. A bare binary places itself there directly; an
+    # archive places its declared executable member there instead.
     Distribution.DOWNLOAD: lambda item, layout: {
         "type": "local",
         "command": [str(_download_command(layout, item))],
@@ -197,7 +198,7 @@ if _UNMAPPED_DISTRIBUTIONS:
 def _download_command(layout: Layout, item: Mcp) -> Path:
     if layout.dependencies_dir is None:
         raise RenderError(f"{item.name}: this layout has no dependencies directory")
-    return binary_path(layout.dependencies_dir, item)
+    return program_path(layout.dependencies_dir, item)
 
 
 def _npm_command(layout: Layout, item: Mcp) -> Path:
