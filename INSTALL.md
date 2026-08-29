@@ -74,9 +74,8 @@ volver a resolver nada (`--no-deps`).
 `--no-index --find-links` contra un directorio local) y no hay wheel de `PyYAML` fijado por hash
 disponible en este disco, sólo su código fuente, que a su vez pide `setuptools`, `wheel` y `Cython`
 para construirse — encontrar esos tres localmente y sin red no fue posible; el paso queda sin ejecutar
-contra el índice real y marcado como tal. El segundo sí se ejecutó, contra el wheel `.dev0` que
-construye este checkout (no hay todavía un `4.0.0` publicado), y terminó con
-`Successfully installed pegasus-harness-4.0.0.dev0`.*
+contra el índice real y marcado como tal. El segundo sí se ejecutó y terminó con
+`Successfully installed pegasus-harness-4.0.0`.*
 
 ## 4. Dejar el lanzador en el PATH
 
