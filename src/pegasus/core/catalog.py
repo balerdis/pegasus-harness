@@ -1,0 +1,258 @@
+"""Turning content plus an adapter into the list of artifacts an install will place.
+
+The catalog is a derived artifact: it is generated from the content core, never
+written by hand. Its digests are what later lets an installation prove that what
+it placed is what the release declared.
+
+Nothing here names a CLI. The build walks the capabilities an adapter declares
+and asks that adapter to render each one.
+
+An artifact lands in one of two legitimate territories: a CLI's own
+configuration root, or Pegasus's own directory -- the second is where a
+materialized dependency will live, placed by the engine rather than by an
+adapter. Anything outside both is a leak regardless of which one it was
+aiming for.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from pathlib import PurePath, PurePosixPath
+from typing import Any
+
+from pegasus.core import ownership
+from pegasus.core.content import Content
+from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileArtifact
+
+SCHEMA = "pegasus/artifact-catalog/v4"
+APPEND_TOKEN = "/-"
+
+SOURCES: dict[Capability, tuple[str, str]] = {
+    Capability.SKILLS: ("skills", "render_skill"),
+    Capability.SUB_AGENTS: ("agents", "render_agent"),
+    Capability.PROMPTS: ("agents", "render_prompt"),
+    Capability.SLASH_COMMANDS: ("commands", "render_command"),
+    Capability.SYSTEM_PROMPT: ("system_prompt", "render_system_prompt"),
+    Capability.MCP: ("mcp", "render_mcp"),
+}
+"""Which part of the content core feeds each capability, and what renders it."""
+
+INTERACTIVE = frozenset({Capability.PER_AGENT_MODEL})
+"""Capabilities configured after installing, so they contribute no artifacts."""
+
+
+class CatalogError(ValueError):
+    """The catalog cannot be built, or would place two artifacts at one address."""
+
+
+_UNSOURCED = [
+    capability
+    for capability in Capability
+    if capability not in INTERACTIVE and capability not in SOURCES
+]
+if _UNSOURCED:
+    # Checked once, at import time, rather than where `render` used to look the
+    # capability up: a `KeyError` caught at runtime would only ever be found in a
+    # user's installation, on whichever CLI first declared the missing capability.
+    # An import-time invariant makes the same mistake impossible to ship at all --
+    # the author's own machine refuses to import the module.
+    raise CatalogError(
+        "no content source for capability(ies): "
+        + ", ".join(sorted(capability.value for capability in _UNSOURCED))
+    )
+
+
+@dataclass(frozen=True)
+class Entry:
+    id: str
+    kind: str
+    target: PurePosixPath
+    digest: str
+    pointer: str | None = None
+    codec: str | None = None
+    mode: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            key: (str(value) if isinstance(value, PurePosixPath) else value)
+            for key, value in asdict(self).items()
+            if value is not None
+        }
+
+
+@dataclass(frozen=True)
+class Catalog:
+    """Everything one CLI would receive, addressed relative to its config root."""
+
+    cli: str
+    entries: tuple[Entry, ...]
+    schema: str = SCHEMA
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "cli": self.cli,
+            "entries": [entry.as_dict() for entry in self.entries],
+        }
+
+    @property
+    def digest(self) -> str:
+        """One digest for the whole catalog, so a release can be compared as a unit."""
+        return ownership.digest_of_value(self.as_dict())
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+
+def render(
+    content: Content, adapter: Any, environment: Environment, model_overrides: dict[str, str] | None = None
+) -> list[Any]:
+    """Everything the adapter declares it supports, plus what it ships itself.
+
+    This is the output of the adapt-and-decorate steps: finished artifacts,
+    addressed at real paths for this environment. The catalog turns them into a
+    portable manifest; an installation hands them to the planner instead.
+
+    `model_overrides` maps an agent's name to an already-resolved
+    ``provider/model`` string -- a fact about one machine, never about the
+    release, which is exactly why `build` below never passes one. Only
+    `render_agent` ever receives it: every other capability's renderer keeps
+    its original two-argument shape.
+    """
+    layout = adapter.layout(environment)
+    manifest = adapter.capabilities()
+    overrides = model_overrides or {}
+    artifacts: list[Any] = []
+
+    for capability in sorted(manifest.enabled - INTERACTIVE, key=lambda item: item.value):
+        attribute, renderer = SOURCES[capability]
+        for item in _items(content, attribute):
+            if capability is Capability.SUB_AGENTS:
+                artifacts.extend(getattr(adapter, renderer)(layout, item, overrides.get(item.name)))
+            else:
+                artifacts.extend(getattr(adapter, renderer)(layout, item))
+
+    artifacts.extend(adapter.own_artifacts(layout))
+    return artifacts
+
+
+#: The frame every catalog is built in. Not a real directory, and never written to.
+CANONICAL_HOME = PurePosixPath("/pegasus/catalog-build")
+
+#: The second frame alongside `CANONICAL_HOME`: the shape of Pegasus's own
+#: directory in the canonical build. Never real, and never computed through a
+#: filesystem -- for the same reason `CANONICAL_HOME` is not real either. The
+#: real path (`FileSystem.data_dir`) varies by platform and environment, which
+#: is exactly what a release digest must not depend on.
+CANONICAL_DATA_DIR = CANONICAL_HOME / ".pegasus-data"
+
+CANONICAL_PROGRAM_MODE = "0755"
+CANONICAL_TEXT_MODE = "0644"
+
+
+@dataclass(frozen=True)
+class Territory:
+    """The roots an artifact may legitimately land under.
+
+    A single root used to be enough to describe "not a leak"; a materialized
+    dependency makes that untrue, so this holds every root that counts as
+    legitimate and answers which one, if any, contains a given path.
+    """
+
+    roots: tuple[PurePath, ...]
+
+    def root_of(self, path: PurePath) -> PurePath | None:
+        """The one root that contains ``path``, or ``None`` outside every root."""
+        for root in self.roots:
+            if path.is_relative_to(root):
+                return root
+        return None
+
+
+def build(content: Content, adapter: Any) -> Catalog:
+    """The portable manifest of what one CLI would receive.
+
+    Built in a canonical frame on purpose, because this is release identity: two
+    machines must agree on it for the digest to mean anything. It used to be
+    home-independent by luck, since nothing an adapter rendered happened to
+    contain a path. A body that asks the installer for one -- the whole point of
+    `core.placeholders` -- would end that quietly, giving every user a different
+    digest for the same release. Taking the environment away makes the property
+    structural instead of accidental.
+
+    The permission a program and a plain file are written with is spelled
+    here as a constant of the format, the same way the home is: what a given
+    platform would really choose is a question for the machine that installs,
+    and asking it here would make the digest depend on where it was built.
+
+    What a machine actually receives comes from `render` with its own
+    environment, and that is what the journal records.
+
+    An artifact may also land in Pegasus's own directory rather than the CLI's
+    configuration root -- `CANONICAL_DATA_DIR` stands in for it here, the same
+    way `CANONICAL_HOME` stands in for a real home: `FileSystem.data_dir` is a
+    filesystem method, computed per platform and environment, and the digest
+    of a release must not vary with either.
+    """
+    # PurePosixPath end to end: `Path` takes the flavour of whatever machine runs
+    # the build, and a canonical frame that spells itself differently on Windows
+    # is not canonical.
+    canonical = Environment(home=CANONICAL_HOME, data_dir=CANONICAL_DATA_DIR)
+    artifacts = render(content, adapter, canonical)
+    config_root = adapter.layout(canonical).config_dir
+    territory = Territory(roots=(config_root, CANONICAL_DATA_DIR))
+    return Catalog(cli=adapter.id, entries=_entries(artifacts, territory, adapter.id))
+
+
+def _items(content: Content, attribute: str) -> tuple[Any, ...]:
+    """A category is a sequence; a singleton is one item, or nothing when absent."""
+    value = getattr(content, attribute)
+    if value is None:
+        return ()
+    return tuple(value) if isinstance(value, (tuple, list)) else (value,)
+
+
+def _entries(artifacts: list[Any], territory: Territory, cli: str) -> tuple[Entry, ...]:
+    entries, seen_ids, seen_addresses = [], set(), set()
+    for artifact in artifacts:
+        root = territory.root_of(artifact.path)
+        if root is None:
+            allowed = " or ".join(str(candidate) for candidate in territory.roots)
+            raise CatalogError(f"{cli!r} would place {artifact.path} outside {allowed}")
+        entry = _entry(artifact, root)
+
+        if entry.id in seen_ids:
+            raise CatalogError(f"{cli!r} produced two artifacts with the id {entry.id!r}")
+        seen_ids.add(entry.id)
+
+        # Appending to a list is legitimately repeatable; every other address is
+        # a single slot and two artifacts claiming it would mean one is lost.
+        address = (entry.target, entry.pointer)
+        if entry.pointer is None or not entry.pointer.endswith(APPEND_TOKEN):
+            if address in seen_addresses:
+                raise CatalogError(f"{cli!r} would place two artifacts at {address}")
+            seen_addresses.add(address)
+
+        entries.append(entry)
+    return tuple(sorted(entries, key=lambda item: item.id))
+
+
+def _entry(artifact: Any, root: Any) -> Entry:
+    target = PurePosixPath(artifact.path.relative_to(root).as_posix())
+    if isinstance(artifact, FileArtifact):
+        return Entry(
+            id=artifact.id,
+            kind="file",
+            target=target,
+            digest=ownership.digest(artifact),
+            mode=CANONICAL_PROGRAM_MODE if artifact.executable else CANONICAL_TEXT_MODE,
+        )
+    if isinstance(artifact, ConfigKeyArtifact):
+        return Entry(
+            id=artifact.id,
+            kind="config-key",
+            target=target,
+            digest=ownership.digest(artifact),
+            pointer=artifact.pointer,
+            codec=artifact.codec.value,
+        )
+    raise CatalogError(f"unsupported artifact shape: {type(artifact).__name__}")
