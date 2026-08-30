@@ -24,13 +24,13 @@ Sustituí `RELEASE_TAG` por el tag que la persona pidió. Cada asset tiene que v
 publicación de GitHub Releases — no combines wheel, `requirements.txt` o el shim de tags distintos.
 
 ```sh
-RELEASE_TAG="v4.1.1"
+RELEASE_TAG="v4.1.2"
 DOWNLOAD_DIR="$HOME/Downloads/pegasus-$RELEASE_TAG"
 mkdir -p "$DOWNLOAD_DIR"
 cd "$DOWNLOAD_DIR"
 
 BASE_URL="https://github.com/balerdis/pegasus-harness/releases/download/$RELEASE_TAG"
-WHEEL="pegasus_harness-4.1.1-py3-none-any.whl"
+WHEEL="pegasus_harness-4.1.2-py3-none-any.whl"
 
 curl -fL -O "$BASE_URL/$WHEEL"
 curl -fL -O "$BASE_URL/$WHEEL.sha256"
@@ -84,7 +84,7 @@ improvisar una instalación parcial. El segundo no necesita red: instala el whee
 
 *Ejecutados los tres comandos tal cual en esta verificación. `python3 -m venv` y el `pip install
 --no-deps` contra el wheel terminaron en `0`, éste último con `Successfully installed
-pegasus-harness-4.1.1` (publicado). El `pip install --require-hashes -r requirements.txt` no se pudo completar sin red — se
+pegasus-harness-4.1.2` (publicado). El `pip install --require-hashes -r requirements.txt` no se pudo completar sin red — se
 intentó forzarlo íntegramente offline y no hay wheel de `PyYAML` fijado por hash disponible en este
 disco; queda documentado como el paso que un agente real debe reportar sin poder saltear.*
 
