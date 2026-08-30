@@ -1,38 +1,22 @@
-# Distribucion de releases
+# Distribución de releases (v4)
 
-La promoción v3.1 exige un RC inmutable y su evidencia operatoria antes del tag final.
+v4 no tiene tarball ni `install.sh`: cada release publica un wheel (`pegasus-harness`) más un `requirements.txt` ya fijado por hash y un shim `pegasus` de una sola pantalla — los tres assets que [INSTALL.md](../INSTALL.md) e [INSTALL_BY_AGENT.md](../INSTALL_BY_AGENT.md) instruyen descargar y verificar. No hay pipeline de CI en este repositorio: los pasos siguientes son manuales, corridos por quien prepara el release.
 
-1. Ejecute los validadores locales y cree el tag anotado `v3.1.0-rc.N` sobre el commit validado.
-2. Genere un archive RC nuevo, su checksum y manifest con el CBM curado.
-3. Publique esos tres assets para el RC y ejecute los cinco perfiles de aceptación aislada manual.
-4. Emita los cinco JSON en un directorio root-controlado fuera de `/home`, legible sin escritura sólo por `serg`, y ejecute el verificador como `serg` con `--output-file` nuevo dentro de un directorio `0700` separado.
-5. Solo el `rc-acceptance-aggregate.json` con `status: "PASS"` es entrada para crear `v3.1.0` sobre el mismo commit. El verificador no crea tags ni releases. Un fallo exige otro commit y otro RC, nunca mutar tags.
+1. Sobre un commit con la suite verde (`PYTHONPATH=src:tests python3 -m unittest discover -s tests -q`), confirmá que `pyproject.toml` declara la versión que vas a publicar y creá el tag anotado `vX.Y.Z` sobre ese commit.
+2. Construí el wheel con lo que ya usa cualquier mantenedor: `pip wheel . --no-deps -w dist/`. El nombre resultante, `pegasus_harness-X.Y.Z-py3-none-any.whl`, tiene que declarar la misma versión que `pyproject.toml` en ese commit — `tools/build_release_evidence.py` lo verifica y rechaza el wheel si no coincide.
+3. Generá la evidencia del release con `tools/build_release_evidence.py`, apuntando al tag:
 
-```sh
-python3 tools/build_release_manifest.py --tag v3.1.0-rc.1 --archive dist/pegasus-harness-v3.1.0-rc.1.tar.gz --output dist/release-manifest.json
-```
+   ```sh
+   python3 tools/build_release_evidence.py \
+     --wheel dist/pegasus_harness-X.Y.Z-py3-none-any.whl \
+     --tag vX.Y.Z \
+     --output dist/release-manifest.json
+   ```
 
-La herramienta acepta únicamente `v3.1.0-rc.N`, exige un tag anotado, `install.sh` trackeado como ejecutable y un contrato `v3.1.0`. El checksum publicado siempre registra sólo el basename del archive (nunca una ruta de staging), para que `sha256sum -c` funcione después de descargar los assets. El CBM curado vive en `dependencies/` dentro del commit del RC; el manifest prueba el digest y membresía del archive, contrato, catálogo y provenance. Antes de crear un RC, ejecute `python3 tools/validate_snapshot.py`: valida el catálogo exacto, excluye artifacts no aprobados y comprueba que cada dependencia tenga fuente fija e integridad. No crea tags ni publica assets.
+   El script no construye el wheel ni genera `requirements.txt` — los toma tal cual existen en el tag, vía `git show`, y solo certifica el commit, la versión y el hash de cada uno de los tres assets (`release-manifest.json` y un `.sha256` por asset). Sin `--tag`, describe el `HEAD` limpio; con el worktree sucio, se niega.
+4. Publicá en GitHub Releases, sobre ese mismo tag, los siete archivos que `INSTALL.md` descarga: el wheel, `requirements.txt`, `bin/pegasus` (publicado como `pegasus`), y los tres `.sha256` correspondientes, más `release-manifest.json`. El checksum de cada asset registra solo su basename, nunca una ruta de staging, para que `sha256sum -c` funcione tal como se descargó.
+5. El release de GitHub debe ser no-draft y no-prerelease para que el contrato `latest` lo ofrezca. Verificá manualmente, descargando cada asset por su ruta versionada y por `.../releases/latest/download/<asset>`, que ambos coinciden en bytes y en el checksum publicado.
 
-Después de publicar, el responsable ejecuta los cinco perfiles de la [aceptación aislada](aceptacion-rc-v3.1.md): `cbm`, `engram`, `playwright`, `context7` y `final`. Es una prueba operatoria manual: el orquestador valida archive/checksum/manifest, recrea sólo el usuario dedicado reconocido explícitamente y no forma parte de tests ni del pipeline de release. El verificador de matriz es una comprobación Python offline: requiere exactamente esas cinco evidencias `PASS` con la misma identidad RC y escribe una única prueba agregada antes de la promoción.
+`tools/build_release_manifest.py` sigue existiendo y sigue sin tocarse: reproduce la evidencia de los tags `v3.1.x` que ya se publicaron con tarball, leyendo sus fuentes con `git show <tag>:ruta` para poder seguir respondiendo por esos releases aunque `install.sh` ya no esté en el árbol de trabajo. No tiene rama para el wheel de v4, a propósito — ver el docstring de `tools/build_release_evidence.py`.
 
-## Promoción RC final v3.1.1
-
-El commit que contendrá el release final (incluidos los cambios posteriores a RC26) primero recibe el tag anotado e inmutable `v3.1.1-rc.1`. El dispatch con `release_stage: rc` genera y publica sus tres assets y luego se ejecutan los cinco perfiles aislados para ese RC. La promoción final recibe manualmente su evidencia agregada aceptada mediante `accepted_v311_rc1_aggregate_b64`; el dispatch con `release_stage: final` descarga los tres assets publicados de `v3.1.1-rc.1` y rechaza el agregado si no es `PASS`, no contiene exactamente los cinco perfiles o no coincide byte a byte con esa identidad RC. Esa validación termina antes de crear el tag final o construir/subir assets finales. Sólo después crea el tag anotado e inmutable `v3.1.1` sobre el commit de `v3.1.1-rc.1`, vuelve a comparar ambos commits y no sustituye la aceptación aislada. La evidencia de RC26 no puede sustituir la aceptación de `v3.1.1-rc.1`. Desde el tag final genera exactamente estos assets:
-
-- `pegasus-harness-v3.1.1.tar.gz`;
-- `pegasus-harness-v3.1.1.tar.gz.sha256`;
-- `release-manifest.json`.
-
-El manifest final registra `release_kind: final`, `promotion_rc_tag: v3.1.1-rc.1`, tag object, commit, digest del archive, installer y evidencia de `README.md`, `INSTALL.md`, `INSTALL_BY_AGENT.md`, `MANUAL.md` y esta guía. El release de GitHub debe ser no-draft y `prerelease: false`; sólo así GitHub puede ofrecer el contrato `latest`.
-
-El smoke manual de cualquier `v3.1.1-rc.N` publicado usa exclusivamente los tres assets versionados de ese RC; `N` debe ser un entero positivo. La preflight acepta el RC sólo si el tag, basename canónico del archive, checksum, manifest, raíz y evidencia del archive son el mismo conjunto inmutable; rechaza versiones, tags o pares RC que no coincidan. Ese smoke no habilita `latest` ni sustituye la distribución final. La instalación/distribución final usa sólo `v3.1.1`; las rutas versionada y `latest` deben conservar bytes, checksum y manifest idénticos.
-
-Después de publicar, descargá cada asset por sus dos rutas y compará bytes antes de reportar distribución lista. No ejecutes esta verificación desde tests ni como parte de la aceptación:
-
-```text
-https://github.com/balerdis/pegasus-harness/releases/download/v3.1.1/<asset>
-https://github.com/balerdis/pegasus-harness/releases/latest/download/<asset>
-```
-
-Cada par debe conservar basename y SHA-256; el checksum y manifest deben identificar `v3.1.1`, y `latest` no puede resolver a RC, asset incompleto ni bytes regenerados. Si la publicación final es incorrecta, retirá el release y publicá un patch nuevo e inmutable: nunca se mutan tag ni assets ya publicados.
+Este documento no describe un proceso de aceptación aislada por perfil ni una promoción RC→final automatizada: eso era de v3.1.1, corrido por un dispatch de CI que esta rama no tiene. Si v4 necesita ese nivel de verificación operatoria, es trabajo nuevo, no una adaptación de lo anterior.

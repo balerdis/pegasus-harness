@@ -91,10 +91,9 @@ No se cambia de estrategia a mitad de la cadena. Si el diff trae cambios que no 
 
 ## Dónde mirar en el repo
 
-- [README.md](README.md): adopción, límites y pre-chequeos.
-- [MANUAL.md](MANUAL.md): instalación y uso de OpenCode con Pegasus.
-- [source/opencode/opencode.json](source/opencode/opencode.json): agentes y MCPs que distribuye esta línea; no fija modelos por agente.
-- [source/opencode/agents/pegasus-orchestrator.md](source/opencode/agents/pegasus-orchestrator.md): responsabilidad del orquestador.
-- [docs/contrato-inclusion-artifacts.md](docs/contrato-inclusion-artifacts.md): qué puede entrar al payload y qué queda afuera.
+- [README.md](../README.md): adopción, límites y pre-chequeos.
+- [MANUAL.md](../MANUAL.md): instalación y uso de OpenCode con Pegasus.
+- [src/pegasus/content/agents/pegasus-orchestrator.md](../src/pegasus/content/agents/pegasus-orchestrator.md): responsabilidad del orquestador.
+- [contrato-inclusion-artifacts.md](contrato-inclusion-artifacts.md): qué puede entrar al payload y qué queda afuera.
 
 El resultado buscado es simple: cada cambio puede explicar qué se hizo, por qué, cómo se probó y qué se puede revertir sin tocar trabajo ajeno.
