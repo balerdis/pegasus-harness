@@ -29,15 +29,15 @@ SYSTEM_PROMPT_DIR = "system-prompt"
 _MCP_CONVENTION_DIR = PurePosixPath("_shared") / "mcp"
 """Where every server's usage convention lands, relative to the skills root.
 
-`_shared/` already holds hand-authored convention files that the skills renderer
-writes by copying an asset verbatim (`cbm-convention.md`, `engram-convention.md`,
-`openspec-convention.md`). A server's convention is a different kind of write:
-the loader derives it from the server's own descriptor body. Landing both writers
-in that same flat namespace means a server whose id happens to match one of those
-stems collides with a file it has nothing to do with -- and `cbm` and `engram` are
-both real planned servers, not a hypothetical. A subdirectory of its own makes
-that collision impossible to express, rather than something a catalog build has
-to notice after the fact.
+`_shared/` also holds hand-authored convention files that the skills renderer
+writes by copying an asset verbatim (`openspec-convention.md`). A server's
+convention is a different kind of write: the loader derives it from the
+server's own descriptor body. Landing both writers in that same flat namespace
+means a server whose id happens to match one of those stems collides with a
+file it has nothing to do with -- `cbm` and `engram` once did, before their
+conventions moved into their own descriptor bodies. A subdirectory of its own
+makes that collision impossible to express, rather than something a catalog
+build has to notice after the fact.
 """
 
 

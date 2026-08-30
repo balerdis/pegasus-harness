@@ -364,7 +364,12 @@ class ShippedCatalogTest(unittest.TestCase):
         # 92, not 91: `_shared/mcp/playwright-convention.md` is the fourth
         # shipped MCP server's convention file.
         # 21, not 20: `/mcp/playwright` is that fourth server's settings key.
-        self.assertEqual((len(files), len(keys)), (92, 21))
+        # 91, not 92: the SDD artifact-naming rules in `_shared/engram-convention.md`
+        # were engram's, not a shared skill's, and moved into `engram`'s own
+        # descriptor body -- folded into the same `_shared/mcp/engram-convention.md`
+        # this count already carried, rather than adding a file of its own. One
+        # hand-authored file disappears with nothing replacing it, net -1.
+        self.assertEqual((len(files), len(keys)), (91, 21))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:

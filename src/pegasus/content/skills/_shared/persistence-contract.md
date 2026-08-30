@@ -45,7 +45,7 @@ Persists every artifact to BOTH Engram and OpenSpec simultaneously:
 - Engram: cross-session recovery, compaction survival, deterministic search
 - OpenSpec: human-readable files, version-controllable artifacts
 
-Write to Engram (per `_shared/engram-convention.md`) AND to filesystem (per `_shared/openspec-convention.md`) for every artifact.
+Write to Engram (per `_shared/mcp/engram-convention.md`) AND to filesystem (per `_shared/openspec-convention.md`) for every artifact.
 
 Read priority: Engram first; fall back to filesystem if Engram returns no results.
 Write behavior: both writes MUST succeed for the operation to be complete.
