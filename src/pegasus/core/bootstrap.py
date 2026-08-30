@@ -11,15 +11,74 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.venv_provisioner import VenvProvisioner
 
 VENV_DIRNAME = "venv"
 SHIM_NAME = "pegasus"
 
+# What `setup` preserves beside the venv the first time it has a checkout to
+# read from, so a later run against the same data directory -- an installed
+# Pegasus, with no checkout in reach -- still has something to rebuild from.
+SOURCES_DIRNAME = "setup-sources"
+REQUIREMENTS_NAME = "requirements.txt"
+PACKAGE_DIRNAME = "package"
+
+#: Skipped while mirroring a checkout beside the venv: version control, test
+#: and doc trees, and build caches -- none of it is read by a rebuild, so
+#: none of it belongs in a copy kept only so a rebuild has something to read.
+_EXCLUDED_FROM_PRESERVATION = frozenset({
+    ".git", ".github", ".claude", "tests", "docs", "tools", "venv", ".venv",
+    "node_modules", "__pycache__", ".pytest_cache", "dist", "build",
+})
+
 
 def venv_dir(data_dir: Path) -> Path:
     """Where the private venv sits inside Pegasus's own data directory."""
     return data_dir / VENV_DIRNAME
+
+
+def setup_sources_dir(data_dir: Path) -> Path:
+    """Where a `setup` run keeps a copy of the checkout inputs it read.
+
+    A sibling of the venv, inside the same data directory Pegasus already
+    manages of its own -- nothing here is any more hidden than the venv
+    itself, and a person who wants both gone can delete them the same way.
+    """
+    return data_dir / SOURCES_DIRNAME
+
+
+def preserve_inputs(filesystem: FileSystem, sources_dir: Path, *, requirements: Path, source: Path, shim: Path) -> None:
+    """Copy this run's own checkout-provided inputs beside the venv.
+
+    Called only once `setup` has actually provisioned from its own checkout:
+    a run that provisioned from a previously preserved copy has nothing new
+    to add here, and copying that copy back onto itself would only spend
+    time confirming what was already true.
+    """
+    _copy_file(filesystem, requirements, sources_dir / REQUIREMENTS_NAME)
+    _copy_file(filesystem, shim, sources_dir / SHIM_NAME)
+    _mirror_tree(filesystem, source, sources_dir / PACKAGE_DIRNAME)
+
+
+def _copy_file(filesystem: FileSystem, source: Path, target: Path) -> None:
+    mode = filesystem.mode_of(source)
+    filesystem.write_atomic(
+        target, filesystem.read_bytes(source), mode=mode if mode is not None else filesystem.mode_for(executable=False)
+    )
+
+
+def _mirror_tree(filesystem: FileSystem, source: Path, target: Path) -> None:
+    for name in filesystem.list_dir(source):
+        if name in _EXCLUDED_FROM_PRESERVATION or name.endswith(".egg-info"):
+            continue
+        child = source / name
+        try:
+            filesystem.list_dir(child)
+        except FileSystemError:
+            _copy_file(filesystem, child, target / name)
+        else:
+            _mirror_tree(filesystem, child, target / name)
 
 
 def provision(provisioner: VenvProvisioner, *, venv: Path, requirements: Path, source: Path) -> None:

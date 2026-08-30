@@ -5,7 +5,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from fakes import FakeVenvProvisioner
+from fakes import FakeFileSystem, FakeVenvProvisioner
 from pegasus.core import bootstrap
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.ports.venv_provisioner import VenvProvisionerError
@@ -17,6 +17,64 @@ BIN_DIR = Path("/home/probe/.local/bin")
 class VenvDirTest(unittest.TestCase):
     def test_venv_dir_sits_inside_the_data_dir(self):
         self.assertEqual(bootstrap.venv_dir(DATA_DIR), DATA_DIR / "venv")
+
+
+class SetupSourcesDirTest(unittest.TestCase):
+    def test_sources_dir_sits_beside_the_venv(self):
+        self.assertEqual(bootstrap.setup_sources_dir(DATA_DIR), DATA_DIR / "setup-sources")
+
+
+class PreserveInputsTest(unittest.TestCase):
+    """Copying a checkout's inputs beside the venv, through the port alone."""
+
+    def setUp(self):
+        self.filesystem = FakeFileSystem(
+            files={
+                Path("/repo/requirements.txt"): b"PyYAML==6.0.2 --hash=sha256:0\n",
+                Path("/repo/bin/pegasus"): b"#!/bin/sh\n",
+                Path("/repo/pyproject.toml"): b"[project]\nname = 'pegasus'\n",
+                Path("/repo/src/pegasus/__init__.py"): b"",
+                Path("/repo/.git/HEAD"): b"ref: refs/heads/main\n",
+                Path("/repo/tests/test_x.py"): b"",
+            },
+            modes={Path("/repo/bin/pegasus"): 0o755},
+        )
+        self.sources_dir = Path("/home/probe/.local/share/pegasus-harness/setup-sources")
+
+    def preserve(self) -> None:
+        bootstrap.preserve_inputs(
+            self.filesystem,
+            self.sources_dir,
+            requirements=Path("/repo/requirements.txt"),
+            source=Path("/repo"),
+            shim=Path("/repo/bin/pegasus"),
+        )
+
+    def test_copies_the_lockfile(self):
+        self.preserve()
+        self.assertEqual(
+            self.filesystem.read_bytes(self.sources_dir / "requirements.txt"),
+            b"PyYAML==6.0.2 --hash=sha256:0\n",
+        )
+
+    def test_copies_the_shim_and_keeps_it_executable(self):
+        self.preserve()
+        target = self.sources_dir / "pegasus"
+        self.assertEqual(self.filesystem.read_bytes(target), b"#!/bin/sh\n")
+        self.assertEqual(self.filesystem.mode_of(target), 0o755)
+
+    def test_mirrors_the_package_source_tree(self):
+        self.preserve()
+        self.assertEqual(
+            self.filesystem.read_bytes(self.sources_dir / "package" / "pyproject.toml"),
+            b"[project]\nname = 'pegasus'\n",
+        )
+        self.assertEqual(self.filesystem.read_bytes(self.sources_dir / "package" / "src" / "pegasus" / "__init__.py"), b"")
+
+    def test_excludes_version_control_and_test_trees(self):
+        self.preserve()
+        self.assertFalse(self.filesystem.exists(self.sources_dir / "package" / ".git"))
+        self.assertFalse(self.filesystem.exists(self.sources_dir / "package" / "tests"))
 
 
 class ProvisionTest(unittest.TestCase):

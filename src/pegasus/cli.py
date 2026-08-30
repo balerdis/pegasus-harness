@@ -975,15 +975,19 @@ def _setup(arguments, runtime: Runtime) -> dict[str, Any]:
     already owns costs nothing extra.
     """
     filesystem = runtime.filesystem
-    _refuse_without_its_own_sources(filesystem, runtime)
-    venv = bootstrap_module.venv_dir(filesystem.data_dir(runtime.home))
-    bootstrap_module.provision(
-        runtime.venv_provisioner, venv=venv, requirements=runtime.requirements, source=runtime.source
-    )
+    data_dir = filesystem.data_dir(runtime.home)
+    sources_dir = bootstrap_module.setup_sources_dir(data_dir)
+    requirements, source, shim_source, from_checkout = _resolve_setup_inputs(filesystem, runtime, sources_dir)
+    venv = bootstrap_module.venv_dir(data_dir)
+    bootstrap_module.provision(runtime.venv_provisioner, venv=venv, requirements=requirements, source=source)
+    if from_checkout:
+        bootstrap_module.preserve_inputs(
+            filesystem, sources_dir, requirements=requirements, source=source, shim=shim_source
+        )
     bin_dir = filesystem.bin_dir(runtime.home)
     shim = bin_dir / bootstrap_module.SHIM_NAME
     filesystem.write_atomic(
-        shim, filesystem.read_bytes(SHIM_SOURCE), mode=filesystem.mode_for(executable=True)
+        shim, filesystem.read_bytes(shim_source), mode=filesystem.mode_for(executable=True)
     )
     warning = bootstrap_module.path_warning(bin_dir, runtime.variables.get("PATH", ""))
     return {
@@ -1010,28 +1014,38 @@ def _attached_to_a_terminal() -> bool:
         return False
 
 
-def _refuse_without_its_own_sources(filesystem: FileSystem, runtime: Runtime) -> None:
-    """Refuse when the inputs a venv is built out of are not there to read.
+def _resolve_setup_inputs(filesystem: FileSystem, runtime: Runtime, sources_dir: Path) -> tuple[Path, Path, Path, bool]:
+    """Which inputs to build the venv from, and where its shim comes from.
 
-    Provisioning needs the pinned lockfile and the shim, and both ship in the
-    checkout rather than inside the installed package. So an installed Pegasus
-    asked to rebuild its own venv has nothing to rebuild it from — the wheel
-    it came from is not kept, and neither is the lockfile that pinned what
-    went in beside it.
+    A checkout is tried first, exactly as before -- unchanged, so a checkout
+    keeps provisioning exactly as it always has. Only once that is confirmed
+    absent is a previously preserved copy tried: what an earlier `setup` run
+    against this same data directory, back when it did have a checkout, left
+    beside the venv for exactly this situation. Refuses, naming both places
+    it looked, when neither has what provisioning needs.
 
     Failing here rather than three subprocess calls later is the difference
     between a sentence someone can act on and a `pip` error naming a path
     inside their own virtual environment.
     """
+    if filesystem.exists(runtime.requirements) and filesystem.exists(SHIM_SOURCE):
+        return runtime.requirements, runtime.source, SHIM_SOURCE, True
+
+    preserved_requirements = sources_dir / bootstrap_module.REQUIREMENTS_NAME
+    preserved_source = sources_dir / bootstrap_module.PACKAGE_DIRNAME
+    preserved_shim = sources_dir / bootstrap_module.SHIM_NAME
+    if all(filesystem.exists(path) for path in (preserved_requirements, preserved_source, preserved_shim)):
+        return preserved_requirements, preserved_source, preserved_shim, False
+
     missing = [path for path in (runtime.requirements, SHIM_SOURCE) if not filesystem.exists(path)]
-    if missing:
-        raise CommandError(
-            "setup builds the private venv out of this project's own checkout, and "
-            + " and ".join(str(path) for path in missing)
-            + " is not there. An installed Pegasus does not keep the wheel or the lockfile it "
-            "came from, so it cannot rebuild its own venv: install again from the release, "
-            "which is safe to repeat, or run this from a checkout."
-        )
+    raise CommandError(
+        "setup builds the private venv out of this project's own checkout, and "
+        + " and ".join(str(path) for path in missing)
+        + " is not there. It also looked for a copy a previous `setup` run may have kept beside "
+        f"the venv, at {sources_dir}, and found none there either. An installed Pegasus that never "
+        "ran `setup` from a checkout has nothing to rebuild its own venv from: install again from "
+        "the release, which is safe to repeat, or run this from a checkout."
+    )
 
 
 COMMANDS = {
