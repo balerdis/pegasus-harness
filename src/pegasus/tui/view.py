@@ -14,6 +14,7 @@ from pegasus.tui.navigator import (
     EFFORT_OPTIONS,
     InstallPlanScreen,
     InstallResultScreen,
+    McpSelectionScreen,
     Menu,
     ModelsScreen,
     Placeholder,
@@ -54,6 +55,8 @@ def render(screen: Screen, cursor: int) -> tuple[Line, ...]:
         return _render_menu(screen, cursor)
     if isinstance(screen, Placeholder):
         return _render_placeholder(screen)
+    if isinstance(screen, McpSelectionScreen):
+        return _render_mcp_selection(screen, cursor)
     if isinstance(screen, InstallPlanScreen):
         return _render_install_plan(screen)
     if isinstance(screen, InstallResultScreen):
@@ -167,6 +170,26 @@ def _render_choices(
         lines.append(Line(f"  ... {len(items) - end} more below"))
     lines += [Line(""), Line(footer)]
     return tuple(lines)
+
+
+#: The label the row after the last server carries — chosen so it reads as
+#: what it is, an action rather than one more server, without borrowing a
+#: word ("Confirm") the destructive confirmations already own for something
+#: that writes nothing by itself.
+CONTINUE_LABEL = "Continue"
+
+
+def _render_mcp_selection(screen: McpSelectionScreen, cursor: int) -> tuple[Line, ...]:
+    """The step between choosing a CLI and seeing its plan: a checklist of
+    every server this release ships, and a Continue row after the last one
+    that fetches the plan for whatever ended up checked."""
+    heading = f"Install · {screen.cli.display_name} · choose which mcp servers to install"
+    rows = tuple(
+        f"[{'x' if option.id in screen.chosen else ' '}] {option.id:<12} {option.description}"
+        for option in screen.options
+    )
+    items = rows + (CONTINUE_LABEL,)
+    return _render_choices(heading, items, cursor, "enter: toggle a server, or continue · esc: back")
 
 
 def _render_models(screen: ModelsScreen, cursor: int) -> tuple[Line, ...]:

@@ -12,6 +12,8 @@ from pegasus.tui.navigator import (
     Entry,
     InstallPlanScreen,
     InstallResultScreen,
+    McpOption,
+    McpSelectionScreen,
     Menu,
     ModelOption,
     ModelsScreen,
@@ -154,6 +156,45 @@ class InstallPlanRenderingTest(unittest.TestCase):
         lines = [line.text for line in render(InstallPlanScreen(cli=SAMPLE, report=PLANNED_REPORT), cursor=0)]
         for expected in cli.prose_for(PLANNED_REPORT).splitlines():
             self.assertIn(expected, lines)
+
+
+MCP_OPTIONS = (
+    McpOption(id="cbm", description="Knowledge graph of the codebase"),
+    McpOption(id="context7", description="Up-to-date third-party docs"),
+)
+
+
+class McpSelectionRenderingTest(unittest.TestCase):
+    def screen(self, **overrides) -> McpSelectionScreen:
+        fields = {"cli": SAMPLE, "options": MCP_OPTIONS, "chosen": ()}
+        fields.update(overrides)
+        return McpSelectionScreen(**fields)
+
+    def test_every_server_shows_its_own_description(self):
+        lines = [line.text for line in render(self.screen(), cursor=0)]
+        self.assertTrue(any("cbm" in text and "Knowledge graph" in text for text in lines))
+        self.assertTrue(any("context7" in text and "third-party docs" in text for text in lines))
+
+    def test_a_checked_server_is_marked_and_an_unchecked_one_is_not(self):
+        lines = [line.text for line in render(self.screen(chosen=("cbm",)), cursor=0)]
+        cbm_line = next(text for text in lines if "cbm" in text)
+        context7_line = next(text for text in lines if "context7" in text)
+        self.assertIn("[x]", cbm_line)
+        self.assertIn("[ ]", context7_line)
+
+    def test_a_continue_row_follows_the_last_server(self):
+        lines = [line.text for line in render(self.screen(), cursor=0)]
+        self.assertTrue(any("Continue" in text for text in lines))
+
+    def test_the_continue_row_can_be_highlighted_like_any_other(self):
+        lines = render(self.screen(), cursor=len(MCP_OPTIONS))
+        highlighted = [line.text for line in lines if line.highlighted]
+        self.assertEqual(len(highlighted), 1)
+        self.assertIn("Continue", highlighted[0])
+
+    def test_exactly_one_line_is_highlighted(self):
+        lines = render(self.screen(), cursor=0)
+        self.assertEqual(sum(1 for line in lines if line.highlighted), 1)
 
 
 class InstallResultRenderingTest(unittest.TestCase):

@@ -81,13 +81,51 @@ class InstallTarget:
 
 
 @dataclass(frozen=True)
+class McpOption:
+    """One mcp server this release can install, pure enough for the
+    selection step below to toggle without ever touching `core.content`
+    itself — the same reason `CliOption` exists apart from a real `Detection`.
+    `description` is the descriptor's own `description` field, verbatim: the
+    one sentence a person needs to decide whether they want it."""
+
+    id: str
+    description: str
+
+
+@dataclass(frozen=True)
+class McpSelectionScreen:
+    """The step between choosing a CLI and seeing its plan: which of the
+    servers this release ships should be part of it.
+
+    `chosen` starts as whatever this CLI's journal already records as
+    installed — the safe default, since leaving every row exactly as found
+    and moving straight to Continue then reproduces the machine's current
+    state rather than silently retiring everything, the same as calling
+    `install` with no `--mcp` at all when nothing was ever installed through
+    it. The row after the last server is Continue itself: reaching it and
+    choosing it is real engine work — fetching the plan for exactly the
+    servers checked so far — so `Navigator` leaves it a no-op, the same
+    reasoning `_ENGINE_TARGETS` already follows for every other request only
+    `session` can act on; toggling a server above it, unlike that request,
+    is pure and handled right here.
+    """
+
+    cli: CliOption
+    options: tuple[McpOption, ...]
+    chosen: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class InstallPlanScreen:
     """What `pegasus install --dry-run` would report, shown before anything
     is written. `report` is the exact document the flag produces — this
-    screen renders it, it does not recompute it."""
+    screen renders it, it does not recompute it. `mcp` is the selection that
+    produced it, carried forward so confirming this plan installs exactly
+    what it previewed rather than falling back to naming none at all."""
 
     cli: CliOption
     report: dict
+    mcp: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -257,6 +295,17 @@ def _models_step_count(screen: ModelsScreen) -> int:
     return len(screen.rows)
 
 
+def _toggled(screen: McpSelectionScreen, index: int) -> McpSelectionScreen:
+    """`screen` with the server at `index` moved in or out of `chosen`."""
+    server_id = screen.options[index].id
+    chosen = (
+        tuple(name for name in screen.chosen if name != server_id)
+        if server_id in screen.chosen
+        else screen.chosen + (server_id,)
+    )
+    return replace(screen, chosen=chosen)
+
+
 @dataclass(frozen=True)
 class Entry:
     """One line of a menu: what it says, and where choosing it leads."""
@@ -292,6 +341,7 @@ class Menu:
 Screen = Union[
     Menu,
     Placeholder,
+    McpSelectionScreen,
     InstallPlanScreen,
     InstallResultScreen,
     StatusScreen,
@@ -423,6 +473,8 @@ class Navigator:
             return self._handle_on_menu(screen, action)
         if isinstance(screen, ModelsScreen):
             return self._handle_on_models(screen, action)
+        if isinstance(screen, McpSelectionScreen):
+            return self._handle_on_mcp_selection(screen, action)
         if isinstance(screen, (InstallResultScreen, UninstallResultScreen, RestoreResultScreen)):
             # A finished install, uninstall, or restore leaves whatever led to
             # it stale — each described a disk that has since changed — so
@@ -500,6 +552,29 @@ class Navigator:
                 return self.replaced(replace(screen, model_id=chosen.id))
             return self  # a plain model: `session.step` commits it.
         return self  # an effort: `session.step` commits it.
+
+    def _handle_on_mcp_selection(self, screen: McpSelectionScreen, action: Action) -> "Navigator":
+        count = len(screen.options) + 1  # the row after the last server is Continue.
+        if action is Action.MOVE_DOWN:
+            return self._with_cursor((self.cursor + 1) % count)
+        if action is Action.MOVE_UP:
+            return self._with_cursor((self.cursor - 1) % count)
+        if action is Action.BACK:
+            return self._pop()
+        if action is Action.CHOOSE:
+            if self.cursor == len(screen.options):
+                # Continue: fetching the plan for this selection is real
+                # engine work, left to `session` — see the screen's own
+                # docstring.
+                return self
+            return self._swapped(_toggled(screen, self.cursor))
+        return self
+
+    def _swapped(self, screen: Screen) -> "Navigator":
+        """Like `replaced`, but keeps the cursor exactly where it is —
+        toggling one row of a checklist must not throw the cursor back to
+        the top the way narrowing a step of the models wizard does."""
+        return replace(self, _stack=self._stack[:-1] + (screen,))
 
     def replaced(self, screen: Screen) -> "Navigator":
         """Swap the screen on top for a freshly computed one at the same
