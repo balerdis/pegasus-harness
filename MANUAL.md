@@ -1,115 +1,76 @@
-# Manual de adopción: OpenCode + Pegasus Harness
+# Manual de uso: Pegasus Harness + OpenCode
 
-Este manual sirve para preparar OpenCode y sumar Pegasus sin entregar el control de tu cuenta o de tus proyectos. OpenCode es el cliente anfitrión; Pegasus agrega un payload seleccionado y preserva lo que ya tenías.
+Este manual describe cómo usar Pegasus 4 una vez instalado: qué decide, qué preserva de tu cuenta y cómo se trabaja el día a día con OpenCode. Para instalarlo no hay procedimiento acá — está en [INSTALL.md](INSTALL.md) (manual) y en [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md) (asistido por un agente).
 
-## Antes de empezar
+## Qué es Pegasus en esta versión
 
-Necesitás una cuenta Linux no-root: Pegasus se ejecuta directamente desde esa cuenta y aplica sus artifacts en su home actual.
+Pegasus 4 no trae un instalador propio ni un tarball: es un paquete de Python que vive en un venv privado (`$XDG_DATA_HOME/pegasus-harness/venv`, o `~/.local/share/pegasus-harness/venv` si esa variable no está definida), con un lanzador `pegasus` en tu PATH. `pegasus` sin argumentos abre una TUI cuando corre en una terminal; sin terminal, o con un subcomando explícito, se comporta como CLI. Ambas superficies llaman al mismo motor: nada que la TUI pueda hacer le está vedado a los flags.
 
-| Requisito | Cómo comprobarlo | Para qué sirve |
+Antes de usarlo necesitás OpenCode instalado por fuera de Pegasus — Pegasus no lo instala, actualiza ni desinstala — y una cuenta Linux no-root, porque escribe únicamente en tu propio `~/.config` y `~/.local`.
+
+## Instalar el payload en OpenCode
+
+Con el venv ya armado y `pegasus` en el PATH, el comando que aplica el payload es:
+
+```sh
+pegasus install --cli opencode --dry-run --mcp <id>
+```
+
+`--dry-run` muestra el plan sin escribir nada; repetir el mismo comando sin ese flag lo aplica. Un servidor MCP no nombrado con `--mcp` no se instala — no hay `--confirm`/`--decline` como en v3, la ausencia del flag ya es la decisión de no instalarlo. Podés repetir `--mcp` para pedir varios.
+
+Si el plan encuentra una clave o un archivo tuyo en el destino, lo informa y lo preserva: no lo adopta como si fuera de Pegasus. El payload de OpenCode queda bajo `~/.config/opencode/` (o el `XDG_CONFIG_HOME` que tengas seteado): las skills en `skills/`, los comandos en `commands/`, el system prompt de Pegasus como `pegasus-AGENTS.md`, y los agentes declarados dentro de `opencode.json` — OpenCode no los materializa como archivos aparte. Después de un apply exitoso, cerrá y reiniciá OpenCode para que cargue la configuración nueva.
+
+## Qué hacen los cuatro MCPs opcionales
+
+| MCP | Uso práctico | Decisión |
 | --- | --- | --- |
-| OpenCode instalado por fuera de Pegasus | `~/.opencode/bin/opencode --version` o `~/.local/bin/opencode --version` | El cliente anfitrión no se instala desde este repo. |
-| Python 3.12 o superior | `python3 --version` | Ejecuta el motor de Pegasus. |
-| CBM, si lo vas a usar | `~/.local/bin/codebase-memory-mcp --version` y `--help` | Pegasus valida que el binario local responda antes de configurarlo. |
-| Navegador compatible, si confirmás Playwright | revisión externa antes de apply | Pegasus no descarga navegadores. |
+| CBM (`codebase-memory-mcp`) | Buscar estructura, callers, flujos e impacto de código. | Es inteligencia de código; no prueba comportamiento. |
+| Engram | Recuperar decisiones, progreso y resúmenes entre sesiones, con el protocolo de memoria persistente. | La memoria no puede sobreescribir la evidencia actual. |
+| Playwright | Probar una frontera de navegador cuando el proyecto lo necesita. | Requiere un navegador compatible instalado por separado; Pegasus no lo descarga. |
+| Context7 | Consultar documentación del proveedor de forma remota. | Es el único servidor remoto embarcado; confirmalo por separado. |
 
-No uses root. No corras Pegasus desde una cuenta que no querés que reciba sus propios artifacts en `~/.config` y `~/.local`.
-
-## Instalar OpenCode
-
-Instalá OpenCode con el método oficial que prefieras, fuera de Pegasus. Por ejemplo, el instalador oficial publica esta alternativa:
-
-```sh
-curl -fsSL https://opencode.ai/install | bash
-```
-
-También existe instalación con Homebrew o gestores de paquetes de Node. Elegí una sola vía, verificá la versión con el binario que quedó en tu cuenta y seguí el mecanismo oficial para actualizarlo. Pegasus no instala, actualiza ni desinstala OpenCode.
-
-Después ubicá el ejecutable en una de las rutas que valida el release:
-
-```sh
-~/.opencode/bin/opencode --version
-# o
-~/.local/bin/opencode --version
-```
-
-## Aplicar Pegasus de forma aditiva
-
-Primero trabajá sobre un archive verificado y revisá el plan. El comando siempre imprime el plan antes de aplicar.
-
-```sh
-sha256sum -c pegasus-harness-v3.1.0-rc.N.tar.gz.sha256
-tar -xzf pegasus-harness-v3.1.0-rc.N.tar.gz
-cd pegasus-harness-v3.1.0-rc.N
-
-./install.sh --client opencode \
-  --decline cbm --decline engram --decline playwright --decline context7
-```
-
-Para habilitar una integración ausente, cambiá solo esa decisión por `--confirm <nombre>` después de revisar su origen y la acción mostrada en el plan. Los nombres admitidos son `cbm`, `engram`, `playwright` y `context7`.
-
-Ejemplo: confirmar CBM y rechazar el resto.
-
-```sh
-./install.sh --client opencode \
-  --confirm cbm \
-  --decline engram --decline playwright --decline context7
-```
-
-Si el plan encuentra una clave o un archivo tuyo en el destino, lo informa y lo preserva. No lo adopta como si fuera de Pegasus. Si la validación final falla, inspeccioná el estado y usá el uninstall/journal de Pegasus antes de volver a intentar; no fuerces un segundo apply sobre un estado incierto.
-
-El payload de OpenCode queda bajo `~/.config/opencode/`. Sus referencias `{file:./...}` se resuelven desde `~/.config/opencode/opencode.json`, por lo que los agentes quedan en `~/.config/opencode/agents/` y los prompts en `~/.config/opencode/prompts/`. Después de un apply exitoso, cerrá y reiniciá OpenCode para que cargue la configuración nueva.
+Instalá solo lo que el equipo vaya a usar: un servidor no pedido con `--mcp` no deja config ni dependencia huérfana.
 
 ## Usarlo todos los días
 
 1. Abrí OpenCode dentro del repositorio en el que vas a trabajar.
-2. Para un cambio con alcance real, iniciá el flujo SDD y completá el pre-chequeo de sesión que pide el orquestador.
-3. Dejá que explore, propuesta, spec, diseño y tareas aclaren el cambio antes de apply.
-4. Implementá por unidades de trabajo y cerrá con `sdd-verify` cuando estén completas las tareas.
+2. Para un cambio con alcance real, iniciá el flujo SDD (`sdd-init`, `sdd-new` o `sdd-ff`) y completá el pre-chequeo de sesión que pide el orquestador.
+3. Dejá que explore, propuesta, spec, diseño y tareas aclaren el cambio antes de `sdd-apply`.
+4. Implementá por unidades de trabajo y cerrá con `sdd-verify` cuando estén completas las tareas; `sdd-verify` es la única autoridad de readiness.
 
-Los comandos distribuidos incluyen `sdd-init`, `sdd-new`, `sdd-ff`, `sdd-apply`, `sdd-status`, `sdd-verify`, `sdd-archive`, además de comandos de contexto, handoff y registry. Los prompts y las reglas de cada fase son parte del payload; podés leerlos en `source/opencode/commands/` y `source/opencode/prompts/` antes de usarlos.
+Los comandos distribuidos son `sdd-init`, `sdd-new`, `sdd-ff`, `sdd-continue`, `sdd-apply`, `sdd-status`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-explore`, además de `context-load`, `context-save`, `handoff-load`, `handoff-save`, `skill-creator` y `skill-registry`. Podés leer su contenido en `~/.config/opencode/commands/` antes de usarlos.
 
-Para revisar la configuración efectiva de OpenCode después de reiniciarlo, la CLI actual ofrece:
+## Elegir proveedor, modelo y esfuerzo
+
+Pegasus distribuye roles, no credenciales ni modelos: ningún agente trae uno asignado por defecto. En el primer arranque, ejecutá `/connect` dentro de OpenCode para configurar las credenciales del proveedor, y `/models` para elegir el modelo que querés usar de forma general. Esas dos decisiones son tuyas y OpenCode las guarda en su propia configuración; Pegasus no las lee ni las reproduce.
+
+Para asignar un modelo puntual a un agente configurable de la línea SDD, Pegasus tiene su propio comando, separado del `/models` de OpenCode:
 
 ```sh
-opencode debug config
-opencode debug info
+pegasus models set --cli opencode --agent sdd-apply --model anthropic/claude-sonnet-5 --effort high
+pegasus models list --cli opencode
+pegasus models unset --cli opencode --agent sdd-apply
 ```
 
-Eso sirve para mirar la configuración resuelta y los plugins que OpenCode reconoce. No reemplaza las validaciones de Pegasus ni una prueba de comportamiento.
+Una asignación se guarda de inmediato, pero no queda escrita en la configuración de OpenCode hasta el próximo `pegasus install --cli opencode`: el comando avisa esto mismo si el agente no la tiene todavía. No pongas tokens ni credenciales en el repo, en prompts, ni en comandos versionados.
 
-## Elegir proveedor y modelo
+## Verificar el estado
 
-Pegasus distribuye roles, no credenciales ni nombres de modelos. Los tres agentes se instalan sin `model`: el agente principal usa el modelo vigente/configurado de OpenCode y los subagentes heredan el modelo del principal que los invocó. Por eso una instalación limpia no intenta usar un modelo de otro proveedor.
-
-En el primer arranque, ejecutá `/connect` para configurar las credenciales del proveedor. Después ejecutá `/models` para seleccionar el modelo que querés usar. Ambas decisiones pertenecen a tu cuenta de OpenCode. Si preferís fijar un valor para toda tu configuración, podés definir el `model` global en tu propia `~/.config/opencode/opencode.json`; si querés una excepción, agregá `model` solo al agente correspondiente. Usá identificadores admitidos por el proveedor conectado.
-
-No pongas tokens en el repo, prompts, comandos ni archivos que vayan a versionarse. Antes de editar tu configuración, hacé una copia; después reiniciá OpenCode y revisá `opencode debug config`. Pegasus preserva una clave existente cuando detecta un collision: no adopta ni pisa tu decisión de proveedor/modelo.
-
-## Qué hacen los MCPs opcionales
-
-| MCP | Uso práctico | Decisión |
-| --- | --- | --- |
-| CBM | Buscar estructura, callers, flujos e impacto de código. | Es inteligencia de código; no prueba comportamiento. |
-| Engram | Recuperar decisiones, progreso y resúmenes entre sesiones. | La memoria no puede sobreescribir la evidencia actual. |
-| Playwright | Probar una frontera de navegador cuando el proyecto lo necesita. | Requiere navegador externo y su pre-chequeo. |
-| Context7 | Consultar documentación del proveedor de forma remota. | Es un endpoint administrado por el proveedor, confirmado por separado. |
-
-Confirmá solo lo que el equipo vaya a usar. Una negativa no deja config ni dependencia huérfana.
-
-## Limpiar o volver atrás
-
-El journal queda en:
-
-```text
-~/.local/share/pegasus-harness/journal-v3.json
+```sh
+pegasus doctor
 ```
 
-El comando `uninstall` borra únicamente entradas creadas por Pegasus cuyo baseline no cambió. Si editaste un artifact, si no hay journal válido o no puede probarse la propiedad, se preserva. Nunca uses rollback para borrar configuración o archivos que ya eran de la cuenta.
+Reporta qué CLIs anfitrionas detecta y qué drift hay entre lo instalado y lo que el contenido actual generaría. No reemplaza una prueba de comportamiento.
+
+## Deshacer
+
+- `pegasus restore [generación]` vuelve al estado exacto anterior a un comando (o a una generación puntual del historial de snapshots).
+- `pegasus uninstall --cli opencode` retira solo lo que el journal reclama como propio.
+
+El journal vive en `$XDG_DATA_HOME/pegasus-harness/journal-v4.json` (o `~/.local/share/pegasus-harness/journal-v4.json`), en un directorio `0700` con el archivo en `0600`. Un ítem que editaste vos, o que ya no puede probarse como propio de Pegasus, se preserva: nunca uses `restore` ni `uninstall` para borrar configuración que ya era tuya.
 
 ## Próximo paso
 
-- Para entender el flujo y los roles: [architecture.md](architecture.md).
-- Para el recorrido completo con una cuenta Linux separada: [INSTALL.md](INSTALL.md).
-- Para el contrato de inclusión y seguridad: [docs/contrato-inclusion-artifacts.md](docs/contrato-inclusion-artifacts.md).
-- Para instalación aditiva, migración y aceptación RC: [docs/instalacion-aditiva-v3.md](docs/instalacion-aditiva-v3.md).
+- Para el recorrido completo de instalación: [INSTALL.md](INSTALL.md).
+- Para instalación asistida por un agente: [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md).
+- Para la arquitectura y las decisiones de diseño de v4: [docs/pegasus-v4/arquitectura.md](docs/pegasus-v4/arquitectura.md).
