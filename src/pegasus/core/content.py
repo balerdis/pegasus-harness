@@ -210,6 +210,16 @@ class Mcp:
     ``archive_members`` names every file the archive is expected to hold, and
     ``archive_executable`` names which one of those is the program to run. A
     plain `download` server -- one asset, one file -- leaves both empty.
+
+    ``argv`` exists for `download` and `npm`, the two forms that actually
+    start a local process: the command-line arguments that process is
+    started with, in order, after its own path. A `remote` server starts
+    nothing, so declaring `argv` there would name arguments for a process
+    that is never launched. Left empty, a server starts exactly as it did
+    before this field existed -- some programs default to running an MCP
+    server with no arguments at all, but at least one shipped server prints
+    its usage and exits unless told which mode to run in, which is what
+    `argv` exists to declare.
     """
 
     name: str
@@ -227,6 +237,7 @@ class Mcp:
     npm_package_name: str | None = None
     archive_members: tuple[str, ...] = ()
     archive_executable: str | None = None
+    argv: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -446,8 +457,8 @@ _INTEGRITY = re.compile(r"^sha512-[A-Za-z0-9+/]+=*$")
 
 _FORM_FIELDS: dict[Distribution, tuple[str, ...]] = {
     Distribution.REMOTE: (),
-    Distribution.DOWNLOAD: ("version", "checksum", "archive_members", "archive_executable"),
-    Distribution.NPM: ("package", "version", "integrity", "entry", "lockfile"),
+    Distribution.DOWNLOAD: ("version", "checksum", "archive_members", "archive_executable", "argv"),
+    Distribution.NPM: ("package", "version", "integrity", "entry", "lockfile", "argv"),
 }
 """Which extra fields each distribution's form declares.
 
@@ -469,6 +480,7 @@ def _load_mcp(directory: Path, root: Path) -> tuple[Mcp, ...]:
             fields, distribution, path, source
         )
         archive_members, archive_executable = _archive_form(fields, distribution, source)
+        argv = _names(fields, "argv", source)
         servers.append(
             Mcp(
                 name=path.stem,
@@ -486,6 +498,7 @@ def _load_mcp(directory: Path, root: Path) -> tuple[Mcp, ...]:
                 npm_package_name=npm_package_name,
                 archive_members=archive_members,
                 archive_executable=archive_executable,
+                argv=argv,
             )
         )
     return tuple(servers)

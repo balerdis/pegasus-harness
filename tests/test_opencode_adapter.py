@@ -5,6 +5,7 @@ import json
 import re
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 from pegasus.adapters.opencode import Adapter
@@ -496,6 +497,25 @@ class DownloadMcpRenderTest(unittest.TestCase):
             render_module.mcp(layout, self.mcp)
         self.assertIn("probe", str(raised.exception))
 
+    def test_argv_is_appended_in_order_after_the_command(self):
+        mcp = replace(self.mcp, argv=("mcp", "--tools=agent"))
+        artifacts = self.adapter.render_mcp(self.layout, mcp)
+        key = only(artifacts, ConfigKeyArtifact)[0]
+        self.assertEqual(
+            key.value["command"],
+            [
+                str(
+                    self.environment.data_dir
+                    / "mcp"
+                    / "probe"
+                    / "1.2.3"
+                    / "probe-linux-x64"
+                ),
+                "mcp",
+                "--tools=agent",
+            ],
+        )
+
 
 class ArchiveDownloadMcpRenderTest(unittest.TestCase):
     """An archive's own asset, the `.tar.gz` itself, is never what a CLI's
@@ -574,6 +594,43 @@ class NpmMcpRenderTest(unittest.TestCase):
         with self.assertRaises(render_module.RenderError) as raised:
             render_module.mcp(layout, self.mcp)
         self.assertIn("probe", str(raised.exception))
+
+    def test_argv_is_appended_in_order_after_the_installed_script(self):
+        mcp = replace(self.mcp, argv=("serve",))
+        artifacts = self.adapter.render_mcp(self.layout, mcp)
+        key = only(artifacts, ConfigKeyArtifact)[0]
+        self.assertEqual(
+            key.value["command"],
+            [
+                str(
+                    self.environment.data_dir
+                    / "mcp"
+                    / "probe"
+                    / "1.2.3"
+                    / "node_modules"
+                    / "probe-mcp"
+                    / "cli.js"
+                ),
+                "serve",
+            ],
+        )
+
+
+class ShippedEngramCommandTest(unittest.TestCase):
+    """`engram`'s binary prints usage and exits when started with no
+    arguments; the real shipped descriptor must render the command that
+    actually starts its MCP server."""
+
+    def setUp(self):
+        self.adapter = Adapter()
+        self.environment = Environment(home=HOME, data_dir=HOME / ".local" / "share" / "pegasus-harness")
+        self.layout = self.adapter.layout(self.environment)
+        self.engram = next(item for item in content_module.load().mcp if item.name == "engram")
+        self.artifacts = self.adapter.render_mcp(self.layout, self.engram)
+
+    def test_the_rendered_command_starts_the_mcp_server(self):
+        key = only(self.artifacts, ConfigKeyArtifact)[0]
+        self.assertEqual(key.value["command"][1:], ["mcp", "--tools=agent"])
 
 
 class OwnArtifactsTest(unittest.TestCase):

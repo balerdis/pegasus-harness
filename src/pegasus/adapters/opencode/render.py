@@ -184,14 +184,14 @@ MCP_VALUE: dict[Distribution, Any] = {
     # archive places its declared executable member there instead.
     Distribution.DOWNLOAD: lambda item, layout: {
         "type": "local",
-        "command": [str(_download_command(layout, item))],
+        "command": [str(_download_command(layout, item)), *item.argv],
         "enabled": True,
     },
     # Same path arithmetic as `download`, pointed at the script `npm ci`
     # installs rather than a fetched binary: `render` never runs `npm`.
     Distribution.NPM: lambda item, layout: {
         "type": "local",
-        "command": [str(_npm_command(layout, item))],
+        "command": [str(_npm_command(layout, item)), *item.argv],
         "enabled": True,
     },
 }
