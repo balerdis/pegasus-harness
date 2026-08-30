@@ -743,6 +743,28 @@ class McpTest(TemporaryContent):
             )
         self.assertIn("archive_members", str(raised.exception))
 
+    def test_a_download_server_declares_no_argv_by_default(self):
+        mcp = self.load_mcp(DOWNLOAD_MCP)
+        self.assertEqual(mcp.argv, ())
+
+    def test_a_download_server_reads_its_argv_in_order(self):
+        mcp = self.load_mcp(DOWNLOAD_MCP.replace(f"checksum: {CHECKSUM}\n", f"checksum: {CHECKSUM}\nargv: [mcp, --tools=agent]\n"))
+        self.assertEqual(mcp.argv, ("mcp", "--tools=agent"))
+
+    def test_an_npm_server_reads_its_argv_in_order(self):
+        mcp = self.load_mcp(NPM_MCP.replace("entry: cli.js\n", "entry: cli.js\nargv: [serve]\n"))
+        self.assertEqual(mcp.argv, ("serve",))
+
+    def test_a_remote_server_may_not_declare_argv(self):
+        with self.assertRaises(ContentError) as raised:
+            self.load_mcp(
+                MCP.replace(
+                    "endpoint: https://example.test/mcp\n",
+                    "endpoint: https://example.test/mcp\nargv: [serve]\n",
+                )
+            )
+        self.assertIn("argv", str(raised.exception))
+
 
 class McpConventionPathTest(unittest.TestCase):
     """The core, not the adapter, owns where a server's convention lands."""

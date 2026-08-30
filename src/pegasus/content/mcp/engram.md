@@ -7,6 +7,7 @@ version: 1.20.0
 checksum: sha256:7dc3003318e303bee269a4772144f3ce01c8ec700bfd524aaec76770acd389ca
 archive_members: [CHANGELOG.md, LICENSE, README.md, engram]
 archive_executable: engram
+argv: [mcp, --tools=agent]
 ---
 
 # Engram Convention (persistent memory)
