@@ -17,6 +17,8 @@ from pegasus.tui.navigator import (
     InstallPlanScreen,
     InstallResultScreen,
     InstallTarget,
+    McpOption,
+    McpSelectionScreen,
     Menu,
     ModelOption,
     ModelsScreen,
@@ -208,6 +210,73 @@ class InstallPlanAndResultScreensTest(unittest.TestCase):
 
     def test_acknowledging_a_result_leaves_it(self):
         navigator = self.result().handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Menu)
+
+
+MCP_OPTIONS = (
+    McpOption(id="cbm", description="Knowledge graph of the codebase"),
+    McpOption(id="context7", description="Up-to-date third-party docs"),
+)
+
+
+def _mcp_screen(**overrides) -> McpSelectionScreen:
+    fields = {"cli": SAMPLE, "options": MCP_OPTIONS, "chosen": ()}
+    fields.update(overrides)
+    return McpSelectionScreen(**fields)
+
+
+class McpSelectionScreenTest(unittest.TestCase):
+    """A checklist rather than a menu of one-way choices: `CHOOSE` toggles a
+    server in or out of `chosen` without ever leaving the screen, and only
+    reaching the row after the last one and choosing that is real engine
+    work, left inert here the same way every other `_ENGINE_TARGETS` member
+    already is."""
+
+    def test_choosing_an_unchecked_server_checks_it_and_keeps_the_cursor(self):
+        navigator = Navigator.starting().opened(_mcp_screen())
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.chosen, ("cbm",))
+        self.assertEqual(navigator.cursor, 0)
+
+    def test_choosing_a_checked_server_again_unchecks_it(self):
+        navigator = Navigator.starting().opened(_mcp_screen(chosen=("cbm",)))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.chosen, ())
+
+    def test_toggling_one_server_never_touches_another(self):
+        navigator = Navigator.starting().opened(_mcp_screen(chosen=("context7",))).handle(Action.MOVE_DOWN)
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.chosen, ())
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.chosen, ("context7",))
+
+    def test_moving_down_past_the_last_server_reaches_continue(self):
+        navigator = Navigator.starting().opened(_mcp_screen())
+        for _ in range(len(MCP_OPTIONS)):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        self.assertEqual(navigator.cursor, len(MCP_OPTIONS))
+
+    def test_moving_down_from_continue_wraps_to_the_first_server(self):
+        navigator = Navigator.starting().opened(_mcp_screen())
+        for _ in range(len(MCP_OPTIONS) + 1):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        self.assertEqual(navigator.cursor, 0)
+
+    def test_choosing_continue_directly_does_nothing_by_itself(self):
+        """Fetching the plan for what ended up checked is real engine work
+        only `session` can do; asking `Navigator` alone for it must never
+        invent a screen to stand in for the report it cannot fetch."""
+        navigator = Navigator.starting().opened(_mcp_screen())
+        for _ in range(len(MCP_OPTIONS)):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        before = navigator
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator, before)
+
+    def test_going_back_leaves_the_selection_screen(self):
+        navigator = Navigator.starting(detections=(SAMPLE,)).handle(Action.CHOOSE)
+        navigator = navigator.opened(_mcp_screen())
+        navigator = navigator.handle(Action.BACK)
         self.assertIsInstance(navigator.current, Menu)
 
 

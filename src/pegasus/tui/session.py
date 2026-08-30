@@ -27,6 +27,8 @@ from pegasus.tui.navigator import (
     InstallPlanScreen,
     InstallResultScreen,
     InstallTarget,
+    McpOption,
+    McpSelectionScreen,
     Menu,
     ModelOption,
     ModelsScreen,
@@ -131,6 +133,53 @@ def _restore_preview(generation: int, runtime: cli.Runtime) -> Menu:
     )
 
 
+def _currently_chosen_mcp(cli_id: str, runtime: cli.Runtime) -> tuple[str, ...]:
+    """Which mcp servers this CLI's own journal already records as
+    installed, read the same way `detect_installed` reads a CLI's own
+    presence: an entry's `id` names the server it is for as `mcp:<name>`,
+    the one convention every adapter's `render_mcp` follows, and the
+    convention file that travels alongside it is deliberately not counted
+    here since it names no server of its own."""
+    journal = cli.journal_store(runtime).load()
+    install = journal_module.install_for(journal, cli_id)
+    if install is None:
+        return ()
+    return tuple(sorted(entry.id.split(":", 1)[1] for entry in install.entries if entry.id.startswith("mcp:")))
+
+
+def _mcp_selection_screen(cli_option: CliOption, runtime: cli.Runtime) -> McpSelectionScreen:
+    """The step between choosing a CLI and seeing its plan, built fresh
+    every time -- the same reasoning `_models_screen` already follows for
+    its own read-only screen. `chosen` opens on what the journal already
+    records, so a person who touches nothing and moves straight to Continue
+    reproduces the machine's current state instead of retiring it."""
+    options = tuple(
+        McpOption(id=server.name, description=server.description) for server in content_module.load().mcp
+    )
+    return McpSelectionScreen(cli=cli_option, options=options, chosen=_currently_chosen_mcp(cli_option.id, runtime))
+
+
+def _mcp_write(
+    screen: McpSelectionScreen, navigator: Navigator, runtime: cli.Runtime, action: Action
+) -> Navigator | None:
+    """The one moment on this screen that is real engine work rather than a
+    pure toggle: reaching Continue, the row after every server, and choosing
+    it fetches the same dry-run plan `install --dry-run --mcp ...` would
+    report for exactly the servers checked so far. `Navigator` leaves this
+    row a no-op on purpose -- see `McpSelectionScreen`'s own docstring -- so
+    this is where it actually happens. Returns `None` for every other
+    action, which tells `step` to fall through to `navigator.handle`, the
+    same as `_models_write` does for its own pure steps.
+    """
+    if action is not Action.CHOOSE or navigator.cursor != len(screen.options):
+        return None
+    chosen = screen.chosen
+    _, report = cli.safe_report(
+        "install", lambda: cli.install(screen.cli.id, runtime, dry_run=True, mcp=list(chosen))
+    )
+    return navigator.opened(InstallPlanScreen(cli=screen.cli, report=report, mcp=chosen))
+
+
 def _configurable_agents() -> tuple[str, ...]:
     """Every agent this release lets a person assign a model to, in the order
     the content core ships them. The engine already refuses the rest through
@@ -219,10 +268,7 @@ def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigato
     if isinstance(screen, Menu) and action is Action.CHOOSE:
         target = screen.entries[navigator.cursor].target
         if isinstance(target, InstallTarget):
-            _, report = cli.safe_report(
-                target.command, lambda: cli.install(target.cli.id, runtime, dry_run=True)
-            )
-            return navigator.opened(InstallPlanScreen(cli=target.cli, report=report))
+            return navigator.opened(_mcp_selection_screen(target.cli, runtime))
         if isinstance(target, StatusRequest):
             _, report = cli.safe_report(target.command, lambda: cli.doctor(runtime))
             return navigator.opened(StatusScreen(report=report))
@@ -242,8 +288,14 @@ def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigato
         stepped = _models_write(screen, navigator, runtime, action)
         if stepped is not None:
             return stepped
+    if isinstance(screen, McpSelectionScreen):
+        stepped = _mcp_write(screen, navigator, runtime, action)
+        if stepped is not None:
+            return stepped
     if isinstance(screen, InstallPlanScreen) and action is Action.CHOOSE:
-        _, report = cli.safe_report("install", lambda: cli.install(screen.cli.id, runtime))
+        _, report = cli.safe_report(
+            "install", lambda: cli.install(screen.cli.id, runtime, mcp=list(screen.mcp))
+        )
         return navigator.opened(InstallResultScreen(cli=screen.cli, report=report))
     if isinstance(screen, StatusScreen) and action is Action.CHOOSE:
         generations = tuple(reversed(cli.snapshot_store(runtime).readable_generations()))

@@ -783,7 +783,7 @@ La verificación de integridad del payload deja de escribirse a mano: el catálo
 
 ---
 
-## Qué queda fuera de 4.0.0
+## Qué queda fuera de 4.0.0 y 4.1.0
 
 Explícitamente fuera de alcance, para que el corte sea revisable:
 
@@ -791,7 +791,6 @@ Explícitamente fuera de alcance, para que el corte sea revisable:
 - **Adapters de Claude Code y Codex.** El esqueleto `_template/` queda listo; los adapters reales no.
 - **Migración automática desde v3.1.x.** El camino es desinstalar v3 e instalar v4.
 - **Skills personales del autor.** Siguen fuera del payload, como hoy.
-- **CBM y Playwright como MCPs instalables.** 4.0.0 embarca `context7` y `engram`; los dos quedan para 4.1.0, y por razones distintas. La forma `npm` existe en el motor y tiene tests propios (unidad 8b5), pero ningún descriptor real la declara: el lockfile que sintetiza fija un solo paquete, y el de Playwright de verdad trae cinco entradas —`playwright-core` entre ellas— cada una con su propio `sha512`; publicarlo con el lockfile sintetizado dejaría el servidor incompleto. CBM no tiene ningún descriptor tampoco, por un motivo distinto: su única fuente en este repo es un tarball vendorizado, y no hay ninguna URL publicada para él en ningún lado.
 
 ---
 
@@ -925,9 +924,9 @@ Sin el segundo, agregar `npm` al núcleo en 8b habría renderizado un servidor n
 
 #### La convención aterriza donde ya viven las convenciones
 
-El cuerpo del descriptor se escribe en `_shared/mcp/<id>-convention.md`, que cuelga del mismo `_shared/` donde `cbm-convention.md` y `engram-convention.md` ya viven y donde el contenido embarcado ya las referencia con la forma defensiva: nombra la ruta y dice qué hacer si no está. Sin placeholder nuevo, sin ancla de layout nueva.
+El cuerpo del descriptor se escribe en `_shared/mcp/<id>-convention.md`, que cuelga del mismo `_shared/` donde viven las convenciones escritas a mano y donde el contenido embarcado las referencia por su ruta. Sin placeholder nuevo, sin ancla de layout nueva.
 
-El subdirectorio propio no es cosmético. `_shared/` ya tiene dos convenciones escritas a mano, y `cbm` y `engram` no son nombres cualquiera: son servidores MCP planeados de verdad. Si la convención de un servidor cayera en el mismo espacio de nombres plano, un id que coincidiera con uno de esos stems pisaría un archivo con el que no tiene nada que ver. `mcp/` como subdirectorio propio no detecta esa colisión al construir el catálogo: la vuelve imposible de escribir.
+El subdirectorio propio no es cosmético. `_shared/` tiene convenciones escritas a mano, y un id de servidor puede coincidir con el nombre de una de ellas. Si la convención de un servidor cayera en el mismo espacio de nombres plano, un id que coincidiera con uno de esos stems pisaría un archivo con el que no tiene nada que ver. `mcp/` como subdirectorio propio no detecta esa colisión al construir el catálogo: la vuelve imposible de escribir.
 
 Eso resuelve el alcance sin condicionales en la prosa y sin conocimiento cruzado. **La referencia es siempre la misma frase; lo condicional es el archivo.** Si el servidor no se eligió, el archivo no se escribe, la cláusula defensiva se activa, y ningún agente leyó una convención que no le tocaba. La alternativa —enlazar la convención globalmente, como hace el prompt de sistema— se descartó: le habría mandado la convención de cada servidor a los doce agentes, que es el mismo defecto que esta unidad viene a corregir.
 
@@ -1210,14 +1209,10 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 | `engram-operations` no viaja como skill embarcada | Nada |
 | La voz `king-pegasus` explica y no puede aplicar nada de lo que explica: declara sólo `read` y su cuerpo le prohíbe generar cualquier artefacto | Nada. Es una decisión de producto sobre qué hace esa voz, y hasta tomarla no se le concede ningún servidor |
 | El orquestador tiene prohibición absoluta de ejecutar —"never by running the phase work yourself"— sin umbral, y no tiene `write` ni `edit`. Prosa y herramientas están de acuerdo, así que no es un bug: es un diseño que hay que cambiar en las dos mitades a la vez | Nada. Cambiar sólo la prosa le nombraría una capacidad que no tiene |
-| Dos gates defensivos —el del protocolo de memoria en el prompt de sistema y el de `cbm-convention.md`— no tienen ningún test que los proteja, y no se pueden afirmar sin afirmar prosa | La unidad 8b: cuando cada convención viva en el cuerpo de su descriptor, la ausencia significará ausencia y los dos gates se borran en vez de necesitar protección |
 | `tools/check_docs_links.py` reporta 13 links rotos, 6 de ellos reales y preexistentes | Nada |
 | `restore` no puede devolver un árbol de dependencias. El snapshot excluye esos destinos porque `capture_paths` lee bytes y un árbol es un directorio, así que un install que materializó una dependencia y falló no la deshace | La 8b, cuando el snapshot sepa capturar un directorio. Hasta entonces `restore` devuelve todo lo demás exacto y esto no |
-| `--effort` se guarda y se ofrece en el asistente de la TUI, pero no llega a la configuración renderizada. Ninguna configuración real de OpenCode que se haya podido mirar tiene una clave de esfuerzo, así que renderizarlo sería adivinar dónde cae | Saber cómo ese CLI recibe el esfuerzo de razonamiento. Hasta entonces son dos caminos: renderizarlo donde corresponda, o dejar de ofrecerlo — un control que no hace nada es la clase de defecto que la unidad 6 sacó del producto |
 | El digest de un árbol de dependencias es la identidad de lo que se materializó, no un hash de lo que quedó en disco, así que `doctor` no puede detectar un árbol corrompido ni manipulado | Nada. Es la consecuencia elegida a conciencia, y necesitaría una verificación distinta de este campo |
-| La forma `npm` sintetiza un lockfile de un solo paquete, así que fija la versión y la integridad del paquete de arriba y no de sus dependencias. El lockfile real de playwright tiene cinco entradas —`playwright-core` entre ellas, que es el driver— cada una con su propio `sha512`. Un `npm ci` contra el lockfile sintetizado dejaría el servidor incompleto, y la integridad verificada cubriría una de cuatro | Que el lockfile completo viaje con el descriptor en vez de sintetizarse. Hasta entonces la forma existe y no hay ningún descriptor real que la declare |
-| Queda un gate defensivo, el de `cbm-convention.md`: la convención de CBM viaja a toda instalación con una frase que avisa que no aplica si las herramientas no están. El de memoria ya se borró cuando `engram` pasó a ser descriptor | Un descriptor de `cbm`, que necesita una URL publicada. No hay ninguna en este repo: su única fuente es el tarball vendorizado que el diseño prohíbe |
-| La TUI no ofrece elegir qué servidores MCP instalar. `--mcp` decide desde los flags y la pantalla siempre instala el conjunto por defecto, así que la paridad obligatoria no se cumple para esa decisión | Una pantalla de selección en el flujo de instalar. Las otras cuatro capacidades que faltaban —el `--dry-run` distinguido, los pasos de activación, el reporte de retención y el balde `unreadable`— ya tienen pantalla |
+| La convención de engram quedó partida. El protocolo de memoria viajó al descriptor cuando engram pasó a ser un servidor elegible, pero `_shared/engram-convention.md` —las reglas de nombres de los artefactos SDD que se persisten ahí— sigue embarcándose a toda instalación, referenciada por `persistence-contract.md` y por la skill de `sdd-init`, que van siempre. Alguien que no elige engram recibe reglas de nomenclatura para un store que no tiene | Decidir si esas reglas son de engram o del formato de los artefactos. Si son de engram, mover el archivo exige que las skills que lo referencian dejen de hacerlo cuando el servidor no está |
 | `mode_of` sigue colapsando "la ruta no existe" y "no pude leer sus bits" en el mismo `None`. Los tres llamadores del planner corren justo después de una lectura que ya tuvo éxito, así que hoy es inalcanzable | Nada. Fragilidad latente, no reproducida |
 
 ---
@@ -1245,10 +1240,14 @@ Tests que fallan si el diseño se degrada:
 
 ## Próximo paso
 
-El corte numerado quedó completo: las catorce unidades de la tabla de arriba —0 a 11, con la partición 8a/8b— llegaron a `Entregada`, y los 1040 tests de la suite lo sostienen. Ya no queda, dentro de este corte, una unidad siguiente en el sentido en que las hubo hasta acá.
+El corte numerado quedó completo y **4.0.0 se publicó**: tag, wheel, evidencia y una instalación hecha de punta a punta en una cuenta Linux limpia, bajando el release desde donde lo baja cualquiera.
 
-Lo que sigue es publicar el release. `INSTALL.md` describe el recorrido completo —descargar, verificar, armar el venv privado, dejar el lanzador en el PATH— pero todavía no hay ningún tag `v4.0.0` real: el ejemplo usa ese nombre a falta de uno publicado, y el único tramo que esta verificación no pudo ejercer fue el `pip install` contra el índice de paquetes real, porque este entorno de trabajo no tiene red. Cortar el tag, construir el wheel, generar su evidencia con `tools/build_release_evidence.py` y repetir esa guía contra una cuenta limpia con red de verdad es lo que falta antes de llamar a esto una versión publicada.
+**4.1.0 cerró lo que 4.0.0 dejó anotado.** Los cuatro servidores MCP se instalan: a `context7` y `engram` se suman `cbm` y `playwright`.
 
-Antes de eso sigue abierta la migración de tests que la unidad 10 dejó a medio camino: `tests/test_journal_store.py` y `tests/test_snapshot_store.py` ya tienen, al lado de sus clases sobre `FakeFileSystem`, una clase `...OnRealDiskTest` que ejercita lo mismo contra disco real; `tests/test_dependencies.py` y `tests/test_model_assignment_store.py` todavía no tienen esa contraparte y siguen enteros sobre el doble en memoria. No bloquea publicar el release, pero es trabajo que ya se sabe pendiente y no una unidad más del corte.
+Dos de los bloqueos que 4.0.0 escribió no existían del todo, y averiguarlo fue el trabajo. CBM decía no tener URL publicada — cierto de este repo, no del mundo: el proyecto publica releases con binario y su propio archivo de checksums, así que el hash lo pone él y no nosotros. Y el lockfile de un solo paquete se resolvió haciendo que el completo viaje al lado del descriptor; en el camino apareció que el `package.json` sintetizado se nombraba a sí mismo distinto de lo que el lockfile declara, que es justo uno de los campos que `npm ci` mira para decidir si están sincronizados: toda instalación de playwright habría fallado.
 
-Lo demás que se sabe pendiente no es una unidad más de este corte: vive en "Deudas sin unidad asignada", acarreado a propósito, y en "Qué queda fuera de 4.0.0", diferido sin fecha salvo CBM y Playwright, que apuntan a 4.1.0.
+También se cerraron el esfuerzo de razonamiento, que se guardaba sin llegar nunca a la configuración —el schema del CLI lo acepta como `variant`, y esa era la evidencia que faltaba— y el último agujero de paridad: la TUI ya deja elegir qué servidores instalar. Ahí apareció el defecto más caro de los tres, porque estaba entregado y en silencio: la pantalla nunca pasaba ese parámetro, así que cada instalación desde la TUI instalaba cero servidores y al reinstalar retiraba lo que una corrida con flags hubiera puesto.
+
+Y salió del árbol lo que quedaba de la distribución de v3: el binario vendorizado de 37 MB que el propio diseño prohíbe, y los manifiestos que lo describían.
+
+**Lo que sigue.** La migración de tests que la unidad 10 dejó a medio camino: `tests/test_dependencies.py` y `tests/test_model_assignment_store.py` siguen enteros sobre el doble en memoria, sin la contraparte contra disco real que sus vecinos ya tienen. Y el resto vive en "Deudas sin unidad asignada", acarreado a propósito.

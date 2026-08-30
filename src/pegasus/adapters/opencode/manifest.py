@@ -23,7 +23,7 @@ MANIFEST = CapabilityManifest(
     # deny this and receive one artifact instead of two.
     prompts=True,
     # The mcp/ content category and render_mcp both exist now: OpenCode's
-    # servers are declared in content, not in manifests/release-contract.json.
+    # servers are declared in content, each with its own descriptor.
     mcp=True,
     # `model_catalog` now reads the CLI's real catalog, credentials, and
     # configuration files, which is what this capability was waiting on.

@@ -18,25 +18,24 @@ Si lo vas a instalar en tu cuenta actual, omití esas dos líneas.
 
 ## 2. Descargar y verificar
 
-Usá el tag que quieras distribuir. El ejemplo usa `v4.0.0`; reemplazalo por el tag real cuando exista
-un release publicado — hoy, mientras se desarrolla 4.0.0, no hay ninguno todavía.
+Usá el tag que quieras instalar. El ejemplo usa `v4.1.0`, que es el último publicado.
 
 ```sh
-RELEASE_TAG="v4.0.0"
+RELEASE_TAG="v4.1.0"
 mkdir -p "$HOME/Downloads/pegasus-$RELEASE_TAG"
 cd "$HOME/Downloads/pegasus-$RELEASE_TAG"
 
 BASE_URL="https://github.com/balerdis/pegasus-harness/releases/download/$RELEASE_TAG"
 
-curl -fL -O "$BASE_URL/pegasus_harness-4.0.0-py3-none-any.whl"
-curl -fL -O "$BASE_URL/pegasus_harness-4.0.0-py3-none-any.whl.sha256"
+curl -fL -O "$BASE_URL/pegasus_harness-4.1.0-py3-none-any.whl"
+curl -fL -O "$BASE_URL/pegasus_harness-4.1.0-py3-none-any.whl.sha256"
 curl -fL -O "$BASE_URL/requirements.txt"
 curl -fL -O "$BASE_URL/requirements.txt.sha256"
 curl -fL -O "$BASE_URL/pegasus"
 curl -fL -O "$BASE_URL/pegasus.sha256"
 curl -fL -O "$BASE_URL/release-manifest.json"
 
-sha256sum -c pegasus_harness-4.0.0-py3-none-any.whl.sha256
+sha256sum -c pegasus_harness-4.1.0-py3-none-any.whl.sha256
 sha256sum -c requirements.txt.sha256
 sha256sum -c pegasus.sha256
 ```
@@ -61,7 +60,7 @@ DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pegasus-harness"
 python3 -m venv "$DATA_DIR/venv"
 
 "$DATA_DIR/venv/bin/python" -m pip install --require-hashes -r requirements.txt
-"$DATA_DIR/venv/bin/python" -m pip install --no-deps pegasus_harness-4.0.0-py3-none-any.whl
+"$DATA_DIR/venv/bin/python" -m pip install --no-deps pegasus_harness-4.1.0-py3-none-any.whl
 ```
 
 El primer `pip install` necesita red: baja `PyYAML` desde el índice de paquetes y verifica cada
@@ -75,7 +74,7 @@ volver a resolver nada (`--no-deps`).
 disponible en este disco, sólo su código fuente, que a su vez pide `setuptools`, `wheel` y `Cython`
 para construirse — encontrar esos tres localmente y sin red no fue posible; el paso queda sin ejecutar
 contra el índice real y marcado como tal. El segundo sí se ejecutó y terminó con
-`Successfully installed pegasus-harness-4.0.0`.*
+`Successfully installed pegasus-harness-4.1.0`.*
 
 ## 4. Dejar el lanzador en el PATH
 

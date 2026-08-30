@@ -27,6 +27,7 @@ from pegasus.tui.navigator import (
     Action,
     InstallPlanScreen,
     InstallResultScreen,
+    McpSelectionScreen,
     Menu,
     ModelsScreen,
     ModelsTarget,
@@ -116,6 +117,13 @@ class SessionTestCase(RealHomeTestCase):
             filesystem=PosixFileSystem(), home=home or self.home, now=AT, out=io.StringIO(), variables=NO_BINARY
         )
 
+    def to_continue(self, navigator: Navigator) -> Navigator:
+        """Move the cursor from wherever it sits on an `McpSelectionScreen`
+        onto Continue, touching no checkbox along the way."""
+        for _ in range(len(navigator.current.options) - navigator.cursor):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        return navigator
+
 
 class DetectClisTest(SessionTestCase):
     def test_a_present_cli_is_offered(self):
@@ -128,14 +136,104 @@ class DetectClisTest(SessionTestCase):
 
 
 class PlanStepTest(SessionTestCase):
-    def test_choosing_a_detected_cli_fetches_a_preview_and_writes_nothing(self):
+    def test_choosing_a_detected_cli_opens_the_mcp_selection_first(self):
         _present(self.home)
         runtime = self.runtime()
         navigator = Navigator.starting(session.detect_clis(runtime)).handle(Action.CHOOSE)
         navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertIsInstance(navigator.current, McpSelectionScreen)
+        self.assertEqual(navigator.current.chosen, ())
+        self.assertEqual([path for path in _layout(self.home).config_dir.rglob("*") if path.is_file()], [])
+
+    def test_continuing_past_the_selection_fetches_a_preview_and_writes_nothing(self):
+        _present(self.home)
+        runtime = self.runtime()
+        navigator = Navigator.starting(session.detect_clis(runtime)).handle(Action.CHOOSE)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the mcp selection
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # fetches the plan
         self.assertIsInstance(navigator.current, InstallPlanScreen)
         self.assertEqual(navigator.current.report["status"], "planned")
         self.assertEqual([path for path in _layout(self.home).config_dir.rglob("*") if path.is_file()], [])
+
+
+class McpSelectionDefaultsTest(SessionTestCase):
+    """What opens pre-checked, and what a person sees to decide with."""
+
+    def test_every_shipped_server_is_offered_with_its_own_description(self):
+        _present(self.home)
+        runtime = self.runtime()
+        navigator = Navigator.starting(session.detect_clis(runtime)).handle(Action.CHOOSE)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        offered = {option.id: option.description for option in navigator.current.options}
+        expected = {server.name: server.description for server in content_module.load().mcp}
+        self.assertEqual(offered, expected)
+        self.assertTrue(all(description for description in offered.values()))
+
+    def test_a_previously_installed_server_opens_pre_checked(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["context7"])
+
+        navigator = Navigator.starting(session.detect_clis(runtime)).handle(Action.CHOOSE)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertIsInstance(navigator.current, McpSelectionScreen)
+        self.assertEqual(navigator.current.chosen, ("context7",))
+
+    def test_the_default_cursor_sits_on_the_first_server_not_continue(self):
+        """Unlike a destructive confirmation, where the safe entry is
+        Cancel, nothing here is destroyed by pressing enter on the first
+        row -- it only toggles a checkbox that already opened checked or
+        unchecked to match the machine's own state. The unsafe move would be
+        a cursor that starts on Continue, one keystroke away from silently
+        retiring whatever the journal already lists; starting on the first
+        server instead makes that impossible by construction."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["context7"])
+        navigator = Navigator.starting(session.detect_clis(runtime)).handle(Action.CHOOSE)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertEqual(navigator.cursor, 0)
+        self.assertLess(navigator.cursor, len(navigator.current.options))
+
+    def test_leaving_a_previously_installed_server_checked_keeps_it_after_reinstalling(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["context7"])
+
+        navigator = Navigator.starting(session.detect_clis(runtime)).handle(Action.CHOOSE)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the mcp selection, context7 pre-checked
+        navigator = self.to_continue(navigator)  # touches nothing
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # fetches the plan
+        self.assertEqual(navigator.current.report["retired"], [])
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # confirms it
+
+        self.assertEqual(navigator.current.report["status"], "installed")
+        self.assertEqual(session.detect_installed(runtime)[0].id, CLI)
+        self.assertEqual(session._currently_chosen_mcp(CLI, runtime), ("context7",))
+
+    def test_unchecking_a_previously_installed_server_retires_it_on_confirm(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["context7"])
+
+        navigator = Navigator.starting(session.detect_clis(runtime)).handle(Action.CHOOSE)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the mcp selection, context7 pre-checked
+        index = next(i for i, option in enumerate(navigator.current.options) if option.id == "context7")
+        for _ in range(index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        navigator = navigator.handle(Action.CHOOSE)  # unchecks context7
+        self.assertEqual(navigator.current.chosen, ())
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # fetches the plan
+        self.assertEqual(
+            {item["id"] for item in navigator.current.report["retired"]},
+            {"mcp:context7", "mcp-convention:context7"},
+        )
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # confirms it
+
+        self.assertEqual(navigator.current.report["status"], "installed")
+        self.assertEqual(session._currently_chosen_mcp(CLI, runtime), ())
 
 
 class ParityWithCliInstallTest(SessionTestCase):
@@ -151,8 +249,52 @@ class ParityWithCliInstallTest(SessionTestCase):
 
             tui_runtime = self.runtime(other_home)
             navigator = Navigator.starting(session.detect_clis(tui_runtime)).handle(Action.CHOOSE)
-            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)
-            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)  # opens the mcp selection
+            navigator = self.to_continue(navigator)  # nothing checked, matching no `--mcp` at all
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)  # fetches the plan
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)  # confirms it
+
+            self.assertEqual(cli_code, 0)
+            self.assertIsInstance(navigator.current, InstallResultScreen)
+            self.assertEqual(navigator.current.report["status"], "installed")
+            self.assertEqual(
+                _sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home))
+            )
+            journal_relative = str(journal_path(PosixFileSystem(), self.home).relative_to(self.home))
+            self.assertEqual(
+                _tree(self.home, skip=frozenset({journal_relative})),
+                _tree(other_home, skip=frozenset({journal_relative})),
+            )
+            self.assertEqual(_journal_shape(self.home), _journal_shape(other_home))
+
+
+class ParityWithCliInstallMcpTest(SessionTestCase):
+    """The same proof as `ParityWithCliInstallTest`, but with a server
+    actually checked: what a person ticks on this screen must land on disk
+    exactly as `--mcp context7` would place it, journal included."""
+
+    def test_choosing_a_server_on_screen_matches_the_equivalent_mcp_flag(self):
+        with tempfile.TemporaryDirectory(dir=self.home.parent) as other:
+            other_home = Path(other)
+            for home in (self.home, other_home):
+                _present(home)
+
+            cli_runtime = self.runtime(self.home)
+            cli_code = cli.main(["install", "--cli", CLI, "--mcp", "context7", "--json"], runtime=cli_runtime)
+            cli_report = json.loads(cli_runtime.out.getvalue())
+
+            tui_runtime = self.runtime(other_home)
+            navigator = Navigator.starting(session.detect_clis(tui_runtime)).handle(Action.CHOOSE)
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)  # opens the mcp selection
+            index = next(i for i, option in enumerate(navigator.current.options) if option.id == "context7")
+            for _ in range(index):
+                navigator = navigator.handle(Action.MOVE_DOWN)
+            navigator = navigator.handle(Action.CHOOSE)  # checks context7
+            self.assertEqual(navigator.current.chosen, ("context7",))
+            navigator = self.to_continue(navigator)
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)  # fetches the plan
+            self.assertEqual(navigator.current.report["status"], "planned")
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)  # confirms it
 
             self.assertEqual(cli_code, 0)
             self.assertIsInstance(navigator.current, InstallResultScreen)
@@ -173,7 +315,9 @@ class InstallFailureThroughTheTuiTest(SessionTestCase):
         _present(self.home)
         runtime = self.runtime()
         navigator = Navigator.starting(session.detect_clis(runtime)).handle(Action.CHOOSE)
-        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the mcp selection
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # fetches the plan
         self.assertIsInstance(navigator.current, InstallPlanScreen)
 
         # A real failure: the directory holding the journal refuses the write

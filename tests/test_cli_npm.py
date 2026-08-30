@@ -29,6 +29,25 @@ AT = "2026-08-14T00:00:00+00:00"
 CLI = available().ids()[0]
 INTEGRITY = "sha512-" + "a" * 86 + "=="
 
+#: The real lockfile this server ships beside its descriptor, read into
+#: memory by the loader in production; this test builds a `Mcp` directly, so
+#: it supplies the same bytes the loader would have read.
+PROBE_LOCKFILE = json.dumps(
+    {
+        "name": "pegasus-probe",
+        "lockfileVersion": 3,
+        "requires": True,
+        "packages": {
+            "": {"name": "pegasus-probe", "dependencies": {"probe-mcp": "1.2.3"}},
+            "node_modules/probe-mcp": {
+                "version": "1.2.3",
+                "resolved": "https://registry.npmjs.org/probe-mcp/-/probe-mcp-1.2.3.tgz",
+                "integrity": INTEGRITY,
+            },
+        },
+    }
+).encode("utf-8")
+
 PROBE = Mcp(
     name="probe",
     description="An npm-distributed probe server",
@@ -40,6 +59,8 @@ PROBE = Mcp(
     package="probe-mcp",
     integrity=INTEGRITY,
     entry="cli.js",
+    npm_lockfile=PROBE_LOCKFILE,
+    npm_package_name="pegasus-probe",
 )
 PROBE_CONTENT = Content(mcp=(PROBE,))
 
@@ -100,6 +121,11 @@ class InstallNpmTest(RealHomeTestCase):
         self.assertEqual(installer.calls, [self.target()])
         self.assertTrue((self.target() / "package.json").exists())
         self.assertTrue((self.target() / "package-lock.json").exists())
+        manifest = json.loads((self.target() / "package.json").read_text())
+        self.assertEqual(manifest["name"], "pegasus-probe")
+        self.assertEqual(
+            (self.target() / "package-lock.json").read_bytes(), PROBE_LOCKFILE
+        )
 
     def test_the_journal_records_a_dependency_tree_identified_by_the_integrity(self, _load):
         self.present()

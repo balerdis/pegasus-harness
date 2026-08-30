@@ -349,16 +349,22 @@ class ShippedCatalogTest(unittest.TestCase):
     def test_produces_the_whole_payload(self):
         files = [entry for entry in self.catalog.entries if entry.kind == "file"]
         keys = [entry for entry in self.catalog.entries if entry.kind == "config-key"]
-        # 89, not 88: `_shared/cbm-convention.md` is the one new shipped file,
-        # centralizing CBM protocol prose that used to be restated per phase.
-        # 90, not 89: `_shared/context7-convention.md` is the mcp category's own
+        # 89, not 88: `_shared/context7-convention.md` is the mcp category's own
         # shared file, now that render_mcp exists and mcp is a declared capability.
         # 18, not 17: `/mcp/context7` is the one shipped MCP server's settings key.
-        # 91, not 90: `_shared/mcp/engram-convention.md` is the second shipped
+        # 90, not 89: `_shared/mcp/engram-convention.md` is the second shipped
         # MCP server's convention file, now that `engram` is a `download`-form
         # descriptor of its own instead of prose inlined into AGENTS.md.
         # 19, not 18: `/mcp/engram` is that second server's settings key.
-        self.assertEqual((len(files), len(keys)), (91, 19))
+        # 91, still 91: `cbm` is the third shipped MCP server. Its convention
+        # file (`_shared/mcp/cbm-convention.md`) replaces the one hand-authored
+        # `_shared/cbm-convention.md` this count used to carry -- one file
+        # traded for another, net zero.
+        # 20, not 19: `/mcp/cbm` is that third server's settings key.
+        # 92, not 91: `_shared/mcp/playwright-convention.md` is the fourth
+        # shipped MCP server's convention file.
+        # 21, not 20: `/mcp/playwright` is that fourth server's settings key.
+        self.assertEqual((len(files), len(keys)), (92, 21))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:
