@@ -9,11 +9,16 @@ from __future__ import annotations
 import unittest
 
 from pegasus import cli
+from pegasus.core import content as content_module
 from pegasus.tui.navigator import (
+    Action,
     CliOption,
     InstallTarget,
+    McpOption,
+    McpSelectionScreen,
     Menu,
     ModelsTarget,
+    Navigator,
     Placeholder,
     RestoreConfirm,
     RestoreTarget,
@@ -75,6 +80,28 @@ class TuiNamesAnExistingCommandTest(unittest.TestCase):
         menu = main_menu(detections=(SAMPLE,), installed=(SAMPLE,))
         for entry in menu.entries:
             self.assertNotIsInstance(entry.target, Placeholder)
+
+    def test_every_server_the_mcp_selection_screen_could_offer_is_one_the_flag_accepts(self):
+        """The screen this change adds must offer nothing `--mcp` itself
+        would refuse: every id it could check is a name `select_mcp` -- the
+        same function the flag runs through -- recognizes as real."""
+        content = content_module.load()
+        known = {server.name for server in content.mcp}
+        options = tuple(McpOption(id=server.name, description=server.description) for server in content.mcp)
+        self.assertTrue(options)
+        self.assertEqual({option.id for option in options}, known)
+        content_module.select_mcp(content, [option.id for option in options])  # raises on an id the flag would refuse
+
+    def test_reaching_continue_on_the_mcp_selection_screen_does_nothing_by_itself(self):
+        """Fetching the plan for what ended up checked is real engine work,
+        same as every other member of `_ENGINE_TARGETS` -- `Navigator` alone
+        must never invent the report it cannot fetch."""
+        options = (McpOption(id="context7", description="docs"),)
+        navigator = Navigator.starting().opened(McpSelectionScreen(cli=SAMPLE, options=options, chosen=()))
+        navigator = navigator.handle(Action.MOVE_DOWN)  # onto Continue
+        before = navigator
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator, before)
 
 
 if __name__ == "__main__":
