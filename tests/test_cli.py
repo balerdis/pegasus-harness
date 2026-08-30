@@ -38,6 +38,7 @@ import pegasus
 from fakes import FakeFileSystem, FakeVenvProvisioner
 from pegasus import cli
 from pegasus.adapters import available
+from pegasus.core import bootstrap
 from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
@@ -1556,6 +1557,66 @@ class SetupTest(RealHomeTestCase):
         code, report = self.run_cli_with(context, "setup")
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
+
+    def test_setup_from_a_checkout_preserves_its_inputs_beside_the_venv(self):
+        """So a later run against the same data directory, with no checkout in
+        reach, still has something to rebuild the venv from."""
+        self.run_cli_with(self.runtime(), "setup")
+        sources_dir = bootstrap.setup_sources_dir(self.filesystem.data_dir(self.home))
+        preserved_requirements = sources_dir / bootstrap.REQUIREMENTS_NAME
+        self.assertTrue(preserved_requirements.exists())
+        self.assertEqual(preserved_requirements.read_bytes(), self.requirements.read_bytes())
+        preserved_shim = sources_dir / bootstrap.SHIM_NAME
+        self.assertTrue(preserved_shim.exists())
+        self.assertEqual(preserved_shim.read_bytes(), cli.SHIM_SOURCE.read_bytes())
+        preserved_source = sources_dir / bootstrap.PACKAGE_DIRNAME
+        self.assertTrue((preserved_source / "requirements.txt").exists())
+
+    def test_setup_rebuilds_from_a_previously_preserved_copy_when_the_checkout_is_gone(self):
+        """An installed Pegasus has no checkout, but a `setup` run against the
+        same data directory earlier -- while there still was one -- leaves
+        enough behind for this run to finish anyway."""
+        first_provisioner = FakeVenvProvisioner()
+        first = cli.Runtime(
+            filesystem=self.filesystem, home=self.home, now=AT, out=io.StringIO(),
+            variables=NO_BINARY, venv_provisioner=first_provisioner,
+            requirements=self.requirements, source=self.checkout,
+        )
+        code, _ = self.run_cli_with(first, "setup")
+        self.assertEqual(code, 0)
+
+        self.requirements.unlink()
+
+        second_provisioner = FakeVenvProvisioner()
+        second = cli.Runtime(
+            filesystem=self.filesystem, home=self.home, now=AT, out=io.StringIO(),
+            variables=NO_BINARY, venv_provisioner=second_provisioner,
+            requirements=self.requirements, source=self.checkout,
+        )
+        code, report = self.run_cli_with(second, "setup")
+
+        self.assertEqual(code, 0, report)
+        self.assertEqual(len(second_provisioner.installed), 1)
+        _, used_requirements, used_source = second_provisioner.installed[0]
+        self.assertNotEqual(used_requirements, self.requirements)
+        self.assertTrue(used_requirements.exists())
+        self.assertTrue((used_source / "requirements.txt").exists())
+        shim = self.filesystem.bin_dir(self.home) / "pegasus"
+        self.assertEqual(shim.read_bytes(), cli.SHIM_SOURCE.read_bytes())
+
+    def test_setup_names_both_checked_locations_when_neither_has_its_inputs(self):
+        """Genuinely absent, on both sides, still gets an honest refusal --
+        never a `pip` error naming a path inside the user's own venv."""
+        self.requirements.unlink()
+
+        code, report = self.run_cli("setup")
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("checkout", report["error"])
+        sources_dir = bootstrap.setup_sources_dir(self.filesystem.data_dir(self.home))
+        self.assertIn(str(sources_dir), report["error"])
+        self.assertEqual(self.provisioner.created, [])
 
     def run_cli_with(self, context: cli.Runtime, *argv) -> tuple[int, dict]:
         code = cli.main([*argv, "--json"], runtime=context)
