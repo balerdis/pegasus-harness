@@ -255,6 +255,21 @@ class AgentRenderTest(unittest.TestCase):
             {"*": False, "read": True, "bash": True, "context7*": True},
         )
 
+    def test_the_deny_baseline_is_written_before_anything_it_is_meant_to_lose_to(self):
+        """The order of these keys decides whether any agent has any tool.
+
+        The runtime turns this map into permission rules in the order it reads
+        them, and resolves a tool against the **last** rule that matches. So a
+        grant only beats the blanket deny by coming after it. Emit the deny
+        last and every agent silently loses every tool, while a comparison of
+        these two maps as dictionaries still passes: Python does not read
+        order into that equality, and the runtime reads nothing else.
+        """
+        agent = self.agent(requires_tools=("read",), optional_mcp=("context7",))
+        keys = list(self.value(agent)["tools"])
+        self.assertEqual(keys[0], "*", f"the deny baseline must come first, got {keys}")
+        self.assertGreater(len(keys), 1, "a baseline with nothing after it grants nothing")
+
     def test_no_declared_tools_still_renders_the_deny_baseline(self):
         """Declaring nothing must mean nothing, not the runtime's full default toolset."""
         self.assertEqual(self.value(self.agent())["tools"], {"*": False})
