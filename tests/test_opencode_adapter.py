@@ -283,12 +283,70 @@ class AgentRenderTest(unittest.TestCase):
         agent = self.agent(may_delegate_to=("explore", "sdd-verify"))
         self.assertEqual(
             self.value(agent)["permission"],
-            {"task": {"*": "deny", "explore": "allow", "sdd-verify": "allow"}},
+            {"*": "deny", "task": {"*": "deny", "explore": "allow", "sdd-verify": "allow"}},
         )
 
     def test_the_deny_baseline_is_emitted_even_with_no_declared_delegation(self):
         """An agent that names nobody must still ship a permission.task block."""
-        self.assertEqual(self.value(self.agent())["permission"], {"task": {"*": "deny"}})
+        self.assertEqual(self.value(self.agent())["permission"], {"*": "deny", "task": {"*": "deny"}})
+
+    def test_a_granted_native_tool_is_translated_into_permission_too(self):
+        agent = self.agent(requires_tools=("read", "bash"))
+        permission = self.value(agent)["permission"]
+        self.assertEqual(permission["read"], "allow")
+        self.assertEqual(permission["bash"], "allow")
+
+    def test_write_targets_the_runtimes_own_edit_permission_not_a_write_key(self):
+        """The runtime's `permission` schema has no `write` key: its loader folds
+        `write`, `edit` and `patch` onto the single `edit` permission it does
+        have. A literal rename of a granted `write` into `permission["write"]`
+        would govern nothing, and this agent would silently lose the ability
+        to write -- so `write` has to land on `edit` here, same as `edit` does.
+        """
+        agent = self.agent(requires_tools=("write",))
+        permission = self.value(agent)["permission"]
+        self.assertEqual(permission["edit"], "allow")
+        self.assertNotIn("write", permission)
+
+    def test_edit_also_targets_the_edit_permission(self):
+        agent = self.agent(requires_tools=("edit",))
+        self.assertEqual(self.value(agent)["permission"]["edit"], "allow")
+
+    def test_declaring_both_write_and_edit_still_yields_one_edit_key(self):
+        agent = self.agent(requires_tools=("write", "edit"))
+        permission = self.value(agent)["permission"]
+        self.assertEqual(permission["edit"], "allow")
+        self.assertNotIn("write", permission)
+
+    def test_an_optional_mcp_id_is_granted_as_a_wildcard_in_permission_too(self):
+        agent = self.agent(optional_mcp=("context7",))
+        self.assertEqual(self.value(agent)["permission"]["context7*"], "allow")
+
+    def test_permission_merges_native_tools_mcp_and_delegation_together(self):
+        agent = self.agent(
+            requires_tools=("read", "write"),
+            optional_mcp=("context7",),
+            may_delegate_to=("explore",),
+        )
+        self.assertEqual(
+            self.value(agent)["permission"],
+            {
+                "*": "deny",
+                "read": "allow",
+                "edit": "allow",
+                "context7*": "allow",
+                "task": {"*": "deny", "explore": "allow"},
+            },
+        )
+
+    def test_the_permission_deny_baseline_is_written_before_anything_it_would_lose_to(self):
+        """Same resolution rule as `_tools`: the runtime keeps the *last*
+        matching rule, so `"*": "deny"` only beats a grant that comes after it.
+        """
+        agent = self.agent(requires_tools=("read",), optional_mcp=("context7",))
+        keys = list(self.value(agent)["permission"])
+        self.assertEqual(keys[0], "*", f"the deny baseline must come first, got {keys}")
+        self.assertGreater(len(keys), 1, "a baseline with nothing after it grants nothing")
 
     def test_the_agent_a_session_starts_in_becomes_the_default(self):
         starts = content_module.SESSION_STARTS_IN
@@ -793,7 +851,20 @@ class ShippedContentRenderTest(unittest.TestCase):
     def test_no_shipped_agent_renders_a_permission_block_lacking_the_deny_baseline(self):
         for agent in self.loaded.agents:
             value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            self.assertEqual(value["permission"]["*"], "deny", agent.name)
             self.assertEqual(value["permission"]["task"]["*"], "deny", agent.name)
+
+    def test_no_shipped_agent_that_declares_write_renders_an_orphaned_write_permission(self):
+        """`write` has no permission of its own in the runtime's schema -- an agent
+        declaring it must show up under `edit`, never under a `write` key that
+        the runtime's resolver would simply never look at.
+        """
+        declares_write = [a for a in self.loaded.agents if "write" in (*a.requires_tools, *a.optional_tools)]
+        self.assertTrue(declares_write, "fixture drifted: no shipped agent declares write any more")
+        for agent in declares_write:
+            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            self.assertNotIn("write", value["permission"], agent.name)
+            self.assertEqual(value["permission"]["edit"], "allow", agent.name)
 
     def test_the_persona_renders_its_declared_tools_as_a_real_restriction(self):
         """The voice declares only `read`; only this side proves that denies

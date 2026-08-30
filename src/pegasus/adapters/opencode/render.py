@@ -46,6 +46,21 @@ TOOL_NAME: dict[str, str] = {
     "glob": "glob",
 }
 
+PERMISSION_NAME: dict[str, str] = {
+    "read": "read",
+    # The runtime's own config loader folds `write`, `edit` and `patch` onto a
+    # single `edit` permission when it derives one from `tools` -- its
+    # `permission` schema has no `write` key at all. Naming both onto the same
+    # target here is what keeps that collapse from being an accident this
+    # module's own translation could get wrong: `write` has to land exactly
+    # where `edit` does, or a granted write silently governs nothing.
+    "write": "edit",
+    "edit": "edit",
+    "bash": "bash",
+    "grep": "grep",
+    "glob": "glob",
+}
+
 
 class RenderError(ValueError):
     """The content asks for something this CLI has no name for."""
@@ -106,7 +121,7 @@ def agent(
             else _body(layout, item.body, item.name)
         )
     value["tools"] = _tools(item)
-    value["permission"] = {"task": {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}}
+    value["permission"] = _permission(item)
     if assignment is not None:
         value["model"] = assignment.full_id
         if assignment.effort is not None:
@@ -296,6 +311,15 @@ def _tools(item: Agent) -> dict[str, bool]:
     defaults: it can grant, never restrict. Starting from `{"*": False}` is what
     makes "declare nothing" mean "nothing", instead of "whatever the runtime
     would have given anyway".
+
+    `tools` is deprecated in the runtime's own schema in favour of `permission`
+    (see `_permission` below), but it still keeps being rendered: a runtime old
+    enough to only read `tools` would otherwise lose every restriction this
+    agent declares, silently turning it unrestricted. A runtime that reads both
+    derives its own permission set from this map first and then applies the
+    explicit `permission` block on top key by key, so rendering both is never a
+    conflict -- only ever the same restriction expressed twice, once for each
+    reader.
     """
     names = (*item.requires_tools, *item.optional_tools)
     unknown = [name for name in names if name not in TOOL_NAME]
@@ -307,6 +331,40 @@ def _tools(item: Agent) -> dict[str, bool]:
     # same key with the wildcard OpenCode uses to grant every tool under it.
     granted.update({f"{mcp_id}*": True for mcp_id in item.optional_mcp})
     return {"*": False, **granted}
+
+
+def _permission(item: Agent) -> dict[str, Any]:
+    """The one map the runtime actually resolves tool calls against.
+
+    Everything `_tools` expresses is repeated here directly, rather than left
+    for the runtime's own `tools`-to-`permission` translation to infer, because
+    that translation is exactly the trap: a plain rename of a granted `write`
+    into a `permission["write"]` key would govern nothing, since the schema
+    folds `write` onto `edit` (`PERMISSION_NAME` above), and this agent would
+    silently lose the ability to write.
+
+    The deny baseline has to come first for the same reason `_tools` puts it
+    first: resolution takes the *last* matching rule, so `"*": "deny"` only
+    ever loses to a grant written after it.
+
+    `task` is the one entry this module has always authored straight into
+    `permission`, never through `tools` -- delegation has no native-tool
+    equivalent to derive it from -- and it keeps landing last, unaffected by
+    the tool and MCP grants next to it: it is resolved against a delegate's
+    name, not against the tool-call action namespace the rest of this map
+    shares with the deny baseline.
+    """
+    names = (*item.requires_tools, *item.optional_tools)
+    unknown = [name for name in names if name not in PERMISSION_NAME]
+    if unknown:
+        raise RenderError(f"{item.name}: no OpenCode name for tools {', '.join(sorted(unknown))}")
+    granted: dict[str, Any] = {PERMISSION_NAME[name]: "allow" for name in names}
+    # Same reasoning as `_tools`: the MCP server id is the key the runtime
+    # matches its tool-call actions against, and the wildcard grants every
+    # tool that server exposes.
+    granted.update({f"{mcp_id}*": "allow" for mcp_id in item.optional_mcp})
+    granted["task"] = {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}
+    return {"*": "deny", **granted}
 
 
 def _frontmatter(fields: dict[str, Any]) -> str:
