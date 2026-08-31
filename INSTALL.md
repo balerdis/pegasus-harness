@@ -78,14 +78,25 @@ mkdir -p "$BIN_DIR"
 install -m 755 pegasus "$BIN_DIR/pegasus"
 
 case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *) echo "agregá $BIN_DIR a tu PATH (por ejemplo, en ~/.bashrc: export PATH=\"$BIN_DIR:\$PATH\")" ;;
+  *":$BIN_DIR:"*)
+    echo "listo: $BIN_DIR ya está en tu PATH" ;;
+  *)
+    echo "$BIN_DIR todavía no está en tu PATH."
+    echo "Para usarlo ahora mismo, en esta terminal:   export PATH=\"$BIN_DIR:\$PATH\""
+    echo "Para que quede: cerrá la sesión y volvé a entrar. La mayoría de los sistemas"
+    echo "agregan ese directorio al iniciar sesión, pero sólo si ya existía — y lo acabás"
+    echo "de crear. Editá tu shell sólo si después de volver a entrar sigue sin aparecer."
+    ;;
 esac
 ```
 
 `pegasus` es un script `sh` de una sola pantalla: busca ese mismo venv y le pasa el control. No importa
 la cuenta ni el shell — es el único archivo que tiene que existir *antes* de que Pegasus mismo pueda
 correr.
+
+**Un `source ~/.bashrc` no alcanza**, y es el error fácil de cometer: quien agrega `~/.local/bin` al
+PATH suele ser `~/.profile`, que corre al *iniciar sesión* y no al abrir una terminal. Si volvés a
+entrar y `pegasus` sigue sin aparecer, ahí sí editá tu shell.
 
 *Ejecutado tal cual: `install -m 755 pegasus "$BIN_DIR/pegasus"` dejó el shim con permiso `0755` en un
 `bin_dir` de prueba, y el chequeo de PATH se probó con las dos ramas del `case` (ausente y presente).*
