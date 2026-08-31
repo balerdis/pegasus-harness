@@ -32,18 +32,30 @@ class Entry:
     back to being empty. Because there is nothing to restore in the second
     case, there is also nothing to have captured — ``mode`` and ``blob`` must
     both be absent, or the manifest would claim bytes that were never written.
+
+    ``is_directory`` is ``True`` for exactly one shape: a dependency tree that
+    did not exist before the run this generation captured. It never appears
+    alongside ``existed=True`` — a directory that was already there cannot be
+    read back whole the way a file's bytes can, so this manifest only ever
+    remembers its *absence*, never its contents. What that buys `restore` is
+    narrow but real: the address must be emptied with `remove_dir`, a whole
+    tree, rather than `remove`, a single file — and nothing wider than that
+    is claimed.
     """
 
     path: Path
     existed: bool
     mode: str | None
     blob: str | None
+    is_directory: bool = False
 
     def __post_init__(self) -> None:
         if not self.existed and (self.mode is not None or self.blob is not None):
             raise SnapshotError("an entry that did not exist cannot carry a mode or a blob reference")
         if self.existed and (not self.mode or not self.blob):
             raise SnapshotError("an entry that existed needs both a mode and a blob reference")
+        if self.is_directory and self.existed:
+            raise SnapshotError("a directory entry can only record that it did not exist -- its contents are never captured")
 
 
 @dataclass(frozen=True)
@@ -76,6 +88,13 @@ def _entry_to_dict(entry: Entry) -> dict[str, Any]:
         payload["mode"] = entry.mode
     if entry.blob is not None:
         payload["blob"] = entry.blob
+    # Omitted rather than written as `false`: a manifest a released version
+    # already wrote never had this key, and a manifest this version writes
+    # for an ordinary file should read back identically to one that version
+    # would have produced -- there is no reason for the two to differ on a
+    # kind of entry neither of them is describing.
+    if entry.is_directory:
+        payload["is_directory"] = True
     return payload
 
 
@@ -105,7 +124,10 @@ def _entry_from_dict(payload: Any) -> Entry:
     blob = payload.get("blob")
     if blob is not None and not isinstance(blob, str):
         raise SnapshotError("blob must be a string")
-    return Entry(path=Path(path), existed=existed, mode=mode, blob=blob)
+    is_directory = payload.get("is_directory", False)
+    if not isinstance(is_directory, bool):
+        raise SnapshotError("is_directory must be a boolean")
+    return Entry(path=Path(path), existed=existed, mode=mode, blob=blob, is_directory=is_directory)
 
 
 def _text(payload: dict[str, Any], key: str) -> str:

@@ -203,5 +203,118 @@ class UninstallNpmTest(RealHomeTestCase):
         self.assertTrue(self.layout().config_dir.is_dir())
 
 
+@patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
+class RestoreDependencyTreeTest(RealHomeTestCase):
+    """`restore` putting back a dependency tree an install left behind.
+
+    `apply` writes the server's configuration key only after
+    `_materialize_dependencies` has already placed the tree on disk. Locking
+    `config_dir` down to read-and-traverse-only, right after `present()`
+    creates it, makes the config write the one that fails: the tree is
+    already there, complete, by the time it does. Nothing in `_install`
+    catches that failure and takes the tree back out -- this is exactly the
+    hole the debt names, reproduced on real disk rather than asserted from
+    reading the code.
+    """
+
+    def lock_config_dir(self) -> None:
+        config_dir = self.layout().config_dir
+        config_dir.chmod(0o500)
+        self.addCleanup(config_dir.chmod, 0o755)
+
+    def test_restore_removes_a_tree_a_failed_install_left_behind(self, _load):
+        self.present()
+        self.lock_config_dir()
+
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+
+        # The precondition this test exists to prove: the failure is real,
+        # and the tree it should have taken back out is still on disk.
+        self.assertEqual(code, cli.FAILED)
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue((self.target() / "package.json").exists())
+        self.assertEqual(self.installed_entries(), ())
+
+        self.layout().config_dir.chmod(0o755)
+        code, report = self.run_cli("restore")
+
+        self.assertEqual(code, cli.OK)
+        self.assertFalse(self.target().exists(), "the leftover tree must be gone after restore")
+
+    def test_the_tree_did_not_exist_before_and_restore_removes_it(self, _load):
+        self.present()
+        self.lock_config_dir()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.assertTrue(self.target().exists())
+
+        self.layout().config_dir.chmod(0o755)
+        self.run_cli("restore")
+
+        self.assertFalse(self.target().exists())
+
+    def test_a_partially_materialized_tree_is_fully_removed(self, _load):
+        self.present()
+        self.lock_config_dir()
+
+        class LeavesExtraFilesBehind(FakeNpmInstaller):
+            """Stands in for an `npm ci` that unpacked more than one file
+            before this run went on to fail elsewhere -- `materialize_npm`
+            only ever writes the lockfile itself, so this is what makes a
+            "partial tree" mean more than the two files every install
+            already leaves."""
+
+            def install(self, directory: Path) -> None:
+                super().install(directory)
+                (directory / "node_modules_stub").write_text("partial")
+
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe", npm_installer=LeavesExtraFilesBehind())
+        self.assertTrue((self.target() / "node_modules_stub").exists())
+
+        self.layout().config_dir.chmod(0o755)
+        self.run_cli("restore")
+
+        self.assertFalse(self.target().exists())
+
+    def test_restore_is_idempotent(self, _load):
+        # Same generation both times, on purpose: asking for "the most
+        # recent" a second time would resolve to the protective snapshot the
+        # first `restore` itself just took, which is a different question
+        # (and a real one -- `RetentionTest` already owns it) from whether
+        # replaying one generation twice is safe.
+        self.present()
+        self.lock_config_dir()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+
+        self.layout().config_dir.chmod(0o755)
+        first_code, _ = self.run_cli("restore", "1")
+        self.assertEqual(first_code, cli.OK)
+        self.assertFalse(self.target().exists())
+
+        second_code, second_report = self.run_cli("restore", "1")
+        self.assertEqual(second_code, cli.OK)
+        self.assertFalse(self.target().exists())
+        self.assertEqual(second_report["status"], "restored")
+
+    def test_a_directory_that_cannot_be_removed_raises_instead_of_succeeding(self, _load):
+        self.present()
+        self.lock_config_dir()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.assertTrue(self.target().exists())
+
+        self.layout().config_dir.chmod(0o755)
+        # Blocking the parent, not the target itself: removing a directory is
+        # a write to what contains it, the same rule that already governs
+        # `remove` on a single file.
+        self.target().parent.chmod(0o500)
+        self.addCleanup(self.target().parent.chmod, 0o755)
+
+        code, report = self.run_cli("restore")
+
+        self.assertEqual(code, cli.FAILED)
+        self.assertEqual(report["status"], "failed")
+        self.target().parent.chmod(0o755)
+        self.assertTrue(self.target().exists(), "a raised failure must not be reported as a removal")
+
+
 if __name__ == "__main__":
     unittest.main()

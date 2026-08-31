@@ -43,7 +43,9 @@ def snapshots_root(filesystem: FileSystem, home: Path) -> Path:
     return filesystem.data_dir(home) / SNAPSHOTS_DIRNAME
 
 
-def capture_paths(filesystem: FileSystem, paths: Iterable[Path]) -> list[Capture]:
+def capture_paths(
+    filesystem: FileSystem, paths: Iterable[Path], *, directories: frozenset[Path] = frozenset()
+) -> list[Capture]:
     """Read every path as it stands right now, ready for :meth:`FileSnapshotStore.save`.
 
     The port's own docstring names two halves of a snapshot's job: "the file
@@ -55,13 +57,35 @@ def capture_paths(filesystem: FileSystem, paths: Iterable[Path]) -> list[Capture
     A path that does not exist yet has no bytes and no mode to have captured,
     so it is recorded as absent rather than guessed at — the store itself
     refuses a capture that claims otherwise.
+
+    ``directories`` names the paths that are a dependency tree rather than a
+    file — a caller's own knowledge, never sniffed from disk here, because a
+    port this small has no `is_directory` to ask and inventing one just for
+    this would teach every implementation a question only one caller needs
+    answered. A path named here that does not yet exist is captured the same
+    way an absent file is, tagged so `restore` knows to reach for
+    `remove_dir`; one that already exists is left out of the result
+    entirely, because reading it whole the way a file's bytes are read is
+    exactly what this function cannot do for a directory — the same limit
+    that keeps every other dependency-tree address out of a snapshot today,
+    narrowed to the one case a caller can still name safely.
     """
     captures: list[Capture] = []
     for path in paths:
+        is_directory = path in directories
         try:
-            if not filesystem.exists(path):
-                captures.append(Capture(path=path, existed=False, mode=None, content=None))
-                continue
+            exists = filesystem.exists(path)
+        except FileSystemError as error:
+            raise SnapshotStoreError(f"cannot capture {path}: {error}") from error
+        if not exists:
+            captures.append(Capture(path=path, existed=False, mode=None, content=None, is_directory=is_directory))
+            continue
+        if is_directory:
+            # Already there, so putting it back would need its bytes read
+            # whole -- exactly what a directory cannot give. Leaving it out
+            # gives up nothing a snapshot ever promised for it.
+            continue
+        try:
             mode = filesystem.mode_of(path)
             content = filesystem.read_bytes(path)
         except FileSystemError as error:
@@ -121,7 +145,15 @@ class FileSnapshotStore:
                 except FileSystemError as error:
                     raise SnapshotStoreError(f"cannot write a blob for {capture.path}: {error}") from error
             try:
-                entries.append(Entry(path=capture.path, existed=capture.existed, mode=capture.mode, blob=blob))
+                entries.append(
+                    Entry(
+                        path=capture.path,
+                        existed=capture.existed,
+                        mode=capture.mode,
+                        blob=blob,
+                        is_directory=capture.is_directory,
+                    )
+                )
             except SnapshotError as error:
                 raise SnapshotStoreError(f"cannot capture {capture.path}: {error}") from error
         manifest = Manifest(taken_at=taken_at, entries=tuple(entries))
