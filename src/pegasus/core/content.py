@@ -17,9 +17,7 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import yaml
-
-from pegasus.core import placeholders
+from pegasus.core import frontmatter, placeholders
 
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "content"
 MARKER = "---"
@@ -262,7 +260,10 @@ def split_frontmatter(text: str, source: str = "<text>") -> tuple[dict[str, Any]
     closing = text.find(f"\n{MARKER}\n", len(MARKER))
     if closing == -1:
         raise ContentError(f"{source}: frontmatter is never closed")
-    fields = yaml.safe_load(text[len(MARKER) + 1 : closing + 1]) or {}
+    try:
+        fields = frontmatter.parse(text[len(MARKER) + 1 : closing + 1], source)
+    except frontmatter.FrontmatterError as error:
+        raise ContentError(str(error)) from error
     if not isinstance(fields, dict):
         raise ContentError(f"{source}: frontmatter must be a mapping of fields")
     return fields, text[closing + len(MARKER) + 2 :].lstrip("\n")

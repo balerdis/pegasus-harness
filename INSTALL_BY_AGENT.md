@@ -18,10 +18,10 @@ id -u
 Si el segundo comando imprime `0`, detenete: no instales como root. Si el primero falla, no estás en
 el checkout de `pegasus-harness`; pedile a la persona la ruta correcta antes de seguir.
 
-## 2. Descargar los cinco assets del release y verificarlos
+## 2. Descargar los assets del release y verificarlos
 
 Sustituí `RELEASE_TAG` por el tag que la persona pidió. Cada asset tiene que venir de la misma
-publicación de GitHub Releases — no combines wheel, `requirements.txt` o el shim de tags distintos.
+publicación de GitHub Releases — no combines el wheel y el shim de tags distintos.
 
 ```sh
 RELEASE_TAG="v4.1.2"
@@ -34,28 +34,30 @@ WHEEL="pegasus_harness-4.1.2-py3-none-any.whl"
 
 curl -fL -O "$BASE_URL/$WHEEL"
 curl -fL -O "$BASE_URL/$WHEEL.sha256"
-curl -fL -O "$BASE_URL/requirements.txt"
-curl -fL -O "$BASE_URL/requirements.txt.sha256"
 curl -fL -O "$BASE_URL/pegasus"
 curl -fL -O "$BASE_URL/pegasus.sha256"
 curl -fL -O "$BASE_URL/release-manifest.json"
 
-sha256sum -c "$WHEEL.sha256" requirements.txt.sha256 pegasus.sha256
+sha256sum -c "$WHEEL.sha256" pegasus.sha256
 python3 -c "
 import json, sys
 manifest = json.load(open('release-manifest.json'))
 assert manifest['schema'] == 'pegasus-harness-release/v4', manifest['schema']
 assert manifest['tag'] == '$RELEASE_TAG', manifest['tag']
 names = {a['name'] for a in manifest['assets']}
-assert names == {'$WHEEL', 'requirements.txt', 'pegasus'}, names
+assert names == {'$WHEEL', 'pegasus'}, names
 print('release-manifest.json: coincide con', manifest['tag'], manifest['commit'])
 "
 ```
 
-**Detenete y no sigas si:** `sha256sum -c` reporta `FAILED` para cualquiera de los tres, o el script de
+**Detenete y no sigas si:** `sha256sum -c` reporta `FAILED` para cualquiera de los dos, o el script de
 Python levanta `AssertionError`. Ninguno de los dos casos es recuperable descargando de nuevo del mismo
 tag: si el tag ya publicó bytes que no calzan con su propio manifest, avisale a la persona y esperá
 instrucciones — no lo instales.
+
+Esta es la única sección de toda la instalación que necesita red: descargar los bytes que se van a
+instalar. Pegasus no tiene dependencias de terceros, así que ningún paso posterior vuelve a salir a
+internet.
 
 *No ejecutado en esta verificación: `curl` contra GitHub necesita red, prohibida en este entorno de
 trabajo. Lo que sí se probó, contra un wheel construido localmente y su propio
@@ -70,23 +72,18 @@ DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pegasus-harness"
 python3 -m venv "$DATA_DIR/venv"
 echo "venv: $?"
 
-"$DATA_DIR/venv/bin/python" -m pip install --require-hashes -r requirements.txt
-echo "requirements: $?"
-
 "$DATA_DIR/venv/bin/python" -m pip install --no-deps "$WHEEL"
 echo "wheel: $?"
 ```
 
-Reportá los tres códigos de salida. El primero necesita red (baja `PyYAML` y lo verifica contra el
-hash ya fijado en `requirements.txt`); si no hay red, detenete acá y decíselo a la persona en vez de
-improvisar una instalación parcial. El segundo no necesita red: instala el wheel que ya verificaste, y
-`--no-deps` evita que vuelva a resolver algo que el paso anterior ya fijó.
+Reportá los dos códigos de salida. Ninguno de los dos necesita red: Pegasus no tiene dependencias de
+terceros, así que el único `pip install` que queda instala el wheel que ya verificaste, y `--no-deps`
+evita que vuelva a resolver algo.
 
-*Ejecutados los tres comandos tal cual en esta verificación. `python3 -m venv` y el `pip install
---no-deps` contra el wheel terminaron en `0`, éste último con `Successfully installed
-pegasus-harness-4.1.2` (publicado). El `pip install --require-hashes -r requirements.txt` no se pudo completar sin red — se
-intentó forzarlo íntegramente offline y no hay wheel de `PyYAML` fijado por hash disponible en este
-disco; queda documentado como el paso que un agente real debe reportar sin poder saltear.*
+*Ejecutados los dos comandos tal cual, sin red, contra un wheel construido localmente: `python3 -m
+venv` y el `pip install --no-deps` terminaron en `0`, éste último con `Successfully installed
+pegasus-harness-4.1.2`. Se confirmó además que el venv resultante no tiene `PyYAML` instalado
+(`import yaml` falla ahí) y que `pegasus doctor` corre igual — ver el paso 5.*
 
 ## 4. Dejar el lanzador en el PATH
 
@@ -113,21 +110,20 @@ ramas (ausente y presente) sobre un `PATH` de prueba.*
 pegasus doctor
 ```
 
-Si el paso 3 no pudo completar `pip install --require-hashes` por falta de red, este comando falla al
-importar `yaml` — reportá exactamente ese traceback, no lo escondas ni lo reintentes en un loop.
-Con las dependencias instaladas, reporta qué CLIs anfitrionas detecta esta cuenta.
+Como el paso 3 no depende de red, si terminó con código `0` este comando ya puede correr. Reporta qué
+CLIs anfitrionas detecta esta cuenta.
 
 **No uses `pegasus setup` para arreglar una instalación a medias.** Sirve desde un checkout, no
-desde una instalación hecha con esta guía: reconstruir el venv exige el wheel y el lockfile con los
-hashes, y una instalación no guarda ninguno de los dos. El comando lo dice y no toca nada, así que
-si lo corrés vas a leer una línea que empieza con `setup builds the private venv out of this
-project's own checkout`. Si el venv quedó a medias, repetí los pasos 3 y 4 — son idempotentes.
+desde una instalación hecha con esta guía: reconstruir el venv exige el propio checkout (su
+`pyproject.toml` y su `bin/pegasus`), y una instalación no guarda ninguno de los dos. El comando lo
+dice y no toca nada, así que si lo corrés vas a leer una línea que empieza con `setup builds the
+private venv out of this project's own checkout`. Si el venv quedó a medias, repetí los pasos 3 y 4
+— son idempotentes.
 
-*Se probaron las dos situaciones: sin completar el paso 3 por falta de red, `pegasus doctor` falló al
-importar `yaml` con el traceback esperado; con `PyYAML` disponible por otra vía sólo para esta
-verificación, `pegasus doctor` corrió de punta a punta a través del shim y reportó
-`OpenCode: not found on this machine.` (correcto para esa cuenta de prueba). `pegasus setup` invocado
-sobre esa misma instalación de prueba se negó nombrando el lockfile que falta, sin escribir nada.*
+*Se probó de punta a punta contra el wheel construido localmente e instalado sin red: `pegasus
+doctor`, invocado a través del shim, corrió completo sin `PyYAML` instalado en el venv y reportó
+`OpenCode: not found on this machine.` (correcto para esa cuenta de prueba). `pegasus setup`,
+invocado sobre esa misma instalación, se negó nombrando el checkout que falta, sin escribir nada.*
 
 ## Instalar en OpenCode y elegir MCPs
 

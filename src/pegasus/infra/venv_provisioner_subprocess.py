@@ -1,4 +1,4 @@
-"""The real venv provisioner: the standard library's `venv`, then `pip`, offline-verifiable only by its pins.
+"""The real venv provisioner: the standard library's `venv`, then a single local, no-deps `pip install`.
 
 Nothing in this suite exercises this module, for the same reason nothing
 exercises `infra.downloader_http` or `infra.npm_installer_subprocess`: every
@@ -34,15 +34,9 @@ class SubprocessVenvProvisioner:
         except (OSError, subprocess.SubprocessError) as error:
             raise VenvProvisionerError(f"could not create a venv at {path}: {error}") from error
 
-    def install(self, path: Path, *, requirements: Path, source: Path) -> None:
+    def install(self, path: Path, *, source: Path) -> None:
         python = path / "bin" / "python"
         try:
-            subprocess.run(  # noqa: S603
-                [str(python), "-m", "pip", "install", "--require-hashes", "-r", str(requirements)],
-                capture_output=True,
-                timeout=TIMEOUT_SECONDS,
-                check=True,
-            )
             subprocess.run(  # noqa: S603
                 [str(python), "-m", "pip", "install", "--no-deps", str(source)],
                 capture_output=True,

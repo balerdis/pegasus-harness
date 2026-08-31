@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the release evidence for v4's distribution shape: a wheel plus its hash-pinned requirements.
+"""Create the release evidence for v4's distribution shape: a wheel plus its boot shim.
 
 v3 distributed a tarball extracted by `install.sh`; `build_release_manifest.py` still reproduces
 that evidence for the tags that shipped it, and stays untouched for exactly that reason -- it reads
@@ -8,13 +8,13 @@ gone from the working tree. It does not extend to v4: there is no tarball, no in
 no bundled dependency to curate, so bolting a wheel-shaped branch onto its tag pattern would make one
 tool understand two unrelated distribution shapes instead of two tools that each understand one.
 
-v4 ships two things a person installs by hand: a wheel (`pegasus-harness`, built by the standard
-`pip wheel . --no-deps` a maintainer already has to run) and `requirements.txt` (already hash-pinned,
-tracked in the repository, never generated here). What was missing is the third thing: evidence that
-ties both to the commit that produced them, so a person can verify what they downloaded *before*
-running `pip install` against it. That evidence is this script's only job. It does not build the
-wheel -- the wheel is a build artifact, and rebuilding it here would make this script a second place
-that has to agree with `pyproject.toml` about how to build it. It only reads what already exists.
+v4 ships one thing a person installs by hand: a wheel (`pegasus-harness`, built by the standard
+`pip wheel . --no-deps` a maintainer already has to run) -- Pegasus has zero runtime dependencies, so
+there is no lockfile to curate alongside it any more. What was missing is the second thing: evidence
+that ties the wheel to the commit that produced it, so a person can verify what they downloaded
+*before* running `pip install` against it. That evidence is this script's only job. It does not build
+the wheel -- the wheel is a build artifact, and rebuilding it here would make this script a second
+place that has to agree with `pyproject.toml` about how to build it. It only reads what already exists.
 
     python3 tools/build_release_evidence.py \\
         --wheel dist/pegasus_harness-4.0.0-py3-none-any.whl \\
@@ -45,7 +45,6 @@ SCHEMA = "pegasus-harness-release/v4"
 TAG = re.compile(r"^v(?:\d+)\.(?:\d+)\.(?:\d+)(?:-rc\.[1-9][0-9]*)?$")
 WHEEL_NAME = re.compile(r"^pegasus_harness-(?P<version>[^-]+)-py3-none-any\.whl$")
 
-REQUIREMENTS_PATH = "requirements.txt"
 SHIM_PATH = "bin/pegasus"
 
 
@@ -117,11 +116,6 @@ def wheel_evidence(wheel: Path, commit: str) -> dict[str, str]:
     return {"name": wheel.name, "sha256": digest(wheel)}
 
 
-def requirements_evidence(commit: str) -> dict[str, str]:
-    tracked = tagged_file(commit, REQUIREMENTS_PATH)
-    return {"name": Path(REQUIREMENTS_PATH).name, "sha256": digest_bytes(tracked)}
-
-
 def shim_evidence(commit: str) -> dict[str, str]:
     if git("ls-tree", commit, "--", SHIM_PATH).split(maxsplit=1)[0] != "100755":
         raise ValueError(f"{SHIM_PATH} at {commit} must be tracked with Git mode 100755")
@@ -144,7 +138,6 @@ def main() -> int:
     try:
         commit, tag = resolve_commit(args.tag)
         wheel = wheel_evidence(args.wheel, commit)
-        requirements = requirements_evidence(commit)
         shim = shim_evidence(commit)
     except (subprocess.CalledProcessError, KeyError, ValueError, tomllib.TOMLDecodeError, zipfile.BadZipFile) as error:
         parser.error(str(error))
@@ -154,9 +147,8 @@ def main() -> int:
         "tag": tag,
         "commit": commit,
         "package_version": package_version_at(commit),
-        "assets": [wheel, requirements, shim],
+        "assets": [wheel, shim],
         "install": {
-            "requirements": f"pip install --require-hashes -r {requirements['name']}",
             "package": f"pip install --no-deps {wheel['name']}",
             "shim": f"install -m 755 {shim['name']} <bin_dir>/pegasus",
         },
@@ -165,7 +157,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    for asset in (wheel, requirements, shim):
+    for asset in (wheel, shim):
         checksum = args.output.parent / f"{asset['name']}.sha256"
         checksum.write_text(checksum_line(asset["name"], asset["sha256"]), encoding="utf-8")
         print(f"WROTE checksum: {checksum}")

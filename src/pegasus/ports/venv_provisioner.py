@@ -44,13 +44,11 @@ class VenvProvisioner(Protocol):
         create it. Does not install anything into it; that is `install`.
         """
 
-    def install(self, path: Path, *, requirements: Path, source: Path) -> None:
-        """Stock the venv at ``path`` with its hash-pinned dependencies, then itself.
+    def install(self, path: Path, *, source: Path) -> None:
+        """Stock the venv at ``path`` with Pegasus itself.
 
-        ``requirements`` names a hash-pinned lockfile installed with
-        ``--require-hashes``, so nothing lands that was not verified against a
-        pin. ``source`` names the Pegasus checkout to install on top, with its
-        own dependencies excluded -- ``requirements`` already accounted for
-        them, and asking twice would let the two disagree about what a pin
-        means. Raises :class:`VenvProvisionerError` if either step fails.
+        ``source`` names the Pegasus checkout to install, with its own
+        dependencies excluded -- Pegasus ships with zero runtime dependencies,
+        so there is nothing else to resolve or pin here. Raises
+        :class:`VenvProvisionerError` if the install fails.
         """

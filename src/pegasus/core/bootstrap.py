@@ -21,7 +21,6 @@ SHIM_NAME = "pegasus"
 # read from, so a later run against the same data directory -- an installed
 # Pegasus, with no checkout in reach -- still has something to rebuild from.
 SOURCES_DIRNAME = "setup-sources"
-REQUIREMENTS_NAME = "requirements.txt"
 PACKAGE_DIRNAME = "package"
 
 #: Skipped while mirroring a checkout beside the venv: version control, test
@@ -48,7 +47,7 @@ def setup_sources_dir(data_dir: Path) -> Path:
     return data_dir / SOURCES_DIRNAME
 
 
-def preserve_inputs(filesystem: FileSystem, sources_dir: Path, *, requirements: Path, source: Path, shim: Path) -> None:
+def preserve_inputs(filesystem: FileSystem, sources_dir: Path, *, source: Path, shim: Path) -> None:
     """Copy this run's own checkout-provided inputs beside the venv.
 
     Called only once `setup` has actually provisioned from its own checkout:
@@ -56,7 +55,6 @@ def preserve_inputs(filesystem: FileSystem, sources_dir: Path, *, requirements: 
     to add here, and copying that copy back onto itself would only spend
     time confirming what was already true.
     """
-    _copy_file(filesystem, requirements, sources_dir / REQUIREMENTS_NAME)
     _copy_file(filesystem, shim, sources_dir / SHIM_NAME)
     _mirror_tree(filesystem, source, sources_dir / PACKAGE_DIRNAME)
 
@@ -81,20 +79,20 @@ def _mirror_tree(filesystem: FileSystem, source: Path, target: Path) -> None:
             _mirror_tree(filesystem, child, target / name)
 
 
-def provision(provisioner: VenvProvisioner, *, venv: Path, requirements: Path, source: Path) -> None:
+def provision(provisioner: VenvProvisioner, *, venv: Path, source: Path) -> None:
     """Build the venv, then stock it.
 
     Both steps are idempotent (see :class:`VenvProvisioner`), so a rerun --
-    picking up a newer ``source`` checkout or a changed pin in
-    ``requirements`` -- costs nothing when nothing changed and lands the
-    update when something did. Neither step is attempted, nor its failure
-    swallowed: a :class:`~pegasus.ports.venv_provisioner.VenvProvisionerError`
-    from either propagates as is, since there is nothing partial here for a
-    caller to clean up -- there is no journal entry for a venv, and the venv
-    directory itself is safe to leave half-built for the next rerun to finish.
+    picking up a newer ``source`` checkout -- costs nothing when nothing
+    changed and lands the update when something did. Neither step is
+    attempted, nor its failure swallowed: a
+    :class:`~pegasus.ports.venv_provisioner.VenvProvisionerError` from either
+    propagates as is, since there is nothing partial here for a caller to
+    clean up -- there is no journal entry for a venv, and the venv directory
+    itself is safe to leave half-built for the next rerun to finish.
     """
     provisioner.create(venv)
-    provisioner.install(venv, requirements=requirements, source=source)
+    provisioner.install(venv, source=source)
 
 
 def path_warning(bin_dir: Path, path_variable: str) -> str | None:

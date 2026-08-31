@@ -30,7 +30,6 @@ class PreserveInputsTest(unittest.TestCase):
     def setUp(self):
         self.filesystem = FakeFileSystem(
             files={
-                Path("/repo/requirements.txt"): b"PyYAML==6.0.2 --hash=sha256:0\n",
                 Path("/repo/bin/pegasus"): b"#!/bin/sh\n",
                 Path("/repo/pyproject.toml"): b"[project]\nname = 'pegasus'\n",
                 Path("/repo/src/pegasus/__init__.py"): b"",
@@ -45,17 +44,14 @@ class PreserveInputsTest(unittest.TestCase):
         bootstrap.preserve_inputs(
             self.filesystem,
             self.sources_dir,
-            requirements=Path("/repo/requirements.txt"),
             source=Path("/repo"),
             shim=Path("/repo/bin/pegasus"),
         )
 
-    def test_copies_the_lockfile(self):
+    def test_does_not_preserve_a_lockfile_there_are_zero_dependencies_to_pin(self):
+        """Nothing here pip-installs from a requirements file anymore, so nothing copies one."""
         self.preserve()
-        self.assertEqual(
-            self.filesystem.read_bytes(self.sources_dir / "requirements.txt"),
-            b"PyYAML==6.0.2 --hash=sha256:0\n",
-        )
+        self.assertFalse(self.filesystem.exists(self.sources_dir / "requirements.txt"))
 
     def test_copies_the_shim_and_keeps_it_executable(self):
         self.preserve()
@@ -81,19 +77,27 @@ class ProvisionTest(unittest.TestCase):
     def test_provision_creates_then_installs_in_order(self):
         provisioner = FakeVenvProvisioner()
         venv = DATA_DIR / "venv"
-        requirements = Path("/repo/requirements.txt")
         source = Path("/repo")
-        bootstrap.provision(provisioner, venv=venv, requirements=requirements, source=source)
+        bootstrap.provision(provisioner, venv=venv, source=source)
         self.assertEqual(provisioner.created, [venv])
-        self.assertEqual(provisioner.installed, [(venv, requirements, source)])
+        self.assertEqual(provisioner.installed, [(venv, source)])
+
+    def test_provision_does_not_ask_for_a_requirements_file(self):
+        """Zero runtime dependencies means nothing here is pinned by a lockfile any more."""
+        provisioner = FakeVenvProvisioner()
+        venv = DATA_DIR / "venv"
+        source = Path("/repo")
+        try:
+            bootstrap.provision(provisioner, venv=venv, source=source)
+        except TypeError as error:
+            self.fail(f"provision() should not require a 'requirements' argument: {error}")
 
     def test_provision_is_idempotent_across_reruns(self):
         provisioner = FakeVenvProvisioner()
         venv = DATA_DIR / "venv"
-        requirements = Path("/repo/requirements.txt")
         source = Path("/repo")
-        bootstrap.provision(provisioner, venv=venv, requirements=requirements, source=source)
-        bootstrap.provision(provisioner, venv=venv, requirements=requirements, source=source)
+        bootstrap.provision(provisioner, venv=venv, source=source)
+        bootstrap.provision(provisioner, venv=venv, source=source)
         self.assertEqual(provisioner.created, [venv, venv])
         self.assertEqual(len(provisioner.installed), 2)
 
@@ -101,18 +105,14 @@ class ProvisionTest(unittest.TestCase):
         venv = DATA_DIR / "venv"
         provisioner = FakeVenvProvisioner(fail_create={venv})
         with self.assertRaises(VenvProvisionerError):
-            bootstrap.provision(
-                provisioner, venv=venv, requirements=Path("/repo/requirements.txt"), source=Path("/repo")
-            )
+            bootstrap.provision(provisioner, venv=venv, source=Path("/repo"))
         self.assertEqual(provisioner.installed, [])
 
     def test_provision_propagates_an_install_failure(self):
         venv = DATA_DIR / "venv"
         provisioner = FakeVenvProvisioner(fail_install={venv})
         with self.assertRaises(VenvProvisionerError):
-            bootstrap.provision(
-                provisioner, venv=venv, requirements=Path("/repo/requirements.txt"), source=Path("/repo")
-            )
+            bootstrap.provision(provisioner, venv=venv, source=Path("/repo"))
 
 
 class PathWarningTest(unittest.TestCase):
