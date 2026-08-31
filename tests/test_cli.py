@@ -1484,13 +1484,15 @@ class SetupTest(RealHomeTestCase):
 
     def setUp(self):
         super().setUp()
-        # A real lockfile in a real place: `setup` refuses to provision out of
+        # A real checkout in a real place: `setup` refuses to provision out of
         # inputs it cannot read, so a fictional path would test the refusal
-        # instead of the provisioning.
+        # instead of the provisioning. `pyproject.toml` is what marks a
+        # directory as an installable checkout now that there is no
+        # hash-pinned lockfile to look for instead.
         self.checkout = self.home / "checkout"
         self.checkout.mkdir()
-        self.requirements = self.checkout / "requirements.txt"
-        self.requirements.write_bytes(b"PyYAML==6.0.2 --hash=sha256:0\n")
+        self.pyproject = self.checkout / "pyproject.toml"
+        self.pyproject.write_bytes(b"[project]\nname = 'pegasus'\n")
 
     def runtime(self, *, variables: dict[str, str] | None = None) -> cli.Runtime:
         self.provisioner = FakeVenvProvisioner()
@@ -1501,16 +1503,15 @@ class SetupTest(RealHomeTestCase):
             out=io.StringIO(),
             variables=variables if variables is not None else NO_BINARY,
             venv_provisioner=self.provisioner,
-            requirements=self.requirements,
             source=self.checkout,
         )
 
-    def test_setup_refuses_when_the_lockfile_it_provisions_from_is_not_there(self):
+    def test_setup_refuses_when_the_checkout_it_provisions_from_is_not_there(self):
         """An installed Pegasus keeps neither the wheel it came from nor the
-        lockfile that pinned its venv, so it has nothing to rebuild out of.
+        checkout it was built from, so it has nothing to rebuild out of.
         Saying that is worth more than a `pip` error naming a path inside the
         user's own virtual environment."""
-        self.requirements.unlink()
+        self.pyproject.unlink()
 
         code, report = self.run_cli("setup")
 
@@ -1525,7 +1526,15 @@ class SetupTest(RealHomeTestCase):
         self.assertEqual(code, 0)
         expected_venv = self.filesystem.data_dir(self.home) / "venv"
         self.assertEqual(self.provisioner.created, [expected_venv])
-        self.assertEqual(self.provisioner.installed, [(expected_venv, self.requirements, self.checkout)])
+        self.assertEqual(self.provisioner.installed, [(expected_venv, self.checkout)])
+
+    def test_setup_does_not_require_a_requirements_file_to_exist(self):
+        """Zero runtime dependencies means `setup` has nothing left to hash-verify
+        or download; it only needs the checkout and the shim."""
+        self.assertFalse((self.checkout / "requirements.txt").exists())
+        context = self.runtime()
+        code = cli.main(["setup", "--json"], runtime=context)
+        self.assertEqual(code, 0)
 
     def test_setup_reports_the_venv_and_shim_paths(self):
         _, report = self.run_cli_with(self.runtime(), "setup")
@@ -1563,14 +1572,11 @@ class SetupTest(RealHomeTestCase):
         reach, still has something to rebuild the venv from."""
         self.run_cli_with(self.runtime(), "setup")
         sources_dir = bootstrap.setup_sources_dir(self.filesystem.data_dir(self.home))
-        preserved_requirements = sources_dir / bootstrap.REQUIREMENTS_NAME
-        self.assertTrue(preserved_requirements.exists())
-        self.assertEqual(preserved_requirements.read_bytes(), self.requirements.read_bytes())
         preserved_shim = sources_dir / bootstrap.SHIM_NAME
         self.assertTrue(preserved_shim.exists())
         self.assertEqual(preserved_shim.read_bytes(), cli.SHIM_SOURCE.read_bytes())
         preserved_source = sources_dir / bootstrap.PACKAGE_DIRNAME
-        self.assertTrue((preserved_source / "requirements.txt").exists())
+        self.assertTrue((preserved_source / "pyproject.toml").exists())
 
     def test_setup_rebuilds_from_a_previously_preserved_copy_when_the_checkout_is_gone(self):
         """An installed Pegasus has no checkout, but a `setup` run against the
@@ -1579,35 +1585,32 @@ class SetupTest(RealHomeTestCase):
         first_provisioner = FakeVenvProvisioner()
         first = cli.Runtime(
             filesystem=self.filesystem, home=self.home, now=AT, out=io.StringIO(),
-            variables=NO_BINARY, venv_provisioner=first_provisioner,
-            requirements=self.requirements, source=self.checkout,
+            variables=NO_BINARY, venv_provisioner=first_provisioner, source=self.checkout,
         )
         code, _ = self.run_cli_with(first, "setup")
         self.assertEqual(code, 0)
 
-        self.requirements.unlink()
+        self.pyproject.unlink()
 
         second_provisioner = FakeVenvProvisioner()
         second = cli.Runtime(
             filesystem=self.filesystem, home=self.home, now=AT, out=io.StringIO(),
-            variables=NO_BINARY, venv_provisioner=second_provisioner,
-            requirements=self.requirements, source=self.checkout,
+            variables=NO_BINARY, venv_provisioner=second_provisioner, source=self.checkout,
         )
         code, report = self.run_cli_with(second, "setup")
 
         self.assertEqual(code, 0, report)
         self.assertEqual(len(second_provisioner.installed), 1)
-        _, used_requirements, used_source = second_provisioner.installed[0]
-        self.assertNotEqual(used_requirements, self.requirements)
-        self.assertTrue(used_requirements.exists())
-        self.assertTrue((used_source / "requirements.txt").exists())
+        _, used_source = second_provisioner.installed[0]
+        self.assertNotEqual(used_source, self.checkout)
+        self.assertTrue((used_source / "pyproject.toml").exists())
         shim = self.filesystem.bin_dir(self.home) / "pegasus"
         self.assertEqual(shim.read_bytes(), cli.SHIM_SOURCE.read_bytes())
 
     def test_setup_names_both_checked_locations_when_neither_has_its_inputs(self):
         """Genuinely absent, on both sides, still gets an honest refusal --
         never a `pip` error naming a path inside the user's own venv."""
-        self.requirements.unlink()
+        self.pyproject.unlink()
 
         code, report = self.run_cli("setup")
 

@@ -17,7 +17,7 @@ Este documento fija la arquitectura antes de escribir código. No es un plan de 
 | Catálogo de artefactos | Generado, no escrito a mano. |
 | Agentes SDD | Se cablean los 10 de la línea SDD (hoy hay 1 solo). |
 | Interfaz de usuario | TUI por defecto + flags equivalentes para modo desatendido. |
-| Lenguaje y dependencias | Python 3.12+, dependencias permitidas con versiones y hashes fijos. |
+| Lenguaje y dependencias | Python 3.12+, sin ninguna dependencia. El frontmatter de los descriptores se parsea con un lector propio y estricto, que rechaza lo que no entiende en vez de interpretarlo a medias. |
 | Punto de entrada | `~/.local/bin/pegasus` + venv privado. |
 
 ### Las dos reglas que gobiernan el diseño
@@ -700,7 +700,6 @@ Las dos son consecuencias coherentes de una instalación aditiva sin actualizaci
 pegasus-harness/
 ├── bin/pegasus                    # shim de arranque
 ├── pyproject.toml
-├── requirements.txt               # versiones y hashes fijos
 ├── src/pegasus/
 │   ├── __main__.py
 │   ├── cli.py                     # flags, modo desatendido
@@ -1200,7 +1199,7 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 
 | Deuda | Qué la destraba |
 |-------|-----------------|
-| `pegasus setup` puede reconstruir el venv de una instalación **sólo si alguna vez corrió desde un checkout**: esa corrida deja sus insumos en `setup-sources/`, al lado del venv. Quien instaló siguiendo `INSTALL.md` —pip a mano, sin checkout— nunca pasa por ahí, así que para esa persona sigue negándose. El mensaje nombra los dos lugares donde buscó | Que los insumos viajen adentro del wheel, o que el recorrido documentado los deje al lado del venv. Lo primero exige duplicar `requirements.txt` y el shim dentro del paquete o un paso de build que los copie; lo segundo, dos líneas más en la guía |
+| `pegasus setup` puede reconstruir el venv de una instalación **sólo si alguna vez corrió desde un checkout**: esa corrida deja sus insumos en `setup-sources/`, al lado del venv. Quien instaló siguiendo `INSTALL.md` —pip a mano, sin checkout— nunca pasa por ahí, así que para esa persona sigue negándose. El mensaje nombra los dos lugares donde buscó | Que los insumos viajen adentro del wheel, o que el recorrido documentado los deje al lado del venv. Lo primero exige llevar el shim adentro del paquete o un paso de build que lo copie; lo segundo, una línea más en la guía |
 | Un `refresh failed` del plugin del skill registry queda sólo en `console.error`, así que una falla del registry no se superficializa | Nada. Es del plugin, no del contrato que lo alimenta |
 | Los sitios de `content.py` que lanzan `ContentError` no tienen un test de tabla que recorra todos y afirme que cada uno nombra una ruta real | Nada. Unidad candidata en cualquier momento |
 | La voz `king-pegasus` explica y no puede aplicar nada de lo que explica: declara sólo `read` y su cuerpo le prohíbe generar cualquier artefacto | Nada. Es una decisión de producto sobre qué hace esa voz, y hasta tomarla no se le concede ningún servidor |

@@ -63,11 +63,11 @@ NODE_BINARY = "node"
 #
 # It also means `setup` only works from a checkout, and that is not an
 # accident of these three lines: an installed Pegasus has neither the wheel it
-# came from nor the pinned lockfile that built its venv, so there is nothing
-# for it to rebuild that venv out of. `_refuse_without_its_own_sources` says
-# so instead of failing on a path that does not exist.
+# came from nor the checkout it was built from, so there is nothing for it to
+# rebuild that venv out of. `_refuse_without_its_own_sources` says so instead
+# of failing on a path that does not exist.
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REQUIREMENTS_FILE = REPO_ROOT / "requirements.txt"
+PYPROJECT_NAME = "pyproject.toml"
 SHIM_SOURCE = REPO_ROOT / "bin" / "pegasus"
 
 SCHEMA = "pegasus/cli-report/v1"
@@ -101,10 +101,9 @@ class Runtime:
     downloader: Downloader = field(default_factory=HttpDownloader)
     npm_installer: NpmInstaller = field(default_factory=SubprocessNpmInstaller)
     venv_provisioner: VenvProvisioner = field(default_factory=SubprocessVenvProvisioner)
-    # Only `setup` reads these two: where its own hash-pinned lockfile and its
-    # own checkout live, so a test can point them at a fixture instead of this
-    # repository without touching anything else `Runtime` carries.
-    requirements: Path = REQUIREMENTS_FILE
+    # Only `setup` reads this: where its own checkout lives, so a test can
+    # point it at a fixture instead of this repository without touching
+    # anything else `Runtime` carries.
     source: Path = REPO_ROOT
 
     @property
@@ -977,13 +976,11 @@ def _setup(arguments, runtime: Runtime) -> dict[str, Any]:
     filesystem = runtime.filesystem
     data_dir = filesystem.data_dir(runtime.home)
     sources_dir = bootstrap_module.setup_sources_dir(data_dir)
-    requirements, source, shim_source, from_checkout = _resolve_setup_inputs(filesystem, runtime, sources_dir)
+    source, shim_source, from_checkout = _resolve_setup_inputs(filesystem, runtime, sources_dir)
     venv = bootstrap_module.venv_dir(data_dir)
-    bootstrap_module.provision(runtime.venv_provisioner, venv=venv, requirements=requirements, source=source)
+    bootstrap_module.provision(runtime.venv_provisioner, venv=venv, source=source)
     if from_checkout:
-        bootstrap_module.preserve_inputs(
-            filesystem, sources_dir, requirements=requirements, source=source, shim=shim_source
-        )
+        bootstrap_module.preserve_inputs(filesystem, sources_dir, source=source, shim=shim_source)
     bin_dir = filesystem.bin_dir(runtime.home)
     shim = bin_dir / bootstrap_module.SHIM_NAME
     filesystem.write_atomic(
@@ -1014,8 +1011,8 @@ def _attached_to_a_terminal() -> bool:
         return False
 
 
-def _resolve_setup_inputs(filesystem: FileSystem, runtime: Runtime, sources_dir: Path) -> tuple[Path, Path, Path, bool]:
-    """Which inputs to build the venv from, and where its shim comes from.
+def _resolve_setup_inputs(filesystem: FileSystem, runtime: Runtime, sources_dir: Path) -> tuple[Path, Path, bool]:
+    """Which checkout to build the venv from, and where its shim comes from.
 
     A checkout is tried first, exactly as before -- unchanged, so a checkout
     keeps provisioning exactly as it always has. Only once that is confirmed
@@ -1024,20 +1021,20 @@ def _resolve_setup_inputs(filesystem: FileSystem, runtime: Runtime, sources_dir:
     beside the venv for exactly this situation. Refuses, naming both places
     it looked, when neither has what provisioning needs.
 
-    Failing here rather than three subprocess calls later is the difference
+    Failing here rather than a subprocess call later is the difference
     between a sentence someone can act on and a `pip` error naming a path
     inside their own virtual environment.
     """
-    if filesystem.exists(runtime.requirements) and filesystem.exists(SHIM_SOURCE):
-        return runtime.requirements, runtime.source, SHIM_SOURCE, True
+    project_marker = runtime.source / PYPROJECT_NAME
+    if filesystem.exists(project_marker) and filesystem.exists(SHIM_SOURCE):
+        return runtime.source, SHIM_SOURCE, True
 
-    preserved_requirements = sources_dir / bootstrap_module.REQUIREMENTS_NAME
     preserved_source = sources_dir / bootstrap_module.PACKAGE_DIRNAME
     preserved_shim = sources_dir / bootstrap_module.SHIM_NAME
-    if all(filesystem.exists(path) for path in (preserved_requirements, preserved_source, preserved_shim)):
-        return preserved_requirements, preserved_source, preserved_shim, False
+    if all(filesystem.exists(path) for path in (preserved_source, preserved_shim)):
+        return preserved_source, preserved_shim, False
 
-    missing = [path for path in (runtime.requirements, SHIM_SOURCE) if not filesystem.exists(path)]
+    missing = [path for path in (project_marker, SHIM_SOURCE) if not filesystem.exists(path)]
     raise CommandError(
         "setup builds the private venv out of this project's own checkout, and "
         + " and ".join(str(path) for path in missing)

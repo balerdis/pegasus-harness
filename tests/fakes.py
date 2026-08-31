@@ -77,15 +77,15 @@ class FakeVenvProvisioner:
         self.fail_create: set[Path] = set(fail_create or ())
         self.fail_install: set[Path] = set(fail_install or ())
         self.created: list[Path] = []
-        self.installed: list[tuple[Path, Path, Path]] = []
+        self.installed: list[tuple[Path, Path]] = []
 
     def create(self, path: Path) -> None:
         self.created.append(path)
         if path in self.fail_create:
             raise VenvProvisionerError(f"refusing to create a venv at {path}: injected failure")
 
-    def install(self, path: Path, *, requirements: Path, source: Path) -> None:
-        self.installed.append((path, requirements, source))
+    def install(self, path: Path, *, source: Path) -> None:
+        self.installed.append((path, source))
         if path in self.fail_install:
             raise VenvProvisionerError(f"refusing to stock the venv at {path}: injected failure")
 
