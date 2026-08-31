@@ -1,10 +1,4 @@
-# Pegasus Harness v3.1
-
-> **Rama de desarrollo de v4.0.0.** El motor de v3 fue retirado de esta rama; el de v4 todavía no existe. Esta rama no instala nada.
->
-> - Versión usable: [`main`](https://github.com/balerdis/pegasus-harness/tree/main) y la [release v3.1.1](https://github.com/balerdis/pegasus-harness/releases/tag/v3.1.1).
-> - Arquitectura de v4: [docs/pegasus-v4/arquitectura.md](docs/pegasus-v4/arquitectura.md).
-> - El texto de abajo describe v3.1 y se reescribe antes de publicar v4.0.0.
+# Pegasus Harness
 
 Pegasus Harness es un conjunto open source con licencia MIT de prompts, agentes, skills, comandos e integraciones opcionales para trabajar con OpenCode de forma más ordenada. Sirve para distintos clientes y repositorios: el flujo queda en manos del equipo que lo usa, no de una configuración particular de cliente.
 
@@ -12,9 +6,35 @@ Pegasus es aditivo. Revisa lo que ya existe, muestra un plan y crea solamente lo
 
 ## Instalación
 
-### Con instalador
+Pegasus es un solo archivo: `pegasus`. Sin wheel, sin venv, sin `pip install` — se descarga, se
+verifica su checksum y se deja ejecutable en el PATH. No hace falta `sudo`.
 
-Seguí [INSTALL.md](INSTALL.md) para instalar Pegasus en la cuenta Linux actual.
+Elegí el tag que vas a instalar en la [página de releases](https://github.com/balerdis/pegasus-harness/releases) y reemplazalo abajo:
+
+```sh
+RELEASE_TAG="<el último tag publicado>"
+mkdir -p "$HOME/Downloads/pegasus-$RELEASE_TAG"
+cd "$HOME/Downloads/pegasus-$RELEASE_TAG"
+
+BASE_URL="https://github.com/balerdis/pegasus-harness/releases/download/$RELEASE_TAG"
+curl -fL -O "$BASE_URL/pegasus"
+curl -fL -O "$BASE_URL/pegasus.sha256"
+sha256sum -c pegasus.sha256
+
+BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+mkdir -p "$BIN_DIR"
+install -m 755 pegasus "$BIN_DIR/pegasus"
+```
+
+Si `sha256sum -c` falla, no sigas: no tenés lo que el release publicó. Si `$BIN_DIR` no queda en tu
+PATH, [INSTALL.md](INSTALL.md) explica el porqué y qué hacer (un `source ~/.bashrc` no alcanza).
+
+```sh
+pegasus doctor
+```
+
+`pegasus` es el único archivo que hace falta: no busca un venv, no depende de nada instalado antes que
+él, y es el mismo archivo en Linux y macOS. Es Python 3.12+, sin ninguna dependencia de terceros.
 
 ### Con un agente
 
@@ -37,34 +57,17 @@ Para cambios ejecutables o de configuración, `sdd-verify` es la autoridad final
 
 ## Prerrequisitos de OpenCode
 
-Para `--client opencode`, necesitás Python 3.12+ y OpenCode instalado previamente en la cuenta Linux actual. Si vas a confirmar CBM, verificá que `codebase-memory-mcp --version` y `codebase-memory-mcp --help` respondan desde el ejecutable local. Playwright necesita un navegador compatible instalado por separado antes del apply; Pegasus no descarga navegadores.
+Para `--client opencode`, necesitás OpenCode instalado previamente en la cuenta actual. Si vas a confirmar CBM, verificá que `codebase-memory-mcp --version` y `codebase-memory-mcp --help` respondan desde el ejecutable local. Playwright necesita un navegador compatible instalado por separado antes del apply; Pegasus no descarga navegadores.
 
 Pegasus no configura credenciales, proveedor ni modelo: usá `/connect` para las credenciales del proveedor y `/models` para elegir el modelo.
 
 La ruta asistida por agente empieza en [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md): verifica los assets finales sin leer la configuración de OpenCode y solicita una decisión independiente para cada MCP.
 
-## Validar un checkout
+## Más allá de instalar
 
-Los checks de v3 se retiraron junto con su motor. Los de v4 llegan con el motor nuevo.
-
-Para validar la versión usable, cambiá a `main`.
+Para el uso diario, seguí [MANUAL.md](MANUAL.md). Para el diseño hexagonal, los puertos y las
+decisiones detrás de esta versión, consultá [docs/pegasus-v4/arquitectura.md](docs/pegasus-v4/arquitectura.md).
 
 ## Licencia
 
 Pegasus Harness se distribuye bajo la [licencia MIT](LICENSE).
-
-## Capturas
-
-Las capturas muestran la validación de instalación sobre `v3.1.1-rc.3` y el resultado en OpenCode.
-
-### Instalación verificada
-
-![Descarga, validación e instalación de OpenCode para Pegasus](docs/images/install-harness-1.png)
-
-### Payload aplicado
-
-![Payload de Pegasus aplicado y OpenCode iniciado](docs/images/install-harness-2.png)
-
-### Pegasus en OpenCode
-
-![Pegasus Orchestrator y sus subagentes disponibles en OpenCode](docs/images/install-harness-3.jpeg)

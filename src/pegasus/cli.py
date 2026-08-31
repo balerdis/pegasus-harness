@@ -30,7 +30,6 @@ from typing import Any, Callable, TextIO
 
 import pegasus
 from pegasus.adapters import available
-from pegasus.core import bootstrap as bootstrap_module
 from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
 from pegasus.core import dependencies as dependencies_module
@@ -45,30 +44,15 @@ from pegasus.infra.journal_store_file import FileJournalStore
 from pegasus.infra.model_assignment_store_file import FileModelAssignmentStore
 from pegasus.infra.npm_installer_subprocess import SubprocessNpmInstaller
 from pegasus.infra.snapshot_store_file import FileSnapshotStore, capture_paths
-from pegasus.infra.venv_provisioner_subprocess import SubprocessVenvProvisioner
 from pegasus.ports.downloader import Downloader
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.journal_store import JournalStoreError
 from pegasus.ports.model_assignment_store import ModelAssignmentStoreError
 from pegasus.ports.npm_installer import NpmInstaller
 from pegasus.ports.snapshot_store import SnapshotStoreError
-from pegasus.ports.venv_provisioner import VenvProvisioner, VenvProvisionerError
 from pegasus.tui import app as tui_app
 
 NODE_BINARY = "node"
-
-# The checkout this module itself lives in: src/pegasus/cli.py -> repo root.
-# `setup` reads its own shim from here and installs its own source from here,
-# which is what lets it run before Pegasus has ever been installed anywhere.
-#
-# It also means `setup` only works from a checkout, and that is not an
-# accident of these three lines: an installed Pegasus has neither the wheel it
-# came from nor the checkout it was built from, so there is nothing for it to
-# rebuild that venv out of. `_refuse_without_its_own_sources` says so instead
-# of failing on a path that does not exist.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-PYPROJECT_NAME = "pyproject.toml"
-SHIM_SOURCE = REPO_ROOT / "bin" / "pegasus"
 
 SCHEMA = "pegasus/cli-report/v1"
 
@@ -100,11 +84,6 @@ class Runtime:
     variables: dict[str, str] = field(default_factory=dict)
     downloader: Downloader = field(default_factory=HttpDownloader)
     npm_installer: NpmInstaller = field(default_factory=SubprocessNpmInstaller)
-    venv_provisioner: VenvProvisioner = field(default_factory=SubprocessVenvProvisioner)
-    # Only `setup` reads this: where its own checkout lives, so a test can
-    # point it at a fixture instead of this repository without touching
-    # anything else `Runtime` carries.
-    source: Path = REPO_ROOT
 
     @property
     def environment(self) -> Environment:
@@ -175,7 +154,6 @@ COMMAND_ERRORS = (
     ModelAssignmentStoreError,
     planner.PlannerError,
     FileSystemError,
-    VenvProvisionerError,
 )
 
 
@@ -232,11 +210,6 @@ def _parser() -> argparse.ArgumentParser:
         help="the generation to restore; defaults to the most recent one that can be read back",
     )
     restore.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
-
-    # No `--cli`: this provisions Pegasus itself -- its own private venv and
-    # its own boot shim -- never a downstream CLI's configuration.
-    setup = commands.add_parser("setup", help="build Pegasus's own private venv and boot shim")
-    setup.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
     models = commands.add_parser("models", help="assign, remove, or list per-agent model preferences")
     models.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
@@ -964,37 +937,6 @@ def _document(filesystem: FileSystem, entry: Record):
         raise CommandError(f"{entry.target} cannot be parsed, so nothing in it can be judged: {error}") from error
 
 
-def _setup(arguments, runtime: Runtime) -> dict[str, Any]:
-    """Build Pegasus's own private venv, then copy its boot shim next to it.
-
-    Unlike `install`, there is no adapter and no journal entry here: this
-    provisions Pegasus itself, not a downstream CLI's configuration, and the
-    venv directory is its own record of what is provisioned -- rebuilding it
-    is always safe, the same way reinstalling a `download` server the journal
-    already owns costs nothing extra.
-    """
-    filesystem = runtime.filesystem
-    data_dir = filesystem.data_dir(runtime.home)
-    sources_dir = bootstrap_module.setup_sources_dir(data_dir)
-    source, shim_source, from_checkout = _resolve_setup_inputs(filesystem, runtime, sources_dir)
-    venv = bootstrap_module.venv_dir(data_dir)
-    bootstrap_module.provision(runtime.venv_provisioner, venv=venv, source=source)
-    if from_checkout:
-        bootstrap_module.preserve_inputs(filesystem, sources_dir, source=source, shim=shim_source)
-    bin_dir = filesystem.bin_dir(runtime.home)
-    shim = bin_dir / bootstrap_module.SHIM_NAME
-    filesystem.write_atomic(
-        shim, filesystem.read_bytes(shim_source), mode=filesystem.mode_for(executable=True)
-    )
-    warning = bootstrap_module.path_warning(bin_dir, runtime.variables.get("PATH", ""))
-    return {
-        "status": "installed",
-        "venv": str(venv),
-        "shim": str(shim),
-        "activation": [warning] if warning else [],
-    }
-
-
 def _attached_to_a_terminal() -> bool:
     """Whether there is a person at a screen to show a menu to.
 
@@ -1011,46 +953,11 @@ def _attached_to_a_terminal() -> bool:
         return False
 
 
-def _resolve_setup_inputs(filesystem: FileSystem, runtime: Runtime, sources_dir: Path) -> tuple[Path, Path, bool]:
-    """Which checkout to build the venv from, and where its shim comes from.
-
-    A checkout is tried first, exactly as before -- unchanged, so a checkout
-    keeps provisioning exactly as it always has. Only once that is confirmed
-    absent is a previously preserved copy tried: what an earlier `setup` run
-    against this same data directory, back when it did have a checkout, left
-    beside the venv for exactly this situation. Refuses, naming both places
-    it looked, when neither has what provisioning needs.
-
-    Failing here rather than a subprocess call later is the difference
-    between a sentence someone can act on and a `pip` error naming a path
-    inside their own virtual environment.
-    """
-    project_marker = runtime.source / PYPROJECT_NAME
-    if filesystem.exists(project_marker) and filesystem.exists(SHIM_SOURCE):
-        return runtime.source, SHIM_SOURCE, True
-
-    preserved_source = sources_dir / bootstrap_module.PACKAGE_DIRNAME
-    preserved_shim = sources_dir / bootstrap_module.SHIM_NAME
-    if all(filesystem.exists(path) for path in (preserved_source, preserved_shim)):
-        return preserved_source, preserved_shim, False
-
-    missing = [path for path in (project_marker, SHIM_SOURCE) if not filesystem.exists(path)]
-    raise CommandError(
-        "setup builds the private venv out of this project's own checkout, and "
-        + " and ".join(str(path) for path in missing)
-        + " is not there. It also looked for a copy a previous `setup` run may have kept beside "
-        f"the venv, at {sources_dir}, and found none there either. An installed Pegasus that never "
-        "ran `setup` from a checkout has nothing to rebuild its own venv from: install again from "
-        "the release, which is safe to repeat, or run this from a checkout."
-    )
-
-
 COMMANDS = {
     "install": _install,
     "uninstall": _uninstall,
     "doctor": _doctor,
     "restore": _restore,
-    "setup": _setup,
     "models": _models,
 }
 
@@ -1300,9 +1207,6 @@ def _prose(report: dict[str, Any]) -> str:
         return f"Nothing was changed. {report['error']}"
 
     command = report["command"]
-    if command == "setup":
-        lines = [f"venv provisioned at {report['venv']}.", f"shim installed at {report['shim']}."]
-        return "\n".join(_and_activation(lines, report))
     if command == "doctor":
         return "\n".join(_cli_prose(entry) for entry in report["clis"])
     if command == "restore":

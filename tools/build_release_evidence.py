@@ -1,51 +1,55 @@
 #!/usr/bin/env python3
-"""Create the release evidence for v4's distribution shape: a wheel plus its boot shim.
+"""Create the release evidence for v5's distribution shape: one runnable file.
 
 v3 distributed a tarball extracted by `install.sh`; `build_release_manifest.py` still reproduces
 that evidence for the tags that shipped it, and stays untouched for exactly that reason -- it reads
 its inputs with `git show <tag>:path`, so it can still answer for `v3.1.1` after `install.sh` is
-gone from the working tree. It does not extend to v4: there is no tarball, no installer script, and
-no bundled dependency to curate, so bolting a wheel-shaped branch onto its tag pattern would make one
-tool understand two unrelated distribution shapes instead of two tools that each understand one.
+gone from the working tree. v4 shipped a wheel plus a boot shim, verified by an earlier version of
+this script through the wheel's own METADATA and the shim's tracked Git mode. Neither exists any
+more: Pegasus has zero runtime dependencies and reads its content from inside a zip as readily as
+from a directory, so the wheel and the venv it needed are both gone, and with them the second file.
 
-v4 ships one thing a person installs by hand: a wheel (`pegasus-harness`, built by the standard
-`pip wheel . --no-deps` a maintainer already has to run) -- Pegasus has zero runtime dependencies, so
-there is no lockfile to curate alongside it any more. What was missing is the second thing: evidence
-that ties the wheel to the commit that produced it, so a person can verify what they downloaded
-*before* running `pip install` against it. That evidence is this script's only job. It does not build
-the wheel -- the wheel is a build artifact, and rebuilding it here would make this script a second
-place that has to agree with `pyproject.toml` about how to build it. It only reads what already exists.
+v5 ships one thing: `pegasus`, a `zipapp` built by `tools/build_zipapp.py` -- a single executable
+file that is the whole command. What was missing is evidence tying that file to the commit that
+produced it, so a person can verify what they downloaded *before* running it. That evidence is this
+script's only job. It does not build the artifact -- that is `build_zipapp.py`'s job, and rebuilding
+it here would make this script a second place that has to agree about how. It runs the artifact it
+is given and reads what it reports, the same thing a person verifying a release would do by hand.
+
+`build_zipapp.py` pins the mtime and mode of everything it stages before zipping, so the SHA-256
+this script records is not only a claim about the exact bytes someone downloaded -- it is also what
+rebuilding `commit` with `build_zipapp.py`, on the same Python feature release, reproduces. That is
+what makes `commit` in the manifest worth anything beyond a label.
 
     python3 tools/build_release_evidence.py \\
-        --wheel dist/pegasus_harness-4.0.0-py3-none-any.whl \\
+        --artifact dist/pegasus \\
         --output dist/release-manifest.json
 
-Add `--tag v4.0.0` once a release actually gets an annotated tag; the commit and file contents are
-then read from that tag with `git show` instead of from `HEAD`, the same discipline the v3 tool uses
-to stay honest about which commit it is describing.
+Add `--tag v5.0.0` once a release actually gets an annotated tag; the commit and the expected version
+are then read from that tag with `git show` instead of from `HEAD`, the same discipline the v3 and v4
+tools use to stay honest about which commit they are describing.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
+import stat
 import subprocess
 import tomllib
-import zipfile
 from pathlib import Path
-import json
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = "pegasus-harness-release/v4"
+SCHEMA = "pegasus-harness-release/v5"
+ARTIFACT_NAME = "pegasus"
+DOCTOR_TIMEOUT_SECONDS = 30
 
 # Not pinned to a specific version the way v3's `RC_TAG`/`FINAL_TAG` were -- that hardcoding is
 # exactly what made the old tool need an edit for every release. Only the shape is fixed: an
 # optional `-rc.N` suffix, same as v3 used, so a release candidate can be evidenced the same way
 # a final release is.
 TAG = re.compile(r"^v(?:\d+)\.(?:\d+)\.(?:\d+)(?:-rc\.[1-9][0-9]*)?$")
-WHEEL_NAME = re.compile(r"^pegasus_harness-(?P<version>[^-]+)-py3-none-any\.whl$")
-
-SHIM_PATH = "bin/pegasus"
 
 
 def git(*args: str) -> str:
@@ -54,10 +58,6 @@ def git(*args: str) -> str:
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def digest_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def checksum_line(name: str, sha256: str) -> str:
@@ -94,74 +94,71 @@ def package_version_at(commit: str) -> str:
     return pyproject["project"]["version"]
 
 
-def wheel_evidence(wheel: Path, commit: str) -> dict[str, str]:
-    match = WHEEL_NAME.fullmatch(wheel.name)
-    if not match:
-        raise ValueError(f"--wheel must be named pegasus_harness-<version>-py3-none-any.whl, got {wheel.name}")
-    expected_version = package_version_at(commit)
-    if match["version"] != expected_version:
-        raise ValueError(
-            f"wheel filename declares version {match['version']!r}, "
-            f"but pyproject.toml at {commit} declares {expected_version!r}"
+def artifact_evidence(artifact: Path, expected_version: str) -> dict[str, str]:
+    """Run the artifact and check what it reports, rather than inspecting its bytes.
+
+    A wheel carries its version in a filename and a METADATA entry that never runs; a `zipapp` has
+    neither, so the only place its version lives is in the code it bundles. Running `doctor --json`
+    is the same proof a person following `INSTALL.md` gets before they trust the file they
+    downloaded, so it doubles as the check that the shebang and the executable bit actually work.
+    """
+    if artifact.name != ARTIFACT_NAME:
+        raise ValueError(f"--artifact must be named {ARTIFACT_NAME!r}, got {artifact.name!r}")
+    if not stat.S_IMODE(artifact.stat().st_mode) & stat.S_IXUSR:
+        raise ValueError(f"{artifact} is not executable; chmod +x it before evidencing it")
+    try:
+        result = subprocess.run(
+            [str(artifact), "doctor", "--json"],
+            capture_output=True, text=True, timeout=DOCTOR_TIMEOUT_SECONDS,
         )
-    with zipfile.ZipFile(wheel) as archive:
-        metadata_name = f"pegasus_harness-{expected_version}.dist-info/METADATA"
-        try:
-            metadata = archive.read(metadata_name).decode("utf-8")
-        except KeyError as error:
-            raise ValueError(f"{wheel} has no {metadata_name}; it is not a wheel this tool built") from error
-    declared = next((line.split(":", 1)[1].strip() for line in metadata.splitlines() if line.startswith("Version:")), None)
-    if declared != expected_version:
-        raise ValueError(f"wheel METADATA declares version {declared!r}, expected {expected_version!r}")
-    return {"name": wheel.name, "sha256": digest(wheel)}
-
-
-def shim_evidence(commit: str) -> dict[str, str]:
-    if git("ls-tree", commit, "--", SHIM_PATH).split(maxsplit=1)[0] != "100755":
-        raise ValueError(f"{SHIM_PATH} at {commit} must be tracked with Git mode 100755")
-    tracked = tagged_file(commit, SHIM_PATH)
-    return {"name": Path(SHIM_PATH).name, "sha256": digest_bytes(tracked)}
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError(f"{artifact} doctor --json could not run: {error}") from error
+    if result.returncode != 0:
+        raise ValueError(f"{artifact} doctor --json exited {result.returncode}: {result.stderr.strip()}")
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{artifact} doctor --json did not print JSON: {error}") from error
+    reported = report.get("pegasus_version")
+    if reported != expected_version:
+        raise ValueError(f"{artifact} reports version {reported!r}, expected {expected_version!r}")
+    return {"name": artifact.name, "sha256": digest(artifact)}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--wheel", type=Path, required=True, help="the already-built wheel to evidence")
+    parser.add_argument("--artifact", type=Path, required=True, help="the already-built zipapp to evidence")
     parser.add_argument("--tag", help="an annotated release tag; defaults to a clean HEAD")
     parser.add_argument("--output", type=Path, required=True, help="where to write release-manifest.json")
     args = parser.parse_args()
 
-    if not args.wheel.is_file():
-        parser.error(f"--wheel does not exist: {args.wheel}")
+    if not args.artifact.is_file():
+        parser.error(f"--artifact does not exist: {args.artifact}")
     if args.output.exists():
         parser.error("--output must not already exist")
 
     try:
         commit, tag = resolve_commit(args.tag)
-        wheel = wheel_evidence(args.wheel, commit)
-        shim = shim_evidence(commit)
-    except (subprocess.CalledProcessError, KeyError, ValueError, tomllib.TOMLDecodeError, zipfile.BadZipFile) as error:
+        expected_version = package_version_at(commit)
+        artifact = artifact_evidence(args.artifact, expected_version)
+    except (subprocess.CalledProcessError, KeyError, ValueError, tomllib.TOMLDecodeError) as error:
         parser.error(str(error))
 
     payload = {
         "schema": SCHEMA,
         "tag": tag,
         "commit": commit,
-        "package_version": package_version_at(commit),
-        "assets": [wheel, shim],
-        "install": {
-            "package": f"pip install --no-deps {wheel['name']}",
-            "shim": f"install -m 755 {shim['name']} <bin_dir>/pegasus",
-        },
+        "package_version": expected_version,
+        "assets": [artifact],
+        "install": {"artifact": f"install -m 755 {artifact['name']} <bin_dir>/pegasus"},
     }
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    for asset in (wheel, shim):
-        checksum = args.output.parent / f"{asset['name']}.sha256"
-        checksum.write_text(checksum_line(asset["name"], asset["sha256"]), encoding="utf-8")
-        print(f"WROTE checksum: {checksum}")
-
+    checksum = args.output.parent / f"{artifact['name']}.sha256"
+    checksum.write_text(checksum_line(artifact["name"], artifact["sha256"]), encoding="utf-8")
+    print(f"WROTE checksum: {checksum}")
     print(f"WROTE release manifest: {args.output}")
     return 0
 
