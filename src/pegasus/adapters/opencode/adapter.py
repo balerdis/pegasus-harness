@@ -7,7 +7,9 @@ registry rejects it.
 from __future__ import annotations
 
 import shutil
+from importlib.resources import files as _package_files
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from pegasus.adapters.opencode import layout as layout_module
 from pegasus.adapters.opencode import manifest as manifest_module
@@ -27,7 +29,17 @@ from pegasus.core.types import (
     SupportTier,
 )
 
-ASSETS = Path(__file__).resolve().parent / "assets"
+#: Whatever `importlib.resources` hands back: a real `pathlib.Path` when the
+#: package sits on a filesystem, a `zipfile.Path` when it is read straight out
+#: of an archive (built with `zipapp`, for instance). Both answer `iterdir`,
+#: `is_dir`, `is_file`, `read_bytes` and `joinpath`; neither call is spelled
+#: here in a way that only one of the two could answer -- `stat`, `resolve`,
+#: `relative_to`, `parent`, `glob` and `rglob` exist on the filesystem one and
+#: not (reliably) on the other, so this module never reaches for them. See
+#: `pegasus.core.content`, which hit the identical constraint first.
+AssetNode = Any
+
+ASSETS: AssetNode = _package_files(__package__) / "assets"
 BINARY = "opencode"
 
 ASSET_TARGETS: dict[str, PurePosixPath] = {
@@ -39,11 +51,59 @@ ASSET_TARGETS: dict[str, PurePosixPath] = {
     "skill-registry": PurePosixPath("pegasus/skill-registry"),
 }
 
+
+class MissingAssetGroupError(Exception):
+    """A group named in `ASSET_TARGETS` has no matching directory at all.
+
+    `ASSET_TARGETS` is the one place this module states which asset groups
+    exist; nothing else ever adds or removes a name from it. So if a name here
+    has no directory under `assets/` at all, only a packaging mistake explains
+    it -- a rename, a delete, a typo between the module and the tree on disk --
+    the exact same shape of self-contradiction `render.py` refuses for an
+    unmapped `Distribution` member and `registry.py` refuses for a declared but
+    unimplemented capability.
+
+    This is deliberately not raised for a directory that exists but is empty.
+    An asset group can legitimately ship with nothing in it -- a plugin
+    retired for a release, a notifier not yet written -- and an empty
+    directory earns exactly zero artifacts, which `_asset_files` already
+    reports correctly on its own. Only the *absence* of the directory itself
+    is treated as a mistake nothing could have intended.
+    """
+
+
+def _missing_asset_groups(assets_root: AssetNode, targets: dict[str, PurePosixPath]) -> list[str]:
+    return sorted(group for group in targets if not (assets_root / group).is_dir())
+
+
+def _check_asset_groups(assets_root: AssetNode, targets: dict[str, PurePosixPath]) -> None:
+    missing = _missing_asset_groups(assets_root, targets)
+    if missing:
+        raise MissingAssetGroupError(
+            "declared asset group(s) missing from the package: " + ", ".join(missing)
+        )
+
+
+# Runs once, at import time, against this package's own bundled assets --
+# never against a user's environment, which does not exist yet at import.
+# `ASSETS` and `ASSET_TARGETS` are both fixed the moment this module is
+# defined, so there is nothing to gain by waiting for an adapter to be
+# registered, let alone for an install to run, before refusing: the failure
+# is exactly as deterministic here as `render.py`'s own import-time check of
+# `Distribution` against `MCP_VALUE`, for the same reason -- it depends on
+# nothing but the shape of the package itself.
+_check_asset_groups(ASSETS, ASSET_TARGETS)
+
 # The skill registry plugin reads its contract from this file, at the root of
 # OpenCode's configuration directory. The name is stated once here and once in
 # the plugin, and a test reads the plugin to hold the two together.
 SKILL_REGISTRY_CONTRACT = "pegasus-skill-registry.env"
 SKILL_REGISTRY_BIN = "pegasus-skill-registry"
+
+#: The assets that ship as programs. Everything else this package carries is
+#: text. Kept as a declaration because the executable bit cannot be read from
+#: inside an archive; a test holds it to what the tree on disk actually says.
+EXECUTABLE_ASSETS = frozenset({SKILL_REGISTRY_BIN})
 
 NOTIFIER_PLUGIN = "@mohak34/opencode-notifier@0.2.4"
 
@@ -161,15 +221,23 @@ class Adapter:
         return artifacts
 
 
-def _is_executable(source: Path) -> bool:
-    """Carry the executable bit across, because the tree already knows.
+def _is_executable(source: AssetNode) -> bool:
+    """Whether this asset is a program rather than text somebody reads.
 
-    One of these assets is a program the skill registry plugin hands to
-    ``execFile``, and the rest are text somebody reads. The difference is already
-    recorded, in the mode of the file itself, so reading it here is what keeps a
-    single special case from being spelled out twice.
+    Answered from `EXECUTABLE_ASSETS` rather than from the file's own mode,
+    because the mode is not always there to read: a zip-backed `Traversable`
+    exposes no POSIX bits at all, and reaching past it into the archive's own
+    entry would mean depending on internals this module avoids on principle.
+    Asking the file on disk and asking a name in a zip would be two answers to
+    one question, and they could disagree without anything saying so.
+
+    Declaring it is not a free lunch either: an executable asset added and not
+    declared here would ship without its bit, silently. That is what
+    `test_opencode_adapter` closes, by comparing this set against the modes the
+    package's own tree really carries — the one place the question can still be
+    asked directly.
     """
-    return bool(source.stat().st_mode & 0o111)
+    return source.name in EXECUTABLE_ASSETS
 
 
 def _skill_registry_contract(layout: Layout) -> FileArtifact:
@@ -195,12 +263,27 @@ def _skill_registry_contract(layout: Layout) -> FileArtifact:
     )
 
 
-def _asset_files(directory: Path) -> list[tuple[Path, PurePosixPath]]:
-    """Every real file under an asset group, ignoring build leftovers."""
+def _asset_files(directory: AssetNode) -> list[tuple[AssetNode, PurePosixPath]]:
+    """Every real file under an asset group, ignoring build leftovers.
+
+    Written as an explicit walk over `iterdir` rather than `Path.rglob`, which
+    a zip-backed `Traversable` does not reliably provide, mirroring the walk
+    `pegasus.core.content` already had to write for the identical reason. A
+    missing declared group never reaches here silently any more -- that is
+    refused once, at import time, by `_check_asset_groups` -- so the `is_dir`
+    guard below only ever matters for a directory that legitimately does not
+    exist yet, such as a nested subdirectory this function recurses into.
+    """
     if not directory.is_dir():
         return []
-    return sorted(
-        (path, PurePosixPath(path.relative_to(directory).as_posix()))
-        for path in directory.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts
-    )
+    found: list[tuple[AssetNode, PurePosixPath]] = []
+    for child in directory.iterdir():
+        if child.is_dir():
+            if child.name == "__pycache__":
+                continue
+            found.extend(
+                (path, PurePosixPath(child.name) / relative) for path, relative in _asset_files(child)
+            )
+        elif child.is_file():
+            found.append((child, PurePosixPath(child.name)))
+    return sorted(found, key=lambda pair: pair[1].as_posix())

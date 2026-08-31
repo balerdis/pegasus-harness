@@ -14,12 +14,24 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from enum import Enum
-from pathlib import Path, PurePosixPath
+from importlib.resources import files as _package_files
+from pathlib import PurePosixPath
 from typing import Any
 
 from pegasus.core import frontmatter, placeholders
 
-DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "content"
+#: Whatever `importlib.resources` hands back: a real `pathlib.Path` when the
+#: package sits on a filesystem, a `zipfile.Path` when it is read straight out
+#: of an archive. Both answer `iterdir`, `is_dir`, `is_file`, `read_text`,
+#: `read_bytes`, `joinpath` and `.name`; neither call is spelled here in a way
+#: that only one of the two could answer -- `resolve`, `relative_to`, `parent`,
+#: `glob` and `rglob` exist on the filesystem one and not the other, so this
+#: module never reaches for them. Every relative path this module reports is
+#: instead threaded through as it is discovered, rather than computed after
+#: the fact from an absolute one.
+ContentRoot = Any
+
+DEFAULT_ROOT: ContentRoot = _package_files("pegasus") / "content"
 MARKER = "---"
 SKILL_FILE = "SKILL.md"
 SYSTEM_PROMPT_DIR = "system-prompt"
@@ -269,19 +281,25 @@ def split_frontmatter(text: str, source: str = "<text>") -> tuple[dict[str, Any]
     return fields, text[closing + len(MARKER) + 2 :].lstrip("\n")
 
 
-def load(root: Path = DEFAULT_ROOT) -> Content:
-    """Read the whole content core, or refuse with the offending file named."""
-    root = root.resolve()
-    agents = _load_agents(root / "agents", root)
-    mcp = _load_mcp(root / "mcp", root)
+def load(root: ContentRoot = DEFAULT_ROOT) -> Content:
+    """Read the whole content core, or refuse with the offending file named.
+
+    ``root`` answers to the `Traversable` interface `importlib.resources`
+    defines: `iterdir`, `is_dir`, `is_file`, `read_text`, `read_bytes` and
+    `joinpath` (and the `/` operator that mirrors it). A real `pathlib.Path`
+    satisfies that interface too, which is exactly what lets a test build a
+    content tree on a real filesystem and hand its root here unchanged.
+    """
+    agents = _load_agents(root / "agents", PurePosixPath("agents"))
+    mcp = _load_mcp(root / "mcp", PurePosixPath("mcp"))
     _require_known_optional_mcp(agents, mcp)
     _require_mcp_convention_referenced(agents)
     return Content(
-        skills=_load_skills(root / "skills", root),
+        skills=_load_skills(root / "skills", PurePosixPath("skills")),
         agents=agents,
-        commands=_load_commands(root / "commands", root),
+        commands=_load_commands(root / "commands", PurePosixPath("commands")),
         mcp=mcp,
-        system_prompt=_load_system_prompt(root / SYSTEM_PROMPT_DIR, root),
+        system_prompt=_load_system_prompt(root / SYSTEM_PROMPT_DIR, PurePosixPath(SYSTEM_PROMPT_DIR)),
     )
 
 
@@ -318,13 +336,14 @@ def select_mcp(content: Content, chosen: Iterable[str]) -> Content:
     )
 
 
-def _load_skills(directory: Path, root: Path) -> tuple[Skill, ...]:
+def _load_skills(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Skill, ...]:
     skills = []
     for item in _subdirectories(directory):
+        item_relative = relative_dir / item.name
         descriptor = item / SKILL_FILE
-        source = _relative(descriptor, root)
+        source = item_relative / SKILL_FILE
         if not descriptor.is_file():
-            raise ContentError(f"{_relative(item, root)}: a skill directory needs a {SKILL_FILE}")
+            raise ContentError(f"{item_relative}: a skill directory needs a {SKILL_FILE}")
         fields, _ = split_frontmatter(descriptor.read_text(encoding="utf-8"), str(source))
         _require_name(fields, item.name, source)
         assets = _assets(item)
@@ -340,14 +359,14 @@ def _load_skills(directory: Path, root: Path) -> tuple[Skill, ...]:
     return tuple(skills)
 
 
-def _load_agents(directory: Path, root: Path) -> tuple[Agent, ...]:
+def _load_agents(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Agent, ...]:
     agents = []
     for path in _markdown_files(directory):
-        fields, body, source = _descriptor(path, root)
+        fields, body, source = _descriptor(path, relative_dir)
         _refuse_derived_fields(fields, source)
         agents.append(
             Agent(
-                name=path.stem,
+                name=_stem(path),
                 description=_text(fields, "description", source),
                 body=body,
                 mode=_choice(fields, "mode", AgentMode, source),
@@ -359,11 +378,11 @@ def _load_agents(directory: Path, root: Path) -> tuple[Agent, ...]:
                 model_configurable=_flag(fields, "model_configurable", source),
             )
         )
-    _require_the_session_start(tuple(agents), directory, root)
+    _require_the_session_start(tuple(agents), relative_dir)
     return tuple(agents)
 
 
-def _require_the_session_start(agents: tuple[Agent, ...], directory: Path, root: Path) -> None:
+def _require_the_session_start(agents: tuple[Agent, ...], relative_dir: PurePosixPath) -> None:
     """The agent a session opens in has to be here, and has to be able to open one.
 
     `SESSION_STARTS_IN` decides who that is, so nothing on disk can claim it twice
@@ -377,7 +396,7 @@ def _require_the_session_start(agents: tuple[Agent, ...], directory: Path, root:
     starts = next((agent for agent in agents if agent.name == SESSION_STARTS_IN), None)
     if starts is None:
         raise ContentError(
-            f"{_relative(directory, root)}: no agent is named {SESSION_STARTS_IN!r}, "
+            f"{relative_dir}: no agent is named {SESSION_STARTS_IN!r}, "
             f"which is where a session starts"
         )
     if starts.mode is not AgentMode.PRIMARY:
@@ -436,13 +455,13 @@ def _require_mcp_convention_referenced(agents: tuple[Agent, ...]) -> None:
         raise ContentError(f"{agent.source}: " + "; ".join(problems))
 
 
-def _load_commands(directory: Path, root: Path) -> tuple[Command, ...]:
+def _load_commands(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Command, ...]:
     commands = []
     for path in _markdown_files(directory):
-        fields, body, source = _descriptor(path, root)
+        fields, body, source = _descriptor(path, relative_dir)
         commands.append(
             Command(
-                name=path.stem,
+                name=_stem(path),
                 description=_text(fields, "description", source),
                 body=body,
                 runs_as=_choice(fields, "runs_as", RunsAs, source),
@@ -470,21 +489,21 @@ from a copy-pasted descriptor is a refusal, not a value nothing ever reads.
 _ALL_FORM_FIELDS = frozenset(name for names in _FORM_FIELDS.values() for name in names)
 
 
-def _load_mcp(directory: Path, root: Path) -> tuple[Mcp, ...]:
+def _load_mcp(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Mcp, ...]:
     servers = []
     for path in _markdown_files(directory):
-        fields, body, source = _descriptor(path, root)
+        fields, body, source = _descriptor(path, relative_dir)
         distribution = _choice(fields, "distribution", Distribution, source)
         _refuse_foreign_form_fields(fields, distribution, source)
         version, checksum = _download_form(fields, distribution, source)
         package, npm_version, integrity, entry, npm_lockfile, npm_package_name = _npm_form(
-            fields, distribution, path, source
+            fields, distribution, directory, source
         )
         archive_members, archive_executable = _archive_form(fields, distribution, source)
         argv = _names(fields, "argv", source)
         servers.append(
             Mcp(
-                name=path.stem,
+                name=_stem(path),
                 description=_text(fields, "description", source),
                 body=body,
                 distribution=distribution,
@@ -576,7 +595,7 @@ def _archive_form(
 
 
 def _npm_form(
-    fields: dict[str, Any], distribution: Distribution, path: Path, source: PurePosixPath
+    fields: dict[str, Any], distribution: Distribution, directory: ContentRoot, source: PurePosixPath
 ) -> tuple[str | None, str | None, str | None, str | None, bytes | None, str | None]:
     """The extra fields the `npm` form needs, all declared or none.
 
@@ -609,7 +628,7 @@ def _npm_form(
         raise ContentError(
             f"{source}: 'lockfile' must be a bare filename beside the descriptor, got {lockfile_name!r}"
         )
-    lockfile_path = path.parent / lockfile_name
+    lockfile_path = directory / lockfile_name
     if not lockfile_path.is_file():
         raise ContentError(f"{source}: 'lockfile' names {lockfile_name!r}, which does not exist beside it")
     npm_lockfile = lockfile_path.read_bytes()
@@ -671,26 +690,26 @@ def _require_lockfile_pins(
     return root_name
 
 
-def _load_system_prompt(directory: Path, root: Path) -> SystemPrompt | None:
+def _load_system_prompt(directory: ContentRoot, relative_dir: PurePosixPath) -> SystemPrompt | None:
     files = _markdown_files(directory)
     if not files:
         return None
     if len(files) > 1:
         raise ContentError(
-            f"{_relative(directory, root)}: exactly one system prompt is allowed, found {len(files)}"
+            f"{relative_dir}: exactly one system prompt is allowed, found {len(files)}"
         )
-    source = _relative(files[0], root)
+    source = relative_dir / files[0].name
     _, body = split_frontmatter(files[0].read_text(encoding="utf-8"), str(source))
     _require_known_placeholders(body, source)
     return SystemPrompt(body=body, source=source)
 
 
-def _descriptor(path: Path, root: Path) -> tuple[dict[str, Any], str, PurePosixPath]:
-    source = _relative(path, root)
+def _descriptor(path: ContentRoot, relative_dir: PurePosixPath) -> tuple[dict[str, Any], str, PurePosixPath]:
+    source = relative_dir / path.name
     fields, body = split_frontmatter(path.read_text(encoding="utf-8"), str(source))
     if not fields:
         raise ContentError(f"{source}: a descriptor is required")
-    _require_name(fields, path.stem, source)
+    _require_name(fields, _stem(path), source)
     _require_known_placeholders(body, source)
     return fields, body, source
 
@@ -746,31 +765,54 @@ def _refuse_verbatim_placeholders(assets: tuple[Asset, ...], source: PurePosixPa
             raise ContentError(f"{where}: a '{{{{' that names nothing would ship as literal braces")
 
 
-def _subdirectories(directory: Path) -> list[Path]:
+def _subdirectories(directory: ContentRoot) -> list[ContentRoot]:
     if not directory.is_dir():
         return []
-    return sorted(item for item in directory.iterdir() if item.is_dir())
+    return sorted((item for item in directory.iterdir() if item.is_dir()), key=lambda item: item.name)
 
 
-def _markdown_files(directory: Path) -> list[Path]:
+def _markdown_files(directory: ContentRoot) -> list[ContentRoot]:
     if not directory.is_dir():
         return []
-    return sorted(item for item in directory.glob("*.md") if item.is_file())
-
-
-def _assets(item: Path) -> tuple[Asset, ...]:
-    """Every file under a content directory, with SKILL.md first."""
-    files = sorted(path for path in item.rglob("*") if path.is_file())
-    ordered = sorted(files, key=lambda path: (path.name != SKILL_FILE, path.relative_to(item).parts))
-    return tuple(
-        Asset(relative_path=PurePosixPath(path.relative_to(item).as_posix()), content=path.read_bytes())
-        for path in ordered
+    return sorted(
+        (item for item in directory.iterdir() if item.is_file() and item.name.endswith(".md")),
+        key=lambda item: item.name,
     )
 
 
-def _relative(path: Path, root: Path) -> PurePosixPath:
-    """A portable, root-relative source reference for error messages and catalogs."""
-    return PurePosixPath(path.resolve().relative_to(root).as_posix())
+def _walk_files(node: ContentRoot) -> list[tuple[ContentRoot, tuple[str, ...]]]:
+    """Every file below `node`, each paired with its path relative to `node`.
+
+    Stands in for `Path.rglob`, which a `Traversable` -- the interface a zip
+    entry actually implements -- does not promise. Written once here instead
+    of at each of the two call sites that used to reach for it directly.
+    """
+    found: list[tuple[ContentRoot, tuple[str, ...]]] = []
+    if not node.is_dir():
+        return found
+    for child in node.iterdir():
+        if child.is_dir():
+            found.extend((file, (child.name, *rest)) for file, rest in _walk_files(child))
+        elif child.is_file():
+            found.append((child, (child.name,)))
+    return found
+
+
+def _assets(item: ContentRoot) -> tuple[Asset, ...]:
+    """Every file under a content directory, with SKILL.md first."""
+    ordered = sorted(_walk_files(item), key=lambda pair: (pair[0].name != SKILL_FILE, pair[1]))
+    return tuple(
+        Asset(relative_path=PurePosixPath(*parts), content=file.read_bytes()) for file, parts in ordered
+    )
+
+
+def _stem(path: ContentRoot) -> str:
+    """The file name without its extension, without relying on `Path.stem`.
+
+    `Traversable` promises `.name`, not `.stem` -- every caller here already
+    knows the name ends in `.md`, so trimming it is enough.
+    """
+    return PurePosixPath(path.name).stem
 
 
 def _require_name(fields: dict[str, Any], expected: str, source: PurePosixPath) -> None:
