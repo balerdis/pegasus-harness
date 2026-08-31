@@ -360,6 +360,81 @@ _ENGINE_TARGETS = (
     InstallTarget, StatusRequest, UninstallTarget, UninstallConfirm, RestoreTarget, RestoreConfirm, ModelsTarget,
 )
 
+#: What to say before probing every adapter, the one engine call `run` makes
+#: before the first frame exists to draw anything else. Named here, next to
+#: every other sentence this module hands out for the same reason, rather
+#: than left for `app` to invent on its own.
+STARTUP_MESSAGE = "Detecting installed CLIs…"
+
+
+def busy_message_for(screen: Screen, cursor: int, action: Action) -> str | None:
+    """What to show before `action`, taken on `screen` at `cursor`, runs a
+    real engine call — or `None` when it is ordinary navigation that costs
+    nothing to show nothing extra for.
+
+    This mirrors, screen by screen, exactly which choice `Navigator` itself
+    leaves a no-op for `session.step` to catch: `_ENGINE_TARGETS` for a menu
+    entry, and the same three screens whose own docstrings already explain
+    why one particular row or step on them is real work rather than a pure
+    narrowing — `McpSelectionScreen`'s Continue row, `ModelsScreen`'s three
+    writes, and `InstallPlanScreen`'s only action. Keeping the two lists in
+    lockstep is a matter of discipline, not the type system: a target that
+    became real work in one without the other would either lie about being
+    idle or freeze without a word, which is the defect this exists to close.
+    """
+    if isinstance(screen, Menu):
+        return _busy_message_for_menu(screen, cursor, action)
+    if isinstance(screen, McpSelectionScreen):
+        return _busy_message_for_mcp_selection(screen, cursor, action)
+    if isinstance(screen, InstallPlanScreen):
+        return f"Installing into {screen.cli.display_name}…" if action is Action.CHOOSE else None
+    if isinstance(screen, StatusScreen):
+        return "Reading snapshot generations…" if action is Action.CHOOSE else None
+    if isinstance(screen, ModelsScreen):
+        return _busy_message_for_models(screen, cursor, action)
+    return None
+
+
+def _busy_message_for_menu(screen: Menu, cursor: int, action: Action) -> str | None:
+    if action is not Action.CHOOSE:
+        return None
+    target = screen.entries[cursor].target
+    if isinstance(target, InstallTarget):
+        return f"Fetching install options for {target.cli.display_name}…"
+    if isinstance(target, StatusRequest):
+        return "Running diagnostics…"
+    if isinstance(target, UninstallTarget):
+        return f"Reading what {target.cli.display_name} has installed…"
+    if isinstance(target, UninstallConfirm):
+        return f"Removing Pegasus from {target.cli.display_name}…"
+    if isinstance(target, RestoreTarget):
+        return f"Reading generation {target.generation}…"
+    if isinstance(target, RestoreConfirm):
+        return f"Restoring generation {target.generation}…"
+    if isinstance(target, ModelsTarget):
+        return f"Reading the model catalog for {target.cli.display_name}…"
+    return None
+
+
+def _busy_message_for_mcp_selection(screen: McpSelectionScreen, cursor: int, action: Action) -> str | None:
+    if action is Action.CHOOSE and cursor == len(screen.options):
+        return f"Fetching the install plan for {screen.cli.display_name}…"
+    return None
+
+
+def _busy_message_for_models(screen: ModelsScreen, cursor: int, action: Action) -> str | None:
+    if action is Action.REMOVE and screen.agent is None and screen.rows:
+        return f"Removing the model assigned to {screen.rows[cursor].agent}…"
+    if action is not Action.CHOOSE:
+        return None
+    if screen.model_id is not None:
+        return f"Assigning a model to {screen.agent}…"
+    if screen.provider_id is not None:
+        provider = _models_provider(screen)
+        if provider.models and not provider.models[cursor].reasoning:
+            return f"Assigning a model to {screen.agent}…"
+    return None
+
 
 def install_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
     """The doc's `¿Dónde instalar Pegasus?` screen: one entry per detected

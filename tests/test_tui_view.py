@@ -24,7 +24,7 @@ from pegasus.tui.navigator import (
     StatusScreen,
     UninstallResultScreen,
 )
-from pegasus.tui.view import render
+from pegasus.tui.view import render, render_busy
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
 DOCTOR_REPORT = {
@@ -328,6 +328,16 @@ class ModelsLongListRenderingTest(unittest.TestCase):
     def test_a_short_list_names_no_more_above_or_below(self):
         lines = [line.text for line in render(_models_screen(), cursor=0)]
         self.assertFalse(any("more" in text for text in lines))
+
+
+class BusyRenderingTest(unittest.TestCase):
+    def test_the_message_becomes_the_one_line_shown(self):
+        lines = render_busy("Installing into Demo CLI…")
+        self.assertEqual([line.text for line in lines], ["Installing into Demo CLI…"])
+
+    def test_nothing_on_it_is_highlighted(self):
+        lines = render_busy("Running diagnostics…")
+        self.assertFalse(any(line.highlighted for line in lines))
 
 
 if __name__ == "__main__":

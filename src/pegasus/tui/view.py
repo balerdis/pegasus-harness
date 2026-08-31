@@ -50,6 +50,16 @@ class Line:
     highlighted: bool = False
 
 
+def render_busy(message: str) -> tuple[Line, ...]:
+    """The one frame shown between choosing an action that needs a real
+    engine call and that call returning. `message` names the work in
+    progress — what `navigator.busy_message_for` decided it is — so this
+    exists only to turn that sentence into the same kind of `Line` tuple
+    every other screen renders into, not to add anything of its own.
+    """
+    return (Line(message),)
+
+
 def render(screen: Screen, cursor: int) -> tuple[Line, ...]:
     if isinstance(screen, Menu):
         return _render_menu(screen, cursor)
