@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: opencode
 metadata:
   author: gentleman-programming
-  version: "1.4"
+  version: "1.6"
 ---
 
 ## Activation Contract
@@ -27,6 +27,10 @@ metadata:
 - The parent snapshot is incomplete by design -- it does not restate what is already known -- so replacing the handoff destroys whatever the parent did not carry. The comparison at the gate is the safety net on that destruction, not a second opinion about durability.
 - The writer writes its draft to a secret-safe, uniquely named file in the OS temp directory, and does not touch `handoff.md` at all. Never draft inside the project: an exclusion covering `handoff.md` does not extend to a sibling draft, and a wide `git add` will commit it. Only after the parent gate passes does the parent replace `handoff.md` with the draft, so a failed gate leaves the previous handoff intact and no reader ever meets a half-written mixture of two sessions.
 - The writer treats the snapshot as authoritative conversational evidence and independently verifies external claims. Classify claims as `parent-supplied`, `independently verified`, `Engram historical`, or `not revalidated`. Fresh external evidence may correct stale operational facts but MUST NOT silently erase parent decisions or incidents.
+- Every figure in the handoff carries its provenance, or it does not go in. Label each number `measured` or `estimated`, and give an estimated one the command that would settle it. A count written beside verified facts inherits their authority without earning it, and the next session spends its budget on a number nobody checked.
+- A handoff reports what the session changed AND what that change invalidates. When the session decided something that alters a policy, contract, or interface, search the project's design documentation for assertions that now contradict it and list them with their locations. Unwritten designs are in scope: a mechanism this decision deletes may be the mechanism an unimplemented unit was designed on, and that breakage is invisible to the test suite because the code does not exist yet.
+- Work in progress is left durable, never parked in the working tree. At save time the tree is clean and standing on the integration branch; anything unfinished is committed on its own branch with the reason in the message, including a test left deliberately red. Uncommitted changes are not a pause, they are one careless checkout away from gone.
+- The save is the last action of the session. A handoff is a photograph of one handover, so anything done after it is taken leaves the photograph wrong at exactly the point a reader will use to choose their first move. If an action with repository effect follows the save -- a push, a commit, a merge, a test run -- re-sync the lines it invalidated before the session ends, and state that the handoff is current as of the last action rather than as of when it was written.
 - Repo-clean is not session-clean. Never infer no session work from no Git changes.
 - Reconcile contradictions in goal/work, branch/HEAD, remote/target baseline, deploy/sync, tests, PR/MR, blockers, and next step. Prefer authoritative fresh evidence; otherwise record unknown. History never replaces newer live facts.
 - Never expose secrets, credentials, tokens, cookies, database URLs, environment values, or credential-bearing output; redact/summarize them.
@@ -46,6 +50,10 @@ metadata:
 | Snapshot conflicts with external evidence | Correct stale operational state explicitly; preserve live decisions/incidents and name unresolved contradictions. |
 | Writer is tempted to open `handoff.md` | Refuse. It is not an input in save mode. Ask the parent for anything the snapshot lacks. |
 | Old handoff holds durable content that names no store | Parent persists it, then appends to the draft a one-line reference naming that store -- never the migrated content itself -- or states plainly that it is being dropped. Appending after the gate is not a violation: the gate passed on the draft's substance, and a reference is not the restatement it guards against. |
+| A number cannot be traced to a measurement | Label it `estimated` and name the command that would settle it, or leave it out. Never present it next to verified facts unlabelled. |
+| The session changed a policy, contract, or interface | List the design-document assertions it invalidates, with locations, including designs for units not yet implemented. Absence of a contradiction is itself a finding worth stating. |
+| Unfinished work exists at save time | Commit it on its own branch with the reason in the message, then return to the integration branch. Never record uncommitted working-tree state as paused work. |
+| An action with repository effect happened after the save | Re-sync the handoff lines it invalidated and report again. A line that was true when written and false when read is indistinguishable from a lie to the next session. |
 | Parent gate fails twice | Delete the draft; leave `handoff.md` exactly as it was; report no save success. |
 
 ## Execution Steps
@@ -65,7 +73,9 @@ metadata:
 
 1. Read `handoff.md`, git status/HEAD, referenced OpenSpec, and files in flight.
 2. Use Engram only as needed. Label handoff-reported, Engram-supplied, independently verified, and not-revalidated facts.
-3. Return the load report without changing state.
+3. Check the handoff's decisions against the project's design documentation: an assertion the documentation still makes that a recorded decision has overturned is staleness the handoff itself cannot see. Report it as documentation debt, naming locations, not as a handoff error.
+4. Verify the working tree is clean and on the branch the next action needs. Uncommitted changes, or standing on a paused feature branch, block the recommended action and are reported before it.
+5. Return the load report without changing state.
 
 ## Output Contract
 
@@ -73,11 +83,13 @@ Save handoff sections: `# Goal`, `## OpenSpec Context`, `## Session Snapshot`, `
 
 Every durable reference NAMES its store, so a later gate reads a label instead of hunting: a documentation path, `Engram #NNNN`, or an explicit `not stored anywhere`.
 
-`Next Step` MUST contain exactly one action. `Session Snapshot` is required unless no useful work exists; report omission. Save response MUST report path, `Anti-stale audit: pass|fail`, `Engram sync: saved|unavailable|failed`, `Documentation sync: saved|unavailable|failed|not applicable`, `Draft cleanup: deleted|failed`, one next-step status, and -- from the parent's own comparison -- `Durable content migrated: none|<list with the store each went to>` and `Dropped with the session: none|<list>`.
+Every figure is labelled `measured` or `estimated`; an estimated one names the command that would settle it.
+
+`Next Step` MUST contain exactly one action. `Session Snapshot` is required unless no useful work exists; report omission. Save response MUST report path, `Anti-stale audit: pass|fail`, `Engram sync: saved|unavailable|failed`, `Documentation sync: saved|unavailable|failed|not applicable`, `Draft cleanup: deleted|failed`, one next-step status, and -- from the parent's own comparison -- `Durable content migrated: none|<list with the store each went to>` and `Dropped with the session: none|<list>`. When the session changed a policy, contract, or interface, also report `Invalidated by this change: none|<list with locations>`.
 
 Delegated writer MUST return exactly these coverage fields: `Parent snapshot received: yes`; `Parent snapshot coverage: passed|blocked`; `Repository verification: passed|partial|not applicable`; `OpenSpec verification: passed|partial|not applicable`; `Engram verification: passed|partial|unavailable|not applicable`; `Critical facts omitted: none|<list>`; `Old handoff read: no`; `Draft path: <absolute path>`; `Handoff write: draft only`. A blocked coverage result prohibits success, and any value other than `no` for the old handoff is a failed gate.
 
-Load sections: `# Loaded Context`, `## Verified State`, `## Possible Staleness`, `## Recommended Next Action`, `## Before Editing`. Recommend exactly one action; do not implement it.
+Load sections: `# Loaded Context`, `## Verified State`, `## Possible Staleness`, `## Recommended Next Action`, `## Before Editing`. `Possible Staleness` reports documentation the handoff's own decisions have overturned, and any unlabelled figure it could not trace to a measurement. Recommend exactly one action; do not implement it.
 
 ## References
 

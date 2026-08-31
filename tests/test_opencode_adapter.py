@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 import zipfile
 from dataclasses import replace
@@ -816,6 +819,73 @@ class ZipAssetFilesTest(unittest.TestCase):
             for path, relative in adapter_module._asset_files(self.zip_root / "plugins")
         )
         self.assertEqual(found["engram.ts"], b"// plugin\n")
+
+
+class RealZipappShipsTheEngramPluginTest(unittest.TestCase):
+    """The real Engram plugin must resolve from inside a real zipapp build.
+
+    `ZipAssetFilesTest` above proves `_asset_files` can walk a `zipfile.Path`
+    generically, but with a placeholder ("// plugin\\n") standing in for the
+    real file -- it cannot tell a correctly shipped plugin from an accidentally
+    empty one. This test builds the actual `pegasus` zipapp from this checkout's
+    own source, loads `pegasus.adapters.opencode.adapter` from inside that
+    archive in a subprocess, and reads back the plugin content `own_artifacts`
+    hands out. This project has already shipped assets that resolved fine from
+    a checkout and silently degraded once packaged, so the check only counts if
+    it runs against a real archive, not a synthetic one.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo_root = Path(__file__).resolve().parents[1]
+        cls.source = (
+            cls.repo_root
+            / "src/pegasus/adapters/opencode/assets/plugins/engram.ts"
+        )
+        tools_dir = cls.repo_root / "tools"
+        if str(tools_dir) not in sys.path:
+            sys.path.insert(0, str(tools_dir))
+        from build_zipapp import build as build_zipapp
+
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.archive = Path(cls._tmp.name) / "pegasus"
+        build_zipapp(cls.repo_root / "src" / "pegasus", cls.archive)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def _plugin_bytes_from_the_archive(self) -> bytes:
+        script = textwrap.dedent(
+            f"""
+            import sys
+            sys.path.insert(0, {str(self.archive)!r})
+            from pathlib import Path
+            from pegasus.adapters.opencode.adapter import Adapter
+            from pegasus.core.types import Environment
+
+            home = Path("/dev/shm/pegasus-zip-probe-home")
+            env = Environment(home=home, data_dir=home / ".local" / "share" / "pegasus-harness")
+            adapter = Adapter()
+            layout = adapter.layout(env)
+            artifacts = adapter.own_artifacts(layout)
+            plugin = next(
+                item for item in artifacts
+                if str(item.path).endswith("plugins/engram.ts")
+            )
+            sys.stdout.buffer.write(plugin.content)
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, check=True
+        )
+        return result.stdout
+
+    def test_the_plugin_shipped_inside_the_archive_is_byte_identical_to_the_source(self):
+        self.assertEqual(
+            self._plugin_bytes_from_the_archive(),
+            self.source.read_bytes(),
+        )
 
 
 class SkillRegistryContractTest(unittest.TestCase):

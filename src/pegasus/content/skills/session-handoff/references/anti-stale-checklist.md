@@ -13,6 +13,10 @@ Use this checklist after writing and rereading the draft.
 - Successful later evidence supersedes earlier pending, failed, or timed-out state.
 - Work already completed is not described as absent, pending, or the next action.
 - Unresolved gaps do not coexist with broad complete, validated, or end-to-end claims.
+- Every figure carries `measured` or `estimated`. An estimated one names the command that would settle it, and none sits unlabelled beside verified facts.
+- If the session changed a policy, contract, or interface, the assertions it invalidates are listed with locations, including designs for units not yet implemented, whose breakage no test can catch.
+- The tree is clean and on the integration branch; nothing unfinished is recorded as paused while living only as uncommitted changes.
+- No action with repository effect was taken after this save; if one was, the lines it invalidated were re-synced and the handoff is declared current as of that action.
 - Exactly one concrete `Next Step` remains.
 - Required sections exist; the diagnostic section appears only when useful.
 - No secret or credential-bearing value appears.
