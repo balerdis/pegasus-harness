@@ -132,9 +132,10 @@ class AgentPointerResolutionTest(unittest.TestCase):
     #: Agents that declare `optional_mcp: [cbm, ...]`, and therefore point at
     #: the server's own rendered convention rather than restate it.
     #:
-    #: `pegasus-orchestrator` and `king-pegasus` are deliberately absent: both
-    #: are pending a reformulation that decides what they may act on, so
-    #: neither declares `cbm` and neither may reference its convention path --
+    #: `pegasus-orchestrator` and `king-pegasus` are deliberately absent: their
+    #: direct-work threshold and applying voice are settled by their own body
+    #: text, not by a codebase-memory server, so neither declares `cbm` and
+    #: neither may reference its convention path --
     #: `_require_mcp_convention_referenced` in `content.py` requires the two
     #: sets to match exactly.
     CBM_AGENTS = (
@@ -214,7 +215,7 @@ class SkillPointerTest(unittest.TestCase):
 
 
 class KingPegasusToolsTest(unittest.TestCase):
-    """king-pegasus stays out of the CBM users: structural reading only, never write/edit/bash."""
+    """king-pegasus stays out of the CBM users: it applies file changes directly, never through a graph server."""
 
     @classmethod
     def setUpClass(cls):
@@ -224,16 +225,19 @@ class KingPegasusToolsTest(unittest.TestCase):
 
     def test_gains_no_mcp_yet(self):
         # `cbm` has a descriptor now, but this voice still declares none of it
-        # on purpose: it is pending a reformulation that decides what it is
-        # allowed to act on before it is granted any server.
+        # on purpose: applying a change is its own body's decision, made through
+        # direct file and text search, never through a codebase-memory server.
         self.assertEqual(self.agent.optional_tools, ())
         self.assertEqual(self.agent.optional_mcp, ())
         self.assertNotIn("cbm", self.agent.optional_mcp)
 
-    def test_gains_nothing_else(self):
-        for forbidden in ("write", "edit", "bash"):
-            self.assertNotIn(forbidden, self.agent.requires_tools)
-            self.assertNotIn(forbidden, self.agent.optional_tools)
+    def test_gains_nothing_beyond_applying_a_file_change(self):
+        # `write` and `edit` are what let this voice apply what it explains; `bash`
+        # stays out, matching its own "never build after changes" rule.
+        for granted in ("write", "edit"):
+            self.assertIn(granted, self.agent.requires_tools)
+        self.assertNotIn("bash", self.agent.requires_tools)
+        self.assertNotIn("bash", self.agent.optional_tools)
 
 
 if __name__ == "__main__":

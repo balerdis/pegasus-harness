@@ -940,12 +940,13 @@ class ShippedContentRenderTest(unittest.TestCase):
             self.assertEqual(value["permission"]["edit"], "allow", agent.name)
 
     def test_the_persona_renders_its_declared_tools_as_a_real_restriction(self):
-        """The voice declares only `read`; only this side proves that denies
-        everything else, including write, edit, and bash.
+        """The voice declares `read`, `write` and `edit` -- what applying a change
+        takes -- and only this side proves that denies everything else, `bash`
+        included.
         """
         persona = next(a for a in self.loaded.agents if a.name == "king-pegasus")
         value = only(render_module.agent(self.layout, persona), ConfigKeyArtifact)[0].value
-        self.assertEqual(value["tools"], {"*": False, "read": True})
+        self.assertEqual(value["tools"], {"*": False, "read": True, "write": True, "edit": True})
 
     def test_the_orchestrator_renders_its_declared_allows_on_top_of_the_deny_baseline(self):
         orchestrator = next(a for a in self.loaded.agents if a.name == "pegasus-orchestrator")
