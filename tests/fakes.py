@@ -21,7 +21,6 @@ import no_network  # noqa: F401  -- importing it is what installs the refusal
 from pegasus.ports.downloader import DownloaderError
 from pegasus.ports.filesystem import FileSystemError
 from pegasus.ports.npm_installer import NpmInstallerError
-from pegasus.ports.venv_provisioner import VenvProvisionerError
 
 DEFAULT_MODE = 0o644
 DEFAULT_DIR_MODE = 0o755
@@ -63,31 +62,6 @@ class FakeNpmInstaller:
         self.calls.append(directory)
         if directory in self.failures:
             raise NpmInstallerError(self.failures[directory])
-
-
-class FakeVenvProvisioner:
-    """A provisioner that records what it was asked to build and stock instead of a real interpreter.
-
-    Never touches a disk or a package index: proving a caller sequences
-    `create` before `install`, and reacts correctly to either failing, does
-    not need either to actually happen.
-    """
-
-    def __init__(self, *, fail_create: set[Path] | None = None, fail_install: set[Path] | None = None):
-        self.fail_create: set[Path] = set(fail_create or ())
-        self.fail_install: set[Path] = set(fail_install or ())
-        self.created: list[Path] = []
-        self.installed: list[tuple[Path, Path]] = []
-
-    def create(self, path: Path) -> None:
-        self.created.append(path)
-        if path in self.fail_create:
-            raise VenvProvisionerError(f"refusing to create a venv at {path}: injected failure")
-
-    def install(self, path: Path, *, source: Path) -> None:
-        self.installed.append((path, source))
-        if path in self.fail_install:
-            raise VenvProvisionerError(f"refusing to stock the venv at {path}: injected failure")
 
 
 class FakeFileSystem:

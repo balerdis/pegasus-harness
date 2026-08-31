@@ -1,9 +1,8 @@
 # Instalar Pegasus
 
-Pegasus 4 no se instala con un instalador propio: se instala como cualquier paquete de Python, dentro
-de un venv privado que sólo Pegasus usa, y después se deja un lanzador (`pegasus`) en el PATH que
-arranca ese venv sin que usted tenga que activarlo a mano. Este es el recorrido corto que probamos con
-una cuenta Linux limpia. No hace falta `sudo` en ningún paso.
+Pegasus 5 es un solo archivo: `pegasus`. No hay wheel, no hay venv privado, no hay `pip install` — se
+descarga, se verifica su checksum, se lo deja ejecutable en el PATH, y listo. Este es el recorrido
+corto que probamos con una cuenta Linux limpia. No hace falta `sudo` en ningún paso.
 
 ## 1. Elegir la cuenta
 
@@ -18,59 +17,50 @@ Si lo vas a instalar en tu cuenta actual, omití esas dos líneas.
 
 ## 2. Descargar y verificar
 
-Usá el tag que quieras instalar. El ejemplo usa `v4.1.2`, que es el último publicado.
+Usá el tag que quieras instalar. El ejemplo usa `v5.0.0`; sustituilo por el último publicado.
 
 ```sh
-RELEASE_TAG="v4.1.2"
+RELEASE_TAG="v5.0.0"
 mkdir -p "$HOME/Downloads/pegasus-$RELEASE_TAG"
 cd "$HOME/Downloads/pegasus-$RELEASE_TAG"
 
 BASE_URL="https://github.com/balerdis/pegasus-harness/releases/download/$RELEASE_TAG"
 
-curl -fL -O "$BASE_URL/pegasus_harness-4.1.2-py3-none-any.whl"
-curl -fL -O "$BASE_URL/pegasus_harness-4.1.2-py3-none-any.whl.sha256"
 curl -fL -O "$BASE_URL/pegasus"
 curl -fL -O "$BASE_URL/pegasus.sha256"
 curl -fL -O "$BASE_URL/release-manifest.json"
 
-sha256sum -c pegasus_harness-4.1.2-py3-none-any.whl.sha256
 sha256sum -c pegasus.sha256
 ```
 
-Los dos `.sha256` alcanzan para verificar bytes; `release-manifest.json` además ata esos dos
-archivos al commit exacto que los produjo (`tag`, `commit`, `package_version`), generado por
-`tools/build_release_evidence.py`. Si `sha256sum -c` falla en cualquiera de los dos, no sigas: no
-tenés lo que el release publicó.
+`pegasus.sha256` alcanza para verificar los bytes; `release-manifest.json` además ata ese archivo al
+commit exacto que lo produjo (`tag`, `commit`, `package_version`), generado por
+`tools/build_release_evidence.py`. Si `sha256sum -c` falla, no sigas: no tenés lo que el release
+publicó.
 
-Esta es la única sección de la instalación que necesita red, y es inevitable: hay que bajar los
-bytes que se van a instalar. Pegasus no tiene dependencias de terceros, así que no hay ningún
-paso más adelante que necesite volver a salir a internet.
+Esta es la única sección de la instalación que necesita red, y es inevitable: hay que bajar los bytes
+que se van a instalar. Pegasus no tiene dependencias de terceros, así que no hay ningún paso más
+adelante que necesite volver a salir a internet.
 
 *Esta sección no se ejecutó en esta verificación: `curl` contra GitHub necesita red, que este entorno
-de trabajo tiene prohibida. Lo que sí se probó, con un wheel construido localmente y sus propios
-checksums, es que `sha256sum -c` valida exactamente estos dos archivos — ver el reporte de esta
-tarea para la corrida real.*
+de trabajo tiene prohibida. Lo que sí se probó, con un artefacto construido localmente
+(`tools/build_zipapp.py`) y su propio checksum, es que `sha256sum -c` valida el archivo correcto y
+rechaza uno alterado — corrida real:*
 
-## 3. Instalar el venv privado
-
-Pegasus vive en `$XDG_DATA_HOME/pegasus-harness/` si esa variable apunta a una ruta absoluta, o si no
-en `~/.local/share/pegasus-harness/`. Dentro de ese directorio va `venv/`, su venv privado:
-
-```sh
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pegasus-harness"
-python3 -m venv "$DATA_DIR/venv"
-
-"$DATA_DIR/venv/bin/python" -m pip install --no-deps pegasus_harness-4.1.2-py3-none-any.whl
+```
+$ sha256sum -c pegasus.sha256
+pegasus: OK
 ```
 
-Pegasus no tiene dependencias de terceros, así que hay un solo `pip install`, y no necesita red:
-instala el wheel que ya descargaste y verificaste en el paso anterior, sin resolver nada más
-(`--no-deps`).
+*y, contra una copia con un byte agregado a mano:*
 
-*`python3 -m venv "$DATA_DIR/venv"` se ejecutó tal cual y terminó en 0. El `pip install --no-deps`
-también se ejecutó tal cual, sin red, y terminó con `Successfully installed pegasus-harness-4.1.2`.*
+```
+$ sha256sum -c pegasus.sha256
+pegasus: FAILED
+sha256sum: WARNING: 1 computed checksum did NOT match
+```
 
-## 4. Dejar el lanzador en el PATH
+## 3. Dejar el ejecutable en el PATH
 
 ```sh
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
@@ -90,57 +80,75 @@ case ":$PATH:" in
 esac
 ```
 
-`pegasus` es un script `sh` de una sola pantalla: busca ese mismo venv y le pasa el control. No importa
-la cuenta ni el shell — es el único archivo que tiene que existir *antes* de que Pegasus mismo pueda
-correr.
+`pegasus` es el único archivo que hace falta: no busca un venv y no depende de nada instalado antes
+que él. Es el mismo archivo en Linux y en macOS, y los pasos de arriba son los mismos en los dos.
+
+En Windows el archivo sirve igual, pero este recorrido no: `sha256sum` e `install` no vienen con el
+sistema, y Windows no honra el shebang de un archivo suelto, así que ahí se invoca con el lanzador de
+Python (`py pegasus`). No lo probamos todavía, y por eso no lo documentamos como si lo hubiéramos
+hecho.
 
 **Un `source ~/.bashrc` no alcanza**, y es el error fácil de cometer: quien agrega `~/.local/bin` al
 PATH suele ser `~/.profile`, que corre al *iniciar sesión* y no al abrir una terminal. Si volvés a
 entrar y `pegasus` sigue sin aparecer, ahí sí editá tu shell.
 
-*Ejecutado tal cual: `install -m 755 pegasus "$BIN_DIR/pegasus"` dejó el shim con permiso `0755` en un
-`bin_dir` de prueba, y el chequeo de PATH se probó con las dos ramas del `case` (ausente y presente).*
+*Ejecutado tal cual: `install -m 755 pegasus "$BIN_DIR/pegasus"` dejó el archivo con permiso `0755` en
+un `bin_dir` de prueba, y el chequeo de PATH se probó con las dos ramas del `case` (ausente y
+presente) — corrida real, rama ausente:*
 
-## 5. Verificar
+```
+$ BIN_DIR=/tmp/.../home/.local/bin; case ":$PATH:" in *":$BIN_DIR:"*) echo presente;; *) echo "$BIN_DIR todavía no está en tu PATH.";; esac
+/tmp/.../home/.local/bin todavía no está en tu PATH.
+```
+
+### Si venís de una instalación 4.x
+
+Pegasus 4.x dejaba un shim en `~/.local/bin/pegasus` que arrancaba un venv privado propio, en
+`~/.local/share/pegasus-harness/venv` (o `$XDG_DATA_HOME/pegasus-harness/venv` si esa variable
+estaba definida). El paso 3 de arriba pisa ese shim con el archivo único de 5.0.0 — eso ya está
+comprobado y es lo esperado. Lo que el paso 3 no toca es ese venv viejo: queda en disco, sin nada
+que lo use.
+
+Ese directorio es distinto del que guarda el journal y los snapshots (`~/.local/share/pegasus-harness/`
+sin el `venv` al final), así que borrarlo no toca tu historial de instalación ni tu capacidad de
+hacer `pegasus restore`. Para recuperar el espacio:
+
+```sh
+rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/pegasus-harness/venv"
+```
+
+### Si sólo hay `python` (no `python3`) en el PATH
+
+`pegasus` arranca con `#!/usr/bin/env python3`, así que si tu sistema sólo tiene `python` en el PATH
+vas a ver:
+
+```
+/usr/bin/env: 'python3': No such file or directory
+```
+
+con código de salida 127. No es que el archivo esté roto: `env` no encuentra un intérprete llamado
+exactamente `python3`. Si ese `python` es Python 3 (comprobalo con `python --version`), corré el
+archivo pasándoselo como argumento en vez de ejecutarlo directo — probado acá, funciona igual:
+
+```sh
+python "$BIN_DIR/pegasus" doctor
+```
+
+## 4. Verificar
 
 ```sh
 pegasus doctor
 ```
 
-Como Pegasus no tiene dependencias de terceros, no hay nada que quede a medio instalar entre los
-pasos 3 y 4: si el `pip install --no-deps` del paso 3 terminó en 0, `doctor` ya puede correr.
-Reporta qué CLIs anfitrionas detecta.
+No hay paso 3 a medias que arreglar: si `sha256sum -c` y el `install -m 755` de arriba terminaron en
+0, `pegasus` ya está completo. `doctor` reporta qué CLIs anfitrionas detecta.
 
-*Se probó de punta a punta con un wheel construido localmente, instalado sin red y sin `PyYAML`
-presente en el venv (`import yaml` falla ahí a propósito, para confirmar que nada lo necesita):
-`pegasus doctor`, invocado a través del shim, corrió completo a través del shim, del venv privado y
-del módulo `pegasus`, con la salida `OpenCode: not found on this machine.` — correcta, porque esa
-cuenta de prueba no tenía OpenCode instalado.*
-
-### Sobre `pegasus setup`
-
-`pegasus setup` construye el venv y deja el shim, y sirve **desde un checkout** — por ejemplo
-mientras desarrollás. Instalado desde el wheel, como en esta guía, no puede reconstruirse a sí
-mismo, y la razón no es un detalle de implementación: para rehacer el venv hace falta el propio
-checkout (su `pyproject.toml` y su `bin/pegasus`), y una instalación no guarda ninguno de los dos.
-No hay de dónde sacarlos.
-
-Corrido en esa situación, el comando lo dice y no toca nada:
+*Corrida real, `pegasus` puesto en un `bin_dir` de prueba y llamado por PATH desde otro directorio:*
 
 ```
-setup builds the private venv out of this project's own checkout, and
-.../pyproject.toml and .../bin/pegasus is not there. It also looked for a copy a
-previous `setup` run may have kept beside the venv, at .../setup-sources, and found
-none there either. An installed Pegasus that never ran `setup` from a checkout has
-nothing to rebuild its own venv from: install again from the release, which is safe
-to repeat, or run this from a checkout.
+$ pegasus doctor
+OpenCode: present at /home/.config/opencode, Pegasus not installed.
 ```
-
-*Mensaje real, obtenido corriendo `pegasus setup --json` desde un wheel instalado igual que en esta
-guía, sin ningún checkout alrededor.*
-
-Para reconstruir el venv, repetí los pasos 3 y 4: son idempotentes y no rompen nada si el venv ya
-existe. Es también lo que dice el shim cuando encuentra su venv borrado.
 
 ## Lo que sigue bajo su control
 

@@ -1,12 +1,12 @@
 # Instalar Pegasus con un agente
 
-Este instructivo es para un agente que instala Pegasus 4 en nombre de una persona, en la cuenta Linux
+Este instructivo es para un agente que instala Pegasus 5 en nombre de una persona, en la cuenta Linux
 actual. El agente descarga, verifica y ejecuta cada comando exactamente como está escrito acá; la
 persona decide qué MCPs se instalan y mantiene el control de credenciales y modelos.
 
-No hay `install.sh` ni tarball en v4: Pegasus se instala como un paquete de Python dentro de un venv
-privado, y después se deja un lanzador (`pegasus`) en el PATH. Cada paso de esta guía dice si necesita
-red o no, y qué hacer si falla.
+Pegasus 5 es un solo archivo: `pegasus`. No hay wheel, no hay venv, no hay `pip install` — se
+descarga, se verifica y se deja ejecutable en el PATH. Cada paso de esta guía dice si necesita red o
+no, y qué hacer si falla.
 
 ## 1. Ubicar el checkout y confirmar la cuenta
 
@@ -16,76 +16,69 @@ id -u
 ```
 
 Si el segundo comando imprime `0`, detenete: no instales como root. Si el primero falla, no estás en
-el checkout de `pegasus-harness`; pedile a la persona la ruta correcta antes de seguir.
+el checkout de `pegasus-harness`; pedile a la persona la ruta correcta antes de seguir. (Instalar
+Pegasus no exige un checkout — este chequeo es sólo para confirmar dónde estás parado si trabajás
+sobre uno.)
 
-## 2. Descargar los assets del release y verificarlos
+## 2. Descargar el asset del release y verificarlo
 
-Sustituí `RELEASE_TAG` por el tag que la persona pidió. Cada asset tiene que venir de la misma
-publicación de GitHub Releases — no combines el wheel y el shim de tags distintos.
+Sustituí `RELEASE_TAG` por el tag que la persona pidió.
 
 ```sh
-RELEASE_TAG="v4.1.2"
+RELEASE_TAG="v5.0.0"
 DOWNLOAD_DIR="$HOME/Downloads/pegasus-$RELEASE_TAG"
 mkdir -p "$DOWNLOAD_DIR"
 cd "$DOWNLOAD_DIR"
 
 BASE_URL="https://github.com/balerdis/pegasus-harness/releases/download/$RELEASE_TAG"
-WHEEL="pegasus_harness-4.1.2-py3-none-any.whl"
 
-curl -fL -O "$BASE_URL/$WHEEL"
-curl -fL -O "$BASE_URL/$WHEEL.sha256"
 curl -fL -O "$BASE_URL/pegasus"
 curl -fL -O "$BASE_URL/pegasus.sha256"
 curl -fL -O "$BASE_URL/release-manifest.json"
 
-sha256sum -c "$WHEEL.sha256" pegasus.sha256
+sha256sum -c pegasus.sha256
 python3 -c "
 import json, sys
 manifest = json.load(open('release-manifest.json'))
-assert manifest['schema'] == 'pegasus-harness-release/v4', manifest['schema']
+assert manifest['schema'] == 'pegasus-harness-release/v5', manifest['schema']
 assert manifest['tag'] == '$RELEASE_TAG', manifest['tag']
 names = {a['name'] for a in manifest['assets']}
-assert names == {'$WHEEL', 'pegasus'}, names
+assert names == {'pegasus'}, names
 print('release-manifest.json: coincide con', manifest['tag'], manifest['commit'])
 "
 ```
 
-**Detenete y no sigas si:** `sha256sum -c` reporta `FAILED` para cualquiera de los dos, o el script de
-Python levanta `AssertionError`. Ninguno de los dos casos es recuperable descargando de nuevo del mismo
-tag: si el tag ya publicó bytes que no calzan con su propio manifest, avisale a la persona y esperá
+**Detenete y no sigas si:** `sha256sum -c` reporta `FAILED`, o el script de Python levanta
+`AssertionError`. Ninguno de los dos casos es recuperable descargando de nuevo del mismo tag: si el
+tag ya publicó bytes que no calzan con su propio manifest, avisale a la persona y esperá
 instrucciones — no lo instales.
 
-Esta es la única sección de toda la instalación que necesita red: descargar los bytes que se van a
+Esta es la única sección de toda la instalación que necesita red: descargar el archivo que se va a
 instalar. Pegasus no tiene dependencias de terceros, así que ningún paso posterior vuelve a salir a
 internet.
 
 *No ejecutado en esta verificación: `curl` contra GitHub necesita red, prohibida en este entorno de
-trabajo. Lo que sí se probó, contra un wheel construido localmente y su propio
-`release-manifest.json` generado por `tools/build_release_evidence.py`, es que `sha256sum -c` y la
-comparación de `schema`/`tag`/`assets` distinguen exactamente un archivo correcto de uno alterado
-— ver el reporte de esta tarea para la corrida real y el caso negativo.*
+trabajo. Lo que sí se probó, contra un artefacto construido localmente con `tools/build_zipapp.py` y
+su propio `release-manifest.json` generado por `tools/build_release_evidence.py --tag v4.1.2`, es que
+`sha256sum -c` y la comparación de `schema`/`tag`/`assets` distinguen exactamente un archivo correcto
+de uno alterado — corrida real:*
 
-## 3. Instalar el venv privado
-
-```sh
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pegasus-harness"
-python3 -m venv "$DATA_DIR/venv"
-echo "venv: $?"
-
-"$DATA_DIR/venv/bin/python" -m pip install --no-deps "$WHEEL"
-echo "wheel: $?"
+```
+$ sha256sum -c pegasus.sha256
+pegasus: OK
+$ python3 -c "... (script de arriba) ..."
+release-manifest.json: coincide con v4.1.2 7afef58e6739b81030511e98a3f288cc0eb11343
 ```
 
-Reportá los dos códigos de salida. Ninguno de los dos necesita red: Pegasus no tiene dependencias de
-terceros, así que el único `pip install` que queda instala el wheel que ya verificaste, y `--no-deps`
-evita que vuelva a resolver algo.
+*y, contra la misma copia con un byte agregado a mano:*
 
-*Ejecutados los dos comandos tal cual, sin red, contra un wheel construido localmente: `python3 -m
-venv` y el `pip install --no-deps` terminaron en `0`, éste último con `Successfully installed
-pegasus-harness-4.1.2`. Se confirmó además que el venv resultante no tiene `PyYAML` instalado
-(`import yaml` falla ahí) y que `pegasus doctor` corre igual — ver el paso 5.*
+```
+$ sha256sum -c pegasus.sha256
+pegasus: FAILED
+sha256sum: WARNING: 1 computed checksum did NOT match
+```
 
-## 4. Dejar el lanzador en el PATH
+## 3. Dejar el ejecutable en el PATH
 
 ```sh
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
@@ -94,7 +87,7 @@ install -m 755 pegasus "$BIN_DIR/pegasus"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) echo "PATH: ya incluye $BIN_DIR" ;;
-  *) echo "PATH: falta $BIN_DIR -- invocá el shim por su ruta absoluta y avisale a la persona" ;;
+  *) echo "PATH: falta $BIN_DIR -- invocá el ejecutable por su ruta absoluta y avisale a la persona" ;;
 esac
 ```
 
@@ -108,34 +101,29 @@ al *iniciar sesión* y no al abrir una terminal, y sólo si el directorio ya exi
 crear esta instalación. Cerrar sesión y volver a entrar es lo que resuelve. Editar el shell es el
 último recurso, no el primero, porque hacerlo cuando no hacía falta deja la entrada duplicada.
 
-*Ejecutado tal cual: `install -m 755` dejó el shim con permiso `0755`, y el `case` se probó con las dos
-ramas (ausente y presente) sobre un `PATH` de prueba.*
+*Ejecutado tal cual: `install -m 755` dejó el archivo con permiso `0755`, y el `case` se probó con las
+dos ramas (ausente y presente) sobre un `PATH` de prueba.*
 
-## 5. Verificar y reportar
+## 4. Verificar y reportar
 
 ```sh
 pegasus doctor
 ```
 
-Como el paso 3 no depende de red, si terminó con código `0` este comando ya puede correr. Reporta qué
-CLIs anfitrionas detecta esta cuenta.
+Como el paso 2 no depende de red y el paso 3 no toca nada más, si `sha256sum -c` terminó en `0` este
+comando ya puede correr. Reporta qué CLIs anfitrionas detecta esta cuenta.
 
-**No uses `pegasus setup` para arreglar una instalación a medias.** Sirve desde un checkout, no
-desde una instalación hecha con esta guía: reconstruir el venv exige el propio checkout (su
-`pyproject.toml` y su `bin/pegasus`), y una instalación no guarda ninguno de los dos. El comando lo
-dice y no toca nada, así que si lo corrés vas a leer una línea que empieza con `setup builds the
-private venv out of this project's own checkout`. Si el venv quedó a medias, repetí los pasos 3 y 4
-— son idempotentes.
+*Ejecutado tal cual, contra el ejecutable puesto en un `bin_dir` de prueba y llamado por PATH:*
 
-*Se probó de punta a punta contra el wheel construido localmente e instalado sin red: `pegasus
-doctor`, invocado a través del shim, corrió completo sin `PyYAML` instalado en el venv y reportó
-`OpenCode: not found on this machine.` (correcto para esa cuenta de prueba). `pegasus setup`,
-invocado sobre esa misma instalación, se negó nombrando el checkout que falta, sin escribir nada.*
+```
+$ pegasus doctor
+OpenCode: present at /home/.config/opencode, Pegasus not installed.
+```
 
 ## Instalar en OpenCode y elegir MCPs
 
-Con el venv instalado y `pegasus` en el PATH, identificá primero el binario de OpenCode en la shell
-real de la cuenta -- no asumas que una shell de login comparte el mismo PATH que la sesión del agente:
+Con `pegasus` en el PATH, identificá primero el binario de OpenCode en la shell real de la cuenta --
+no asumas que una shell de login comparte el mismo PATH que la sesión del agente:
 
 ```sh
 command -v opencode
@@ -143,7 +131,7 @@ command -v opencode
 
 Pedile a la persona una decisión explícita por cada MCP que quiera instalar; hoy el único servidor
 remoto embarcado en el contenido es `context7`. Traducí cada decisión a `--mcp <id>` (instalar) o a la
-ausencia del flag (no instalar) -- no hay `--confirm`/`--decline` en v4, un servidor no nombrado
+ausencia del flag (no instalar) -- no hay `--confirm`/`--decline` en v5, un servidor no nombrado
 simplemente no se instala:
 
 ```sh

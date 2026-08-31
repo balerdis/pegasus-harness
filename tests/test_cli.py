@@ -35,10 +35,9 @@ from pathlib import Path
 from typing import Callable
 
 import pegasus
-from fakes import FakeFileSystem, FakeVenvProvisioner
+from fakes import FakeFileSystem
 from pegasus import cli
 from pegasus.adapters import available
-from pegasus.core import bootstrap
 from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
@@ -1477,153 +1476,6 @@ class ActivationTest(RealHomeTestCase):
         written = context.out.getvalue()
         for step in available().get(CLI).activation_steps():
             self.assertIn(step, written)
-
-
-class SetupTest(RealHomeTestCase):
-    """Provisioning Pegasus's own private venv and boot shim -- no adapter involved."""
-
-    def setUp(self):
-        super().setUp()
-        # A real checkout in a real place: `setup` refuses to provision out of
-        # inputs it cannot read, so a fictional path would test the refusal
-        # instead of the provisioning. `pyproject.toml` is what marks a
-        # directory as an installable checkout now that there is no
-        # hash-pinned lockfile to look for instead.
-        self.checkout = self.home / "checkout"
-        self.checkout.mkdir()
-        self.pyproject = self.checkout / "pyproject.toml"
-        self.pyproject.write_bytes(b"[project]\nname = 'pegasus'\n")
-
-    def runtime(self, *, variables: dict[str, str] | None = None) -> cli.Runtime:
-        self.provisioner = FakeVenvProvisioner()
-        return cli.Runtime(
-            filesystem=self.filesystem,
-            home=self.home,
-            now=AT,
-            out=io.StringIO(),
-            variables=variables if variables is not None else NO_BINARY,
-            venv_provisioner=self.provisioner,
-            source=self.checkout,
-        )
-
-    def test_setup_refuses_when_the_checkout_it_provisions_from_is_not_there(self):
-        """An installed Pegasus keeps neither the wheel it came from nor the
-        checkout it was built from, so it has nothing to rebuild out of.
-        Saying that is worth more than a `pip` error naming a path inside the
-        user's own virtual environment."""
-        self.pyproject.unlink()
-
-        code, report = self.run_cli("setup")
-
-        self.assertNotEqual(code, 0)
-        self.assertEqual(report["status"], "failed")
-        self.assertIn("checkout", report["error"])
-        self.assertEqual(self.provisioner.created, [])
-
-    def test_setup_builds_the_venv_under_data_dir_then_stocks_it(self):
-        context = self.runtime()
-        code = cli.main(["setup", "--json"], runtime=context)
-        self.assertEqual(code, 0)
-        expected_venv = self.filesystem.data_dir(self.home) / "venv"
-        self.assertEqual(self.provisioner.created, [expected_venv])
-        self.assertEqual(self.provisioner.installed, [(expected_venv, self.checkout)])
-
-    def test_setup_does_not_require_a_requirements_file_to_exist(self):
-        """Zero runtime dependencies means `setup` has nothing left to hash-verify
-        or download; it only needs the checkout and the shim."""
-        self.assertFalse((self.checkout / "requirements.txt").exists())
-        context = self.runtime()
-        code = cli.main(["setup", "--json"], runtime=context)
-        self.assertEqual(code, 0)
-
-    def test_setup_reports_the_venv_and_shim_paths(self):
-        _, report = self.run_cli_with(self.runtime(), "setup")
-        expected_venv = self.filesystem.data_dir(self.home) / "venv"
-        expected_shim = self.filesystem.bin_dir(self.home) / "pegasus"
-        self.assertEqual(report["venv"], str(expected_venv))
-        self.assertEqual(report["shim"], str(expected_shim))
-
-    def test_setup_writes_an_executable_shim(self):
-        self.run_cli_with(self.runtime(), "setup")
-        shim = self.filesystem.bin_dir(self.home) / "pegasus"
-        self.assertTrue(shim.exists())
-        self.assertEqual(stat.S_IMODE(shim.stat().st_mode), 0o755)
-
-    def test_setup_warns_when_bin_dir_is_not_on_path(self):
-        _, report = self.run_cli_with(self.runtime(variables={"PATH": "/usr/bin"}), "setup")
-        self.assertTrue(report["activation"])
-        self.assertIn(str(self.filesystem.bin_dir(self.home)), report["activation"][0])
-
-    def test_setup_is_quiet_when_bin_dir_is_already_on_path(self):
-        on_path = {"PATH": f"/usr/bin:{self.filesystem.bin_dir(self.home)}"}
-        _, report = self.run_cli_with(self.runtime(variables=on_path), "setup")
-        self.assertEqual(report["activation"], [])
-
-    def test_setup_reports_failure_without_crashing_when_provisioning_fails(self):
-        context = self.runtime()
-        expected_venv = self.filesystem.data_dir(self.home) / "venv"
-        context.venv_provisioner.fail_create.add(expected_venv)
-        code, report = self.run_cli_with(context, "setup")
-        self.assertNotEqual(code, 0)
-        self.assertEqual(report["status"], "failed")
-
-    def test_setup_from_a_checkout_preserves_its_inputs_beside_the_venv(self):
-        """So a later run against the same data directory, with no checkout in
-        reach, still has something to rebuild the venv from."""
-        self.run_cli_with(self.runtime(), "setup")
-        sources_dir = bootstrap.setup_sources_dir(self.filesystem.data_dir(self.home))
-        preserved_shim = sources_dir / bootstrap.SHIM_NAME
-        self.assertTrue(preserved_shim.exists())
-        self.assertEqual(preserved_shim.read_bytes(), cli.SHIM_SOURCE.read_bytes())
-        preserved_source = sources_dir / bootstrap.PACKAGE_DIRNAME
-        self.assertTrue((preserved_source / "pyproject.toml").exists())
-
-    def test_setup_rebuilds_from_a_previously_preserved_copy_when_the_checkout_is_gone(self):
-        """An installed Pegasus has no checkout, but a `setup` run against the
-        same data directory earlier -- while there still was one -- leaves
-        enough behind for this run to finish anyway."""
-        first_provisioner = FakeVenvProvisioner()
-        first = cli.Runtime(
-            filesystem=self.filesystem, home=self.home, now=AT, out=io.StringIO(),
-            variables=NO_BINARY, venv_provisioner=first_provisioner, source=self.checkout,
-        )
-        code, _ = self.run_cli_with(first, "setup")
-        self.assertEqual(code, 0)
-
-        self.pyproject.unlink()
-
-        second_provisioner = FakeVenvProvisioner()
-        second = cli.Runtime(
-            filesystem=self.filesystem, home=self.home, now=AT, out=io.StringIO(),
-            variables=NO_BINARY, venv_provisioner=second_provisioner, source=self.checkout,
-        )
-        code, report = self.run_cli_with(second, "setup")
-
-        self.assertEqual(code, 0, report)
-        self.assertEqual(len(second_provisioner.installed), 1)
-        _, used_source = second_provisioner.installed[0]
-        self.assertNotEqual(used_source, self.checkout)
-        self.assertTrue((used_source / "pyproject.toml").exists())
-        shim = self.filesystem.bin_dir(self.home) / "pegasus"
-        self.assertEqual(shim.read_bytes(), cli.SHIM_SOURCE.read_bytes())
-
-    def test_setup_names_both_checked_locations_when_neither_has_its_inputs(self):
-        """Genuinely absent, on both sides, still gets an honest refusal --
-        never a `pip` error naming a path inside the user's own venv."""
-        self.pyproject.unlink()
-
-        code, report = self.run_cli("setup")
-
-        self.assertNotEqual(code, 0)
-        self.assertEqual(report["status"], "failed")
-        self.assertIn("checkout", report["error"])
-        sources_dir = bootstrap.setup_sources_dir(self.filesystem.data_dir(self.home))
-        self.assertIn(str(sources_dir), report["error"])
-        self.assertEqual(self.provisioner.created, [])
-
-    def run_cli_with(self, context: cli.Runtime, *argv) -> tuple[int, dict]:
-        code = cli.main([*argv, "--json"], runtime=context)
-        return code, json.loads(context.out.getvalue())
 
 
 if __name__ == "__main__":

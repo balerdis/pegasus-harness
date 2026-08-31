@@ -18,7 +18,7 @@ Este documento fija la arquitectura antes de escribir código. No es un plan de 
 | Agentes SDD | Se cablean los 10 de la línea SDD (hoy hay 1 solo). |
 | Interfaz de usuario | TUI por defecto + flags equivalentes para modo desatendido. |
 | Lenguaje y dependencias | Python 3.12+, sin ninguna dependencia. El frontmatter de los descriptores se parsea con un lector propio y estricto, que rechaza lo que no entiende en vez de interpretarlo a medias. |
-| Punto de entrada | `~/.local/bin/pegasus` + venv privado. |
+| Punto de entrada | Un solo archivo ejecutable (`zipapp` con shebang y bit ejecutable), instalado en `~/.local/bin/pegasus`. Sin venv privado. |
 
 ### Las dos reglas que gobiernan el diseño
 
@@ -566,7 +566,7 @@ En v3.1.2 se embarcan los 10 prompts SDD pero solo uno está cableado como agent
 
 ## Interfaz de usuario
 
-La TUI se dibuja con `curses`, de la biblioteca estándar. No agrega ninguna dependencia, y por lo tanto no agrega nada que la unidad 4 tenga que fijar con hash ni meter en el venv privado. Las pantallas que siguen son listas verticales con un cursor y teclas de una letra: no piden color, ni layout anidado, ni nada que justifique traer un paquete —y menos uno que arrastre un segundo— para dibujarlas.
+La TUI se dibuja con `curses`, de la biblioteca estándar. No agrega ninguna dependencia, y por lo tanto no agrega nada que el empaquetado de la unidad 4 tenga que fijar con hash ni sumar al zipapp. Las pantallas que siguen son listas verticales con un cursor y teclas de una letra: no piden color, ni layout anidado, ni nada que justifique traer un paquete —y menos uno que arrastre un segundo— para dibujarlas.
 
 
 ### Menú principal
@@ -698,7 +698,6 @@ Las dos son consecuencias coherentes de una instalación aditiva sin actualizaci
 
 ```
 pegasus-harness/
-├── bin/pegasus                    # shim de arranque
 ├── pyproject.toml
 ├── src/pegasus/
 │   ├── __main__.py
@@ -740,7 +739,10 @@ pegasus-harness/
 │       ├── mcp/
 │       └── policies/
 ├── manifests/                     # generados, verificados en CI
-├── tools/build_catalog.py
+├── tools/
+│   ├── build_catalog.py
+│   ├── build_zipapp.py            # empaqueta el paquete en el zipapp ejecutable
+│   └── build_release_evidence.py  # certifica el zipapp y su checksum contra el commit
 ├── tests/
 └── docs/
 ```
@@ -818,13 +820,13 @@ Ocho unidades numeradas, más la unidad 0 de demolición. Cada una tiene tests p
 | 1b | Carga de contenido, adapter OpenCode y catálogo | Genera en memoria el catálogo del contenido presente, con digests deterministas | Entregada |
 | 2 | Motor de instalación, journal v4, rollback | Paridad funcional con v3.1.2 en modo desatendido | Entregada |
 | 3 | Los 12 agentes cableados con sus prompts, y el contenido normalizado | Los 10 SDD existen como subagentes reales | Entregada |
-| 4 | Launcher, venv privado, empaquetado | `pegasus` disponible en el PATH tras instalar: el shim `bin/pegasus`, `pegasus setup` para levantar el venv desde un checkout, y `tools/build_release_evidence.py` atando wheel, lockfile y shim al commit que los produjo. `INSTALL.md` documenta el recorrido de punta a punta y deja constancia de qué se corrió en esta verificación y qué no —el único paso no ejecutado es el `pip install` con red real, prohibida en este entorno | Entregada |
+| 4 | Launcher, empaquetado de un solo archivo | `pegasus` disponible en el PATH tras instalar: un único `zipapp` con shebang y bit ejecutable, construido por `tools/build_zipapp.py`, y `tools/build_release_evidence.py` atando el archivo y su `.sha256` al commit que los produjo. Sin venv privado ni shim: con cero dependencias un venv no aísla nada, y con shebang más bit ejecutable el archivo se ejecuta solo, así que el launcher, el provisioner de venv y su puerto se quedaron sin sujeto y se retiraron. `INSTALL.md` documenta el recorrido de punta a punta y deja constancia de qué se corrió en esta verificación y qué no —el único paso no ejecutado es la descarga con red real, prohibida en este entorno | Entregada |
 | 5 | TUI: menú principal e instalación | Instalación completa sin escribir un flag: menú de cinco entradas (`Install`, `Configure models`, `Status and diagnostics`, `Uninstall`, `Exit`), instalación con vista previa (`InstallPlanScreen`, el mismo reporte de `install --dry-run`) separada del punto sin retorno | Entregada |
 | 6 | TUI: configuración de modelos | Asignar y quitar modelo por agente, con la preferencia guardada en el estado propio de Pegasus: la caminata de cuatro pasos (`ModelsScreen`) llama a `cli.models_set`/`cli.models_unset`, que escriben en el store real de asignaciones | Entregada |
 | 7 | Actualización de una instalación existente | Reinstalar sobre una instalación propia actualiza el payload. La segunda mitad de lo entregado —preservar y reportar lo que el usuario reescribió— la reemplazó la unidad 9 | Entregada |
 | 8a1 | Categoría `mcp/`, descriptor y render del servidor | Un MCP remoto se instala de verdad, con su convención embarcada y su permiso concedido | Entregada |
 | 8a2 | Selección del usuario y reversibilidad | `--mcp` decide qué servidores se instalan, y dejar de nombrar uno lo retira. El retiro salió genérico: alcanza a cualquier artefacto que el journal reclame y el render ya no produzca | Entregada |
-| 8b1 | El directorio propio de Pegasus y su resolutor | El journal, los snapshots y lo que venga cuelgan de un único lugar que la plataforma decide (`FileSystem.data_dir`), y la unidad 4 lo adopta: `bin/pegasus` y `journal_store_file.py` resuelven el mismo directorio, `bootstrap.venv_dir` cuelga el venv de ahí | Entregada |
+| 8b1 | El directorio propio de Pegasus y su resolutor | El journal, los snapshots y lo que venga cuelgan de un único lugar que la plataforma decide (`FileSystem.data_dir`): `journal_store_file.py`, `snapshot_store_file.py` y `model_assignment_store_file.py` resuelven el mismo directorio a través del puerto `FileSystem` | Entregada |
 | 8b2 | Contención: el registry y el catálogo aprenden el segundo territorio | Un artefacto en el directorio propio deja de parecer una fuga: `catalog.Territory` reconoce `config_dir` y `CANONICAL_DATA_DIR` al calcular el catálogo. El chequeo de `registry` sobre `own_artifacts` queda a propósito ceñido al `config_dir` del adapter —una dependencia la coloca el motor, nunca un adapter, así que ensanchar ese guard no cerraría ningún hueco real | Entregada |
 | 8b3 | El journal sabe reclamar una dependencia materializada | `uninstall` deja de poder olvidarse un binario en silencio: `journal.KINDS` suma `dependency-tree`, y `planner._retire_dependency_trees` lo retira al desinstalar | Entregada |
 | 8b4 | La forma `download` | Un servidor que publica binario queda disponible, con SHA-256 propio verificado antes de que el archivo llegue a su lugar (`core/dependencies.materialize`). También extrae un `.tar.gz` con guarda contra miembros que se escapan del directorio (`tarfile.data_filter`): `engram` ya se instala así, con checksum y `archive_members` fijados en su descriptor | Entregada |
@@ -1184,7 +1186,7 @@ La clasificación de la unidad 10 responde una pregunta —qué causa un `False`
 1. **Unidad 8**, en cadena: **8a** la categoría `mcp/` y la selección, **8b** el directorio propio y la materialización.
    - **La Unidad 9** corre adentro de esa cadena, antes de **8a2**: reemplaza el digest-permiso por el snapshot antes de que 8a2 le dé al usuario el poder de retirar servidores sobre esa misma política.
    - **La Unidad 10** también corre adentro, entre **8a2** y **8b**: arregla el contrato del puerto de filesystem antes de que 8b agregue superficie de archivo nueva que pasaría por los mismos trece sitios sin auditar.
-2. **Unidad 4.** Launcher, venv privado, empaquetado. Destraba la TUI.
+2. **Unidad 4.** Launcher, empaquetado de un solo archivo. Destraba la TUI.
 3. **Unidades 5 y 6.** La TUI.
 
 Ya entregado, en este orden: el cierre de la unidad 3 —el `.env` real del skill registry y el retiro de los marcadores sin lector—; la unidad 7, que fue temprano por ser la herramienta con la que se verifica todo lo que viene después; la **8a1**, con la categoría `mcp/` y el primer servidor instalado de verdad; la **unidad 9**, en cadena de cuatro PRs; la **8a2**, que cerró la cadena 8a con la selección del usuario y un retiro que salió genérico; y la **unidad 10**, el contrato del puerto de filesystem.
@@ -1199,7 +1201,6 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 
 | Deuda | Qué la destraba |
 |-------|-----------------|
-| `pegasus setup` puede reconstruir el venv de una instalación **sólo si alguna vez corrió desde un checkout**: esa corrida deja sus insumos en `setup-sources/`, al lado del venv. Quien instaló siguiendo `INSTALL.md` —pip a mano, sin checkout— nunca pasa por ahí, así que para esa persona sigue negándose. El mensaje nombra los dos lugares donde buscó | Que los insumos viajen adentro del wheel, o que el recorrido documentado los deje al lado del venv. Lo primero exige llevar el shim adentro del paquete o un paso de build que lo copie; lo segundo, una línea más en la guía |
 | Un `refresh failed` del plugin del skill registry queda sólo en `console.error`, así que una falla del registry no se superficializa | Nada. Es del plugin, no del contrato que lo alimenta |
 | Los sitios de `content.py` que lanzan `ContentError` no tienen un test de tabla que recorra todos y afirme que cada uno nombra una ruta real | Nada. Unidad candidata en cualquier momento |
 | La voz `king-pegasus` explica y no puede aplicar nada de lo que explica: declara sólo `read` y su cuerpo le prohíbe generar cualquier artefacto | Nada. Es una decisión de producto sobre qué hace esa voz, y hasta tomarla no se le concede ningún servidor |
@@ -1209,6 +1210,14 @@ Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a prop�
 | `mode_of` sigue colapsando "la ruta no existe" y "no pude leer sus bits" en el mismo `None`. Los tres llamadores del planner corren justo después de una lectura que ya tuvo éxito, así que hoy es inalcanzable | Nada. Fragilidad latente, no reproducida |
 | No hay CI en el repositorio: `.github/` no existe. La estructura documentada describe `manifests/` como "generados, verificados en CI", y esa verificación no la corre nada | Nada. Es una decisión sobre si el proyecto quiere una. El procedimiento de release es manual, está escrito en `docs/release-distribution.md`, y se ejecutó tal cual para 4.0.0, 4.1.0 y 4.1.1 |
 | Ningún test arranca un servidor MCP. La suite verifica que el archivo se baje, que el hash coincida, que se extraiga, que el journal lo reclame y que la configuración quede escrita — todo cierto mientras el servidor no levanta. Es lo que dejó pasar que `engram` se instalara y no funcionara en 4.0.0 y 4.1.0, y lo encontró una instalación real y no la suite | Aceptar que un test hable el protocolo contra cada servidor embarcado, lo que exige red o binarios locales y rompe la hermeticidad que el resto de la suite sostiene. Es una decisión, no un pendiente obvio |
+
+### Deudas disueltas
+
+Una deuda listada más arriba en algún momento del corte puede dejar de tener sujeto porque el diseño que la sostenía cambió, no porque alguien la haya resuelto. Se anota acá, separada de lo entregado, para no confundir "se arregló" con "dejó de aplicar".
+
+| Deuda | Qué la disolvió |
+|-------|------------------|
+| `pegasus setup` sólo podía reconstruir el venv de una instalación si esa instalación alguna vez corrió desde un checkout, porque esa corrida es la que deja los insumos en `setup-sources/` | Pegasus quedó sin dependencias y el punto de entrada pasó a ser un `zipapp` con shebang y bit ejecutable. Sin dependencias, un venv privado no aísla nada; sin necesidad de aislar nada, no hace falta shim que lo arranque. `pegasus setup`, el venv, el shim y `setup-sources/` se retiraron enteros, y la deuda dejó de tener sobre qué pararse |
 
 ---
 
@@ -1244,5 +1253,7 @@ Dos de los bloqueos que 4.0.0 escribió no existían del todo, y averiguarlo fue
 También se cerraron el esfuerzo de razonamiento, que se guardaba sin llegar nunca a la configuración —el schema del CLI lo acepta como `variant`, y esa era la evidencia que faltaba— y el último agujero de paridad: la TUI ya deja elegir qué servidores instalar. Ahí apareció el defecto más caro de los tres, porque estaba entregado y en silencio: la pantalla nunca pasaba ese parámetro, así que cada instalación desde la TUI instalaba cero servidores y al reinstalar retiraba lo que una corrida con flags hubiera puesto.
 
 Y salió del árbol lo que quedaba de la distribución de v3: el binario vendorizado de 37 MB que el propio diseño prohíbe, y los manifiestos que lo describían.
+
+**Después de 4.1.0, Pegasus se quedó sin dependencias de terceros.** Con eso resuelto, el venv privado dejó de aislar nada, así que el punto de entrada cambió de shim más venv a un único `zipapp` con shebang y bit ejecutable (`tools/build_zipapp.py`), acompañado de su `.sha256`. Instalar pasa a ser bajar dos archivos, verificar el checksum y dejar el ejecutable en el PATH — sin wheel, sin `pip install`, sin `pegasus setup`. Esto sólo era viable porque, en paralelo, el contenido y los assets de los adapters aprendieron a leerse también desde adentro de un zip.
 
 **Lo que sigue.** La migración de tests que la unidad 10 dejó a medio camino: `tests/test_dependencies.py` y `tests/test_model_assignment_store.py` siguen enteros sobre el doble en memoria, sin la contraparte contra disco real que sus vecinos ya tienen. Y el resto vive en "Deudas sin unidad asignada", acarreado a propósito.
