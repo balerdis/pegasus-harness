@@ -44,12 +44,18 @@ class Capture:
     overwrote them; it is ``None`` exactly when ``existed`` is ``False``,
     mirroring :class:`pegasus.core.snapshot.Entry`, whose ``blob`` reference
     the store derives from this once the bytes are written.
+
+    ``is_directory`` mirrors the same field on :class:`~pegasus.core.snapshot.Entry`
+    and is subject to the same limit: it is only ever ``True`` alongside
+    ``existed=False``. A directory this capture found already standing is not
+    something `capture_paths` places here at all -- see its own docstring.
     """
 
     path: Path
     existed: bool
     mode: str | None
     content: bytes | None
+    is_directory: bool = False
 
 
 @dataclass(frozen=True)

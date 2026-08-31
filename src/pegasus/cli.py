@@ -252,6 +252,12 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
     adapter = _adapter(cli_id)
     environment = runtime.environment
     _require_present(adapter, environment)
+    # Computed early -- pure arithmetic over `adapter` and `environment`, so
+    # nothing is lost by asking for it before the preflight below rather than
+    # where `_materialize_dependencies` used to be the first to need it. The
+    # pre-write snapshot needs it too, to name a dependency tree's prospective
+    # address before that tree exists.
+    layout = adapter.layout(environment)
 
     # The whole preflight, before the first artifact rather than after the last.
     # Writable is only half of it: a journal that cannot be read is one that
@@ -325,17 +331,29 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
     # after a retiring reinstall would give back the key and not the file.
     #
     # A `dependency-tree` target is a directory, not a file -- `capture_paths`
-    # reads a path's bytes whole, and a directory has none to read. `restore`
-    # could not have put a whole tree back either way, so leaving one out of
-    # what this snapshot covers gives up nothing `restore` already promised.
+    # reads a path's bytes whole, and a directory has none to read, so an
+    # already-materialized tree stays out of every snapshot the way it always
+    # has (see `_stale_dependencies` and the exclusion above). A tree this run
+    # is *about* to materialize is different: at this point it has no bytes
+    # yet at all, existing or otherwise, so capturing "this did not exist" is
+    # exactly the ordinary absent-path case `capture_paths` already handles.
+    # That is narrow -- it only ever lets `restore` remove a tree, never put
+    # one back -- but it is what closes the hole a failed materialization
+    # used to leave open: nothing before this call to `apply` catches a
+    # failure there and takes the tree back out.
+    dependency_targets = _prospective_dependency_targets(runtime, layout, content, installed)
     touched = sorted(
         {step.artifact.path for step in plan.placements}
         | {record.target for record in retirements if record.kind != "dependency-tree"}
-        | {store.path},
+        | {store.path}
+        | dependency_targets,
         key=str,
     )
     try:
-        snapshot.save(capture_paths(runtime.filesystem, touched), taken_at=runtime.now)
+        snapshot.save(
+            capture_paths(runtime.filesystem, touched, directories=frozenset(dependency_targets)),
+            taken_at=runtime.now,
+        )
     except SnapshotStoreError as error:
         raise CommandError(
             f"a snapshot of what this install is about to overwrite could not be taken, "
@@ -353,7 +371,6 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
     # decided the fate of, so this is the one part of an install `planner`
     # never sees. A mismatch here raises before a single byte reaches disk,
     # so the whole install fails exactly as cleanly as a collision would.
-    layout = adapter.layout(environment)
     try:
         kept_dependencies, new_dependencies = _materialize_dependencies(runtime, layout, content, installed)
     except dependencies_module.MaterializeError as error:
@@ -530,6 +547,33 @@ def _stale_dependencies(installed: Install | None, content: content_module.Conte
     return tuple(
         entry for entry in installed.entries if entry.kind == "dependency-tree" and entry.id not in wanted
     )
+
+
+def _prospective_dependency_targets(
+    runtime: Runtime, layout, content: content_module.Content, installed: Install | None
+) -> set[Path]:
+    """Where a `download` or `npm` server would land, for every one this run
+    is about to materialize fresh.
+
+    Asked before `_materialize_dependencies` runs, so the pre-write snapshot
+    can name a tree's address while it still has nothing there to read — the
+    one moment `capture_paths` can honestly say something about a directory.
+    The "already kept, nothing to materialize" half of that function's own
+    decision is repeated here rather than shared with it, because sharing
+    would mean returning `kept` and `created` from a function that has not
+    fetched anything yet to decide between them.
+    """
+    owned = {entry.id: entry for entry in (installed.entries if installed else ())}
+    targets: set[Path] = set()
+    for item in content.mcp:
+        if item.distribution not in _MATERIALIZED_DISTRIBUTIONS:
+            continue
+        digest = item.checksum if item.distribution is content_module.Distribution.DOWNLOAD else item.integrity
+        existing = owned.get(f"dependency:{item.name}")
+        if existing is not None and existing.after_digest == digest and runtime.filesystem.exists(existing.target):
+            continue
+        targets.add(dependencies_module.target_dir(layout.dependencies_dir, item))
+    return targets
 
 
 def _materialize_dependencies(
@@ -767,9 +811,17 @@ def restore(runtime: Runtime, generation: int | None = None) -> dict[str, Any]:
     # Same reasoning as install and uninstall: restore writes, so nothing is
     # touched without its own copy taken first. What it captures is the
     # addresses it is about to touch, plus the journal, same as the others.
+    # A dependency-tree address this generation names is the one this call is
+    # about to `remove_dir` -- if it is standing right now, that is exactly
+    # the directory `capture_paths` cannot read back whole, so it is named
+    # here the same way `_install` names one, and left uncaptured for the
+    # same reason.
+    directories = frozenset(entry.path for entry in manifest.entries if entry.is_directory)
     touched = sorted({entry.path for entry in manifest.entries} | {store.path}, key=str)
     try:
-        snapshot.save(capture_paths(runtime.filesystem, touched), taken_at=runtime.now)
+        snapshot.save(
+            capture_paths(runtime.filesystem, touched, directories=directories), taken_at=runtime.now
+        )
     except SnapshotStoreError as error:
         raise CommandError(
             f"a snapshot of what this restore is about to overwrite could not be taken, "
@@ -789,6 +841,16 @@ def restore(runtime: Runtime, generation: int | None = None) -> dict[str, Any]:
                 content = snapshot.read_blob(generation, entry.blob)
                 runtime.filesystem.write_atomic(entry.path, content, mode=int(entry.mode, 8))
                 written.append(str(entry.path))
+            elif entry.is_directory:
+                # `remove`, called below for every other absent-before entry,
+                # is file-only by contract; a dependency tree needs the whole
+                # directory taken back out, same as `_retire_dependency_trees`
+                # -- and the same refusal to swallow a real failure: a
+                # permission this process cannot override surfaces as the
+                # `FileSystemError` caught just below, never as a silent
+                # `removed`.
+                runtime.filesystem.remove_dir(entry.path)
+                removed.append(str(entry.path))
             else:
                 runtime.filesystem.remove(entry.path)
                 removed.append(str(entry.path))
