@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path, PurePosixPath
 
 from pegasus.core import content
@@ -204,6 +205,83 @@ class LoadTest(TemporaryContent):
     def test_loading_twice_yields_equal_content(self):
         self.complete()
         self.assertEqual(content.load(self.root), content.load(self.root))
+
+
+def write_zip(archive_path: Path, entries: dict[str, str]) -> None:
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for relative, text in entries.items():
+            archive.writestr(relative, text)
+
+
+class ZipRootTest(unittest.TestCase):
+    """A package shipped inside a zip has no directory to walk on disk.
+
+    `importlib.resources.files(...)` hands the loader a `zipfile.Path` in that
+    case instead of a `pathlib.Path`. The two share `iterdir`, `is_dir`,
+    `is_file`, `read_text`, `read_bytes` and `joinpath`, but a `zipfile.Path`
+    has no `resolve`, no `relative_to`, no `parent`, and no `glob`/`rglob` --
+    exactly the calls this loader must not depend on if it is to work inside
+    an actual archive, not merely on a filesystem that happens to look like
+    one.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        archive_path = Path(self._directory.name) / "content.zip"
+        write_zip(
+            archive_path,
+            {
+                "skills/alpha/SKILL.md": SKILL,
+                "skills/alpha/references/guide.md": "# Guide\n",
+                f"agents/{content.SESSION_STARTS_IN}.md": SESSION_START,
+                "commands/probe-command.md": COMMAND,
+                "mcp/probe-mcp.md": NPM_MCP,
+                f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE,
+                "system-prompt/AGENTS.md": "# Rules\n\nBe careful.\n",
+            },
+        )
+        self.zip_file = zipfile.ZipFile(archive_path)
+        self.addCleanup(self.zip_file.close)
+        self.zip_root = zipfile.Path(self.zip_file)
+
+    def test_loads_every_category_from_inside_a_zip(self):
+        loaded = content.load(self.zip_root)
+        self.assertEqual([s.name for s in loaded.skills], ["alpha"])
+        self.assertEqual([a.name for a in loaded.agents], [content.SESSION_STARTS_IN])
+        self.assertEqual([c.name for c in loaded.commands], ["probe-command"])
+        self.assertEqual([m.name for m in loaded.mcp], ["probe-mcp"])
+        self.assertIsNotNone(loaded.system_prompt)
+
+    def test_a_skill_asset_below_the_top_level_is_read_from_the_zip(self):
+        """Exercises the recursive walk that stands in for `Path.rglob`."""
+        skill = content.load(self.zip_root).skills[0]
+        self.assertEqual(
+            [str(asset.relative_path) for asset in skill.assets],
+            ["SKILL.md", "references/guide.md"],
+        )
+        guide = next(a for a in skill.assets if str(a.relative_path) == "references/guide.md")
+        self.assertEqual(guide.content, "# Guide\n".encode("utf-8"))
+
+    def test_an_npm_servers_lockfile_beside_it_is_read_from_the_zip(self):
+        """Exercises the sibling lookup that stands in for `Path.parent`."""
+        mcp = content.load(self.zip_root).mcp[0]
+        self.assertEqual(mcp.npm_lockfile, NPM_LOCKFILE.encode("utf-8"))
+
+    def test_sources_read_from_a_zip_are_the_same_as_from_a_directory(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        write(root, "skills/alpha/SKILL.md", SKILL)
+        write(root, "skills/alpha/references/guide.md", "# Guide\n")
+        write_session_start(root)
+        write(root, "commands/probe-command.md", COMMAND)
+        write(root, "mcp/probe-mcp.md", NPM_MCP)
+        write(root, f"mcp/{NPM_LOCKFILE_NAME}", NPM_LOCKFILE)
+        write(root, "system-prompt/AGENTS.md", "# Rules\n\nBe careful.\n")
+        from_directory = content.load(root)
+        from_zip = content.load(self.zip_root)
+        self.assertEqual(from_directory, from_zip)
 
 
 class SkillTest(TemporaryContent):

@@ -5,10 +5,12 @@ import json
 import re
 import tempfile
 import unittest
+import zipfile
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 from pegasus.adapters.opencode import Adapter
+from pegasus.adapters.opencode import adapter as adapter_module
 from pegasus.adapters.opencode import render as render_module
 from pegasus.core import content as content_module
 from pegasus.core.content import (
@@ -745,6 +747,77 @@ class OwnArtifactsTest(unittest.TestCase):
         self.assertEqual(Adapter().own_artifacts(self.layout), Adapter().own_artifacts(self.layout))
 
 
+class MissingAssetGroupTest(unittest.TestCase):
+    """A declared asset group with no matching directory must never pass silently.
+
+    An empty-but-present directory is a different situation: an asset group can
+    legitimately ship with nothing in it, so that case must not raise.
+    """
+
+    def test_a_declared_group_with_no_directory_at_all_is_reported_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "present").mkdir()
+            targets = {"present": PurePosixPath("present"), "absent": PurePosixPath("absent")}
+            self.assertEqual(adapter_module._missing_asset_groups(root, targets), ["absent"])
+
+    def test_an_empty_but_present_directory_is_not_reported_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "empty").mkdir()
+            targets = {"empty": PurePosixPath("empty")}
+            self.assertEqual(adapter_module._missing_asset_groups(root, targets), [])
+
+    def test_a_missing_group_is_refused_with_its_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            targets = {"plugins": PurePosixPath("plugins")}
+            with self.assertRaises(adapter_module.MissingAssetGroupError) as raised:
+                adapter_module._check_asset_groups(root, targets)
+            self.assertIn("plugins", str(raised.exception))
+
+    def test_the_shipped_package_itself_has_every_declared_group(self):
+        """The check that runs at import time must already have passed for real."""
+        self.assertEqual(
+            adapter_module._missing_asset_groups(adapter_module.ASSETS, adapter_module.ASSET_TARGETS),
+            [],
+        )
+
+
+class ZipAssetFilesTest(unittest.TestCase):
+    """`own_artifacts` must read its bundled assets from inside a zip archive too.
+
+    `importlib.resources.files` hands back a `zipfile.Path` when the package is
+    read straight out of a zip (built with `zipapp`, for instance) instead of a
+    real `pathlib.Path`. The two share `iterdir`, `is_dir`, `is_file` and
+    `read_bytes`, so `_asset_files` must walk the tree using only those, the
+    same constraint `pegasus.core.content` already had to satisfy.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        archive_path = Path(self._directory.name) / "assets.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("plugins/engram.ts", "// plugin\n")
+            archive.writestr("plugins/nested/helper.ts", "// helper\n")
+        self.zip_file = zipfile.ZipFile(archive_path)
+        self.addCleanup(self.zip_file.close)
+        self.zip_root = zipfile.Path(self.zip_file)
+
+    def test_files_nested_inside_a_zip_are_found(self):
+        found = adapter_module._asset_files(self.zip_root / "plugins")
+        relative = sorted(str(item[1]) for item in found)
+        self.assertEqual(relative, ["engram.ts", "nested/helper.ts"])
+
+    def test_content_is_read_from_inside_the_zip(self):
+        found = dict(
+            (str(relative), path.read_bytes())
+            for path, relative in adapter_module._asset_files(self.zip_root / "plugins")
+        )
+        self.assertEqual(found["engram.ts"], b"// plugin\n")
+
+
 class SkillRegistryContractTest(unittest.TestCase):
     """The one contract that spans a TypeScript plugin and a Python install plan.
 
@@ -965,3 +1038,38 @@ class PlaceholderRenderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeclaredProgramsMatchTheTreeTest(unittest.TestCase):
+    """The executable bit is declared, and this is what keeps the declaration true.
+
+    It has to be declared: inside an archive the bit cannot be read at all, so
+    asking the file would answer one way from a checkout and another way from a
+    zip, and nothing would say they disagreed.
+
+    But a declaration drifts. An asset added with its executable bit set and not
+    named here would ship as plain text, and the failure lands far away — a
+    program someone's plugin cannot run. So the set is held to what this
+    package's own tree really carries, on disk, which is the one place the
+    question can still be asked directly.
+    """
+
+    def executables_on_disk(self) -> set[str]:
+        root = Path(adapter_module.__file__).resolve().parent / "assets"
+        return {
+            path.name
+            for path in root.rglob("*")
+            if path.is_file() and path.stat().st_mode & 0o111 and "__pycache__" not in path.parts
+        }
+
+    def test_every_asset_that_is_executable_on_disk_is_declared(self):
+        undeclared = self.executables_on_disk() - set(adapter_module.EXECUTABLE_ASSETS)
+        self.assertEqual(
+            sorted(undeclared), [], "executable assets that would ship without their bit"
+        )
+
+    def test_nothing_is_declared_that_is_not_executable_on_disk(self):
+        """The other direction: a name left behind after its file stopped being
+        a program would quietly hand out a bit nothing needs."""
+        stale = set(adapter_module.EXECUTABLE_ASSETS) - self.executables_on_disk()
+        self.assertEqual(sorted(stale), [], "declared programs that are not executable in the tree")
