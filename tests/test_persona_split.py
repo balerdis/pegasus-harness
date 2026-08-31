@@ -259,10 +259,11 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
         """What the voice declares. That the declaration binds is the adapter's to prove.
 
         king-pegasus acts rather than delegates, so it does structural discovery
-        too, but it declares no server: this voice is pending a reformulation
-        that decides what it may act on. It must never gain write, edit, or bash.
+        too, and it now applies what it explains: `write` and `edit` are what
+        that takes. It declares no server, and it must never gain `bash` --
+        applying stops at the edit, never at running anything.
         """
-        self.assertEqual(list(self.agent.requires_tools), ["read"])
+        self.assertEqual(set(self.agent.requires_tools), {"read", "write", "edit"})
         self.assertEqual(self.agent.optional_tools, ())
         self.assertEqual(self.agent.optional_mcp, ())
 

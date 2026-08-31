@@ -936,13 +936,14 @@ class ShippedContentTest(unittest.TestCase):
         # tool need used to fall back on the runtime's defaults. Now that the
         # renderer's deny baseline covers every agent, this is the one whose
         # tools this repository must declare on purpose rather than by omission.
-        # It declares no server: this coordinator is pending a reformulation
-        # that decides what it may act on, so nothing is granted beyond the
-        # native tools it needs to read and search.
+        # It declares no server: what it may act on is settled by the direct-work
+        # threshold in its own body, not by a codebase-memory server, so `write`
+        # and `edit` join the native tools it needs to read, search and make a
+        # small, already-known, single-file edit without delegating it away.
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         self.assertEqual(
             set(orchestrator.requires_tools),
-            {"read", "bash", "grep", "glob"},
+            {"read", "bash", "grep", "glob", "write", "edit"},
         )
         self.assertEqual(orchestrator.optional_tools, ())
         self.assertEqual(orchestrator.optional_mcp, ())
