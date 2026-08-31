@@ -17,8 +17,8 @@ import io
 
 from pegasus import cli
 from pegasus.tui import session
-from pegasus.tui.navigator import Action, Navigator
-from pegasus.tui.view import Line, render
+from pegasus.tui.navigator import STARTUP_MESSAGE, Action, Navigator, busy_message_for
+from pegasus.tui.view import Line, render, render_busy
 
 KEYS: dict[int, Action] = {
     curses.KEY_UP: Action.MOVE_UP,
@@ -63,12 +63,16 @@ def draw(window, lines: tuple[Line, ...]) -> None:
 def run(window, runtime: cli.Runtime) -> None:
     curses.curs_set(0)
     window.keypad(True)
+    draw(window, render_busy(STARTUP_MESSAGE))
     navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
     draw(window, render(navigator.current, navigator.cursor))
     while not navigator.quit:
         action = action_for(window.getch())
         if action is None:
             continue
+        message = busy_message_for(navigator.current, navigator.cursor, action)
+        if message is not None:
+            draw(window, render_busy(message))
         navigator = session.step(navigator, runtime, action)
         draw(window, render(navigator.current, navigator.cursor))
 
