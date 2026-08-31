@@ -94,12 +94,19 @@ install -m 755 pegasus "$BIN_DIR/pegasus"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) echo "PATH: ya incluye $BIN_DIR" ;;
-  *) echo "PATH: falta $BIN_DIR -- agregalo antes de invocar 'pegasus' en una shell nueva" ;;
+  *) echo "PATH: falta $BIN_DIR -- invocá el shim por su ruta absoluta y avisale a la persona" ;;
 esac
 ```
 
-Si falta en el PATH, no lo agregues vos mismo al perfil de shell de la persona sin que lo pida: decíselo
-y esperá.
+**Si falta en el PATH, no lo agregues vos al perfil de shell de nadie**, ni siquiera "temporalmente":
+decíselo y seguí. Y no lo necesitás para terminar — tenés la ruta absoluta, así que invocá
+`"$BIN_DIR/pegasus"` y andá.
+
+Lo que sí tenés que decirle, con estas palabras, porque es el error fácil de cometer: **un
+`source ~/.bashrc` no alcanza.** Quien agrega `~/.local/bin` al PATH suele ser `~/.profile`, que corre
+al *iniciar sesión* y no al abrir una terminal, y sólo si el directorio ya existía — y lo acaba de
+crear esta instalación. Cerrar sesión y volver a entrar es lo que resuelve. Editar el shell es el
+último recurso, no el primero, porque hacerlo cuando no hacía falta deja la entrada duplicada.
 
 *Ejecutado tal cual: `install -m 755` dejó el shim con permiso `0755`, y el `case` se probó con las dos
 ramas (ausente y presente) sobre un `PATH` de prueba.*
