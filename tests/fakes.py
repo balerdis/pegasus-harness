@@ -20,6 +20,7 @@ from pathlib import Path
 import no_network  # noqa: F401  -- importing it is what installs the refusal
 from pegasus.ports.downloader import DownloaderError
 from pegasus.ports.filesystem import FileSystemError
+from pegasus.ports.mcp_process import MCPExchange
 from pegasus.ports.npm_installer import NpmInstallerError
 
 DEFAULT_MODE = 0o644
@@ -62,6 +63,24 @@ class FakeNpmInstaller:
         self.calls.append(directory)
         if directory in self.failures:
             raise NpmInstallerError(self.failures[directory])
+
+
+class FakeMCPProcess:
+    """An MCP process that answers from a table of exchanges instead of a real one.
+
+    Keyed by the command tuple, so a test can hand each configured server a
+    different outcome without ever spawning anything.
+    """
+
+    def __init__(self, *, exchanges: dict[tuple[str, ...], MCPExchange] | None = None):
+        self.exchanges: dict[tuple[str, ...], MCPExchange] = dict(exchanges or {})
+        self.calls: list[tuple[tuple[str, ...], str, float]] = []
+
+    def exchange(self, command: tuple[str, ...], request: str, timeout_seconds: float) -> MCPExchange:
+        self.calls.append((command, request, timeout_seconds))
+        if command not in self.exchanges:
+            raise AssertionError(f"no fake exchange registered for {command!r}")
+        return self.exchanges[command]
 
 
 class FakeFileSystem:
