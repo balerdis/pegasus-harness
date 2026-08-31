@@ -37,16 +37,19 @@ from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core import ownership, planner, pointer
 from pegasus.core.journal import KINDS, Install, Record
+from pegasus.core import mcp_handshake
 from pegasus.core.types import Capability, Codec, Environment, ModelAssignment
 from pegasus.infra.downloader_http import HttpDownloader
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import FileJournalStore
+from pegasus.infra.mcp_process_subprocess import SubprocessMCPProcess
 from pegasus.infra.model_assignment_store_file import FileModelAssignmentStore
 from pegasus.infra.npm_installer_subprocess import SubprocessNpmInstaller
 from pegasus.infra.snapshot_store_file import FileSnapshotStore, capture_paths
 from pegasus.ports.downloader import Downloader
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from pegasus.ports.journal_store import JournalStoreError
+from pegasus.ports.mcp_process import MCPProcess
 from pegasus.ports.model_assignment_store import ModelAssignmentStoreError
 from pegasus.ports.npm_installer import NpmInstaller
 from pegasus.ports.snapshot_store import SnapshotStoreError
@@ -84,6 +87,8 @@ class Runtime:
     variables: dict[str, str] = field(default_factory=dict)
     downloader: Downloader = field(default_factory=HttpDownloader)
     npm_installer: NpmInstaller = field(default_factory=SubprocessNpmInstaller)
+    mcp_process: MCPProcess = field(default_factory=SubprocessMCPProcess)
+    mcp_handshake_timeout_seconds: float = mcp_handshake.DEFAULT_TIMEOUT_SECONDS
 
     @property
     def environment(self) -> Environment:
@@ -104,6 +109,7 @@ def default_runtime(out: TextIO) -> Runtime:
         variables=variables,
         downloader=HttpDownloader(),
         npm_installer=SubprocessNpmInstaller(),
+        mcp_process=SubprocessMCPProcess(),
     )
 
 
@@ -200,6 +206,11 @@ def _parser() -> argparse.ArgumentParser:
 
     doctor = commands.add_parser("doctor", help="what is supported, what is present, what has drifted")
     doctor.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    doctor.add_argument(
+        "--start-mcp-servers",
+        action="store_true",
+        help="also launch each configured MCP server and perform the handshake (executes commands; off by default)",
+    )
 
     # No `--cli`: a generation is whatever one command touched, not one CLI's
     # installation, so restoring is never scoped to a CLI the way install and
@@ -872,24 +883,33 @@ def restore(runtime: Runtime, generation: int | None = None) -> dict[str, Any]:
 
 
 def _doctor(arguments, runtime: Runtime) -> dict[str, Any]:
-    return doctor(runtime)
+    return doctor(runtime, start_mcp_servers=getattr(arguments, "start_mcp_servers", False))
 
 
-def doctor(runtime: Runtime) -> dict[str, Any]:
+def doctor(runtime: Runtime, *, start_mcp_servers: bool = False) -> dict[str, Any]:
     """What is supported, what is present, and what has drifted, per CLI —
     the TUI's status screen calls this directly, the report it gets back
     the same one `--json` would.
+
+    `start_mcp_servers` is the one way this stops being read-only: every
+    locally-launched MCP server the journal claims for a CLI is actually
+    started and put through the MCP `initialize` handshake.
     """
     environment = runtime.environment
     registry = available()
     journal = journal_store(runtime).load()
     return {
         "pegasus_version": pegasus.__version__,
-        "clis": [_health(registry.get(cli_id), environment, journal, runtime) for cli_id in registry.ids()],
+        "clis": [
+            _health(registry.get(cli_id), environment, journal, runtime, start_mcp_servers=start_mcp_servers)
+            for cli_id in registry.ids()
+        ],
     }
 
 
-def _health(adapter, environment: Environment, journal, runtime: Runtime) -> dict[str, Any]:
+def _health(
+    adapter, environment: Environment, journal, runtime: Runtime, *, start_mcp_servers: bool = False
+) -> dict[str, Any]:
     detection = adapter.detect(environment)
     install = journal_module.install_for(journal, adapter.id)
     health: dict[str, Any] = {
@@ -926,7 +946,56 @@ def _health(adapter, environment: Environment, journal, runtime: Runtime) -> dic
             health["missing"].append(entry.id)
         elif current != entry.after_digest:
             health["drifted"].append(entry.id)
+
+    if start_mcp_servers:
+        health["mcp_servers"] = [
+            {"id": check.id, "status": check.status, "detail": check.detail}
+            for check in _mcp_checks(runtime, install)
+        ]
     return health
+
+
+_MCP_ENTRY_PREFIX = "mcp:"
+
+
+def _mcp_checks(runtime: Runtime, install) -> list[mcp_handshake.ServerCheck]:
+    """Launch every locally-configured MCP server the journal claims for this
+    install, and hand back one verdict per server.
+
+    Only what `_mcp_entries` finds is ever executed: a `config-key` entry
+    whose id this same install wrote, read back from the configuration file
+    Pegasus itself placed. Nothing named anywhere else is ever a candidate.
+    """
+    return [
+        _mcp_checks_one(runtime, entry, name)
+        for entry, name in _mcp_entries(install)
+    ]
+
+
+def _mcp_entries(install) -> list[tuple[Record, str]]:
+    return [
+        (entry, entry.id[len(_MCP_ENTRY_PREFIX):])
+        for entry in install.entries
+        if entry.kind == "config-key" and entry.id.startswith(_MCP_ENTRY_PREFIX)
+    ]
+
+
+def _mcp_checks_one(runtime: Runtime, entry: Record, name: str) -> mcp_handshake.ServerCheck:
+    try:
+        document = _document(runtime.filesystem, entry)
+    except (FileSystemError, CommandError) as error:
+        return mcp_handshake.ServerCheck(name, "unreadable", f"configuration could not be read: {error}")
+    value = pointer.get_at(document, entry.pointer or "")
+    if not isinstance(value, dict):
+        return mcp_handshake.ServerCheck(name, "missing", "not configured")
+    if value.get("type") != "local":
+        return mcp_handshake.ServerCheck(name, "remote", "not a locally-launched server; not started")
+    command = value.get("command")
+    if not isinstance(command, list) or not command or not all(isinstance(part, str) for part in command):
+        return mcp_handshake.ServerCheck(name, "invalid", "configured command is malformed")
+    return mcp_handshake.check_server(
+        name, tuple(command), runtime.mcp_process, timeout_seconds=runtime.mcp_handshake_timeout_seconds
+    )
 
 
 def _current_digest(filesystem: FileSystem, entry: Record) -> str | None:
@@ -1380,4 +1449,12 @@ def _cli_prose(entry: dict[str, Any]) -> str:
     if steps:
         line += "\n  If it was already running when Pegasus was installed:"
         line += "".join(f"\n    {step}" for step in steps)
+    if "mcp_servers" in entry:
+        if entry["mcp_servers"]:
+            line += "\n  MCP servers:"
+            line += "".join(
+                f"\n    {check['id']}: {check['status']} — {check['detail']}" for check in entry["mcp_servers"]
+            )
+        else:
+            line += "\n  No MCP servers configured."
     return line

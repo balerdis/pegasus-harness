@@ -62,6 +62,14 @@ pegasus doctor
 
 Reporta qué CLIs anfitrionas detecta y qué drift hay entre lo instalado y lo que el contenido actual generaría. No reemplaza una prueba de comportamiento.
 
+Para chequear además que cada servidor MCP instalado arranca y contesta el handshake de MCP:
+
+```sh
+pegasus doctor --start-mcp-servers
+```
+
+Tiene sentido correrlo después de instalar servidores MCP, o cuando un cliente reporta que uno no conecta. A diferencia de `doctor` a secas, este flag ejecuta los comandos que la configuración tiene guardados — por eso no es el comportamiento por defecto. Por servidor informa `ok` (contestó el handshake), `timeout` (arrancó pero nunca contestó), `exited` (terminó antes de contestar), `invalid` (contestó algo que no es una respuesta MCP válida) o `not-found` (no se pudo arrancar); un servidor configurado como remoto se reporta como tal y no se arranca.
+
 ## Deshacer
 
 - `pegasus restore [generación]` vuelve al estado exacto anterior a un comando (o a una generación puntual del historial de snapshots).
