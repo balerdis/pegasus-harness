@@ -1,9 +1,12 @@
 """Loading the content core, and refusing to load content that would mislead an adapter."""
 from __future__ import annotations
 
+import ast
+import inspect
 import tempfile
 import unittest
 import zipfile
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 from pegasus.core import content
@@ -1089,6 +1092,297 @@ class SelectMcpTest(unittest.TestCase):
         self.assertEqual(self.content.agents, before_agents)
         self.assertEqual(self.agent.optional_mcp, ("context7", "other"))
 
+
+
+def _content_error_raise_sites() -> dict[str, int]:
+    """`raise ContentError(...)` sites in `content.py`, keyed by enclosing
+    function name plus call order -- stable under unrelated edits, unlike a
+    line number, and moved only by adding/removing/reordering a raise inside
+    that function, which is exactly what `test_every_raise_site_has_a_case`
+    must catch.
+    """
+    tree = ast.parse(inspect.getsource(content))
+    sites: dict[str, int] = {}
+    counters: dict[str, int] = {}
+    stack: list[str] = []
+
+    def visit(node: ast.AST) -> None:
+        pushed = isinstance(node, ast.FunctionDef)
+        if pushed:
+            stack.append(node.name)
+        if isinstance(node, ast.Raise):
+            call = node.exc
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "ContentError":
+                function = stack[-1] if stack else "<module>"
+                sites[f"{function}#{counters.get(function, 0)}"] = node.lineno
+                counters[function] = counters.get(function, 0) + 1
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+        if pushed:
+            stack.pop()
+
+    visit(tree)
+    return sites
+
+
+_ContentCase = Callable[[Path], tuple[str | None, str]]
+
+
+def _via_load(files: dict[str, str], expected: str) -> _ContentCase:
+    """A case whose fixture is the given files, refused by `content.load`."""
+
+    def run(root: Path) -> tuple[str, str]:
+        for relative, text in files.items():
+            write(root, relative, text)
+        try:
+            content.load(root)
+        except ContentError as error:
+            return expected, str(error)
+        raise AssertionError(f"malformed fixture was accepted: {sorted(files)}")
+
+    return run
+
+
+def _agent_text(name: str, mode: str = "primary", extra: str = "") -> str:
+    return f"---\nname: {name}\ndescription: d\nmode: {mode}\n{extra}---\n\nx\n"
+
+
+_SESSION_START_FILE = f"agents/{content.SESSION_STARTS_IN}.md"
+
+
+def _session_start_case(extra: str) -> _ContentCase:
+    """A malformed session-start agent, the only file in the tree."""
+    return _via_load({_SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN, extra=extra)}, _SESSION_START_FILE)
+
+
+def _run_dead_branch(root: Path) -> tuple[None, str]:
+    """Evidence for `split_frontmatter#2`: a non-mapping document is refused
+    by `frontmatter.parse` itself via `FrontmatterError`, before the
+    `isinstance` check ever runs -- `parse` only ever returns a `dict` it
+    built, or raises.
+    """
+    try:
+        content.split_frontmatter("---\n- a\n- b\n---\n\nbody\n")
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("non-mapping frontmatter was accepted")
+
+
+def _run_select_mcp_unknown_id(root: Path) -> tuple[None, str]:
+    server = content.Mcp(
+        name="context7", description="d", body="b", distribution=Distribution.REMOTE,
+        endpoint="https://example.test/context7", source=PurePosixPath("mcp/context7.md"),
+    )
+    try:
+        content.select_mcp(content.Content(mcp=(server,)), ["bogus"])
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("an unknown mcp id was accepted")
+
+
+class ContentErrorSitesTest(unittest.TestCase):
+    """Table test over every `raise ContentError` site in `content.py`, from
+    an AST walk rather than a hand-kept list -- the `test_architecture.py`
+    habit. Every reachable site's message must name the real path of the file
+    responsible, matching `frontmatter.py`'s own `"{source}:{line_no}: ..."`.
+    """
+
+    #: key -> (runner, reason); reason is set only where no path applies.
+    CASES: dict[str, tuple[_ContentCase, str]] = {
+        "split_frontmatter#0": (
+            _via_load({"commands/broken.md": "---\nname: broken\ndescription: d\n\nno closing\n"}, "commands/broken.md"), ""),
+        "split_frontmatter#1": (
+            _via_load({"commands/broken.md": "---\n  bad: x\n---\n\nb\n"}, "commands/broken.md"), ""),
+        "split_frontmatter#2": (_run_dead_branch, "Dead code -- see `_run_dead_branch`'s docstring."),
+        "select_mcp#0": (
+            _run_select_mcp_unknown_id,
+            "Refuses a chosen mcp id, not a file on disk, so no path applies; the "
+            "message already names the offending id and the ids that do exist.",
+        ),
+        "_load_skills#0": (
+            _via_load({"skills/alpha/references/orphan.md": "# Orphan\n"}, "skills/alpha"), ""),
+        "_require_the_session_start#0": (_via_load({"agents/alpha.md": _agent_text("alpha")}, "agents"), ""),
+        "_require_the_session_start#1": (
+            _via_load({_SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN, mode="subagent")}, _SESSION_START_FILE), ""),
+        "_require_known_optional_mcp#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "agents/probe-agent.md": "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+                    "optional_mcp: [phantom]\n---\n\nx\n",
+                },
+                "agents/probe-agent.md",
+            ),
+            "",
+        ),
+        "_require_mcp_convention_referenced#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "mcp/context7.md": MCP.replace("probe-mcp", "context7"),
+                    "agents/probe-agent.md": "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+                    "optional_mcp: [context7]\n---\n\nx\n",
+                },
+                "agents/probe-agent.md",
+            ),
+            "",
+        ),
+        "_refuse_foreign_form_fields#0": (
+            _via_load(
+                {"mcp/probe-mcp.md": MCP.replace(
+                    "endpoint: https://example.test/mcp\n",
+                    "endpoint: https://example.test/mcp\nversion: 1.0.0\n",
+                )},
+                "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
+        "_download_form#0": (
+            _via_load({"mcp/probe-mcp.md": DOWNLOAD_MCP.replace(CHECKSUM, "sha256:not-hex")}, "mcp/probe-mcp.md"), ""),
+        "_archive_form#0": (
+            _via_load({"mcp/probe-mcp.md": ARCHIVE_MCP.replace("archive_executable: probe-mcp\n", "")}, "mcp/probe-mcp.md"), ""),
+        "_archive_form#1": (
+            _via_load(
+                {"mcp/probe-mcp.md": ARCHIVE_MCP.replace(
+                    "archive_members: [CHANGELOG.md, LICENSE, probe-mcp]", "archive_members: []"
+                )},
+                "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
+        "_archive_form#2": (
+            _via_load({"mcp/probe-mcp.md": ARCHIVE_MCP.replace("LICENSE", "../LICENSE")}, "../LICENSE"), ""),
+        "_archive_form#3": (
+            _via_load(
+                {"mcp/probe-mcp.md": ARCHIVE_MCP.replace("archive_executable: probe-mcp\n", "archive_executable: ghost\n")},
+                "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
+        "_npm_form#0": (
+            _via_load(
+                {"mcp/probe-mcp.md": NPM_MCP.replace(INTEGRITY, "sha256:not-sha512"), f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE},
+                "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
+        "_npm_form#1": (
+            _via_load(
+                {"mcp/probe-mcp.md": NPM_MCP.replace(NPM_LOCKFILE_NAME, f"../{NPM_LOCKFILE_NAME}"), f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE},
+                "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
+        "_npm_form#2": (
+            _via_load({"mcp/probe-mcp.md": NPM_MCP.replace(NPM_LOCKFILE_NAME, "ghost-lock.json")}, "ghost-lock.json"), ""),
+        "_require_lockfile_pins#0": (
+            _via_load({"mcp/probe-mcp.md": NPM_MCP, f"mcp/{NPM_LOCKFILE_NAME}": "not json at all"}, "mcp/probe-mcp.md"), ""),
+        "_require_lockfile_pins#1": (
+            _via_load({"mcp/probe-mcp.md": NPM_MCP, f"mcp/{NPM_LOCKFILE_NAME}": '{"name": "no-packages-here"}'}, "mcp/probe-mcp.md"), ""),
+        "_require_lockfile_pins#2": (
+            _via_load(
+                {"mcp/probe-mcp.md": NPM_MCP, f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE.replace('"probe-mcp": "1.2.3"', '"probe-mcp": "9.9.9"')},
+                "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
+        "_require_lockfile_pins#3": (
+            _via_load(
+                {"mcp/probe-mcp.md": NPM_MCP, f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE.replace('"name": "pegasus-probe-mcp", ', "")},
+                "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
+        "_require_lockfile_pins#4": (
+            _via_load(
+                {"mcp/probe-mcp.md": NPM_MCP, f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE.replace("node_modules/probe-mcp", "node_modules/other")},
+                "node_modules/probe-mcp",
+            ),
+            "",
+        ),
+        "_require_lockfile_pins#5": (
+            _via_load(
+                {"mcp/probe-mcp.md": NPM_MCP, f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE.replace(INTEGRITY, "sha512-" + "b" * 86 + "==")},
+                "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
+        "_load_system_prompt#0": (
+            _via_load({"system-prompt/AGENTS.md": "# Rules\n", "system-prompt/OTHER.md": "# More\n"}, "system-prompt"), ""),
+        "_descriptor#0": (_via_load({"commands/probe-command.md": "# Just a body\n"}, "commands/probe-command.md"), ""),
+        "_refuse_derived_fields#0": (
+            _session_start_case("default: true\n"), ""),
+        "_require_known_placeholders#0": (
+            _via_load({"commands/probe-command.md": COMMAND.replace("Command body.", "{{bogus}}")}, "commands/probe-command.md"), ""),
+        "_require_known_placeholders#1": (
+            _via_load({"commands/probe-command.md": COMMAND.replace("Command body.", "{{ oops")}, "commands/probe-command.md"), ""),
+        "_refuse_verbatim_placeholders#0": (
+            _via_load(
+                {"skills/alpha/SKILL.md": SKILL, "skills/alpha/references/note.md": "See {{skills_root}}.\n"},
+                "skills/alpha/references/note.md",
+            ),
+            "",
+        ),
+        "_refuse_verbatim_placeholders#1": (
+            _via_load(
+                {"skills/alpha/SKILL.md": SKILL, "skills/alpha/references/note.md": "{{ oops\n"},
+                "skills/alpha/references/note.md",
+            ),
+            "",
+        ),
+        "_require_name#0": (_via_load({"skills/beta/SKILL.md": SKILL}, "skills/beta/SKILL.md"), ""),
+        "_text#0": (
+            _via_load(
+                {"commands/probe-command.md": "---\nname: probe-command\nruns_as: default\nexecution: inline\n---\n\nx\n"},
+                "commands/probe-command.md",
+            ),
+            "",
+        ),
+        "_choice#0": (
+            _via_load({"commands/probe-command.md": COMMAND.replace("orchestrator", "pegasus-orchestrator")}, "commands/probe-command.md"), ""),
+        "_flag#0": (_session_start_case('model_configurable: "false"\n'), ""),
+        "_names#0": (_session_start_case("requires_tools: bash\n"), ""),
+        "_names#1": (_session_start_case('requires_tools: [""]\n'), ""),
+    }
+
+    def _temp_root(self) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name)
+
+    def test_every_raise_site_has_a_case(self):
+        self.assertEqual(set(_content_error_raise_sites()), set(self.CASES))
+
+    def test_every_reachable_site_names_a_real_path(self):
+        for key, (run, reason) in self.CASES.items():
+            with self.subTest(key=key):
+                expected, message = run(self._temp_root())
+                if expected is None:
+                    self.assertTrue(reason, f"{key}: a path-less result must record why")
+                    continue
+                self.assertFalse(reason, f"{key}: a reason is only for path-less results")
+                self.assertIn(expected, message)
+
+    def test_a_representative_subset_raises_identically_from_inside_a_zip(self):
+        """Same malformed trees, staged inside a real zip archive instead of
+        loose files, must raise identically -- proof these fixtures are not
+        bypassing the `Traversable` path production reads a zip through.
+        """
+        subset = {
+            "skills/alpha/references/orphan.md": ("# Orphan\n", "skills/alpha"),
+            "mcp/probe-mcp.md": (NPM_MCP.replace(NPM_LOCKFILE_NAME, "ghost-lock.json"), "ghost-lock.json"),
+        }
+        for relative, (text, expected) in subset.items():
+            with self.subTest(relative=relative):
+                archive_dir = tempfile.TemporaryDirectory()
+                self.addCleanup(archive_dir.cleanup)
+                archive_path = Path(archive_dir.name) / "content.zip"
+                write_zip(archive_path, {relative: text})
+                zip_file = zipfile.ZipFile(archive_path)
+                self.addCleanup(zip_file.close)
+                with self.assertRaises(ContentError) as raised:
+                    content.load(zipfile.Path(zip_file))
+                self.assertIn(expected, str(raised.exception))
 
 
 if __name__ == "__main__":
