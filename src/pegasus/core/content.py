@@ -44,6 +44,24 @@ A subdirectory rather than more files beside `AGENTS.md`, for the same reason
 have to be told apart from it by name.
 """
 
+AGENT_MCP_DIR = "mcp"
+"""Where agent prompts keep the sections that belong to one server each.
+
+The same idea as `SYSTEM_PROMPT_MCP_DIR`, moved to the tree that has twelve
+files instead of one: an agent prompt is unconditional prose the moment it is
+written, so a server's ambient half has to live beside it rather than inside
+it, or a user who never selected that server would still be told to follow a
+convention file that was never installed. `_markdown_files` only ever looks at
+files directly inside the directory it is given -- it does not recurse -- so
+this subdirectory is invisible to `_load_agents`'s own scan of `agents/` by
+construction, never by a name it has to remember to exclude.
+"""
+
+_AGENT_MCP_OVERRIDE = re.compile(r"^(?P<mcp_id>[^@]+)@(?P<agent>[^@]+)$")
+"""How an agent-specific section names itself: `<id>@<agent>.md`. A file with
+no `@` in its stem is the shared section for that id, read by every agent
+that declares it and does not narrow it further."""
+
 _MCP_CONVENTION_DIR = PurePosixPath("_shared") / "mcp"
 """Where every server's usage convention lands, relative to the skills root.
 
@@ -176,6 +194,19 @@ class Agent:
     optional_mcp: tuple[str, ...] = ()
     may_delegate_to: tuple[str, ...] = ()
     model_configurable: bool = False
+    mcp_sections: tuple[McpSection, ...] = ()
+    """This agent's own ambient half, one per server it was granted.
+
+    The same split `McpSection` already draws for the system prompt, carried
+    down to the level that actually grants the tools: an agent's own body is
+    unconditional prose the moment it is written, so the paragraph telling it
+    to follow a server's convention has to live beside the grant instead of
+    inside the prompt, or it ships to every agent whether or not anyone chose
+    that server. Resolved from `optional_mcp` at load time -- shared unless an
+    override exists naming this agent specifically -- and pruned by
+    `select_mcp` in lockstep with `optional_mcp` itself, so a grant and the
+    instruction to use it can never disagree.
+    """
 
     @property
     def default(self) -> bool:
@@ -341,8 +372,8 @@ def load(root: ContentRoot = DEFAULT_ROOT) -> Content:
     satisfies that interface too, which is exactly what lets a test build a
     content tree on a real filesystem and hand its root here unchanged.
     """
-    agents = _load_agents(root / "agents", PurePosixPath("agents"))
     mcp = _load_mcp(root / "mcp", PurePosixPath("mcp"))
+    agents = _load_agents(root / "agents", PurePosixPath("agents"), mcp)
     _require_known_optional_mcp(agents, mcp)
     _require_mcp_convention_referenced(agents)
     system_prompt = _load_system_prompt(root / SYSTEM_PROMPT_DIR, PurePosixPath(SYSTEM_PROMPT_DIR))
@@ -420,6 +451,9 @@ def select_mcp(content: Content, chosen: Iterable[str]) -> Content:
                 optional_mcp=tuple(
                     bindings[name] or name for name in agent.optional_mcp if name in kept
                 ),
+                mcp_sections=tuple(
+                    section for section in agent.mcp_sections if section.name in kept
+                ),
             )
             for agent in content.agents
         ),
@@ -471,27 +505,93 @@ def _load_skills(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[S
     return tuple(skills)
 
 
-def _load_agents(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Agent, ...]:
+def _load_agents(
+    directory: ContentRoot, relative_dir: PurePosixPath, mcp: tuple[Mcp, ...]
+) -> tuple[Agent, ...]:
+    paths = _markdown_files(directory)
+    agent_names = {_stem(path) for path in paths}
+    known_mcp = {server.name for server in mcp}
+    shared, overrides = _load_agent_mcp_sections(
+        directory / AGENT_MCP_DIR, relative_dir / AGENT_MCP_DIR, agent_names, known_mcp
+    )
     agents = []
-    for path in _markdown_files(directory):
+    for path in paths:
         fields, body, source = _descriptor(path, relative_dir)
         _refuse_derived_fields(fields, source)
+        name = _stem(path)
+        optional_mcp = _names(fields, "optional_mcp", source)
+        mcp_sections = tuple(
+            overrides[(mcp_id, name)] if (mcp_id, name) in overrides else shared[mcp_id]
+            for mcp_id in optional_mcp
+            if mcp_id in shared or (mcp_id, name) in overrides
+        )
         agents.append(
             Agent(
-                name=_stem(path),
+                name=name,
                 description=_text(fields, "description", source),
                 body=body,
                 mode=_choice(fields, "mode", AgentMode, source),
                 source=source,
                 requires_tools=_names(fields, "requires_tools", source),
                 optional_tools=_names(fields, "optional_tools", source),
-                optional_mcp=_names(fields, "optional_mcp", source),
+                optional_mcp=optional_mcp,
                 may_delegate_to=_names(fields, "may_delegate_to", source),
                 model_configurable=_flag(fields, "model_configurable", source),
+                mcp_sections=mcp_sections,
             )
         )
     _require_the_session_start(tuple(agents), relative_dir)
     return tuple(agents)
+
+
+def _load_agent_mcp_sections(
+    directory: ContentRoot,
+    relative_dir: PurePosixPath,
+    agent_names: set[str],
+    known_mcp: set[str],
+) -> tuple[dict[str, McpSection], dict[tuple[str, str], McpSection]]:
+    """Every agent-side section this tree ships, shared or narrowed to one agent.
+
+    Returns the two maps `_load_agents` resolves each agent's `mcp_sections`
+    from: `id -> McpSection` for a file with no `@` in its stem, and
+    `(id, agent) -> McpSection` for one that names an override. Kept apart
+    rather than merged into one lookup keyed by `(id, agent | None)`, because
+    the two failure modes below read from different sets -- `known_mcp` alone
+    for the first, `agent_names` alone for the second -- and merging the maps
+    would not have merged the checks.
+
+    Both checks run the moment a file is read, before any agent even asks for
+    it: a section for a server nothing ships, or an override for an agent that
+    was renamed or removed, would otherwise sit in the tree looking wired in
+    and reach nobody -- the same silent failure `_require_known_optional_mcp`
+    and `_require_the_session_start` each exist to turn into a load-time
+    refusal instead.
+    """
+    shared: dict[str, McpSection] = {}
+    overrides: dict[tuple[str, str], McpSection] = {}
+    for path in _markdown_files(directory):
+        source = relative_dir / path.name
+        stem = _stem(path)
+        match = _AGENT_MCP_OVERRIDE.match(stem)
+        mcp_id = match.group("mcp_id") if match else stem
+        if mcp_id not in known_mcp:
+            raise ContentError(
+                f"{source}: is an agent section for {mcp_id!r}, which no mcp server declares"
+            )
+        _, body = split_frontmatter(path.read_text(encoding="utf-8"), str(source))
+        _require_known_placeholders(body, source)
+        section = McpSection(name=mcp_id, body=body, source=source)
+        if match is None:
+            shared[mcp_id] = section
+            continue
+        agent_name = match.group("agent")
+        if agent_name not in agent_names:
+            raise ContentError(
+                f"{source}: overrides the {mcp_id!r} section for {agent_name!r}, "
+                f"which is not one of the shipped agents"
+            )
+        overrides[(mcp_id, agent_name)] = section
+    return shared, overrides
 
 
 def _require_the_session_start(agents: tuple[Agent, ...], relative_dir: PurePosixPath) -> None:
@@ -546,10 +646,21 @@ def _require_mcp_convention_referenced(agents: tuple[Agent, ...]) -> None:
     to follow a convention for tools it will never have. Both directions have to
     agree, so the set of ids declared and the set of ids referenced are required
     to be exactly equal.
+
+    "The body" here means the agent's own prose together with every section
+    `mcp_sections` resolved for it: the pointer this invariant looks for now
+    usually lives in the shared or overriding section itself, not in the
+    agent's own file, because that is exactly what moved it out of twelve
+    unconditional prompts. An agent that still writes the pointer inline,
+    with no section behind it, still satisfies this the same way it always
+    did -- the two places are read together, never one to the exclusion of
+    the other.
     """
     for agent in agents:
         declared = set(agent.optional_mcp)
         referenced = _referenced_mcp_ids(agent.body)
+        for section in agent.mcp_sections:
+            referenced |= _referenced_mcp_ids(section.body)
         if declared == referenced:
             continue
         problems = []
