@@ -166,7 +166,10 @@ class AgentPointerResolutionTest(unittest.TestCase):
             for server in content_module.load().mcp
         }
         offenders = []
-        for path in sorted(AGENTS.glob("*.md")):
+        # `agents/mcp/` too, and not by accident: the pointer paragraphs moved
+        # there, so a glob that only reads the agent files now checks the
+        # directory the references left rather than the one they landed in.
+        for path in sorted([*AGENTS.glob("*.md"), *(AGENTS / "mcp").glob("*.md")]):
             text = path.read_text(encoding="utf-8")
             for match in self.REFERENCE.finditer(text):
                 if match.group(1) in rendered_not_shipped:
@@ -176,13 +179,22 @@ class AgentPointerResolutionTest(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_every_cbm_agent_points_at_the_rendered_convention(self):
-        missing = [
-            name
-            for name in self.CBM_AGENTS
-            if "{{skills_root}}/_shared/mcp/cbm-convention.md" not in (AGENTS / name).read_text(
-                encoding="utf-8"
+        """The pointer moved out of each agent's own prose and into its cbm
+        section -- shared for three agents, overridden for the other three --
+        the same move `engram` and `context7` went through in the agent
+        prompts, and `cbm` itself went through for the system prompt. What
+        used to be checked by reading the raw agent file is now checked by
+        reading the loaded section, which is where the pointer actually lives.
+        """
+        agents = {agent.name: agent for agent in content_module.load().agents}
+        missing = []
+        for filename in self.CBM_AGENTS:
+            name = filename.removesuffix(".md")
+            section = next(
+                (s for s in agents[name].mcp_sections if s.name == "cbm"), None
             )
-        ]
+            if section is None or "{{skills_root}}/_shared/mcp/cbm-convention.md" not in section.body:
+                missing.append(filename)
         self.assertEqual(missing, [], f"agents missing the CBM pointer: {missing}")
 
     def test_no_agent_still_names_the_old_unconditional_path(self):

@@ -237,10 +237,15 @@ class ZipRootTest(unittest.TestCase):
             {
                 "skills/alpha/SKILL.md": SKILL,
                 "skills/alpha/references/guide.md": "# Guide\n",
-                f"agents/{content.SESSION_STARTS_IN}.md": SESSION_START,
+                f"agents/{content.SESSION_STARTS_IN}.md": SESSION_START.replace(
+                    "mode: primary\n", "mode: primary\noptional_mcp: [probe-mcp]\n"
+                ),
                 "commands/probe-command.md": COMMAND,
                 "mcp/probe-mcp.md": NPM_MCP,
                 f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE,
+                "agents/mcp/probe-mcp.md": (
+                    "## Probe\n\nFollow {{skills_root}}/_shared/mcp/probe-mcp-convention.md.\n"
+                ),
                 "system-prompt/AGENTS.md": "# Rules\n\nBe careful.\n",
             },
         )
@@ -266,6 +271,20 @@ class ZipRootTest(unittest.TestCase):
         guide = next(a for a in skill.assets if str(a.relative_path) == "references/guide.md")
         self.assertEqual(guide.content, "# Guide\n".encode("utf-8"))
 
+    def test_an_agents_mcp_section_is_read_from_the_zip(self):
+        """Exercises the nested-directory lookup that stands in for `Path.glob`.
+
+        `agents/mcp/` is the one content directory that sits *inside* another
+        one, so it is the one whose exclusion from the agent scan and whose own
+        listing both depend on `iterdir` behaving the same inside an archive as
+        it does on disk. A `zipfile.Path` has no `glob`, and this is where that
+        would first be reached for.
+        """
+        agents = content.load(self.zip_root).agents
+        self.assertEqual([a.name for a in agents], [content.SESSION_STARTS_IN])
+        self.assertEqual([s.name for s in agents[0].mcp_sections], ["probe-mcp"])
+        self.assertIn("probe-mcp-convention.md", agents[0].mcp_sections[0].body)
+
     def test_an_npm_servers_lockfile_beside_it_is_read_from_the_zip(self):
         """Exercises the sibling lookup that stands in for `Path.parent`."""
         mcp = content.load(self.zip_root).mcp[0]
@@ -277,10 +296,19 @@ class ZipRootTest(unittest.TestCase):
         root = Path(directory.name)
         write(root, "skills/alpha/SKILL.md", SKILL)
         write(root, "skills/alpha/references/guide.md", "# Guide\n")
-        write_session_start(root)
+        write(
+            root,
+            f"agents/{content.SESSION_STARTS_IN}.md",
+            SESSION_START.replace("mode: primary\n", "mode: primary\noptional_mcp: [probe-mcp]\n"),
+        )
         write(root, "commands/probe-command.md", COMMAND)
         write(root, "mcp/probe-mcp.md", NPM_MCP)
         write(root, f"mcp/{NPM_LOCKFILE_NAME}", NPM_LOCKFILE)
+        write(
+            root,
+            "agents/mcp/probe-mcp.md",
+            "## Probe\n\nFollow {{skills_root}}/_shared/mcp/probe-mcp-convention.md.\n",
+        )
         write(root, "system-prompt/AGENTS.md", "# Rules\n\nBe careful.\n")
         from_directory = content.load(root)
         from_zip = content.load(self.zip_root)
@@ -497,6 +525,198 @@ class McpConventionReferenceInvariantTest(TemporaryContent):
             "{{skills_root}}/_shared/mcp/not/a-convention.md\n"
         )
         self.assertEqual(found, set())
+
+
+class AgentMcpSectionTest(TemporaryContent):
+    """The same ambient/on-demand split the system prompt already has
+    (`McpSection`, `_load_mcp_sections`), applied to agent prompts: the
+    pointer paragraph lives beside the grant in `agents/mcp/`, not baked
+    unconditionally into every agent that might one day carry it.
+    """
+
+    def load_agents(self):
+        return {agent.name: agent for agent in content.load(self.root).agents}
+
+    def test_a_shared_section_is_attached_to_every_agent_that_declares_the_id(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\nx\n",
+        )
+        write(
+            self.root,
+            "agents/mcp/context7.md",
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
+        )
+        agent = self.load_agents()["probe-agent"]
+        self.assertEqual([s.name for s in agent.mcp_sections], ["context7"])
+        self.assertIn("context7-convention.md", agent.mcp_sections[0].body)
+
+    def test_an_override_replaces_the_shared_section_for_that_agent_only(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        for name in ("probe-agent", "other-agent"):
+            write(
+                self.root,
+                f"agents/{name}.md",
+                f"---\nname: {name}\ndescription: d\nmode: primary\n"
+                "optional_mcp: [context7]\n---\n\nx\n",
+            )
+        pointer = "{{skills_root}}/_shared/mcp/context7-convention.md"
+        write(self.root, "agents/mcp/context7.md", f"Shared framing. Follow {pointer}.\n")
+        write(self.root, "agents/mcp/context7@probe-agent.md", f"Special framing. Follow {pointer}.\n")
+        agents = self.load_agents()
+        self.assertIn("Special framing.", agents["probe-agent"].mcp_sections[0].body)
+        self.assertIn("Shared framing.", agents["other-agent"].mcp_sections[0].body)
+
+    def test_an_override_for_an_agent_that_never_declared_the_id_is_refused(self):
+        """Naming a real agent is not the same as naming a wired one.
+
+        An override that targets an agent who never put that id in its own
+        `optional_mcp` attaches to nothing: the resolution walks the agent's
+        declaration, so a file addressed to somebody who is not listening is
+        read, validated and then dropped. It is the likelier mistake than the
+        renamed agent the check above catches -- an author adds the framing and
+        forgets the declaration -- and it fails the same silent way, so it earns
+        the same refusal.
+        """
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n",
+        )
+        write(
+            self.root,
+            "agents/mcp/context7@probe-agent.md",
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
+        )
+        with self.assertRaises(content.ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("agents/mcp/context7@probe-agent.md", message)
+        self.assertIn("probe-agent", message)
+
+    def test_an_id_with_neither_shared_nor_override_carries_no_section(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\n"
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
+        )
+        agent = self.load_agents()["probe-agent"]
+        self.assertEqual(agent.mcp_sections, ())
+
+    def test_the_mcp_subdirectory_is_never_read_as_an_agent(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "agents/mcp/context7.md", "Shared text.\n")
+        names = set(self.load_agents())
+        self.assertNotIn("context7", names)
+        self.assertNotIn("mcp", names)
+
+    def test_a_section_naming_a_server_nothing_ships_is_refused(self):
+        write_session_start(self.root)
+        write(self.root, "agents/mcp/phantom.md", "Ambient text.\n")
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        self.assertIn("agents/mcp/phantom.md", str(raised.exception))
+
+    def test_an_override_naming_an_agent_that_does_not_exist_is_refused(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "agents/mcp/context7@ghost-agent.md", "Ambient text.\n")
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        self.assertIn("agents/mcp/context7@ghost-agent.md", str(raised.exception))
+
+    def test_the_convention_pointer_can_live_only_in_the_section(self):
+        """The pairing invariant (`McpConventionReferenceInvariantTest`) is
+        satisfied by body plus sections combined, not by the agent's own prose
+        alone -- that is the whole point of moving the pointer out of every
+        agent body and into one shared file.
+        """
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\nx\n",
+        )
+        write(
+            self.root,
+            "agents/mcp/context7.md",
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
+        )
+        loaded = content.load(self.root)
+        agent = next(a for a in loaded.agents if a.name == "probe-agent")
+        self.assertEqual(agent.optional_mcp, ("context7",))
+
+
+class SelectMcpAgentSectionTest(unittest.TestCase):
+    """`select_mcp` prunes an agent's own mcp sections in the same step it
+    prunes `optional_mcp`, so a grant and the pointer telling an agent to use
+    it can never disagree -- the same invariant `_select_system_prompt_mcp`
+    upholds for the system prompt's ambient half.
+    """
+
+    def setUp(self):
+        self.context7 = content.Mcp(
+            name="context7", description="d", body="b", distribution=Distribution.REMOTE,
+            endpoint="https://example.test/context7", source=PurePosixPath("mcp/context7.md"),
+        )
+        self.cbm = content.Mcp(
+            name="cbm", description="d", body="b", distribution=Distribution.DOWNLOAD,
+            endpoint="https://example.test/cbm.tar.gz", checksum="sha256:" + "a" * 64,
+            source=PurePosixPath("mcp/cbm.md"),
+        )
+        self.agent = content.Agent(
+            name="probe-agent", description="d", body="x", mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/probe-agent.md"),
+            optional_mcp=("context7", "cbm"),
+            mcp_sections=(
+                content.McpSection(
+                    name="context7", body="Ambient context7.",
+                    source=PurePosixPath("agents/mcp/context7.md"),
+                ),
+                content.McpSection(
+                    name="cbm", body="Ambient cbm.", source=PurePosixPath("agents/mcp/cbm.md")
+                ),
+            ),
+        )
+        self.content = content.Content(agents=(self.agent,), mcp=(self.context7, self.cbm))
+
+    def test_keeps_only_the_chosen_server_s_section(self):
+        selected = content.select_mcp(self.content, ["context7"])
+        self.assertEqual([s.name for s in selected.agents[0].mcp_sections], ["context7"])
+
+    def test_choosing_nothing_leaves_no_section(self):
+        selected = content.select_mcp(self.content, [])
+        self.assertEqual(selected.agents[0].mcp_sections, ())
+
+    def test_a_bound_server_s_section_survives_matched_by_id_not_by_the_rewritten_key(self):
+        """`optional_mcp` gets rewritten to the bound key, but a section's own
+        `name` is the descriptor id and is never rewritten -- matching a
+        section against the post-binding value would drop it the moment a
+        server is bound, since the section's name never changes to match.
+        """
+        selected = content.select_mcp(self.content, ["cbm=codebase-memory-mcp"])
+        agent = selected.agents[0]
+        self.assertEqual(agent.optional_mcp, ("codebase-memory-mcp",))
+        self.assertEqual([s.name for s in agent.mcp_sections], ["cbm"])
+
+    def test_is_pure(self):
+        before = self.agent.mcp_sections
+        content.select_mcp(self.content, ["context7"])
+        self.assertEqual(self.agent.mcp_sections, before)
 
 
 class SessionStartTest(TemporaryContent):
@@ -877,6 +1097,23 @@ class ShippedContentTest(unittest.TestCase):
     def setUpClass(cls):
         cls.content = content.load()
 
+    def test_every_agent_mcp_section_opens_with_its_own_heading(self):
+        """A section is appended after the body, so it has to announce itself.
+
+        These paragraphs used to sit mid-prompt, where the section above them
+        gave them their context. Composed at the end they have no such
+        neighbour: an unheaded paragraph after `## Result identity` reads as
+        more of the result identity, which is the one thing it is not. The
+        system prompt's own sections already open with a heading for exactly
+        this reason -- see `system-prompt/mcp/engram.md`.
+        """
+        for agent in self.content.agents:
+            for section in agent.mcp_sections:
+                self.assertTrue(
+                    section.body.lstrip().startswith("## "),
+                    f"{section.source}: must open with a level-2 heading",
+                )
+
     def test_skills_load(self):
         self.assertEqual(len(self.content.skills), 27)
 
@@ -1086,6 +1323,56 @@ class ShippedContentTest(unittest.TestCase):
         for section in self.content.system_prompt.mcp_sections:
             with self.subTest(section=section.name):
                 self.assertIn(section.name, shipped)
+
+    def test_no_shipped_agent_body_names_the_shared_mcp_path_unconditionally(self):
+        """The paragraph that used to be pasted into twelve agent prompts now
+        lives in a section that ships only when the server it belongs to is
+        selected. An agent body that still names `_shared/mcp/` directly would
+        resurrect exactly the bug this mechanism exists to fix: every install
+        would see the pointer regardless of which servers it chose.
+        """
+        offenders = [agent.name for agent in self.content.agents if "_shared/mcp/" in agent.body]
+        self.assertEqual(offenders, [])
+
+    def test_every_agent_carries_the_engram_section(self):
+        """Every agent can reach memory (`test_every_agent_can_reach_memory`
+        above); this is the other half of that promise -- the pointer telling
+        it how to use the grant travels with the grant, for every one of them.
+        """
+        for agent in self.content.agents:
+            with self.subTest(agent=agent.name):
+                self.assertIn("engram", [s.name for s in agent.mcp_sections])
+
+    def test_the_five_context7_agents_carry_the_shared_section_and_no_one_else_does(self):
+        context7_agents = {"sdd-apply", "sdd-design", "sdd-explore", "sdd-verify", "sdd-onboard"}
+        for agent in self.content.agents:
+            with self.subTest(agent=agent.name):
+                carries = "context7" in [s.name for s in agent.mcp_sections]
+                self.assertEqual(carries, agent.name in context7_agents)
+
+    def test_the_cbm_section_is_shared_for_three_agents_and_overridden_for_three(self):
+        """`sdd-apply`, `sdd-design` and `sdd-explore` carry the plain pointer;
+        `king-pegasus`, `pegasus-orchestrator` and `sdd-verify` each carry
+        deliberate, agent-specific framing that a shared file would flatten.
+        """
+        shared_agents = {"sdd-apply", "sdd-design", "sdd-explore"}
+        overridden_agents = {"king-pegasus", "pegasus-orchestrator", "sdd-verify"}
+        by_name = {agent.name: agent for agent in self.content.agents}
+
+        shared_sources = set()
+        for name in shared_agents:
+            section = next(s for s in by_name[name].mcp_sections if s.name == "cbm")
+            shared_sources.add(section.source)
+        self.assertEqual(len(shared_sources), 1, shared_sources)
+
+        for name in overridden_agents:
+            section = next(s for s in by_name[name].mcp_sections if s.name == "cbm")
+            self.assertIn(f"@{name}.md", section.source.name)
+            self.assertNotIn(section.source, shared_sources)
+
+        for agent in self.content.agents:
+            if agent.name not in shared_agents | overridden_agents:
+                self.assertNotIn("cbm", [s.name for s in agent.mcp_sections], agent.name)
 
     def test_the_engram_section_defers_its_detail_to_the_convention(self):
         """The ambient section says what to do; the convention says how.
@@ -1466,6 +1753,41 @@ class ContentErrorSitesTest(unittest.TestCase):
             ),
             "",
         ),
+        "_load_agent_mcp_sections#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "agents/mcp/phantom.md": "Ambient text.\n",
+                },
+                "agents/mcp/phantom.md",
+            ),
+            "",
+        ),
+        "_load_agent_mcp_sections#1": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "mcp/context7.md": MCP.replace("probe-mcp", "context7"),
+                    "agents/mcp/context7@ghost-agent.md": "Ambient text.\n",
+                },
+                "agents/mcp/context7@ghost-agent.md",
+            ),
+            "",
+        ),
+        "_require_every_override_is_wired#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "mcp/context7.md": MCP.replace("probe-mcp", "context7"),
+                    "agents/probe-agent.md": (
+                        "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n"
+                    ),
+                    "agents/mcp/context7@probe-agent.md": "Ambient text.\n",
+                },
+                "agents/mcp/context7@probe-agent.md",
+            ),
+            "",
+        ),
         "_refuse_foreign_form_fields#0": (
             _via_load(
                 {"mcp/probe-mcp.md": MCP.replace(
@@ -1621,6 +1943,7 @@ class ContentErrorSitesTest(unittest.TestCase):
         subset = {
             "skills/alpha/references/orphan.md": ("# Orphan\n", "skills/alpha"),
             "mcp/probe-mcp.md": (NPM_MCP.replace(NPM_LOCKFILE_NAME, "ghost-lock.json"), "ghost-lock.json"),
+            "agents/mcp/phantom.md": ("Ambient text.\n", "agents/mcp/phantom.md"),
         }
         for relative, (text, expected) in subset.items():
             with self.subTest(relative=relative):

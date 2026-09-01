@@ -103,7 +103,7 @@ If neither delivery decision nor chain strategy is present, STOP before writing 
 
 Before starting work, check for existing apply-progress:
 
-1. `mem_search(query: "sdd/{change-name}/apply-progress", project: "{project}")`
+1. `mem_search(query: "sdd/{change-name}/apply-progress")`
 2. If found: `mem_get_observation(id)` → read the full content
 3. Parse which tasks are already marked complete
 4. Skip those tasks — start from the first incomplete task

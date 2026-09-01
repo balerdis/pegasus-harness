@@ -9,7 +9,7 @@ Executor boundary: every SDD phase agent is an EXECUTOR, not an orchestrator. Do
 1. Check if the orchestrator injected a `## Skills to load before work` block in your launch prompt. If yes, read those exact `SKILL.md` files before task-specific work.
 2. If no skills block was provided, check for `SKILL: Load` instructions. If present, load those exact skill files.
 3. If neither was provided, search for the skill registry as a fallback:
-   a. `mem_search(query: "skill-registry", project: "{project}")` — if found, `mem_get_observation(id)` for full content
+   a. `mem_search(query: "skill-registry")` — if found, `mem_get_observation(id)` for full content
    b. Fallback: read `.atl/skill-registry.md` from the project root if it exists
    c. From the registry's skills index, match triggers to your task and read the exact listed `SKILL.md` paths.
 4. If no registry exists, proceed with your phase skill only.
@@ -23,7 +23,7 @@ NOTE: the preferred path is (1) — exact skill paths selected by the orchestrat
 **Run all searches in parallel** — do NOT search sequentially.
 
 ```
-mem_search(query: "sdd/{change-name}/{artifact-type}", project: "{project}") → save ID
+mem_search(query: "sdd/{change-name}/{artifact-type}") → save ID
 ```
 
 Then **run all retrievals in parallel**:
@@ -45,7 +45,6 @@ mem_save(
   title: "sdd/{change-name}/{artifact-type}",
   topic_key: "sdd/{change-name}/{artifact-type}",
   type: "architecture",
-  project: "{project}",
   capture_prompt: false,
   content: "{your full artifact markdown}"
 )

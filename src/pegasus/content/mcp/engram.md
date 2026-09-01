@@ -126,7 +126,6 @@ ALL SDD artifacts persisted to Engram MUST follow this deterministic naming:
 title:     sdd/{change-name}/{artifact-type}
 topic_key: sdd/{change-name}/{artifact-type}
 type:      architecture
-project:   {detected or current project name}
 scope:     project
 capture_prompt: false
 ```
@@ -154,7 +153,6 @@ mem_save(
   title: "sdd/{change-name}/state",
   topic_key: "sdd/{change-name}/state",
   type: "architecture",
-  project: "{project}",
   capture_prompt: false,
   content: "change: {change-name}\nphase: {last-phase}\nartifact_store: engram\nartifacts:\n  proposal: true\n  specs: true\n  design: false\n  tasks: false\ntasks_progress:\n  completed: []\n  pending: []\nlast_updated: {ISO date}"
 )
@@ -173,7 +171,7 @@ Memory lifecycle rule (when Engram exposes lifecycle metadata/tooling):
 - Do NOT call `mem_review` with action `mark_reviewed` automatically. Only call `mark_reviewed` after explicit user confirmation or through a dedicated memory maintenance command.
 
 ```
-Step 1: mem_search(query: "sdd/{change-name}/{artifact-type}", project: "{project}") → truncated preview + ID
+Step 1: mem_search(query: "sdd/{change-name}/{artifact-type}") → truncated preview + ID
 Step 2: mem_get_observation(id: {observation-id}) → complete content
 ```
 
@@ -193,7 +191,7 @@ STEP B — RETRIEVE FULL CONTENT (mandatory):
 
 Loading project context:
 ```
-mem_search(query: "sdd-init/{project}", project: "{project}") → get ID
+mem_search(query: "sdd-init/{project}") → get ID
 mem_get_observation(id) → full project context
 ```
 
@@ -205,7 +203,6 @@ mem_save(
   title: "sdd/{change-name}/{artifact-type}",
   topic_key: "sdd/{change-name}/{artifact-type}",
   type: "architecture",
-  project: "{project}",
   capture_prompt: false,
   content: "{full markdown content}"
 )
@@ -235,15 +232,35 @@ Use `mem_update` when you have the exact ID. Use `mem_save` with same `topic_key
 #### Browsing All Artifacts for a Change
 
 ```
-mem_search(query: "sdd/{change-name}/", project: "{project}")
+mem_search(query: "sdd/{change-name}/")
 → Returns all artifacts for that change
 ```
 
 ### Project Name Resolution (engram v1.11.0+)
 
-Engram auto-detects the project name from the git remote at MCP startup. The `--project` flag and `ENGRAM_PROJECT` env var can override detection. All project names are normalized to lowercase and trimmed.
+**Do not pass `project`. Engram already knows.** It resolves the project once, at
+MCP startup, from the git remote of the tree it was started in, and every call
+without the argument lands there. The `--project` flag and the `ENGRAM_PROJECT`
+env var override that resolution; all names are normalized to lowercase and
+trimmed.
 
-If the agent saves a memory under a project name that doesn't match existing observations, engram warns about potential name drift. Use `mem_merge_projects` (MCP tool) or `engram projects consolidate` (CLI) to merge variants.
+Pass the argument only to reach a project other than the current one, and only
+when you know that project already exists — `mem_save` refuses a name it does
+not recognise rather than creating it, and the error is `unknown_project`. A
+refused save is a memory lost with the turn, so the argument is the riskiest
+field in the call: omitted it is always right, supplied it can only be wrong.
+`mem_search` refuses the same way, and its error lists the projects that do
+exist, which is the cheapest way to find the real name of one.
+
+**A project name from another server is not a project name here.** Codebase
+Memory derives its names from the filesystem path; engram derives its own from
+the git remote. The same checkout is `home-serg-work-thing` to one and
+`thing-api` to the other, and neither can resolve the other's spelling. Never
+carry a name across from a tool that just handed you one.
+
+If a memory is saved under a name that does not match existing observations,
+engram warns about potential name drift. Use `mem_merge_projects` (MCP tool) or
+`engram projects consolidate` (CLI) to merge variants.
 
 ### Upsert Behavior
 

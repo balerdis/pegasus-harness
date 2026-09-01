@@ -25,8 +25,6 @@ If that required path is missing or unreadable, STOP and return `blocked` naming
 
 This phase destroys and rewrites source-of-truth specs. If any required reference or artifact is missing, fail closed rather than merging from inference.
 
-Persistent memory lives behind engram, and what to save is settled by your ambient instructions rather than by this prompt. Follow `{{skills_root}}/_shared/mcp/engram-convention.md` for the save format, topic keys and the naming convention for SDD artifacts. If you have the `mem_*` tools and that path is missing or unreadable, save anyway rather than skipping the write, and say so; if you have no such tools, this session has no memory and nothing here applies.
-
 ## Path resolution
 
 Resolve every skill-file reference against the skills root, per `{{skills_root}}/_shared/sdd-phase-common.md`.

@@ -37,6 +37,12 @@ Use `search_code` for text patterns that are not represented well as graph symbo
 `detect_changes` to compare current work against a base branch or previous ref and to
 summarize changed surface and impact, not only as a pre-reindex check.
 
+A project name here is derived from the filesystem path, and it belongs to this
+server alone. Other tools name the same checkout differently — persistent memory
+derives its own names from the git remote — so a name `list_projects` hands you
+identifies an index, never a project anywhere else. Carrying one across is how a
+call ends up addressed to something that does not exist.
+
 ## Index Freshness — Repair, Don't Skip
 
 Check `index_status` (or `list_projects`) before relying on graph evidence. A missing or

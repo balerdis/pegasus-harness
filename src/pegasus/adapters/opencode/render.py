@@ -103,7 +103,7 @@ def prompt(layout: Layout, item: Agent) -> list[Artifact]:
         FileArtifact(
             id=f"prompt:{item.name}",
             path=_prompt_path(layout, item),
-            content=_body(layout, item.body, item.name).encode("utf-8"),
+            content=_agent_body(layout, item).encode("utf-8"),
             executable=False,
         )
     ]
@@ -136,7 +136,7 @@ def agent(
         value["prompt"] = (
             "{file:./%s}" % _prompt_path(layout, item).relative_to(layout.config_dir).as_posix()
             if separate_prompt
-            else _body(layout, item.body, item.name)
+            else _agent_body(layout, item)
         )
     value["tools"] = _tools(item)
     value["permission"] = _permission(layout, item)
@@ -215,7 +215,25 @@ def system_prompt(layout: Layout, item: SystemPrompt) -> list[Artifact]:
 
 
 def _system_prompt_body(layout: Layout, item: SystemPrompt) -> str:
-    """The base prompt, then one section per server the user chose.
+    """The base prompt, then one section per server the user chose."""
+    return _with_mcp_sections(layout, item.body, item.mcp_sections, "system-prompt")
+
+
+def _agent_body(layout: Layout, item: Agent) -> str:
+    """The agent's own prose, then one section per server it was granted.
+
+    Composed exactly the way `_system_prompt_body` composes the base prompt:
+    the two are the same idea at two different levels of the tree, and letting
+    them diverge would be an accident of which one this module wrote first,
+    not a real difference between an agent's own prompt and the shared one.
+    """
+    return _with_mcp_sections(layout, item.body, item.mcp_sections, item.name)
+
+
+def _with_mcp_sections(
+    layout: Layout, body: str, sections: tuple[Any, ...], owner: str
+) -> str:
+    """One prose body, then one section per server that survived selection.
 
     Concatenated here rather than composed in the content core because the
     separator is a fact about the file being written, not about the text: the
@@ -224,11 +242,8 @@ def _system_prompt_body(layout: Layout, item: SystemPrompt) -> str:
     `_markdown_files` guarantees -- so two installs of the same selection
     produce the same bytes, and the digest that attests them means something.
     """
-    parts = [_body(layout, item.body, "system-prompt")]
-    parts += [
-        _body(layout, section.body, str(section.source))
-        for section in item.mcp_sections
-    ]
+    parts = [_body(layout, body, owner)]
+    parts += [_body(layout, section.body, str(section.source)) for section in sections]
     return "\n\n".join(part.strip("\n") for part in parts) + "\n"
 
 
