@@ -237,10 +237,15 @@ class ZipRootTest(unittest.TestCase):
             {
                 "skills/alpha/SKILL.md": SKILL,
                 "skills/alpha/references/guide.md": "# Guide\n",
-                f"agents/{content.SESSION_STARTS_IN}.md": SESSION_START,
+                f"agents/{content.SESSION_STARTS_IN}.md": SESSION_START.replace(
+                    "mode: primary\n", "mode: primary\noptional_mcp: [probe-mcp]\n"
+                ),
                 "commands/probe-command.md": COMMAND,
                 "mcp/probe-mcp.md": NPM_MCP,
                 f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE,
+                "agents/mcp/probe-mcp.md": (
+                    "## Probe\n\nFollow {{skills_root}}/_shared/mcp/probe-mcp-convention.md.\n"
+                ),
                 "system-prompt/AGENTS.md": "# Rules\n\nBe careful.\n",
             },
         )
@@ -266,6 +271,20 @@ class ZipRootTest(unittest.TestCase):
         guide = next(a for a in skill.assets if str(a.relative_path) == "references/guide.md")
         self.assertEqual(guide.content, "# Guide\n".encode("utf-8"))
 
+    def test_an_agents_mcp_section_is_read_from_the_zip(self):
+        """Exercises the nested-directory lookup that stands in for `Path.glob`.
+
+        `agents/mcp/` is the one content directory that sits *inside* another
+        one, so it is the one whose exclusion from the agent scan and whose own
+        listing both depend on `iterdir` behaving the same inside an archive as
+        it does on disk. A `zipfile.Path` has no `glob`, and this is where that
+        would first be reached for.
+        """
+        agents = content.load(self.zip_root).agents
+        self.assertEqual([a.name for a in agents], [content.SESSION_STARTS_IN])
+        self.assertEqual([s.name for s in agents[0].mcp_sections], ["probe-mcp"])
+        self.assertIn("probe-mcp-convention.md", agents[0].mcp_sections[0].body)
+
     def test_an_npm_servers_lockfile_beside_it_is_read_from_the_zip(self):
         """Exercises the sibling lookup that stands in for `Path.parent`."""
         mcp = content.load(self.zip_root).mcp[0]
@@ -277,10 +296,19 @@ class ZipRootTest(unittest.TestCase):
         root = Path(directory.name)
         write(root, "skills/alpha/SKILL.md", SKILL)
         write(root, "skills/alpha/references/guide.md", "# Guide\n")
-        write_session_start(root)
+        write(
+            root,
+            f"agents/{content.SESSION_STARTS_IN}.md",
+            SESSION_START.replace("mode: primary\n", "mode: primary\noptional_mcp: [probe-mcp]\n"),
+        )
         write(root, "commands/probe-command.md", COMMAND)
         write(root, "mcp/probe-mcp.md", NPM_MCP)
         write(root, f"mcp/{NPM_LOCKFILE_NAME}", NPM_LOCKFILE)
+        write(
+            root,
+            "agents/mcp/probe-mcp.md",
+            "## Probe\n\nFollow {{skills_root}}/_shared/mcp/probe-mcp-convention.md.\n",
+        )
         write(root, "system-prompt/AGENTS.md", "# Rules\n\nBe careful.\n")
         from_directory = content.load(root)
         from_zip = content.load(self.zip_root)
@@ -543,6 +571,35 @@ class AgentMcpSectionTest(TemporaryContent):
         agents = self.load_agents()
         self.assertIn("Special framing.", agents["probe-agent"].mcp_sections[0].body)
         self.assertIn("Shared framing.", agents["other-agent"].mcp_sections[0].body)
+
+    def test_an_override_for_an_agent_that_never_declared_the_id_is_refused(self):
+        """Naming a real agent is not the same as naming a wired one.
+
+        An override that targets an agent who never put that id in its own
+        `optional_mcp` attaches to nothing: the resolution walks the agent's
+        declaration, so a file addressed to somebody who is not listening is
+        read, validated and then dropped. It is the likelier mistake than the
+        renamed agent the check above catches -- an author adds the framing and
+        forgets the declaration -- and it fails the same silent way, so it earns
+        the same refusal.
+        """
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n",
+        )
+        write(
+            self.root,
+            "agents/mcp/context7@probe-agent.md",
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
+        )
+        with self.assertRaises(content.ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("agents/mcp/context7@probe-agent.md", message)
+        self.assertIn("probe-agent", message)
 
     def test_an_id_with_neither_shared_nor_override_carries_no_section(self):
         write_session_start(self.root)
@@ -1717,6 +1774,20 @@ class ContentErrorSitesTest(unittest.TestCase):
             ),
             "",
         ),
+        "_require_every_override_is_wired#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "mcp/context7.md": MCP.replace("probe-mcp", "context7"),
+                    "agents/probe-agent.md": (
+                        "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n"
+                    ),
+                    "agents/mcp/context7@probe-agent.md": "Ambient text.\n",
+                },
+                "agents/mcp/context7@probe-agent.md",
+            ),
+            "",
+        ),
         "_refuse_foreign_form_fields#0": (
             _via_load(
                 {"mcp/probe-mcp.md": MCP.replace(
@@ -1872,6 +1943,7 @@ class ContentErrorSitesTest(unittest.TestCase):
         subset = {
             "skills/alpha/references/orphan.md": ("# Orphan\n", "skills/alpha"),
             "mcp/probe-mcp.md": (NPM_MCP.replace(NPM_LOCKFILE_NAME, "ghost-lock.json"), "ghost-lock.json"),
+            "agents/mcp/phantom.md": ("Ambient text.\n", "agents/mcp/phantom.md"),
         }
         for relative, (text, expected) in subset.items():
             with self.subTest(relative=relative):

@@ -166,7 +166,10 @@ class AgentPointerResolutionTest(unittest.TestCase):
             for server in content_module.load().mcp
         }
         offenders = []
-        for path in sorted(AGENTS.glob("*.md")):
+        # `agents/mcp/` too, and not by accident: the pointer paragraphs moved
+        # there, so a glob that only reads the agent files now checks the
+        # directory the references left rather than the one they landed in.
+        for path in sorted([*AGENTS.glob("*.md"), *(AGENTS / "mcp").glob("*.md")]):
             text = path.read_text(encoding="utf-8")
             for match in self.REFERENCE.finditer(text):
                 if match.group(1) in rendered_not_shipped:

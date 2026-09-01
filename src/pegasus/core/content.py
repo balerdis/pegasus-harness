@@ -540,6 +540,7 @@ def _load_agents(
                 mcp_sections=mcp_sections,
             )
         )
+    _require_every_override_is_wired(overrides, tuple(agents))
     _require_the_session_start(tuple(agents), relative_dir)
     return tuple(agents)
 
@@ -566,6 +567,12 @@ def _load_agent_mcp_sections(
     and reach nobody -- the same silent failure `_require_known_optional_mcp`
     and `_require_the_session_start` each exist to turn into a load-time
     refusal instead.
+
+    The third way an override reaches nobody cannot be checked here, and is
+    checked in `_require_every_override_is_wired` once the agents exist: an
+    override addressed to an agent that never declared that id. Naming a real
+    agent is not the same as naming a listening one, and at this point no
+    agent has been parsed yet, so there is nothing here to ask.
     """
     shared: dict[str, McpSection] = {}
     overrides: dict[tuple[str, str], McpSection] = {}
@@ -592,6 +599,32 @@ def _load_agent_mcp_sections(
             )
         overrides[(mcp_id, agent_name)] = section
     return shared, overrides
+
+
+def _require_every_override_is_wired(
+    overrides: dict[tuple[str, str], McpSection], agents: tuple[Agent, ...]
+) -> None:
+    """An override addressed to an agent that never declared the id reaches nobody.
+
+    `_load_agent_mcp_sections` already refuses an override naming a server
+    nothing ships and one naming an agent that does not exist. This is the
+    third way the same file can be dead on arrival, and the likeliest of the
+    three: the agent is real and the server is real, but that agent never put
+    the id in its own `optional_mcp`, so the resolution -- which walks the
+    declaration, not the directory -- never looks the file up. An author who
+    writes the framing and forgets the declaration gets no error, no section,
+    and no way to tell that from having written the framing badly.
+
+    It cannot be checked where the other two are: at that point no agent has
+    been parsed, so nothing knows what any of them declares.
+    """
+    declared = {(mcp_id, agent.name) for agent in agents for mcp_id in agent.optional_mcp}
+    for (mcp_id, agent_name), section in sorted(overrides.items()):
+        if (mcp_id, agent_name) not in declared:
+            raise ContentError(
+                f"{section.source}: overrides the {mcp_id!r} section for {agent_name!r}, "
+                f"which does not declare {mcp_id!r} in its own optional_mcp"
+            )
 
 
 def _require_the_session_start(agents: tuple[Agent, ...], relative_dir: PurePosixPath) -> None:
