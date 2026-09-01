@@ -36,6 +36,14 @@ MARKER = "---"
 SKILL_FILE = "SKILL.md"
 SYSTEM_PROMPT_DIR = "system-prompt"
 
+SYSTEM_PROMPT_MCP_DIR = "mcp"
+"""Where the system prompt keeps the sections that belong to one server each.
+
+A subdirectory rather than more files beside `AGENTS.md`, for the same reason
+`_shared/mcp/` is one: the base prompt is exactly one file, and a sibling would
+have to be told apart from it by name.
+"""
+
 _MCP_CONVENTION_DIR = PurePosixPath("_shared") / "mcp"
 """Where every server's usage convention lands, relative to the skills root.
 
@@ -251,9 +259,33 @@ class Mcp:
 
 
 @dataclass(frozen=True)
+class McpSection:
+    """One server's ambient half of the system prompt.
+
+    A server's contract has two halves that are read at different moments. The
+    ambient half is what every agent has to know the instant those tools exist
+    in the session -- that memory is mandatory, that the graph comes before
+    grep -- and it is worth the context it costs on every turn. The operational
+    half is field formats, tool order, lifecycle states, and it is only needed
+    on the turns that actually act; that half stays in
+    `_shared/mcp/<id>-convention.md` and is read on demand.
+
+    Kept out of the base body because a server nobody installed must leave no
+    instruction behind: an ambient section for absent tools would tell agents
+    to reach for something they were never granted, and they would have no way
+    to tell that from their own mistake.
+    """
+
+    name: str
+    body: str
+    source: PurePosixPath
+
+
+@dataclass(frozen=True)
 class SystemPrompt:
     body: str
     source: PurePosixPath
+    mcp_sections: tuple[McpSection, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -294,12 +326,14 @@ def load(root: ContentRoot = DEFAULT_ROOT) -> Content:
     mcp = _load_mcp(root / "mcp", PurePosixPath("mcp"))
     _require_known_optional_mcp(agents, mcp)
     _require_mcp_convention_referenced(agents)
+    system_prompt = _load_system_prompt(root / SYSTEM_PROMPT_DIR, PurePosixPath(SYSTEM_PROMPT_DIR))
+    _require_known_system_prompt_mcp(system_prompt, mcp)
     return Content(
         skills=_load_skills(root / "skills", PurePosixPath("skills")),
         agents=agents,
         commands=_load_commands(root / "commands", PurePosixPath("commands")),
         mcp=mcp,
-        system_prompt=_load_system_prompt(root / SYSTEM_PROMPT_DIR, PurePosixPath(SYSTEM_PROMPT_DIR)),
+        system_prompt=system_prompt,
     )
 
 
@@ -332,6 +366,28 @@ def select_mcp(content: Content, chosen: Iterable[str]) -> Content:
         agents=tuple(
             replace(agent, optional_mcp=tuple(name for name in agent.optional_mcp if name in kept))
             for agent in content.agents
+        ),
+        system_prompt=_select_system_prompt_mcp(content.system_prompt, kept),
+    )
+
+
+def _select_system_prompt_mcp(
+    system_prompt: SystemPrompt | None, kept: set[str]
+) -> SystemPrompt | None:
+    """The same choice, applied to the ambient half.
+
+    The base body is never touched: it says what is true whatever the user
+    installed. Only the per-server sections answer to the choice, and they
+    answer to it exactly as `optional_mcp` does -- so an agent's grant and the
+    instruction telling it to use that grant can never disagree about which
+    servers exist.
+    """
+    if system_prompt is None:
+        return None
+    return replace(
+        system_prompt,
+        mcp_sections=tuple(
+            section for section in system_prompt.mcp_sections if section.name in kept
         ),
     )
 
@@ -701,7 +757,51 @@ def _load_system_prompt(directory: ContentRoot, relative_dir: PurePosixPath) -> 
     source = relative_dir / files[0].name
     _, body = split_frontmatter(files[0].read_text(encoding="utf-8"), str(source))
     _require_known_placeholders(body, source)
-    return SystemPrompt(body=body, source=source)
+    return SystemPrompt(
+        body=body,
+        source=source,
+        mcp_sections=_load_mcp_sections(
+            directory / SYSTEM_PROMPT_MCP_DIR, relative_dir / SYSTEM_PROMPT_MCP_DIR
+        ),
+    )
+
+
+def _load_mcp_sections(
+    directory: ContentRoot, relative_dir: PurePosixPath
+) -> tuple[McpSection, ...]:
+    """Each file is one server's ambient section, named by its own stem.
+
+    `_descriptor` is what makes the name a fact rather than a convention: it
+    already refuses a descriptor whose `name` disagrees with its filename, so
+    the id this section belongs to cannot drift from the file it lives in.
+    """
+    sections = []
+    for path in _markdown_files(directory):
+        _, body, source = _descriptor(path, relative_dir)
+        sections.append(McpSection(name=_stem(path), body=body, source=source))
+    return tuple(sections)
+
+
+def _require_known_system_prompt_mcp(
+    system_prompt: SystemPrompt | None, mcp: tuple[Mcp, ...]
+) -> None:
+    """An ambient section has to belong to a server this release ships.
+
+    The same invariant `_require_known_optional_mcp` holds for an agent's
+    declaration, for the same reason: a section naming a server nobody ships
+    would never be selected by any `--mcp` flag, so it would sit in the tree
+    looking installed and reach nobody -- the failure being silent is exactly
+    what makes it worth refusing at load.
+    """
+    if system_prompt is None:
+        return
+    known = {server.name for server in mcp}
+    for section in system_prompt.mcp_sections:
+        if section.name not in known:
+            raise ContentError(
+                f"{section.source}: is the ambient section for {section.name!r}, "
+                f"which no mcp server declares"
+            )
 
 
 def _descriptor(path: ContentRoot, relative_dir: PurePosixPath) -> tuple[dict[str, Any], str, PurePosixPath]:

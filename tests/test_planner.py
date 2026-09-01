@@ -330,6 +330,36 @@ class AppendTest(RealHomeTestCase):
         self.assertEqual(retired.removed, ("system-prompt-instruction",))
         self.assertEqual(retired.unaccounted, ())
 
+    def test_a_changed_value_replaces_ours_in_place_instead_of_appending_a_second(self):
+        """The upgrade path, and the one an append makes easy to get wrong.
+
+        Every installation that already carries a version of this item has the
+        old value sitting in the list and recorded in its journal. Appending
+        the new one would leave two of ours: the live entry and a dead one the
+        runtime would still try to resolve. It is found by the fingerprint the
+        journal recorded, replaced where it already sits, and the list neither
+        grows nor reorders -- including around the items the user put there.
+        """
+        seeded = {"instructions": ["./theirs.md", "./pegasus-AGENTS.md", "./another.md"]}
+        self.seed(files={self.SETTINGS: document(seeded)})
+        absolute = str(self.CONFIG / "pegasus-AGENTS.md")
+        plan = self.plan_for(self.append(absolute), installed=self.install(self.entry()))
+        self.assertEqual([step.action for step in plan.steps], [planner.UPDATE])
+        planner.apply(self.filesystem, plan, at=AT)
+        self.assertEqual(
+            self.settings()["instructions"], ["./theirs.md", absolute, "./another.md"]
+        )
+
+    def test_a_changed_value_the_list_no_longer_holds_is_appended_not_duplicated(self):
+        """The user deleted our old item. There is nothing to replace, so this
+        is a creation -- and it must still be exactly one item, not two."""
+        self.seed(files={self.SETTINGS: document({"instructions": ["./theirs.md"]})})
+        absolute = str(self.CONFIG / "pegasus-AGENTS.md")
+        plan = self.plan_for(self.append(absolute), installed=self.install(self.entry()))
+        self.assertEqual([step.action for step in plan.steps], [planner.CREATE])
+        planner.apply(self.filesystem, plan, at=AT)
+        self.assertEqual(self.settings()["instructions"], ["./theirs.md", absolute])
+
     def test_two_artifacts_appending_the_same_value_are_refused(self):
         """They would place the same item twice, and nothing later could tell them apart."""
         with self.assertRaises(planner.PlannerError):

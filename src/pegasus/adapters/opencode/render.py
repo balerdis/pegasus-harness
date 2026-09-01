@@ -170,22 +170,48 @@ def system_prompt(layout: Layout, item: SystemPrompt) -> list[Artifact]:
 
     Appending rather than replacing is what keeps this additive: the user's own
     AGENTS.md and any instruction files they already listed stay untouched.
+
+    The value is the absolute path, not a relative one. OpenCode resolves a
+    relative entry in this list by walking up from the directory being worked
+    in -- the project, never the configuration root -- so `./pegasus-AGENTS.md`
+    written into the global configuration names a file that exists nowhere the
+    runtime looks, and the whole system prompt is dropped without a word. An
+    absolute entry is resolved against itself, which is the only spelling that
+    means the file this artifact actually places.
     """
     path = layout.system_prompt_file
     return [
         FileArtifact(
             id="system-prompt",
             path=path,
-            content=_body(layout, item.body, "system-prompt").encode("utf-8"),
+            content=_system_prompt_body(layout, item).encode("utf-8"),
             executable=False,
         ),
         ConfigKeyArtifact(
             id="system-prompt-instruction",
             path=layout.settings_file,
             pointer="/instructions/-",
-            value=f"./{path.relative_to(layout.config_dir).as_posix()}",
+            value=str(path),
         ),
     ]
+
+
+def _system_prompt_body(layout: Layout, item: SystemPrompt) -> str:
+    """The base prompt, then one section per server the user chose.
+
+    Concatenated here rather than composed in the content core because the
+    separator is a fact about the file being written, not about the text: the
+    core hands over bodies, and how they sit on a page is this adapter's
+    business. Order follows the content core's, which is the filename order
+    `_markdown_files` guarantees -- so two installs of the same selection
+    produce the same bytes, and the digest that attests them means something.
+    """
+    parts = [_body(layout, item.body, "system-prompt")]
+    parts += [
+        _body(layout, section.body, str(section.source))
+        for section in item.mcp_sections
+    ]
+    return "\n\n".join(part.strip("\n") for part in parts) + "\n"
 
 
 MCP_VALUE: dict[Distribution, Any] = {
