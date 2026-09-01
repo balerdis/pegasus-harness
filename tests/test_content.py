@@ -1235,6 +1235,82 @@ class SelectMcpTest(unittest.TestCase):
 
 
 
+class BoundMcpTest(unittest.TestCase):
+    """A server the user already administers: Pegasus owns the contract, not the binary.
+
+    An installation that already runs a server has it under a key of its own
+    choosing, at a version of its own choosing. Today `optional_mcp: [cbm]`
+    means two things at once -- fetch and manage this server, and grant its
+    tools -- and only the second is wanted there. Binding separates them: the
+    grants point at the key that installation really uses, and Pegasus fetches
+    nothing.
+    """
+
+    def setUp(self):
+        self.server = content.Mcp(
+            name="cbm",
+            description="Code graph",
+            body="Convention body.",
+            distribution=Distribution.DOWNLOAD,
+            endpoint="https://example.test/cbm.tar.gz",
+            checksum="sha256:" + "a" * 64,
+            source=PurePosixPath("mcp/cbm.md"),
+        )
+        self.agent = content.Agent(
+            name="probe-agent",
+            description="Probes things",
+            body="x",
+            mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/probe-agent.md"),
+            optional_mcp=("cbm",),
+        )
+        self.content = content.Content(agents=(self.agent,), mcp=(self.server,))
+
+    def test_an_unbound_choice_leaves_the_server_unbound(self):
+        selected = content.select_mcp(self.content, ["cbm"])
+        self.assertIsNone(selected.mcp[0].bound_to)
+        self.assertFalse(selected.mcp[0].is_bound)
+
+    def test_a_binding_records_the_key_that_installation_uses(self):
+        selected = content.select_mcp(self.content, ["cbm=codebase-memory-mcp"])
+        self.assertEqual(selected.mcp[0].bound_to, "codebase-memory-mcp")
+        self.assertTrue(selected.mcp[0].is_bound)
+
+    def test_the_server_keeps_its_own_id_when_bound(self):
+        """The id is what names the convention file and what an agent body
+        references, so it must survive the binding untouched."""
+        selected = content.select_mcp(self.content, ["cbm=codebase-memory-mcp"])
+        self.assertEqual(selected.mcp[0].name, "cbm")
+
+    def test_an_agent_grant_follows_the_binding(self):
+        """The grant is matched by the runtime against the server key, so a
+        bound server has to be granted under the key the runtime resolves --
+        not under Pegasus's own name for it, which that installation never
+        writes."""
+        selected = content.select_mcp(self.content, ["cbm=codebase-memory-mcp"])
+        self.assertEqual(selected.agents[0].optional_mcp, ("codebase-memory-mcp",))
+
+    def test_an_unbound_grant_stays_the_id(self):
+        selected = content.select_mcp(self.content, ["cbm"])
+        self.assertEqual(selected.agents[0].optional_mcp, ("cbm",))
+
+    def test_binding_a_server_nobody_ships_is_refused_and_named(self):
+        with self.assertRaises(ContentError) as raised:
+            content.select_mcp(self.content, ["bogus=whatever"])
+        self.assertIn("bogus", str(raised.exception))
+
+    def test_a_binding_with_no_key_is_refused(self):
+        for spelling in ("cbm=", "=codebase-memory-mcp", "cbm= ", "cbm=a=b"):
+            with self.subTest(spelling=spelling):
+                with self.assertRaises(ContentError):
+                    content.select_mcp(self.content, [spelling])
+
+    def test_is_pure_the_input_content_is_unchanged(self):
+        content.select_mcp(self.content, ["cbm=codebase-memory-mcp"])
+        self.assertIsNone(self.server.bound_to)
+        self.assertEqual(self.agent.optional_mcp, ("cbm",))
+
+
 def _content_error_raise_sites() -> dict[str, int]:
     """`raise ContentError(...)` sites in `content.py`, keyed by enclosing
     function name plus call order -- stable under unrelated edits, unlike a
@@ -1309,6 +1385,19 @@ def _run_dead_branch(root: Path) -> tuple[None, str]:
     raise AssertionError("non-mapping frontmatter was accepted")
 
 
+def _run_mcp_choice(spelling: str):
+    """A malformed `--mcp` value, refused by `parse_mcp_choice`."""
+
+    def run(root: Path) -> tuple[None, str]:
+        try:
+            content.parse_mcp_choice(spelling)
+        except ContentError as error:
+            return None, str(error)
+        raise AssertionError(f"a malformed mcp choice was accepted: {spelling!r}")
+
+    return run
+
+
 def _run_select_mcp_unknown_id(root: Path) -> tuple[None, str]:
     server = content.Mcp(
         name="context7", description="d", body="b", distribution=Distribution.REMOTE,
@@ -1335,6 +1424,15 @@ class ContentErrorSitesTest(unittest.TestCase):
         "split_frontmatter#1": (
             _via_load({"commands/broken.md": "---\n  bad: x\n---\n\nb\n"}, "commands/broken.md"), ""),
         "split_frontmatter#2": (_run_dead_branch, "Dead code -- see `_run_dead_branch`'s docstring."),
+        "parse_mcp_choice#0": (
+            _run_mcp_choice("cbm=a=b"),
+            "Refuses a `--mcp` value, not a file on disk, so no path applies; the "
+            "message quotes the value and names both spellings that are accepted.",
+        ),
+        "parse_mcp_choice#1": (
+            _run_mcp_choice("cbm="),
+            "Same: a value the user typed, quoted back, with no file to name.",
+        ),
         "select_mcp#0": (
             _run_select_mcp_unknown_id,
             "Refuses a chosen mcp id, not a file on disk, so no path applies; the "

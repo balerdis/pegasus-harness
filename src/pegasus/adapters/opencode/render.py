@@ -283,7 +283,21 @@ def mcp(layout: Layout, item: Mcp) -> list[Artifact]:
     No guard around the lookup: the import-time invariant above already proves
     every mechanism has an entry, so a miss cannot happen and a branch for it
     would be unreachable code with a test that has to forge its own subject.
+
+    A bound server contributes the convention alone. Writing `/mcp/<id>` for a
+    server the user administers would stand a second definition beside the one
+    they maintain, and the address arithmetic above would resolve a binary this
+    install is never going to fetch. The convention travels either way, and it
+    is named by the id, because that is the path agent bodies reference.
     """
+    convention = FileArtifact(
+        id=f"mcp-convention:{item.name}",
+        path=_convention_path(layout, item),
+        content=_body(layout, item.body, item.name).encode("utf-8"),
+        executable=False,
+    )
+    if item.is_bound:
+        return [convention]
     value = MCP_VALUE[item.distribution](item, layout)
     return [
         ConfigKeyArtifact(
@@ -292,12 +306,7 @@ def mcp(layout: Layout, item: Mcp) -> list[Artifact]:
             pointer=f"/mcp/{item.name}",
             value=value,
         ),
-        FileArtifact(
-            id=f"mcp-convention:{item.name}",
-            path=_convention_path(layout, item),
-            content=_body(layout, item.body, item.name).encode("utf-8"),
-            executable=False,
-        ),
+        convention,
     ]
 
 
