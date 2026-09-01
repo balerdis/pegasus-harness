@@ -96,8 +96,7 @@ Non-SDD:
 ```
 PERSISTENCE (MANDATORY):
 If you make important discoveries, decisions, or fix bugs, you MUST save them to engram before returning:
-  mem_save(title: "{short description}", type: "{decision|bugfix|discovery|pattern}",
-           project: "{project}", content: "{What, Why, Where, Learned}")
+  mem_save(title: "{short description}", type: "{decision|bugfix|discovery|pattern}", content: "{What, Why, Where, Learned}")
 Do NOT return without saving what you learned. This is how the team builds persistent knowledge across sessions.
 ```
 
@@ -105,7 +104,7 @@ SDD (with dependencies):
 ```
 Artifact store mode: {engram|openspec|hybrid|none}
 Read these artifacts before starting (search returns truncated previews):
-  mem_search(query: "sdd/{change-name}/{type}", project: "{project}") → get ID
+  mem_search(query: "sdd/{change-name}/{type}") → get ID
   mem_get_observation(id: {id}) → full content (REQUIRED)
 
 PERSISTENCE (MANDATORY — do NOT skip):
@@ -114,7 +113,6 @@ After completing your work, you MUST call:
     title: "sdd/{change-name}/{artifact-type}",
     topic_key: "sdd/{change-name}/{artifact-type}",
     type: "architecture",
-    project: "{project}",
     capture_prompt: false,
     content: "{your full artifact markdown}"
   )
@@ -131,7 +129,6 @@ After completing your work, you MUST call:
     title: "sdd/{change-name}/{artifact-type}",
     topic_key: "sdd/{change-name}/{artifact-type}",
     type: "architecture",
-    project: "{project}",
     capture_prompt: false,
     content: "{your full artifact markdown}"
   )
