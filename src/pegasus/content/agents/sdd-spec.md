@@ -3,6 +3,7 @@ name: sdd-spec
 description: Specification executor for one change; writes delta specs with requirements and scenarios
 mode: subagent
 requires_tools: [read, write, edit, grep, glob]
+optional_mcp: [engram]
 model_configurable: true
 ---
 
@@ -21,6 +22,8 @@ Your FIRST tool call, before reading any project file or writing anything, must 
 It owns the full specification procedure: what you receive, the execution and persistence contract per artifact store, the authoring steps, the exact delta-spec structure for ADDED / MODIFIED / REMOVED / RENAMED requirements, the requirement and scenario format, and the spec rules.
 
 If that required path is missing or unreadable, STOP and return `blocked` naming the unreadable path. Do not infer the procedure, do not search for substitutes, and do not proceed from this prompt alone.
+
+Persistent memory lives behind engram, and what to save is settled by your ambient instructions rather than by this prompt. Follow `{{skills_root}}/_shared/mcp/engram-convention.md` for the save format, topic keys and the naming convention for SDD artifacts. If you have the `mem_*` tools and that path is missing or unreadable, save anyway rather than skipping the write, and say so; if you have no such tools, this session has no memory and nothing here applies.
 
 ## Path resolution
 

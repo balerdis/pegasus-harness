@@ -132,13 +132,18 @@ class AgentPointerResolutionTest(unittest.TestCase):
     #: Agents that declare `optional_mcp: [cbm, ...]`, and therefore point at
     #: the server's own rendered convention rather than restate it.
     #:
-    #: `pegasus-orchestrator` and `king-pegasus` are deliberately absent: their
-    #: direct-work threshold and applying voice are settled by their own body
-    #: text, not by a codebase-memory server, so neither declares `cbm` and
-    #: neither may reference its convention path --
-    #: `_require_mcp_convention_referenced` in `content.py` requires the two
-    #: sets to match exactly.
+    #: The two primaries were deliberately absent while their bodies said they
+    #: declared no server. Both now do, for reasons their own bodies state: the
+    #: orchestrator asks the graph the cheap question that decides where work
+    #: goes, and the voice asks it because it does its own discovery instead of
+    #: delegating it. What has not changed is the pairing --
+    #: `_require_mcp_convention_referenced` in `content.py` requires the set an
+    #: agent declares and the set its body references to match exactly, so an
+    #: entry here without a declaration, or a declaration without the pointer,
+    #: still fails at load.
     CBM_AGENTS = (
+        "king-pegasus.md",
+        "pegasus-orchestrator.md",
         "sdd-explore.md",
         "sdd-design.md",
         "sdd-apply.md",
@@ -215,7 +220,8 @@ class SkillPointerTest(unittest.TestCase):
 
 
 class KingPegasusToolsTest(unittest.TestCase):
-    """king-pegasus stays out of the CBM users: it applies file changes directly, never through a graph server."""
+    """king-pegasus reads the graph itself, because it is the one voice that
+    does its own discovery instead of delegating it."""
 
     @classmethod
     def setUpClass(cls):
@@ -223,13 +229,15 @@ class KingPegasusToolsTest(unittest.TestCase):
             agent for agent in content_module.load().agents if agent.name == "king-pegasus"
         )
 
-    def test_gains_no_mcp_yet(self):
-        # `cbm` has a descriptor now, but this voice still declares none of it
-        # on purpose: applying a change is its own body's decision, made through
-        # direct file and text search, never through a codebase-memory server.
+    def test_declares_the_servers_whose_contract_is_ambient(self):
+        # It used to declare none: applying a change was its own body's
+        # decision, made through direct file and text search. That reasoning
+        # held for delegation, not for discovery -- this voice acts rather than
+        # delegates, so the discovery a phase agent would have done for it is
+        # its own, and an explanation is only as good as the shape of the code
+        # behind it. Memory it declares for the same reason every agent does.
         self.assertEqual(self.agent.optional_tools, ())
-        self.assertEqual(self.agent.optional_mcp, ())
-        self.assertNotIn("cbm", self.agent.optional_mcp)
+        self.assertEqual(set(self.agent.optional_mcp), {"cbm", "engram"})
 
     def test_gains_nothing_beyond_applying_a_file_change(self):
         # `write` and `edit` are what let this voice apply what it explains; `bash`

@@ -468,11 +468,14 @@ class CommandRenderTest(unittest.TestCase):
 
 
 class SystemPromptRenderTest(unittest.TestCase):
+    def render(self, prompt: SystemPrompt):
+        return self.adapter.render_system_prompt(self.layout, prompt)
+
     def setUp(self):
         self.adapter = Adapter()
         self.layout = self.adapter.layout(ENVIRONMENT)
-        self.artifacts = self.adapter.render_system_prompt(
-            self.layout, SystemPrompt(body="# Rules\n", source=PurePosixPath("system-prompt/AGENTS.md"))
+        self.artifacts = self.render(
+            SystemPrompt(body="# Rules\n", source=PurePosixPath("system-prompt/AGENTS.md"))
         )
 
     def test_ships_its_own_file(self):
@@ -482,7 +485,63 @@ class SystemPromptRenderTest(unittest.TestCase):
     def test_wires_itself_in_by_appending_to_the_instructions_list(self):
         key = only(self.artifacts, ConfigKeyArtifact)[0]
         self.assertEqual(key.pointer, "/instructions/-")
-        self.assertEqual(key.value, "./pegasus-AGENTS.md")
+
+    def test_names_the_file_by_its_absolute_path(self):
+        """A relative entry in this list is resolved against the project being
+        worked in, not against the directory the config lives in -- so a
+        `./pegasus-AGENTS.md` written into the global configuration names a
+        file that exists nowhere the runtime will look, and the whole system
+        prompt is silently never loaded. The absolute path is the only spelling
+        that means the file Pegasus actually placed.
+        """
+        key = only(self.artifacts, ConfigKeyArtifact)[0]
+        self.assertEqual(key.value, str(CONFIG / "pegasus-AGENTS.md"))
+
+    def _body_of(self, prompt: SystemPrompt) -> str:
+        return only(self.render(prompt), FileArtifact)[0].content.decode("utf-8")
+
+    def test_a_prompt_with_no_section_is_shipped_as_written(self):
+        body = self._body_of(
+            SystemPrompt(body="# Rules\n", source=PurePosixPath("system-prompt/AGENTS.md"))
+        )
+        self.assertEqual(body, "# Rules\n")
+
+    def test_each_section_is_appended_after_the_base_body(self):
+        body = self._body_of(
+            SystemPrompt(
+                body="# Rules\n",
+                source=PurePosixPath("system-prompt/AGENTS.md"),
+                mcp_sections=(
+                    content_module.McpSection(
+                        name="alpha",
+                        body="# Alpha\n",
+                        source=PurePosixPath("system-prompt/mcp/alpha.md"),
+                    ),
+                    content_module.McpSection(
+                        name="beta",
+                        body="# Beta\n",
+                        source=PurePosixPath("system-prompt/mcp/beta.md"),
+                    ),
+                ),
+            )
+        )
+        self.assertEqual(body, "# Rules\n\n# Alpha\n\n# Beta\n")
+
+    def test_a_section_gets_the_same_placeholders_answered_as_the_body(self):
+        body = self._body_of(
+            SystemPrompt(
+                body="# Rules\n",
+                source=PurePosixPath("system-prompt/AGENTS.md"),
+                mcp_sections=(
+                    content_module.McpSection(
+                        name="alpha",
+                        body="Detail lives in {{skills_root}}/_shared/mcp/alpha-convention.md.\n",
+                        source=PurePosixPath("system-prompt/mcp/alpha.md"),
+                    ),
+                ),
+            )
+        )
+        self.assertIn(str(CONFIG / "skills" / "_shared" / "mcp" / "alpha-convention.md"), body)
 
 
 class McpRenderTest(unittest.TestCase):
@@ -1011,12 +1070,22 @@ class ShippedContentRenderTest(unittest.TestCase):
 
     def test_the_persona_renders_its_declared_tools_as_a_real_restriction(self):
         """The voice declares `read`, `write` and `edit` -- what applying a change
-        takes -- and only this side proves that denies everything else, `bash`
-        included.
+        takes -- plus the two servers whose contract is ambient, and only this
+        side proves that denies everything else, `bash` included.
         """
         persona = next(a for a in self.loaded.agents if a.name == "king-pegasus")
         value = only(render_module.agent(self.layout, persona), ConfigKeyArtifact)[0].value
-        self.assertEqual(value["tools"], {"*": False, "read": True, "write": True, "edit": True})
+        self.assertEqual(
+            value["tools"],
+            {
+                "*": False,
+                "read": True,
+                "write": True,
+                "edit": True,
+                "cbm*": True,
+                "engram*": True,
+            },
+        )
 
     def test_the_orchestrator_renders_its_declared_allows_on_top_of_the_deny_baseline(self):
         orchestrator = next(a for a in self.loaded.agents if a.name == "pegasus-orchestrator")

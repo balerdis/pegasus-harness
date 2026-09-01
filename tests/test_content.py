@@ -949,7 +949,11 @@ class ShippedContentTest(unittest.TestCase):
             {"read", "bash", "grep", "glob", "write", "edit"},
         )
         self.assertEqual(orchestrator.optional_tools, ())
-        self.assertEqual(orchestrator.optional_mcp, ())
+        # It declares the two servers whose contract is ambient rather than
+        # phase-owned: memory, which every agent must be able to write, and the
+        # code graph, which is how a router decides where to send work without
+        # reading four files to find out.
+        self.assertEqual(set(orchestrator.optional_mcp), {"cbm", "engram"})
 
     def test_the_orchestrator_is_the_agent_a_session_starts_in(self):
         starting = [agent.name for agent in self.content.agents if agent.default]
@@ -1007,6 +1011,65 @@ class ShippedContentTest(unittest.TestCase):
     def test_system_prompt_loads(self):
         self.assertIn("Co-Authored-By", self.content.system_prompt.body)
 
+    def test_every_agent_can_reach_memory(self):
+        """Memory is ambient: an agent that fixes a bug must be able to record it.
+
+        Declared per agent rather than left to the system prompt, because the
+        declaration is what grants the tools. The renderer writes a deny
+        baseline for every agent, so one that does not name `engram` cannot
+        call `mem_save` at all -- however plainly the ambient section tells it
+        to. An instruction without the tool behind it is the failure this is
+        here to make impossible.
+        """
+        self.assertEqual(
+            {agent.name for agent in self.content.agents if "engram" not in agent.optional_mcp},
+            set(),
+        )
+
+    def test_structural_discovery_is_declared_by_the_agents_that_do_it(self):
+        """Not everyone: an agent that never asks the graph a question should
+        not carry the graph's convention, and the pairing invariant would make
+        it carry one. The two primaries earn it for different reasons -- the
+        orchestrator to route, the voice to answer -- and the four phase agents
+        because discovery is their work.
+        """
+        self.assertEqual(
+            {agent.name for agent in self.content.agents if "cbm" in agent.optional_mcp},
+            {
+                "king-pegasus",
+                "pegasus-orchestrator",
+                "sdd-apply",
+                "sdd-design",
+                "sdd-explore",
+                "sdd-verify",
+            },
+        )
+
+    def test_the_system_prompt_carries_a_section_for_engram(self):
+        self.assertIn(
+            "engram", [section.name for section in self.content.system_prompt.mcp_sections]
+        )
+
+    def test_every_system_prompt_section_belongs_to_a_shipped_server(self):
+        shipped = {server.name for server in self.content.mcp}
+        for section in self.content.system_prompt.mcp_sections:
+            with self.subTest(section=section.name):
+                self.assertIn(section.name, shipped)
+
+    def test_the_engram_section_defers_its_detail_to_the_convention(self):
+        """The ambient section says what to do; the convention says how.
+
+        Lazy loading is the whole point of splitting them. A section long
+        enough to carry field formats, topic-key rules and lifecycle states
+        would be paid for by every agent on every turn, and that detail is
+        only ever needed on the turns that actually save.
+        """
+        section = next(
+            item for item in self.content.system_prompt.mcp_sections if item.name == "engram"
+        )
+        self.assertIn("{{skills_root}}/_shared/mcp/engram-convention.md", section.body)
+
+
     def test_sources_are_relative_and_portable(self):
         for skill in self.content.skills:
             self.assertIsInstance(skill.source, PurePosixPath)
@@ -1048,8 +1111,26 @@ class SelectMcpTest(unittest.TestCase):
             mode=AgentMode.PRIMARY,
             source=PurePosixPath("agents/plain-agent.md"),
         )
+        self.system_prompt = content.SystemPrompt(
+            body="Base rules.",
+            source=PurePosixPath("system-prompt/AGENTS.md"),
+            mcp_sections=(
+                content.McpSection(
+                    name="context7",
+                    body="Ambient context7 rules.",
+                    source=PurePosixPath("system-prompt/mcp/context7.md"),
+                ),
+                content.McpSection(
+                    name="other",
+                    body="Ambient other rules.",
+                    source=PurePosixPath("system-prompt/mcp/other.md"),
+                ),
+            ),
+        )
         self.content = content.Content(
-            agents=(self.agent, self.plain_agent), mcp=(self.context7, self.other)
+            agents=(self.agent, self.plain_agent),
+            mcp=(self.context7, self.other),
+            system_prompt=self.system_prompt,
         )
 
     def test_keeps_only_the_chosen_server(self):
@@ -1084,13 +1165,42 @@ class SelectMcpTest(unittest.TestCase):
         self.assertIn("context7", message)
         self.assertIn("other", message)
 
+    def test_keeps_only_the_chosen_server_s_ambient_section(self):
+        """A server nobody chose leaves no instruction behind.
+
+        This is the failure the whole conditional exists for: an ambient
+        section for a server that was never installed would tell every agent
+        to reach for tools none of them were granted, and the agent would have
+        no way to tell a missing tool from its own mistake.
+        """
+        selected = content.select_mcp(self.content, ["context7"])
+        self.assertEqual(
+            [section.name for section in selected.system_prompt.mcp_sections], ["context7"]
+        )
+
+    def test_the_base_system_prompt_survives_every_choice(self):
+        for chosen in ([], ["context7"], ["context7", "other"]):
+            with self.subTest(chosen=chosen):
+                selected = content.select_mcp(self.content, chosen)
+                self.assertEqual(selected.system_prompt.body, "Base rules.")
+
+    def test_choosing_nothing_leaves_the_system_prompt_with_no_section(self):
+        selected = content.select_mcp(self.content, [])
+        self.assertEqual(selected.system_prompt.mcp_sections, ())
+
+    def test_a_content_without_a_system_prompt_is_left_alone(self):
+        bare = content.Content(mcp=(self.context7,))
+        self.assertIsNone(content.select_mcp(bare, ["context7"]).system_prompt)
+
     def test_is_pure_the_input_content_is_unchanged(self):
         before_mcp = self.content.mcp
         before_agents = self.content.agents
+        before_sections = self.system_prompt.mcp_sections
         content.select_mcp(self.content, ["context7"])
         self.assertEqual(self.content.mcp, before_mcp)
         self.assertEqual(self.content.agents, before_agents)
         self.assertEqual(self.agent.optional_mcp, ("context7", "other"))
+        self.assertEqual(self.system_prompt.mcp_sections, before_sections)
 
 
 
@@ -1304,6 +1414,17 @@ class ContentErrorSitesTest(unittest.TestCase):
             _via_load(
                 {"mcp/probe-mcp.md": NPM_MCP, f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE.replace(INTEGRITY, "sha512-" + "b" * 86 + "==")},
                 "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
+        "_require_known_system_prompt_mcp#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "system-prompt/AGENTS.md": "# Rules\n",
+                    "system-prompt/mcp/phantom.md": "---\nname: phantom\n---\n\nAmbient rules.\n",
+                },
+                "system-prompt/mcp/phantom.md",
             ),
             "",
         ),

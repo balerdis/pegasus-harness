@@ -3,7 +3,7 @@ name: sdd-apply
 description: Implementation executor for one change; writes code following spec, design and tasks
 mode: subagent
 requires_tools: [read, write, edit, bash, grep, glob]
-optional_mcp: [cbm, context7]
+optional_mcp: [cbm, context7, engram]
 model_configurable: true
 ---
 
@@ -26,6 +26,8 @@ If that required path is missing or unreadable, STOP and return `blocked` naming
 CBM tool priority and the index-repair rule live in `{{skills_root}}/_shared/mcp/cbm-convention.md`. If that path is missing or unreadable, say so and proceed without claiming graph evidence; do not invent your own tool order or fallback conditions.
 
 Current documentation for third-party libraries, frameworks, SDKs and CLIs lives behind context7. Follow `{{skills_root}}/_shared/mcp/context7-convention.md` for tool order, query budget, and the rule against sending secrets in a query. If that path is missing or unreadable, say so and proceed without claiming documentation evidence; do not invent your own tool order.
+
+Persistent memory lives behind engram, and what to save is settled by your ambient instructions rather than by this prompt. Follow `{{skills_root}}/_shared/mcp/engram-convention.md` for the save format, topic keys and the naming convention for SDD artifacts. If you have the `mem_*` tools and that path is missing or unreadable, save anyway rather than skipping the write, and say so; if you have no such tools, this session has no memory and nothing here applies.
 
 ## Path resolution
 

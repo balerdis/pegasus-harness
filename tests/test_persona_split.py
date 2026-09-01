@@ -260,12 +260,13 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
 
         king-pegasus acts rather than delegates, so it does structural discovery
         too, and it now applies what it explains: `write` and `edit` are what
-        that takes. It declares no server, and it must never gain `bash` --
-        applying stops at the edit, never at running anything.
+        that takes. Doing its own discovery is exactly why it declares the graph
+        server, and memory it declares like every other agent -- but it must
+        never gain `bash`: applying stops at the edit, never at running anything.
         """
         self.assertEqual(set(self.agent.requires_tools), {"read", "write", "edit"})
         self.assertEqual(self.agent.optional_tools, ())
-        self.assertEqual(self.agent.optional_mcp, ())
+        self.assertEqual(set(self.agent.optional_mcp), {"cbm", "engram"})
 
     def test_the_persona_carries_the_voice_sections(self):
         """A set, not a sequence: `## Persona Scope` promises these exist."""
