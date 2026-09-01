@@ -256,6 +256,25 @@ class Mcp:
     archive_members: tuple[str, ...] = ()
     archive_executable: str | None = None
     argv: tuple[str, ...] = ()
+    bound_to: str | None = None
+    """The key an installation already uses for this server, when it runs its own.
+
+    A release describes a server two ways: how to obtain it, and how agents
+    must behave once its tools exist. Only the first belongs to Pegasus by
+    necessity. An installation that already administers this server has it
+    under a key of its own choosing, at a version of its own choosing, and
+    fetching a second copy is how two versions end up writing one store.
+
+    Set, this says: the contract still travels, the tools are still granted --
+    under this key, because that is what the runtime resolves -- and nothing
+    is fetched, verified or written into the settings for it. Never a fact
+    about the release, always about one installation, which is why it arrives
+    through `select_mcp` and not from the descriptor.
+    """
+
+    @property
+    def is_bound(self) -> bool:
+        return self.bound_to is not None
 
 
 @dataclass(frozen=True)
@@ -337,6 +356,34 @@ def load(root: ContentRoot = DEFAULT_ROOT) -> Content:
     )
 
 
+def parse_mcp_choice(spelling: str) -> tuple[str, str | None]:
+    """One `--mcp` value, as an id and the key it is bound to, if any.
+
+    Two spellings, and the second is the whole point of the first being
+    ambiguous today: `cbm` asks Pegasus to obtain and administer the server,
+    `cbm=codebase-memory-mcp` asks it only for the contract, against a server
+    the installation already runs under that key.
+
+    A key that is blank, or a value with more than one `=`, is refused rather
+    than guessed: both would otherwise produce a grant naming a server no
+    runtime resolves, which fails as tools quietly missing rather than as a
+    message anyone reads.
+    """
+    if "=" not in spelling:
+        return spelling.strip(), None
+    parts = spelling.split("=")
+    if len(parts) != 2:
+        raise ContentError(
+            f"cannot read mcp choice {spelling!r}: expected 'id' or 'id=server-key'"
+        )
+    server_id, key = (part.strip() for part in parts)
+    if not server_id or not key:
+        raise ContentError(
+            f"cannot read mcp choice {spelling!r}: both an id and a server key are required"
+        )
+    return server_id, key
+
+
 def select_mcp(content: Content, chosen: Iterable[str]) -> Content:
     """Keep only the mcp servers the user chose, and only the `optional_mcp`
     entries that name them.
@@ -352,19 +399,28 @@ def select_mcp(content: Content, chosen: Iterable[str]) -> Content:
     no agent declaring one, because a server nobody named does not install.
     """
     known = {server.name for server in content.mcp}
-    chosen_ids = tuple(chosen)
-    unknown = sorted(name for name in chosen_ids if name not in known)
+    bindings = dict(parse_mcp_choice(spelling) for spelling in chosen)
+    unknown = sorted(name for name in bindings if name not in known)
     if unknown:
         raise ContentError(
             f"chose unknown mcp server(s) {', '.join(unknown)}; "
             f"the servers this release ships are: {', '.join(sorted(known)) or 'none'}"
         )
-    kept = set(chosen_ids)
+    kept = set(bindings)
     return replace(
         content,
-        mcp=tuple(server for server in content.mcp if server.name in kept),
+        mcp=tuple(
+            replace(server, bound_to=bindings[server.name])
+            for server in content.mcp
+            if server.name in kept
+        ),
         agents=tuple(
-            replace(agent, optional_mcp=tuple(name for name in agent.optional_mcp if name in kept))
+            replace(
+                agent,
+                optional_mcp=tuple(
+                    bindings[name] or name for name in agent.optional_mcp if name in kept
+                ),
+            )
             for agent in content.agents
         ),
         system_prompt=_select_system_prompt_mcp(content.system_prompt, kept),

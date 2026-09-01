@@ -1126,6 +1126,69 @@ class ShippedContentRenderTest(unittest.TestCase):
             self.assertEqual(value["permission"]["task"][name], "allow")
 
 
+class BoundMcpRenderTest(unittest.TestCase):
+    """A bound server contributes its contract and nothing else.
+
+    Writing `/mcp/<id>` for a server the user administers would put a second
+    definition beside the one they maintain -- two servers, or one silently
+    replaced. The convention still travels, because the behaviour half is
+    Pegasus's regardless of who owns the binary.
+    """
+
+    def setUp(self):
+        self.adapter = Adapter()
+        self.layout = self.adapter.layout(ENVIRONMENT)
+        self.server = Mcp(
+            name="cbm",
+            description="Code graph",
+            body="# CBM Convention\n",
+            distribution=Distribution.DOWNLOAD,
+            endpoint="https://example.test/cbm.tar.gz",
+            checksum="sha256:" + "a" * 64,
+            version="0.10.8",
+            archive_executable="cbm",
+            source=PurePosixPath("mcp/cbm.md"),
+        )
+
+    def test_an_unbound_server_still_gets_its_settings_key(self):
+        artifacts = render_module.mcp(self.layout, self.server)
+        key = only(artifacts, ConfigKeyArtifact)[0]
+        self.assertEqual(key.pointer, "/mcp/cbm")
+
+    def test_a_bound_server_gets_no_settings_key_at_all(self):
+        bound = replace(self.server, bound_to="codebase-memory-mcp")
+        self.assertEqual(only(render_module.mcp(self.layout, bound), ConfigKeyArtifact), [])
+
+    def test_a_bound_server_still_ships_its_convention(self):
+        bound = replace(self.server, bound_to="codebase-memory-mcp")
+        artifact = only(render_module.mcp(self.layout, bound), FileArtifact)[0]
+        self.assertEqual(artifact.id, "mcp-convention:cbm")
+        self.assertEqual(
+            artifact.path, CONFIG / "skills" / "_shared" / "mcp" / "cbm-convention.md"
+        )
+
+    def test_the_convention_is_named_by_the_id_not_by_the_binding(self):
+        """An agent body references `_shared/mcp/cbm-convention.md`, which is
+        derived from the id. Naming the file after the binding would break that
+        reference for exactly the installations this feature exists to serve.
+        """
+        bound = replace(self.server, bound_to="codebase-memory-mcp")
+        artifact = only(render_module.mcp(self.layout, bound), FileArtifact)[0]
+        self.assertNotIn("codebase-memory-mcp", artifact.path.name)
+
+    def test_a_bound_server_needs_no_dependencies_directory(self):
+        """The download path resolves an address for a fetched binary. A bound
+        server is never fetched, so a layout with no dependencies directory --
+        the shape a catalog build uses -- must not fail on its account.
+        """
+        bare = replace(self.layout, dependencies_dir=None)
+        bound = replace(self.server, bound_to="codebase-memory-mcp")
+        artifacts = render_module.mcp(bare, bound)
+        self.assertEqual(len(only(artifacts, FileArtifact)), 1)
+        with self.assertRaises(render_module.RenderError):
+            render_module.mcp(bare, self.server)
+
+
 class PlaceholderRenderTest(unittest.TestCase):
     """The adapter answers what the body could not know.
 

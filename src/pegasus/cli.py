@@ -196,8 +196,13 @@ def _parser() -> argparse.ArgumentParser:
     install.add_argument(
         "--mcp",
         action="append",
-        metavar="ID",
-        help="install this mcp server too (repeatable); a server not named here is not installed",
+        metavar="ID[=SERVER-KEY]",
+        help=(
+            "install this mcp server too (repeatable); a server not named here is not "
+            "installed. Give it as ID=SERVER-KEY to bind it to a server you already "
+            "administer under that key: the convention and the tool grants still "
+            "arrive, and nothing is fetched or written into the mcp settings for it"
+        ),
     )
 
     uninstall = commands.add_parser("uninstall", help="take Pegasus back out of one CLI")
@@ -539,6 +544,22 @@ def _merged(journal, adapter, environment, catalog, records, retired_ids, now: s
 _MATERIALIZED_DISTRIBUTIONS = frozenset({content_module.Distribution.DOWNLOAD, content_module.Distribution.NPM})
 
 
+def _materializes(item) -> bool:
+    """Whether Pegasus fetches and places this server itself.
+
+    Two reasons it might not, and they differ in kind. A `remote` server has
+    nothing to place. A bound server has something to place and must not: the
+    installation already administers it, and a second copy is how two versions
+    end up opening one store -- which for a cache costs a reindex, and for a
+    memory database costs the memories.
+
+    One function rather than the same condition written in three places,
+    because the three have to agree: what gets fetched, what gets retired, and
+    what a pre-write snapshot claims an address for.
+    """
+    return not item.is_bound and item.distribution in _MATERIALIZED_DISTRIBUTIONS
+
+
 def _stale_dependencies(installed: Install | None, content: content_module.Content) -> tuple[Record, ...]:
     """`download` and `npm` servers this render no longer names.
 
@@ -550,11 +571,7 @@ def _stale_dependencies(installed: Install | None, content: content_module.Conte
     """
     if installed is None:
         return ()
-    wanted = {
-        f"dependency:{item.name}"
-        for item in content.mcp
-        if item.distribution in _MATERIALIZED_DISTRIBUTIONS
-    }
+    wanted = {f"dependency:{item.name}" for item in content.mcp if _materializes(item)}
     return tuple(
         entry for entry in installed.entries if entry.kind == "dependency-tree" and entry.id not in wanted
     )
@@ -577,7 +594,7 @@ def _prospective_dependency_targets(
     owned = {entry.id: entry for entry in (installed.entries if installed else ())}
     targets: set[Path] = set()
     for item in content.mcp:
-        if item.distribution not in _MATERIALIZED_DISTRIBUTIONS:
+        if not _materializes(item):
             continue
         digest = item.checksum if item.distribution is content_module.Distribution.DOWNLOAD else item.integrity
         existing = owned.get(f"dependency:{item.name}")
@@ -605,7 +622,7 @@ def _materialize_dependencies(
     kept: list[Record] = []
     created: list[Record] = []
     for item in content.mcp:
-        if item.distribution not in _MATERIALIZED_DISTRIBUTIONS:
+        if not _materializes(item):
             continue
         digest = item.checksum if item.distribution is content_module.Distribution.DOWNLOAD else item.integrity
         existing = owned.get(f"dependency:{item.name}")

@@ -656,6 +656,46 @@ class InstallMcpTest(RealHomeTestCase):
         # `mem_save` and friends included as its own worked example.
         self.assertIn("DELIVERY GUARANTEE", prompt_text)
 
+    def test_binding_a_server_writes_no_key_and_fetches_nothing(self):
+        """The whole point, end to end: an installation that already runs the
+        server gets the contract without a second definition beside its own,
+        and without a download this machine never asked for. `--dry-run`
+        answers both at once -- the plan names every artifact, and a fetch
+        that were going to happen would show as a dependency to materialize.
+        """
+        self.present()
+        code, report = self.run_cli(
+            "install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--dry-run"
+        )
+        self.assertEqual(code, 0)
+        planned = {item["id"] for group in ("created", "updated") for item in report[group]}
+        self.assertIn("mcp-convention:cbm", planned)
+        self.assertNotIn("mcp:cbm", planned)
+        self.assertNotIn("dependency:cbm", planned)
+
+    def test_a_bound_server_grants_its_tools_under_the_key_the_runtime_resolves(self):
+        """A grant spelled `cbm*` would match nothing in an installation whose
+        server is called something else -- the tools would be silently absent,
+        which is the failure this feature exists to prevent."""
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        tools = self.tools_of("sdd-apply")
+        self.assertIs(tools.get("codebase-memory-mcp*"), True)
+        self.assertNotIn("cbm*", tools)
+
+    def test_a_bound_server_leaves_the_settings_mcp_map_untouched(self):
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        self.assertNotIn("cbm", self.settings().get("mcp", {}))
+
+    def test_a_malformed_binding_is_refused_with_the_value_quoted(self):
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=")
+        self.assertEqual(code, 1)
+        self.assertIn("cbm=", json.dumps(report))
+
     def test_choosing_engram_plans_its_key_and_its_convention_file(self):
         """`download` servers materialize real dependencies on a real install,
         which this test suite must never trigger over the network. `--dry-run`
