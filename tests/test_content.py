@@ -946,7 +946,7 @@ class ShippedContentTest(unittest.TestCase):
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         self.assertEqual(
             set(orchestrator.requires_tools),
-            {"read", "bash", "grep", "glob", "write", "edit"},
+            {"read", "bash", "grep", "glob", "write", "edit", "skill", "ask"},
         )
         self.assertEqual(orchestrator.optional_tools, ())
         # It declares the two servers whose contract is ambient rather than
@@ -954,6 +954,37 @@ class ShippedContentTest(unittest.TestCase):
         # code graph, which is how a router decides where to send work without
         # reading four files to find out.
         self.assertEqual(set(orchestrator.optional_mcp), {"cbm", "engram"})
+
+    def test_the_two_voices_that_face_the_user_can_reach_the_skills_and_ask(self):
+        """Both are demanded by text this repository ships, and neither survives
+        the deny baseline unless it is declared.
+
+        `pegasus-AGENTS.md` opens its Contextual Skill Loading section with
+        "this is a blocking requirement, not optional context" -- and the
+        runtime only puts the skill inventory in front of an agent that holds
+        the tool, so an agent without it is told to consult a list that is not
+        there. The preflight gate is the same shape: "ask what it defines, and
+        STOP" is not something an agent can do with no way to ask.
+        """
+        for name in ("pegasus-orchestrator", "king-pegasus"):
+            with self.subTest(agent=name):
+                agent = next(a for a in self.content.agents if a.name == name)
+                self.assertIn("skill", agent.requires_tools)
+                self.assertIn("ask", agent.requires_tools)
+
+    def test_no_executor_can_reach_the_skills_or_ask(self):
+        """The other side of the same line. An executor receives a task and a
+        named procedure it loads by path, so it needs no inventory; and it
+        returns `blocked` rather than asking, which is what keeps a phase from
+        stalling on a question nobody is watching for. `sdd-verify` says so in
+        its own body: "do not call the `skill()` tool".
+        """
+        for agent in self.content.agents:
+            if agent.mode is not AgentMode.SUBAGENT:
+                continue
+            with self.subTest(agent=agent.name):
+                self.assertNotIn("skill", agent.requires_tools + agent.optional_tools)
+                self.assertNotIn("ask", agent.requires_tools + agent.optional_tools)
 
     def test_the_orchestrator_is_the_agent_a_session_starts_in(self):
         starting = [agent.name for agent in self.content.agents if agent.default]

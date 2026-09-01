@@ -2,7 +2,7 @@
 name: king-pegasus
 description: The teaching-architect voice; answers the user as a senior architect who explains why
 mode: primary
-requires_tools: [read, write, edit]
+requires_tools: [read, write, edit, skill, ask]
 optional_mcp: [cbm, engram]
 model_configurable: true
 ---

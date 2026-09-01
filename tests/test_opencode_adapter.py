@@ -1082,10 +1082,41 @@ class ShippedContentRenderTest(unittest.TestCase):
                 "read": True,
                 "write": True,
                 "edit": True,
+                "skill": True,
+                "question": True,
                 "cbm*": True,
                 "engram*": True,
             },
         )
+
+    def test_the_deny_baseline_leaves_the_skill_inventory_reachable(self):
+        """The baseline denies by omission, and the inventory is the cost.
+
+        `{"*": false}` is not a list of what an agent may not do -- it is
+        everything the runtime offers, minus what this repository thought to
+        name. The runtime only shows an agent the installed skills when it
+        holds the tool, so an agent without it is shipped 39 skills it cannot
+        see, under a system prompt that calls consulting them mandatory. This
+        is the assertion that keeps the vocabulary from silently falling behind
+        the runtime again.
+        """
+        for name in ("pegasus-orchestrator", "king-pegasus"):
+            with self.subTest(agent=name):
+                agent = next(a for a in self.loaded.agents if a.name == name)
+                value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+                self.assertIs(value["tools"]["skill"], True)
+                self.assertIs(value["tools"]["question"], True)
+                self.assertEqual(value["permission"]["skill"], "allow")
+                self.assertEqual(value["permission"]["question"], "allow")
+
+    def test_an_executor_is_left_without_the_inventory_or_a_way_to_ask(self):
+        for agent in self.loaded.agents:
+            if agent.mode is not content_module.AgentMode.SUBAGENT:
+                continue
+            with self.subTest(agent=agent.name):
+                value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+                self.assertNotIn("skill", value["tools"])
+                self.assertNotIn("question", value["tools"])
 
     def test_the_orchestrator_renders_its_declared_allows_on_top_of_the_deny_baseline(self):
         orchestrator = next(a for a in self.loaded.agents if a.name == "pegasus-orchestrator")
