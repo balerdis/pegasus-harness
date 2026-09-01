@@ -340,9 +340,64 @@ class AgentRenderTest(unittest.TestCase):
                 "read": "allow",
                 "edit": "allow",
                 "context7*": "allow",
+                "external_directory": {"*": "deny", f"{CONFIG.as_posix()}/skills/*": "allow"},
                 "task": {"*": "deny", "explore": "allow"},
             },
         )
+
+    def test_a_reader_is_allowed_out_to_the_config_directory_and_nowhere_else(self):
+        """Reading a path outside the project worktree is a permission of its own.
+
+        `read`, `grep` and `glob` each call the runtime's own
+        `assertExternalDirectory` before they ask for their named permission,
+        and that asks under the separate name `external_directory`. Permission
+        names are matched by wildcard and resolved to the last match, so the
+        deny baseline this map opens with matches that name too -- and denies
+        it outright, with no prompt, which is fatal in a sub-agent that has
+        nobody to prompt. Every path Pegasus itself hands an agent (a phase
+        agent's own SKILL.md, the `_shared` conventions) lives under the
+        config directory and outside every worktree, so without this grant the
+        whole lazy-loading contract is unreadable by construction. The grant is
+        a pattern rather than a bare `allow` so that it opens exactly the
+        directory Pegasus writes into, and nothing else on the machine.
+        """
+        agent = self.agent(requires_tools=("read",))
+        rule = self.value(agent)["permission"]["external_directory"]
+        self.assertEqual(rule, {"*": "deny", f"{CONFIG.as_posix()}/skills/*": "allow"})
+
+    def test_the_grant_refuses_every_other_path_outside_the_worktree(self):
+        """The exception carries its own refusal.
+
+        The outer baseline already denies this name, so an agent could not
+        reach `~/.ssh` or `/etc` either way -- but the boundary this entry
+        exists to draw should be readable in the entry itself, not inferred
+        from the absence of a rule two keys above.
+        """
+        rule = self.value(self.agent(requires_tools=("read",)))["permission"]["external_directory"]
+        self.assertEqual(rule["*"], "deny")
+        self.assertEqual(next(iter(rule)), "*", "the refusal must precede the one path it excepts")
+
+    def test_the_settings_file_is_not_something_a_shipped_agent_may_read(self):
+        """The config directory holds the settings file, and the settings file
+        holds whatever a server the user administers was configured with. The
+        grant stops at the skills directory for that reason, so widening it back
+        to the config root has to fail here.
+        """
+        rule = self.value(self.agent(requires_tools=("read",)))["permission"]["external_directory"]
+        self.assertNotIn(f"{CONFIG.as_posix()}/*", rule)
+
+    def test_grep_and_glob_earn_the_same_grant_read_does(self):
+        """They ask under the same permission name, for the same reason."""
+        for tool in ("grep", "glob"):
+            with self.subTest(tool=tool):
+                permission = self.value(self.agent(requires_tools=(tool,)))["permission"]
+                self.assertIn("external_directory", permission)
+
+    def test_an_agent_that_reads_nothing_is_granted_no_way_out(self):
+        """Declaring nothing keeps meaning nothing: only the three tools that
+        actually ask under this name can earn it."""
+        permission = self.value(self.agent(requires_tools=("bash",)))["permission"]
+        self.assertNotIn("external_directory", permission)
 
     def test_the_permission_deny_baseline_is_written_before_anything_it_would_lose_to(self):
         """Same resolution rule as `_tools`: the runtime keeps the *last*
@@ -1055,6 +1110,19 @@ class ShippedContentRenderTest(unittest.TestCase):
             value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
             self.assertEqual(value["permission"]["*"], "deny", agent.name)
             self.assertEqual(value["permission"]["task"]["*"], "deny", agent.name)
+
+    def test_every_shipped_agent_can_reach_the_skills_pegasus_installs_for_it(self):
+        """Each shipped prompt defers its detail to an absolute path under the
+        config directory, and every one of those sits outside the project
+        worktree the agent runs in. An agent that can read but is not allowed
+        out there is one whose own required-loading gate can never open.
+        """
+        for agent in self.loaded.agents:
+            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            rule = value["permission"]["external_directory"]
+            self.assertEqual(rule[f"{self.layout.skills_dir.as_posix()}/*"], "allow", agent.name)
+            for path in (self.layout.settings_file, self.layout.config_dir / "prompts"):
+                self.assertNotIn(f"{path.as_posix()}/*", rule, agent.name)
 
     def test_no_shipped_agent_that_declares_write_renders_an_orphaned_write_permission(self):
         """`write` has no permission of its own in the runtime's schema -- an agent
