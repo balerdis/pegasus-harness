@@ -44,6 +44,15 @@ TOOL_NAME: dict[str, str] = {
     "bash": "bash",
     "grep": "grep",
     "glob": "glob",
+    # Two the runtime offers that are not file work, and that the deny baseline
+    # therefore takes away by omission rather than by decision. `skill` is what
+    # puts the installed inventory in front of an agent at all -- without it the
+    # skills Pegasus placed are invisible, however plainly the system prompt
+    # calls consulting them mandatory. `ask` is the runtime's own way of putting
+    # a question to the person and waiting, which is what a gate that says "ask,
+    # and STOP" needs to exist to mean anything.
+    "skill": "skill",
+    "ask": "question",
 }
 
 PERMISSION_NAME: dict[str, str] = {
@@ -59,6 +68,8 @@ PERMISSION_NAME: dict[str, str] = {
     "bash": "bash",
     "grep": "grep",
     "glob": "glob",
+    "skill": "skill",
+    "ask": "question",
 }
 
 

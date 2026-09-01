@@ -264,7 +264,9 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
         server, and memory it declares like every other agent -- but it must
         never gain `bash`: applying stops at the edit, never at running anything.
         """
-        self.assertEqual(set(self.agent.requires_tools), {"read", "write", "edit"})
+        self.assertEqual(
+            set(self.agent.requires_tools), {"read", "write", "edit", "skill", "ask"}
+        )
         self.assertEqual(self.agent.optional_tools, ())
         self.assertEqual(set(self.agent.optional_mcp), {"cbm", "engram"})
 
