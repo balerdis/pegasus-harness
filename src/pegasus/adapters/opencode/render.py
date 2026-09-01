@@ -55,6 +55,13 @@ TOOL_NAME: dict[str, str] = {
     "ask": "question",
 }
 
+# The three the runtime makes ask for `external_directory` before they ask for
+# their own name -- `read`, `grep` and `glob` each call `assertExternalDirectory`
+# against their target first. Spelled in Pegasus's own tool vocabulary, which is
+# what an agent declares; `write` and `edit` are absent because the runtime does
+# not gate them this way.
+READS_OUTSIDE_THE_WORKTREE = frozenset({"read", "grep", "glob"})
+
 PERMISSION_NAME: dict[str, str] = {
     "read": "read",
     # The runtime's own config loader folds `write`, `edit` and `patch` onto a
@@ -132,7 +139,7 @@ def agent(
             else _body(layout, item.body, item.name)
         )
     value["tools"] = _tools(item)
-    value["permission"] = _permission(item)
+    value["permission"] = _permission(layout, item)
     if assignment is not None:
         value["model"] = assignment.full_id
         if assignment.effort is not None:
@@ -379,7 +386,7 @@ def _tools(item: Agent) -> dict[str, bool]:
     return {"*": False, **granted}
 
 
-def _permission(item: Agent) -> dict[str, Any]:
+def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     """The one map the runtime actually resolves tool calls against.
 
     Everything `_tools` expresses is repeated here directly, rather than left
@@ -399,6 +406,33 @@ def _permission(item: Agent) -> dict[str, Any]:
     the tool and MCP grants next to it: it is resolved against a delegate's
     name, not against the tool-call action namespace the rest of this map
     shares with the deny baseline.
+
+    `external_directory` is authored the same way, and for the opposite reason
+    to `task`: it is not a tool at all, so nothing in `tools` could ever derive
+    it, yet the deny baseline still reaches it. Granting a tool is not granting
+    every path it can be pointed at -- the runtime asks separately, under this
+    name, the moment a target sits outside the project worktree -- and a
+    baseline that says `*` says this too. Denied is where that ends: the runtime
+    refuses before it would prompt, and a sub-agent has nobody to prompt anyway.
+    Every path Pegasus hands an agent -- a phase agent's own SKILL.md, the
+    `_shared` conventions each prompt defers its detail to -- lives under the
+    skills directory, which is outside every worktree, so the lazy-loading
+    contract is unreadable by construction without this. The grant is scoped to
+    that directory and not to the config directory above it, even though both
+    sit outside the worktree: the settings file is the config directory's own
+    resident, and it carries whatever a server the user administers was
+    configured with. Nothing shipped needs to read it, so nothing shipped is
+    allowed to. It is earned rather than given, too -- only the three tools that
+    actually ask under this name bring it, so declaring nothing keeps meaning
+    nothing.
+
+    The inner `"*": "deny"` is the same shape `task` uses, and it is deliberate
+    even though the outer baseline already covers this name: the runtime
+    flattens every key of this map into one ordered rule list and keeps the last
+    rule matching both name and target, so an unlisted path outside the worktree
+    already falls to that baseline. Writing the refusal where the exception
+    lives makes the boundary a property of this entry rather than an inference
+    across two, which is what lets a test assert it directly.
     """
     names = (*item.requires_tools, *item.optional_tools)
     unknown = [name for name in names if name not in PERMISSION_NAME]
@@ -409,6 +443,8 @@ def _permission(item: Agent) -> dict[str, Any]:
     # matches its tool-call actions against, and the wildcard grants every
     # tool that server exposes.
     granted.update({f"{mcp_id}*": "allow" for mcp_id in item.optional_mcp})
+    if any(name in READS_OUTSIDE_THE_WORKTREE for name in names):
+        granted["external_directory"] = {"*": "deny", f"{layout.skills_dir.as_posix()}/*": "allow"}
     granted["task"] = {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}
     return {"*": "deny", **granted}
 
