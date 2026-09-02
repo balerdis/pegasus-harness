@@ -271,7 +271,7 @@ Eleven command files under `commands/sdd-*.md` assert:
 **No file anywhere defined what preflight is, and no "exact orchestrator preflight prompt"
 existed.** Every command asserted a precondition nobody owned.
 
-> **Homonym warning for v4:** `docs/pegasus-v4/arquitectura.md` and `src/pegasus/cli.py`
+> **Homonym warning for v4:** `docs/arquitectura/arquitectura.md` and `src/pegasus/cli.py`
 > also use the word "preflight", but that is the CLI installer's `ensure_writable()`
 > journal check — an unrelated concept. Grepping for "preflight" in v4 docs finds the
 > wrong thing.
