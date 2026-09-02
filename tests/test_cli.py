@@ -219,6 +219,20 @@ class VersionFlagTest(unittest.TestCase):
     def test_the_short_spelling_answers_the_same(self):
         self.assertEqual(self.run_flag("-V")[1], self.run_flag("--version")[1])
 
+    def test_it_is_not_accepted_after_a_subcommand_and_that_is_deliberate(self):
+        """`--json` is accepted on either side because it modifies a report.
+        A version request modifies nothing: it is its own command, and
+        `pegasus install --cli x --version` printing a number instead of
+        installing would be a surprising way to not install something. So it
+        is refused there, and argparse's own usage line names where it goes.
+        """
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as exit_code:
+                cli.main(["doctor", "--version"])
+        self.assertEqual(exit_code.exception.code, 2)
+        self.assertIn("--version", err.getvalue())
+
     def test_it_needs_no_home_and_no_journal(self):
         """It is answered by the parser, before anything opens a file. A
         version that depended on an installation would fail exactly where it

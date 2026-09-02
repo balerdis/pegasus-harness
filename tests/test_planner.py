@@ -256,6 +256,43 @@ class AppendTest(RealHomeTestCase):
     def settings(self) -> dict:
         return json.loads(self.SETTINGS.read_bytes())
 
+    def test_a_reconciled_append_can_still_be_found_by_the_release_after_it(self):
+        """The interaction that makes reconciliation worth getting right.
+
+        An append has no address, so it is located by the digest the journal
+        recorded for it. Leave that digest stale and the next release cannot
+        find the item it is supposed to replace: it appends a second one, and
+        the user ends up with both. Reconciling the digest is what keeps the
+        list from growing every time somebody's hand edit anticipated a
+        release.
+
+        The control is the point. Without the reconciliation this sequence
+        ends in `["beta", "gamma"]`; with it, in `["gamma"]`.
+        """
+        self.SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        self.SETTINGS.write_bytes(json.dumps({"instructions": ["beta"]}).encode("utf-8"))
+        # The journal still remembers the value a hand edit replaced.
+        stale = self.install(self.entry("alpha"))
+
+        reconciling = self.plan_for(self.append("beta"), installed=stale)
+        self.assertEqual([step.action for step in reconciling.steps], [planner.UNCHANGED])
+        applied = planner.apply(self.filesystem, reconciling, at=AT)
+        self.assertEqual([record.after_digest for record in applied.reconciled],
+                         [ownership.digest_of_value("beta")])
+
+        after = self.install(*applied.reconciled)
+        planner.apply(self.filesystem, self.plan_for(self.append("gamma"), installed=after), at=AT)
+        self.assertEqual(self.settings()["instructions"], ["gamma"])
+
+    def test_without_reconciling_the_next_release_appends_a_second_item(self):
+        """The same sequence with the stale digest left in place, so the test
+        above is proving the reconciliation and not the machinery around it."""
+        self.SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        self.SETTINGS.write_bytes(json.dumps({"instructions": ["beta"]}).encode("utf-8"))
+        stale = self.install(self.entry("alpha"))
+        planner.apply(self.filesystem, self.plan_for(self.append("gamma"), installed=stale), at=AT)
+        self.assertEqual(self.settings()["instructions"], ["beta", "gamma"])
+
     def test_appending_into_a_missing_list_creates_it(self):
         planner.apply(self.filesystem, self.plan_for(self.append()), at=AT)
         self.assertEqual(self.settings()["instructions"], ["./pegasus-AGENTS.md"])

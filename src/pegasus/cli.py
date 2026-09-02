@@ -193,6 +193,13 @@ def _parser() -> argparse.ArgumentParser:
     # broken is exactly when it has to still work. It was reachable only
     # through `doctor --json` before, which is a different question entirely
     # and does all of that work to answer it.
+    #
+    # Unlike `--json` above, this one is NOT repeated on the subparsers, and
+    # the asymmetry is the point: `--json` modifies a report, so it belongs
+    # wherever the command it modifies is written. A version request modifies
+    # nothing — it is its own command — and `pegasus install --cli x --version`
+    # printing a number instead of installing would be a surprising way to not
+    # install something.
     parser.add_argument(
         "-V", "--version", action="version", version=f"%(prog)s {pegasus.__version__}",
         help="report the version of this binary and exit",

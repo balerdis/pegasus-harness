@@ -31,8 +31,61 @@ PLUGIN = (
 HELPER_NAME = "reportFailure"
 
 
+def without_comments_and_strings(source: str) -> str:
+    """The same text with comments and string bodies blanked out, length intact.
+
+    The scan below counts braces, and a brace inside a comment or a string is
+    not a brace the language reads -- `// fix the { shape` would send the
+    scanner past the helper's real closing brace and swallow whatever follows
+    into what it reports as "inside the helper", quietly turning the guard
+    below into one that checks nothing. Blanking rather than deleting is what
+    keeps every offset in the result usable against the original text.
+    """
+    out = list(source)
+    kind: str | None = None
+    position = 0
+    while position < len(source):
+        pair = source[position : position + 2]
+        if kind is None:
+            if pair == "//":
+                kind, span = "line", 2
+            elif pair == "/*":
+                kind, span = "block", 2
+            elif source[position] in "\"'`":
+                kind, span = source[position], 1
+            else:
+                position += 1
+                continue
+            for offset in range(span):
+                out[position + offset] = " "
+            position += span
+            continue
+        if kind == "line" and source[position] == "\n":
+            kind = None
+            position += 1
+            continue
+        if kind == "block" and pair == "*/":
+            out[position] = out[position + 1] = " "
+            kind, position = None, position + 2
+            continue
+        if kind in "\"'`":
+            if source[position] == "\\":
+                out[position] = out[position + 1] = " "
+                position += 2
+                continue
+            if source[position] == kind:
+                kind = None
+                out[position] = " "
+                position += 1
+                continue
+        out[position] = " "
+        position += 1
+    return "".join(out)
+
+
 def helper_span(source: str) -> tuple[int, int]:
     """The [start, end) character range of the reporting helper's body."""
+    source = without_comments_and_strings(source)
     signature = re.search(
         r"function\s+%s\s*\([^)]*\)[^{]*\{" % re.escape(HELPER_NAME), source
     )
@@ -90,6 +143,31 @@ class ConsoleErrorStaysInsideTheReportingHelperTest(unittest.TestCase):
             "expected both the missing-contract path and the generator-failure "
             "path to route through the reporting helper",
         )
+
+
+class ScannerTest(unittest.TestCase):
+    """The guard is only as good as its idea of where the helper ends."""
+
+    def test_a_brace_inside_a_comment_does_not_move_the_helper_s_end(self):
+        source = (
+            "async function reportFailure(a) {\n"
+            "  // a stray { in prose\n"
+            "  console.error(a)\n"
+            "}\n"
+            "console.error('outside')\n"
+        )
+        start, end = helper_span(source)
+        self.assertNotIn("outside", source[start:end])
+
+    def test_a_brace_inside_a_string_does_not_either(self):
+        source = (
+            "async function reportFailure(a) {\n"
+            "  console.error(\"a { in text\")\n"
+            "}\n"
+            "console.error('outside')\n"
+        )
+        start, end = helper_span(source)
+        self.assertNotIn("outside", source[start:end])
 
 
 if __name__ == "__main__":
