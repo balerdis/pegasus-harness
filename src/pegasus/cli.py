@@ -343,6 +343,7 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
             "created": [_placed(step) for step in plan.creations],
             "updated": [_placed(step) for step in plan.updates],
             "unchanged": [_placed(step) for step in plan.unchanged],
+            "overwritten": [_placed(step) for step in plan.overwritten],
             "skipped": [_left(step) for step in plan.collisions],
             "retired": [_recorded(record) for record in retirements],
             "model_warnings": list(model_warnings),
@@ -498,6 +499,11 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
         "created": [_recorded(record) for record in reported if record.id in created_ids],
         "updated": [_recorded(record) for record in reported if record.id not in created_ids],
         "unchanged": [_placed(step) for step in applied.unchanged] + [_recorded(r) for r in kept_dependencies],
+        # What the journal claims is rewritten without asking — that policy
+        # stands. This is the half it never settled: whether the person finds
+        # out. Named at the moment the edit is spent, which is the only moment
+        # they can still do something about it.
+        "overwritten": [_placed(step) for step in plan.overwritten],
         "skipped": [_left(step) for step in applied.skipped],
         # Filtered to what `retire` actually confirmed removed, not the intent
         # `retirements` describes — an unaccounted entry belongs in
@@ -1435,6 +1441,13 @@ def _prose(report: dict[str, Any]) -> str:
             f"{'would update' if planned else 'updated'} {len(report['updated'])}, "
             f"{len(report['unchanged'])} already current, skipped {len(report['skipped'])}."
         ]
+        if report.get("overwritten"):
+            lines.append(
+                "Overwritten, because Pegasus owns these and you had changed them:"
+                if not planned
+                else "Would be overwritten, because Pegasus owns these and you had changed them:"
+            )
+            lines.extend(f"  {item['id']} → {item['target']}" for item in report["overwritten"])
         if report["skipped"]:
             lines.append("Left alone because something was already there:")
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["skipped"])

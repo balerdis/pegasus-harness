@@ -480,6 +480,42 @@ class InstallTest(RealHomeTestCase):
     # would only be able to prove it by counting calls.
 
 
+class OverwrittenReportTest(RealHomeTestCase):
+    """Ganar en silencio no es ganar: es no haber decidido la otra mitad.
+
+    Lo que el journal reclama se pisa sin preguntar, y eso no cambia. Lo que
+    cambia es que la persona se entera en el momento en que su edición se
+    gasta, y no antes por `doctor` ni después por sorpresa.
+    """
+
+    def hand_edit_one_file(self) -> tuple[str, Path]:
+        install = journal_module.install_for(self.store().load(), CLI)
+        target = next(entry for entry in install.entries if entry.kind == "file")
+        target.target.write_text("lo que escribió la persona\n", encoding="utf-8")
+        return target.id, target.target
+
+    def test_an_update_over_a_hand_edit_is_named_in_the_report(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        edited, path = self.hand_edit_one_file()
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertIn(edited, [item["id"] for item in report["overwritten"]])
+        self.assertNotEqual(path.read_text(encoding="utf-8"), "lo que escribió la persona\n")
+
+    def test_an_ordinary_install_names_nobody(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(report["overwritten"], [])
+
+    def test_the_prose_report_says_it_too(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.hand_edit_one_file()
+        _, printed = self.run_prose("install", "--cli", CLI)
+        self.assertIn("Overwritten", printed)
+
+
 class DriftReconciliationTest(RealHomeTestCase):
     """A run that writes nothing still has to leave the journal telling the truth.
 

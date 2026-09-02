@@ -1036,6 +1036,62 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class OverwrittenByHandTest(unittest.TestCase):
+    """An update that lands on somebody's own edit has to say so.
+
+    The policy is settled and this does not change it: an address the journal
+    claims is overwritten without asking, because a digest was retired as a
+    permission back in unit 9. What the policy never decided was whether the
+    person finds out. Silence is not part of "the product wins" — it is only
+    the cheapest way to implement it.
+
+    The planner already knows. It reads the bytes to decide `UNCHANGED` against
+    `UPDATE`, so it holds both the digest on disk and the one the journal
+    recorded, and those two disagreeing is exactly the definition of a hand
+    edit. Nothing extra is read to answer it.
+    """
+
+    def setUp(self):
+        self.filesystem = fakes.FakeFileSystem()
+
+    def artifact(self, content: bytes):
+        return FileArtifact(id="probe", path=Path("/home/probe.md"), content=content, executable=False)
+
+    def install(self, artifact, digest):
+        return Install(
+            cli="probe-cli", installed_at=AT, config_dir=Path("/home"), release={},
+            entries=(Record(id=artifact.id, kind="file", target=artifact.path,
+                            after_digest=digest, created_at=AT),),
+        )
+
+    def test_an_update_over_a_hand_edit_is_reported_as_overwritten(self):
+        wanted = self.artifact(b"what this release renders\n")
+        self.filesystem.write_atomic(wanted.path, b"what the user typed\n")
+        # The journal remembers what Pegasus itself last wrote, which is neither.
+        installed = self.install(wanted, ownership.digest(self.artifact(b"what an older release rendered\n")))
+        plan = planner.plan(self.filesystem, cli="probe-cli", artifacts=[wanted], installed=installed)
+        self.assertEqual([step.action for step in plan.steps], [planner.UPDATE])
+        self.assertEqual([step.artifact.id for step in plan.overwritten], ["probe"])
+
+    def test_an_update_over_what_pegasus_itself_last_wrote_is_not(self):
+        """The ordinary upgrade. Nobody touched anything, so nobody is told."""
+        wanted = self.artifact(b"what this release renders\n")
+        previous = self.artifact(b"what an older release rendered\n")
+        self.filesystem.write_atomic(wanted.path, previous.content)
+        plan = planner.plan(
+            self.filesystem, cli="probe-cli", artifacts=[wanted],
+            installed=self.install(wanted, ownership.digest(previous)),
+        )
+        self.assertEqual([step.action for step in plan.steps], [planner.UPDATE])
+        self.assertEqual(plan.overwritten, ())
+
+    def test_a_creation_is_never_an_overwrite(self):
+        wanted = self.artifact(b"body\n")
+        plan = planner.plan(self.filesystem, cli="probe-cli", artifacts=[wanted], installed=None)
+        self.assertEqual([step.action for step in plan.steps], [planner.CREATE])
+        self.assertEqual(plan.overwritten, ())
+
+
 class ReconciliationTest(unittest.TestCase):
     """What the journal says has to survive a run that wrote nothing.
 
