@@ -394,12 +394,14 @@ def _upgrade_preview(runtime: cli.Runtime) -> InstallPlanScreen | InstallResultS
     for the `CliOption` every other flow's plan and result screen carry,
     since `upgrade` has none of its own. Like `_update_preview`, this can
     already fail here -- not running from an installed executable, an
-    unwritable destination, no network, or already current -- and a
-    refusal has nothing left to preview or confirm, so it opens straight
-    onto a result screen instead of a plan with nothing real to show.
+    unwritable destination, or no network -- and a refusal has nothing left
+    to preview or confirm, so it opens straight onto a result screen instead
+    of a plan with nothing real to show. Being already current is not a
+    refusal, but it belongs on the same result screen for the same reason:
+    there is no plan to preview when there is nothing to do.
     """
     code, report = cli.safe_report("upgrade", lambda: cli.upgrade(runtime, dry_run=True))
-    if code != cli.OK:
+    if code != cli.OK or report.get("status") == "already-current":
         return InstallResultScreen(cli=PEGASUS_PROGRAM, report=report, command="upgrade")
     return InstallPlanScreen(cli=PEGASUS_PROGRAM, report=report, command="upgrade")
 

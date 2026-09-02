@@ -40,21 +40,37 @@ UNSELECTED = "    "
 # writes anything by itself; only confirming it does. Every banner below is
 # deliberately unalike the others so this is never left to be inferred from
 # wording that could look the same by accident.
+#
+# The five failure banners read in sentence case rather than shouting --
+# "didn't succeed" is exactly as unmistakable as "FAILED" without reading
+# like an alarm, and the prose line right underneath already carries the
+# detail (whether anything was written, and why) so the banner never has to
+# repeat it. Every non-failure banner keeps the all-caps register that marks
+# it apart from these on sight.
 PREVIEW_BANNER = "PREVIEW — nothing has been written yet."
 INSTALLED_BANNER = "INSTALLED."
-FAILED_BANNER = "INSTALL FAILED."
+FAILED_BANNER = "Install didn't succeed."
 UPDATED_BANNER = "UPDATED."
-UPDATE_FAILED_BANNER = "UPDATE FAILED."
+UPDATE_FAILED_BANNER = "Update didn't succeed."
 #: The one banner that does not read as "done" -- a replaced binary is not a
 #: running one. `_render_install_result`'s own prose (`cli.prose_for`'s
 #: `"upgrade"` branch) already says to restart; this banner says it too,
 #: right where a person's eye lands first.
 UPGRADED_BANNER = "UPGRADED — restart pegasus to run the new version."
-UPGRADE_FAILED_BANNER = "UPGRADE FAILED."
+UPGRADE_FAILED_BANNER = "Upgrade didn't succeed."
+#: Not a failure and not a completed upgrade: nothing was written because
+#: there was nothing to write. It takes the all-caps register deliberately --
+#: asking to be current and already being current is a finished, successful
+#: state, and putting it in the sentence-case failure wording would tell a
+#: person something went wrong when nothing did. What separates it from
+#: `UPGRADED_BANNER` is the words themselves plus the absent wordmark: that
+#: art celebrates a home this run actually wrote, and this run wrote nothing
+#: (see `_render_install_result`).
+ALREADY_CURRENT_BANNER = "ALREADY UP TO DATE."
 UNINSTALLED_BANNER = "UNINSTALLED."
-UNINSTALL_FAILED_BANNER = "UNINSTALL FAILED."
+UNINSTALL_FAILED_BANNER = "Uninstall didn't succeed."
 RESTORED_BANNER = "RESTORED."
-RESTORE_FAILED_BANNER = "RESTORE FAILED."
+RESTORE_FAILED_BANNER = "Restore didn't succeed."
 
 
 class Style(Enum):
@@ -258,16 +274,30 @@ def _render_install_plan(screen: InstallPlanScreen) -> tuple[Line, ...]:
 
 
 def _render_install_result(screen: InstallResultScreen, width: int) -> tuple[Line, ...]:
-    failed = screen.report.get("status") == "failed"
+    status = screen.report.get("status")
+    failed = status == "failed"
+    # `already-current` only ever reaches this screen through `upgrade` --
+    # `install`/`update` have no status by that name -- but the check is
+    # written against the report rather than the command so a bare `status ==
+    # "already-current"` elsewhere in this function can never drift out of
+    # sync with what actually earns the third banner.
+    already_current = status == "already-current"
     label = _COMMAND_LABEL.get(screen.command, screen.command.capitalize())
     if screen.command == "update":
         banner = UPDATE_FAILED_BANNER if failed else UPDATED_BANNER
     elif screen.command == "upgrade":
-        banner = UPGRADE_FAILED_BANNER if failed else UPGRADED_BANNER
+        if failed:
+            banner = UPGRADE_FAILED_BANNER
+        elif already_current:
+            banner = ALREADY_CURRENT_BANNER
+        else:
+            banner = UPGRADED_BANNER
     else:
         banner = FAILED_BANNER if failed else INSTALLED_BANNER
     lines = [Line(f"{label} · {screen.cli.display_name}"), Line("")]
-    if not failed:
+    # The wordmark celebrates a completed install; being told there was
+    # nothing to do is neither that nor a failure, so it draws for neither.
+    if not failed and not already_current:
         variant = _wordmark_variant(width)
         if variant is not None:
             lines.extend(_wordmark_lines(variant))

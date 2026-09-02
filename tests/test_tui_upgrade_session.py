@@ -107,18 +107,20 @@ class ChoosingUpgradeFromTheMenuTest(UpgradeSessionTestCase):
         self.assertEqual(filesystem.files[self.destination], b"old bytes")
         self.assertEqual(filesystem.writes, [])
 
-    def test_a_refusal_goes_straight_to_a_result_screen_naming_the_error(self):
+    def test_already_current_goes_straight_to_a_result_screen_not_a_plan(self):
         """No plan to preview and nothing to confirm when the destination is
         already current -- lands directly on a result screen, not a plan
         screen with nothing real to show, the same as an unresolved `update`
-        binding does."""
+        binding does. Unlike that case, though, this is not a failure: being
+        current already is the successful outcome asking to upgrade was
+        for."""
         runtime = self.runtime(downloader=upgrade_downloader(version=CURRENT_VERSION))
         navigator = self.to_upgrade_target(Navigator.starting())
         navigator = session.step(navigator, runtime, Action.CHOOSE)
         self.assertIsInstance(navigator.current, InstallResultScreen)
         self.assertEqual(navigator.current.command, "upgrade")
-        self.assertEqual(navigator.current.report["status"], "failed")
-        self.assertIn("already", navigator.current.report["error"].lower())
+        self.assertEqual(navigator.current.report["status"], "already-current")
+        self.assertEqual(navigator.current.report["version"], CURRENT_VERSION)
 
 
 class ConfirmingTheUpgradePlanTest(UpgradeSessionTestCase):

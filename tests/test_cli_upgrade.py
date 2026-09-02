@@ -205,13 +205,41 @@ class OwnedBySomeoneElseTest(UpgradeTestCase):
 
 
 class AlreadyCurrentTest(UpgradeTestCase):
-    def test_refuses_when_the_newest_published_release_matches_the_running_version(self):
+    """Being at the newest published version already is not a failure --
+    it is exactly what asking to be current was for. `upgrade` reports it
+    as a successful no-op, the same register as `install`/`update`'s own
+    "already current" and `models unset`'s "already-unset": nothing to do
+    is news, not an error."""
+
+    def test_reports_a_successful_no_op_instead_of_raising(self):
         downloader = upgrade_downloader(version=CURRENT_VERSION)
         runtime = self.runtime(downloader=downloader)
-        with self.assertRaises(cli.CommandError) as caught:
-            cli.upgrade(runtime)
-        self.assertIn("already", str(caught.exception).lower())
-        self.assertIn(CURRENT_VERSION, str(caught.exception))
+        report = cli.upgrade(runtime)
+        self.assertEqual(report["status"], "already-current")
+        self.assertEqual(report["version"], CURRENT_VERSION)
+
+    def test_does_not_touch_the_destination(self):
+        downloader = upgrade_downloader(version=CURRENT_VERSION)
+        filesystem = self.make_filesystem()
+        runtime = self.runtime(downloader=downloader, filesystem=filesystem)
+        cli.upgrade(runtime)
+        self.assertEqual(filesystem.writes, [])
+
+    def test_the_process_report_exits_ok_not_failed(self):
+        downloader = upgrade_downloader(version=CURRENT_VERSION)
+        runtime = self.runtime(downloader=downloader)
+        code, report = cli.safe_report("upgrade", lambda: cli.upgrade(runtime))
+        self.assertEqual(code, cli.OK)
+        self.assertEqual(report["status"], "already-current")
+
+    def test_the_prose_reads_as_finished_not_refused(self):
+        downloader = upgrade_downloader(version=CURRENT_VERSION)
+        runtime = self.runtime(downloader=downloader)
+        report = cli.upgrade(runtime)
+        prose = cli.prose_for({"schema": cli.SCHEMA, "command": "upgrade", **report})
+        self.assertIn(CURRENT_VERSION, prose)
+        self.assertIn("nothing to do", prose.lower())
+        self.assertNotIn("failed", prose.lower())
 
 
 class UnreachableNetworkTest(UpgradeTestCase):

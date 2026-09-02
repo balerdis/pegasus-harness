@@ -209,13 +209,14 @@ pegasus upgrade
 el inode del archivo con el que arrancó, así que el proceso que acaba de hacer el upgrade sigue siendo,
 en memoria, la versión vieja.
 
-`upgrade` se niega, en este orden y antes de bajar nada, en estos casos:
+Si ya estás en la versión más nueva publicada, `upgrade` no baja nada y no lo trata como un error —
+es exactamente lo que pediste, no hay nada que hacer:
 
-- Ya estás en la versión más nueva publicada:
+```
+Already running the newest published version (5.9.0) -- nothing to do.
+```
 
-  ```
-  pegasus is already at the newest published version (5.9.0)
-  ```
+Aparte de eso, `upgrade` se niega, en este orden y antes de bajar nada, en estos casos:
 
 - No hay red para consultar el release más nuevo — se niega a adivinar en vez de reportar "no hay
   nada nuevo" cuando en realidad no pudo verificar:

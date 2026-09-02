@@ -97,6 +97,10 @@ UPGRADED_REPORT = {
 UPGRADE_FAILED_REPORT = {
     "schema": cli.SCHEMA, "command": "upgrade", "status": "failed", "error": "5.10.0 is not writable",
 }
+UPGRADE_ALREADY_CURRENT_REPORT = {
+    "schema": cli.SCHEMA, "command": "upgrade", "status": "already-current",
+    "version": "5.11.0", "destination": "/opt/pegasus/pegasus",
+}
 
 
 class MenuRenderingTest(unittest.TestCase):
@@ -237,7 +241,7 @@ class InstallResultRenderingTest(unittest.TestCase):
 
     def test_a_failed_install_says_so_and_carries_no_traceback(self):
         lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=FAILED_REPORT), cursor=0)]
-        self.assertIn("INSTALL FAILED.", lines)
+        self.assertIn("Install didn't succeed.", lines)
         self.assertTrue(any("disk is full" in text for text in lines))
         self.assertFalse(any("Traceback" in text for text in lines))
 
@@ -279,8 +283,8 @@ class UpdateResultRenderingTest(unittest.TestCase):
         report = {**FAILED_REPORT, "command": "update"}
         screen = InstallResultScreen(cli=SAMPLE, report=report, command="update")
         lines = [line.text for line in render(screen, cursor=0)]
-        self.assertIn("UPDATE FAILED.", lines)
-        self.assertNotIn("INSTALL FAILED.", lines)
+        self.assertIn("Update didn't succeed.", lines)
+        self.assertNotIn("Install didn't succeed.", lines)
         self.assertFalse(any("Traceback" in text for text in lines))
 
     def test_the_multi_line_unresolved_bindings_refusal_is_not_flattened_to_one_line(self):
@@ -291,7 +295,7 @@ class UpdateResultRenderingTest(unittest.TestCase):
         width the way a single overlong line would be."""
         screen = InstallResultScreen(cli=SAMPLE, report=UPDATE_UNRESOLVED_BINDINGS_REPORT, command="update")
         lines = [line.text for line in render(screen, cursor=0)]
-        self.assertIn("UPDATE FAILED.", lines)
+        self.assertIn("Update didn't succeed.", lines)
         prose = cli.prose_for(UPDATE_UNRESOLVED_BINDINGS_REPORT)
         for expected in prose.splitlines():
             self.assertIn(expected, lines, f"line {expected!r} was flattened into a longer one")
@@ -350,11 +354,34 @@ class UpgradeResultRenderingTest(unittest.TestCase):
     def test_a_failed_upgrade_says_so_and_carries_no_traceback(self):
         screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_FAILED_REPORT, command="upgrade")
         lines = [line.text for line in render(screen, cursor=0)]
-        self.assertTrue(any("FAILED" in text for text in lines))
         self.assertTrue(any("not writable" in text for text in lines))
         self.assertFalse(any("Traceback" in text for text in lines))
-        self.assertNotIn("INSTALL FAILED.", lines)
-        self.assertNotIn("UPDATE FAILED.", lines)
+        self.assertNotIn("Install didn't succeed.", lines)
+        self.assertNotIn("Update didn't succeed.", lines)
+
+    def test_already_current_gets_its_own_banner_not_failed_or_upgraded(self):
+        """Nothing happened, but nothing was asked to happen and did not --
+        this is neither the failure banner nor the one that celebrates a
+        completed install."""
+        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_ALREADY_CURRENT_REPORT, command="upgrade")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertNotIn("UPGRADE FAILED.", lines)
+        self.assertFalse(any("UPGRADED" in text for text in lines))
+        self.assertTrue(any("already" in text.lower() and "up to date" in text.lower() for text in lines))
+
+    def test_already_current_does_not_draw_the_success_wordmark(self):
+        """The wordmark celebrates a completed install; nothing happened
+        here, so it must not appear even when there is ample width for it."""
+        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_ALREADY_CURRENT_REPORT, command="upgrade")
+        lines = [line.text for line in render(screen, cursor=0, width=200)]
+        self.assertNotIn(wordmark.wordmark_rows()[0], lines)
+        self.assertNotIn(wordmark.pegasus_rows()[0], lines)
+
+    def test_already_current_carries_the_exact_prose_the_flag_would_print(self):
+        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_ALREADY_CURRENT_REPORT, command="upgrade")
+        lines = [line.text for line in render(screen, cursor=0)]
+        for expected in cli.prose_for(UPGRADE_ALREADY_CURRENT_REPORT).splitlines():
+            self.assertIn(expected, lines)
 
 
 class UninstallResultRenderingTest(unittest.TestCase):
@@ -366,7 +393,7 @@ class UninstallResultRenderingTest(unittest.TestCase):
         lines = [
             line.text for line in render(UninstallResultScreen(cli=SAMPLE, report=UNINSTALL_FAILED_REPORT), cursor=0)
         ]
-        self.assertIn("UNINSTALL FAILED.", lines)
+        self.assertIn("Uninstall didn't succeed.", lines)
         self.assertTrue(any("permission denied" in text for text in lines))
         self.assertFalse(any("Traceback" in text for text in lines))
 
@@ -383,7 +410,7 @@ class RestoreResultRenderingTest(unittest.TestCase):
 
     def test_a_failed_restore_says_so_and_carries_no_traceback(self):
         lines = [line.text for line in render(RestoreResultScreen(report=RESTORE_FAILED_REPORT), cursor=0)]
-        self.assertIn("RESTORE FAILED.", lines)
+        self.assertIn("Restore didn't succeed.", lines)
         self.assertTrue(any("cannot be restored" in text for text in lines))
         self.assertFalse(any("Traceback" in text for text in lines))
 
