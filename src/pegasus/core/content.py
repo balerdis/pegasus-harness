@@ -208,6 +208,21 @@ class Agent:
     instruction to use it can never disagree.
     """
 
+    denied_mcp_tools: tuple[str, ...] = ()
+    """Fully-qualified tool names a wildcard grant of this agent's servers
+    must not reach, in `<key>_<tool>` form.
+
+    Empty at load time, the same way `mcp_sections` starts as one thing and
+    becomes another: a descriptor's `withheld_tools` names tools bare, because
+    it is written before any binding exists to qualify them against, and this
+    agent has not yet been told which key any of its servers will resolve
+    under. `select_mcp` is the one place that knows both -- the descriptor's
+    `withheld_tools` and the key (bound, or the id itself) each server in
+    `optional_mcp` ends up granted under -- so it is the only place that can
+    fill this in, mirroring exactly how it resolves `mcp_sections` and
+    rewrites `optional_mcp` itself in the same pass.
+    """
+
     @property
     def default(self) -> bool:
         """Whether a session starts in this agent. Read off the name, so only one can."""
@@ -287,6 +302,25 @@ class Mcp:
     archive_members: tuple[str, ...] = ()
     archive_executable: str | None = None
     argv: tuple[str, ...] = ()
+    withheld_tools: tuple[str, ...] = ()
+    """Tools this server exposes that a grant must never reach, named bare.
+
+    An agent that declares this server's id is granted every tool it exposes,
+    through the wildcard `_tools` and `_permission` write (`render.py`) --
+    that wildcard is what lets a descriptor avoid enumerating a server's whole
+    surface just to grant it. `withheld_tools` exists for the exception, not
+    the rule: naming here is how a descriptor takes back the one or two tools
+    that wildcard should never have reached in the first place -- typically
+    something destructive or irreversible enough that no agent should get it
+    merely by being granted the server's ordinary, cheap-to-use tools. Absent
+    means the wildcard is trusted as written, which stays true for almost
+    every server this repository ships.
+
+    Named bare (`delete_project`, not `cbm_delete_project`): the qualified
+    form only exists once a grant resolves against an actual key, and that key
+    is decided at selection time -- the descriptor itself is written before
+    any binding exists to qualify against.
+    """
     bound_to: str | None = None
     """The key an installation already uses for this server, when it runs its own.
 
@@ -461,6 +495,7 @@ def select_mcp(content: Content, chosen: Iterable[str]) -> Content:
             f"the servers this release ships are: {', '.join(sorted(known)) or 'none'}"
         )
     kept = set(bindings)
+    by_name = {server.name: server for server in content.mcp}
     return replace(
         content,
         mcp=tuple(
@@ -477,10 +512,33 @@ def select_mcp(content: Content, chosen: Iterable[str]) -> Content:
                 mcp_sections=tuple(
                     section for section in agent.mcp_sections if section.name in kept
                 ),
+                denied_mcp_tools=_denied_mcp_tools(agent, by_name, bindings, kept),
             )
             for agent in content.agents
         ),
         system_prompt=_select_system_prompt_mcp(content.system_prompt, kept),
+    )
+
+
+def _denied_mcp_tools(
+    agent: Agent, by_name: dict[str, Mcp], bindings: dict[str, str | None], kept: set[str]
+) -> tuple[str, ...]:
+    """The fully-qualified names this agent's grants must not extend to.
+
+    Built here rather than left for the renderer because this is the one place
+    that holds both halves of the fact: the descriptor's own `withheld_tools`
+    -- bare names, since the descriptor is written before any binding exists
+    -- and the key each granted server actually resolves under once selection
+    and binding are settled, exactly the key `optional_mcp` itself is rewritten
+    to two lines above. A tool named under the id when the server was bound to
+    a different key would deny something the runtime never matches, leaving
+    the wildcard grant it was meant to narrow fully intact.
+    """
+    return tuple(
+        f"{bindings[server_id] or server_id}_{tool}"
+        for server_id in agent.optional_mcp
+        if server_id in kept
+        for tool in by_name[server_id].withheld_tools
     )
 
 
@@ -780,6 +838,7 @@ def _load_mcp(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Mcp,
         )
         archive_members, archive_executable = _archive_form(fields, distribution, source)
         argv = _names(fields, "argv", source)
+        withheld_tools = _names(fields, "withheld_tools", source)
         servers.append(
             Mcp(
                 name=_stem(path),
@@ -798,6 +857,7 @@ def _load_mcp(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Mcp,
                 archive_members=archive_members,
                 archive_executable=archive_executable,
                 argv=argv,
+                withheld_tools=withheld_tools,
             )
         )
     return tuple(servers)
