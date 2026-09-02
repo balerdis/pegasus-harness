@@ -122,12 +122,15 @@ def materialize(
             raise MaterializeError(
                 f"{item.name}: fetched and verified, but could not be placed: {error}"
             ) from error
+    program_relpath, program_digest = _program_digest(filesystem, target_root, program_path(dependencies_dir, item))
     return Record(
         id=f"dependency:{item.name}",
         kind="dependency-tree",
         target=target_root,
         after_digest=digest,
         created_at=at,
+        program_relpath=program_relpath,
+        program_digest=program_digest,
     )
 
 
@@ -231,13 +234,37 @@ def materialize_npm(
     except NpmInstallerError as error:
         _clean_up(filesystem, target)
         raise MaterializeError(f"{item.name}: npm ci failed: {error}") from error
+    program_relpath, program_digest = _program_digest(filesystem, target, npm_script_path(dependencies_dir, item))
     return Record(
         id=f"dependency:{item.name}",
         kind="dependency-tree",
         target=target,
         after_digest=item.integrity,
         created_at=at,
+        program_relpath=program_relpath,
+        program_digest=program_digest,
     )
+
+
+def _program_digest(filesystem: FileSystem, target_root: Path, program: Path) -> tuple[str | None, str | None]:
+    """The one fact `doctor` can later check cheaply: not the whole tree, the
+    program a CLI's configuration will actually run.
+
+    Read back rather than assumed, for both callers: `materialize` already
+    holds the fetched bytes in memory, but reading the placed file instead
+    is what one code path can share with `materialize_npm`, whose own write
+    is `npm ci`'s, not this module's -- a descriptor whose declared entry
+    `npm ci` did not produce (a stale or wrong `entry` field) must not stop
+    an install `npm ci` itself already accepted. Recording nothing here is
+    exactly what a journal written before this pair existed also carries,
+    and `doctor` already knows what that means: nothing to check, not
+    something checked and found wanting.
+    """
+    try:
+        content = filesystem.read_bytes(program)
+    except FileSystemError:
+        return None, None
+    return str(program.relative_to(target_root)), ownership.digest_of_bytes(content)
 
 
 def _clean_up(filesystem: FileSystem, target: Path) -> None:

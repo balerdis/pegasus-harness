@@ -26,8 +26,8 @@ El release incluye solamente lo siguiente:
 4. Skills:
    - Todos los Core y SDD.
    - Todos los de contexto, Git y colaboracion, excepto los que comienzan con `sergio-`.
-   - De quality, security y operations: solamente `laravel-security` y `lazy-load-prompt-audit`.
-   - De domain: solamente `skill-versiones-estandar-asi`.
+   - De quality, security y operations: solamente `lazy-load-prompt-audit`.
+   - De domain: ninguna. `skill-versiones-estandar-asi` y `laravel-security` se retiraron del contenido embarcado: el primero codifica el estándar de tecnología interno de una organización y el segundo llegó por la misma mudanza, y ninguno de los dos es guía genérica que corresponda que embarque un producto público.
    - `api-service-contract-documentation`.
 
 `tui.json`, toda configuración/salida de plugins TUI, `judgment-day` y la referencia de transporte de deployment de `lazy-load-prompt-audit` no se distribuyen. La ausencia de esa referencia bloquea el flujo de deployment con `blocked-missing-reference`; no se infiere ni se recrea. Si hay una copia local existente, se preserva y no se toca.

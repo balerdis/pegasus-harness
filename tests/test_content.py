@@ -1128,7 +1128,7 @@ class ShippedContentTest(unittest.TestCase):
                 )
 
     def test_skills_load(self):
-        self.assertEqual(len(self.content.skills), 27)
+        self.assertEqual(len(self.content.skills), 25)
 
     def test_commands_load(self):
         self.assertEqual(len(self.content.commands), 16)

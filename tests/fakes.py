@@ -88,7 +88,10 @@ class FakeFileSystem:
 
     Beyond storing bytes it can be told to fail: ``fail_on`` names the paths
     whose next write must raise, which is how rollback gets exercised without
-    filling a real disk. ``fail_exists`` is the same idea for a probe rather
+    filling a real disk. ``fail_mode`` is the same for a path whose permission
+    bits cannot be read, which the port reports by raising rather than by
+    answering ``None`` -- ``None`` means absent and nothing else.
+    ``fail_exists`` is the same idea for a probe rather
     than a write — without it, a caller that cannot tell whether a path exists
     was not constructible in a test at all.
     """
@@ -106,6 +109,7 @@ class FakeFileSystem:
         fail_list: set[Path] | None = None,
         fail_read: set[Path] | None = None,
         fail_exists: set[Path] | None = None,
+        fail_mode: set[Path] | None = None,
     ):
         self.files: dict[Path, bytes] = dict(files or {})
         self.modes: dict[Path, int] = dict(modes or {})
@@ -118,6 +122,7 @@ class FakeFileSystem:
         self.fail_remove_dir: set[Path] = set(fail_remove_dir or ())
         self.fail_list: set[Path] = set(fail_list or ())
         self.fail_read: set[Path] = set(fail_read or ())
+        self.fail_mode: set[Path] = set(fail_mode or ())
         self.fail_exists: set[Path] = set(fail_exists or ())
         self.writes: list[Path] = []
         self.removals: list[Path] = []
@@ -137,6 +142,12 @@ class FakeFileSystem:
         return self.files[path]
 
     def mode_of(self, path: Path) -> int | None:
+        if path in self.fail_mode:
+            # The port distinguishes "absent" from "there but its bits could
+            # not be read", and a double that can only express the first
+            # proves the callers against a contract the real filesystem no
+            # longer has.
+            raise FileSystemError(f"refusing to read the mode of {path}: injected failure")
         if path in self.files:
             return self.modes.get(path, DEFAULT_MODE)
         if path in self.directories:

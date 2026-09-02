@@ -66,8 +66,19 @@ class PosixFileSystem:
     def mode_of(self, path: Path) -> int | None:
         try:
             return stat.S_IMODE(path.stat().st_mode)
-        except OSError:
+        except FileNotFoundError:
+            # The one `OSError` that already means absent, so it answers the
+            # contract's ``None`` directly. Caught here rather than probed for
+            # with `exists` first, because a probe and a `stat` are two moments:
+            # a file removed between them would answer "there" and then raise,
+            # and the contract would be broken by the gap rather than by either
+            # call.
             return None
+        except OSError as error:
+            # It is there and its bits could not be read. Returning `None` sent
+            # that to a caller whose default is right for a file being created
+            # and wrong for this one: a `0600` file put back as `0644`.
+            raise FileSystemError(f"cannot read the mode of {path}: {error}") from error
 
     def list_dir(self, path: Path) -> list[str]:
         # Delegates to `self.exists` rather than a raw `path.exists()` on

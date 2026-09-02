@@ -64,6 +64,14 @@ class Step:
 
     Carried on the step rather than looked up again while applying: the decision
     and the record that justified it cannot then disagree."""
+    found: str | None = None
+    """What was actually at this address when the step was decided.
+
+    Only set where reading it was already part of deciding, which is every
+    address that held something. It answers a question the action alone cannot:
+    an `UPDATE` says the address does not hold what this release renders, and
+    this says whether what it holds is what Pegasus itself last wrote or
+    something a person put there."""
 
 
 @dataclass(frozen=True)
@@ -102,6 +110,30 @@ class Plan:
         """Everything this run writes. A creation and an update differ in what
         they leave behind, not in the writing."""
         return (*self.creations, *self.updates)
+
+    @property
+    def overwritten(self) -> tuple[Step, ...]:
+        """The updates that land on somebody's own edit rather than on ours.
+
+        A digest stopped being a permission in unit 9: an address the journal
+        claims is rewritten without asking whether it changed since. That
+        decision stands, and this does not soften it — the product still wins.
+        What it settles is the other half, which the policy never addressed:
+        whether the person finds out. Silence was never the decision, only the
+        cheapest way to implement it.
+
+        Nothing is read to answer this. Deciding `UNCHANGED` against `UPDATE`
+        already meant reading the address, so the step carries what was found
+        there, and `found` disagreeing with the digest the journal recorded is
+        the definition of a hand edit -- the same comparison `doctor` calls
+        drift, asked at the moment the edit is about to be spent instead of
+        before or after.
+        """
+        return tuple(
+            step
+            for step in self.updates
+            if step.entry is not None and step.found is not None and step.found != step.entry.after_digest
+        )
 
     @property
     def collisions(self) -> tuple[Step, ...]:
@@ -240,8 +272,8 @@ def _file_step(
     if current == digest and filesystem.mode_of(artifact.path) == filesystem.mode_for(executable=artifact.executable):
         # Both halves, because a fingerprint is of content and a permission is
         # not content. A program whose bit was wrong ships identical bytes.
-        return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
-    return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
+        return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry, found=current)
+    return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry, found=current)
 
 
 def _key_step(artifact: ConfigKeyArtifact, document: Any, digest: str, entry: Record | None) -> Step:
@@ -263,9 +295,16 @@ def _key_step(artifact: ConfigKeyArtifact, document: Any, digest: str, entry: Re
         return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
     if not ownership.occupies(artifact, document):
         return Step(artifact=artifact, action=CREATE, digest=digest, entry=entry)
-    if ownership.digest_of_value(pointer.get_at(document, artifact.pointer)) == digest:
-        return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry)
-    return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry)
+    # The same read that decides the action answers who wrote what is there, so
+    # `found` costs nothing here either. An append is left out on purpose: it is
+    # located BY the recorded digest, so a value that disagrees with it is not
+    # found at all, and "somebody edited ours" is indistinguishable from
+    # "somebody deleted ours and added their own" -- see `_retire_key`, which
+    # refuses the same claim for the same reason.
+    found = ownership.digest_of_value(pointer.get_at(document, artifact.pointer))
+    if found == digest:
+        return Step(artifact=artifact, action=UNCHANGED, digest=digest, entry=entry, found=found)
+    return Step(artifact=artifact, action=UPDATE, digest=digest, entry=entry, found=found)
 
 
 def _claimable(artifact: ConfigKeyArtifact, entry: Record | None) -> bool:

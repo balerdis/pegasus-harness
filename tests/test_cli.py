@@ -480,6 +480,80 @@ class InstallTest(RealHomeTestCase):
     # would only be able to prove it by counting calls.
 
 
+class UnverifiedDependencyReportTest(RealHomeTestCase):
+    """Una verificación que no se encendió tiene que decirse, no deducirse.
+
+    `materialize_npm` deja los dos campos del programa en `None` cuando no
+    puede releer el script de entrada — el `entry` del descriptor quedó viejo,
+    por ejemplo. La instalación sigue, y con razón: eso es una escritura de
+    `npm ci` que faltó, no una de Pegasus que falló. Lo que no puede seguir es
+    en silencio, porque desde ahí `doctor` trata ese árbol igual que uno
+    anterior a la verificación: sin drift para siempre, aunque lo cambien
+    entero.
+    """
+
+    def test_a_tree_whose_program_was_never_recorded_is_named(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        store = self.store()
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        claimed = journal_module.Record(
+            id="dependency:probe", kind="dependency-tree",
+            target=self.home / "share" / "deps" / "probe" / "1.0.0",
+            after_digest="sha256:" + "a" * 64, created_at=AT,
+        )
+        store.save(journal_module.with_install(
+            journal, replace(install, entries=(*install.entries, claimed))
+        ))
+        _, report = self.run_cli("doctor")
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertIn("dependency:probe", entry["unverified"])
+
+    def test_an_install_with_nothing_unverifiable_names_nobody(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        _, report = self.run_cli("doctor")
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertEqual(entry["unverified"], [])
+
+
+class OverwrittenReportTest(RealHomeTestCase):
+    """Ganar en silencio no es ganar: es no haber decidido la otra mitad.
+
+    Lo que el journal reclama se pisa sin preguntar, y eso no cambia. Lo que
+    cambia es que la persona se entera en el momento en que su edición se
+    gasta, y no antes por `doctor` ni después por sorpresa.
+    """
+
+    def hand_edit_one_file(self) -> tuple[str, Path]:
+        install = journal_module.install_for(self.store().load(), CLI)
+        target = next(entry for entry in install.entries if entry.kind == "file")
+        target.target.write_text("lo que escribió la persona\n", encoding="utf-8")
+        return target.id, target.target
+
+    def test_an_update_over_a_hand_edit_is_named_in_the_report(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        edited, path = self.hand_edit_one_file()
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertIn(edited, [item["id"] for item in report["overwritten"]])
+        self.assertNotEqual(path.read_text(encoding="utf-8"), "lo que escribió la persona\n")
+
+    def test_an_ordinary_install_names_nobody(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        _, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(report["overwritten"], [])
+
+    def test_the_prose_report_says_it_too(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.hand_edit_one_file()
+        _, printed = self.run_prose("install", "--cli", CLI)
+        self.assertIn("Overwritten", printed)
+
+
 class DriftReconciliationTest(RealHomeTestCase):
     """A run that writes nothing still has to leave the journal telling the truth.
 
@@ -1140,11 +1214,16 @@ class DoctorTest(RealHomeTestCase):
         self.assertEqual(entry["drifted"], [])
         self.assertEqual(entry["missing"], [])
 
-    def claim_a_dependency_tree(self, target: Path) -> None:
+    def claim_a_dependency_tree(
+        self, target: Path, *, program_relpath: str | None = None, program_digest: str | None = None
+    ) -> None:
         """Put a record for a materialized dependency into the journal.
 
         Nothing materializes one yet, so the record is written by hand — but
         the kind is real, and `doctor` reads whatever the journal claims.
+        Leaving ``program_relpath``/``program_digest`` unset is itself a real
+        case: a record written before `dependencies.materialize` recorded
+        that pair at all.
         """
         store = self.store()
         journal = store.load()
@@ -1155,6 +1234,8 @@ class DoctorTest(RealHomeTestCase):
             target=target,
             after_digest=ownership.digest_of_bytes(b"whatever the archive hashed to"),
             created_at=AT,
+            program_relpath=program_relpath,
+            program_digest=program_digest,
         )
         grown = replace(install, entries=(*install.entries, claimed))
         store.save(journal_module.with_install(journal, grown))
@@ -1185,6 +1266,74 @@ class DoctorTest(RealHomeTestCase):
     def test_doctor_reports_a_dependency_tree_that_is_gone_as_missing(self):
         self.install()
         self.claim_a_dependency_tree(self.home / "deps" / "probe" / "1.0.0")
+
+        _, report = self.run_cli("doctor")
+
+        self.assertIn("dependency:probe", report["clis"][0]["missing"])
+
+    def test_doctor_reports_a_dependency_tree_whose_program_is_untouched_as_healthy(self):
+        """The program named by `program_relpath` still hashes to
+        `program_digest`, so this is the intact case, distinct from the older
+        "the tree is merely present" case above only in that it was actually
+        checked rather than left unchecked.
+        """
+        self.install()
+        tree = self.home / "deps" / "probe" / "1.0.0"
+        tree.mkdir(parents=True)
+        program = tree / "probe"
+        program.write_bytes(b"the real program bytes")
+        self.claim_a_dependency_tree(
+            tree,
+            program_relpath="probe",
+            program_digest=ownership.digest_of_bytes(b"the real program bytes"),
+        )
+
+        code, report = self.run_cli("doctor")
+
+        self.assertEqual(code, 0)
+        entry = report["clis"][0]
+        self.assertNotIn("dependency:probe", entry["drifted"])
+        self.assertNotIn("dependency:probe", entry["missing"])
+        self.assertNotIn("dependency:probe", entry["unreadable"])
+
+    def test_doctor_reports_a_substituted_program_as_drifted(self):
+        """The tree is there, and the program `program_relpath` names is
+        there too -- but its bytes no longer hash to `program_digest`, which
+        is exactly the substitution this check exists to catch: the one file
+        whose replacement would matter, being something other than what
+        Pegasus placed.
+        """
+        self.install()
+        tree = self.home / "deps" / "probe" / "1.0.0"
+        tree.mkdir(parents=True)
+        program = tree / "probe"
+        program.write_bytes(b"the real program bytes")
+        self.claim_a_dependency_tree(
+            tree,
+            program_relpath="probe",
+            program_digest=ownership.digest_of_bytes(b"the real program bytes"),
+        )
+        program.write_bytes(b"a substituted binary, not what pegasus placed")
+
+        _, report = self.run_cli("doctor")
+
+        self.assertIn("dependency:probe", report["clis"][0]["drifted"])
+
+    def test_doctor_reports_an_absent_program_as_missing_even_though_the_tree_is_there(self):
+        """The tree directory itself still exists -- only the one file inside
+        it that a CLI's configuration would actually run is gone. That must
+        land in `missing`, the same bucket an entirely absent tree lands in,
+        since a configuration pointed at this program can no longer run it
+        either way.
+        """
+        self.install()
+        tree = self.home / "deps" / "probe" / "1.0.0"
+        tree.mkdir(parents=True)
+        self.claim_a_dependency_tree(
+            tree,
+            program_relpath="probe",
+            program_digest=ownership.digest_of_bytes(b"the real program bytes"),
+        )
 
         _, report = self.run_cli("doctor")
 

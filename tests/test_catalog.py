@@ -369,7 +369,7 @@ class ShippedCatalogTest(unittest.TestCase):
         # descriptor body -- folded into the same `_shared/mcp/engram-convention.md`
         # this count already carried, rather than adding a file of its own. One
         # hand-authored file disappears with nothing replacing it, net -1.
-        self.assertEqual((len(files), len(keys)), (91, 21))
+        self.assertEqual((len(files), len(keys)), (86, 21))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:

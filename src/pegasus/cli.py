@@ -343,6 +343,7 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
             "created": [_placed(step) for step in plan.creations],
             "updated": [_placed(step) for step in plan.updates],
             "unchanged": [_placed(step) for step in plan.unchanged],
+            "overwritten": [_placed(step) for step in plan.overwritten],
             "skipped": [_left(step) for step in plan.collisions],
             "retired": [_recorded(record) for record in retirements],
             "model_warnings": list(model_warnings),
@@ -498,6 +499,11 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
         "created": [_recorded(record) for record in reported if record.id in created_ids],
         "updated": [_recorded(record) for record in reported if record.id not in created_ids],
         "unchanged": [_placed(step) for step in applied.unchanged] + [_recorded(r) for r in kept_dependencies],
+        # What the journal claims is rewritten without asking — that policy
+        # stands. This is the half it never settled: whether the person finds
+        # out. Named at the moment the edit is spent, which is the only moment
+        # they can still do something about it.
+        "overwritten": [_placed(step) for step in plan.overwritten],
         "skipped": [_left(step) for step in applied.skipped],
         # Filtered to what `retire` actually confirmed removed, not the intent
         # `retirements` describes — an unaccounted entry belongs in
@@ -968,6 +974,13 @@ def _health(
         "drifted": [],
         "missing": [],
         "unreadable": [],
+        # Not a fourth way of being wrong: a way of not being checkable. A
+        # dependency tree recorded before the program pair existed, or one whose
+        # program `npm ci` never wrote where the descriptor said it would, has
+        # nothing to compare against — so it reports no drift, and would read as
+        # verified if nothing said otherwise. Naming it is the difference
+        # between "checked and fine" and "never checked".
+        "unverified": [],
     }
     if install is None:
         return health
@@ -987,10 +1000,25 @@ def _health(
         except FileSystemError:
             health["unreadable"].append(entry.id)
             continue
+        if entry.kind == "dependency-tree" and entry.program_digest is None:
+            health["unverified"].append(entry.id)
         if current is None:
             health["missing"].append(entry.id)
         elif current != entry.after_digest:
             health["drifted"].append(entry.id)
+
+    # Outside the flag, and deliberately: the flag authorises running someone's
+    # configured processes, and this runs nothing at all -- it reads the journal
+    # for servers this install granted without configuring. Keeping it inside
+    # left a plain `doctor` silent about them, which is the same blind spot the
+    # flag's own report was fixed to remove, only for the invocation almost
+    # everybody types. Its own key, rather than joining `mcp_servers`: that one
+    # is documented as the result of launching things, and would otherwise hold
+    # entries nothing launched.
+    health["mcp_bound"] = [
+        {"id": check.id, "status": check.status, "detail": check.detail}
+        for check in _bound_checks(install)
+    ]
 
     if start_mcp_servers:
         health["mcp_servers"] = [
@@ -1011,11 +1039,14 @@ def _mcp_checks(runtime: Runtime, install) -> list[mcp_handshake.ServerCheck]:
     Only what `_mcp_entries` finds is ever executed: a `config-key` entry
     whose id this same install wrote, read back from the configuration file
     Pegasus itself placed. Nothing named anywhere else is ever a candidate.
+
+    A bound server is not here, and that is the point of it living in
+    `mcp_bound` instead: this list is what launching produced, and a server
+    with no configuration of its own was never launched. It used to be
+    appended here as well, so a report with the flag named the same server
+    twice under two headings that disagreed about what it was.
     """
-    return [
-        *(_mcp_checks_one(runtime, entry, name) for entry, name in _mcp_entries(install)),
-        *_bound_checks(install),
-    ]
+    return [_mcp_checks_one(runtime, entry, name) for entry, name in _mcp_entries(install)]
 
 
 def _bound_checks(install) -> list[mcp_handshake.ServerCheck]:
@@ -1097,16 +1128,40 @@ def _digest_of_file(filesystem: FileSystem, entry: Record) -> str | None:
 
 
 def _digest_of_dependency_tree(filesystem: FileSystem, entry: Record) -> str | None:
-    """A tree that is there is all this can honestly report.
+    """What this can honestly report is bounded by what it would cost to find out.
 
-    The digest a dependency-tree record carries is the identity of what was
-    materialized — the checksum of the archive, or the integrity the lockfile
-    pinned — not a hash of the directory as it stands. So being present is
-    the whole of what can be checked here, and answering with the recorded
-    digest says exactly that and nothing more. Telling a tampered tree from
-    an intact one needs a different check than this field can give.
+    Hashing the whole tree would need a recursive read — cheap for a single
+    binary, prohibitive for a `node_modules` with tens of thousands of files —
+    so this never does that, and `Record.after_digest` says why at length: it
+    names the *source* Pegasus fetched, not a hash of the directory as it
+    stands, and proves nothing about what is on disk now.
+
+    What this checks instead is smaller and cheaper: the one file inside the
+    tree a CLI's configuration is actually told to run — `entry.program_relpath`,
+    recorded by `dependencies.materialize` or `materialize_npm` alongside its
+    own digest. That is a single read, not a walk, and it proves exactly one
+    thing: whether the program Pegasus placed is still the program Pegasus
+    placed. It proves nothing about any other file the tree contains — a
+    substituted dependency three levels into `node_modules` is invisible to
+    this, on purpose, because catching it would cost the walk this function
+    exists to avoid.
+
+    A record written before this pair existed carries neither field, and that
+    is a different fact from the program having gone missing or been swapped:
+    there was never anything to check, so nothing here can be asserted one
+    way or the other. Returning ``entry.after_digest`` unconditionally is how
+    that distinction survives into `doctor`'s bucketing — the caller compares
+    this return value against ``entry.after_digest`` to decide "drifted", so
+    a value engineered to always equal it is the only way to say "not proven
+    wrong" without also claiming "proven right".
     """
-    return entry.after_digest
+    if entry.program_relpath is None or entry.program_digest is None:
+        return entry.after_digest
+    program = entry.target / entry.program_relpath
+    if not filesystem.exists(program):
+        return None
+    current = ownership.digest_of_bytes(filesystem.read_bytes(program))
+    return entry.after_digest if current == entry.program_digest else current
 
 
 def _digest_of_config_key(filesystem: FileSystem, entry: Record) -> str | None:
@@ -1435,6 +1490,13 @@ def _prose(report: dict[str, Any]) -> str:
             f"{'would update' if planned else 'updated'} {len(report['updated'])}, "
             f"{len(report['unchanged'])} already current, skipped {len(report['skipped'])}."
         ]
+        if report.get("overwritten"):
+            lines.append(
+                "Overwritten, because Pegasus owns these and you had changed them:"
+                if not planned
+                else "Would be overwritten, because Pegasus owns these and you had changed them:"
+            )
+            lines.extend(f"  {item['id']} → {item['target']}" for item in report["overwritten"])
         if report["skipped"]:
             lines.append("Left alone because something was already there:")
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["skipped"])
@@ -1522,6 +1584,10 @@ def _cli_prose(entry: dict[str, Any]) -> str:
         ("changed by hand", "drifted"),
         ("missing", "missing"),
         ("could not be checked", "unreadable"),
+        # Reads next to the others on purpose: the difference between an
+        # artifact that came back wrong and one that was never checkable is
+        # exactly what this line exists to keep visible.
+        ("carrying no record of their own program, so unverified", "unverified"),
     ):
         if entry.get(key):
             line += f" {len(entry[key])} {label}: {', '.join(entry[key])}."
@@ -1531,6 +1597,9 @@ def _cli_prose(entry: dict[str, Any]) -> str:
     if steps:
         line += "\n  If it was already running when Pegasus was installed:"
         line += "".join(f"\n    {step}" for step in steps)
+    if entry.get("mcp_bound"):
+        line += "\n  MCP servers you administer, granted but not installed by Pegasus:"
+        line += "".join(f"\n    {check['id']}" for check in entry["mcp_bound"])
     if "mcp_servers" in entry:
         if entry["mcp_servers"]:
             line += "\n  MCP servers:"

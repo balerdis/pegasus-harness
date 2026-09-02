@@ -173,6 +173,30 @@ class PosixFileSystemTest(unittest.TestCase):
         with self.assertRaises(FileSystemError):
             self.fs.exists(present)
 
+    def test_mode_of_raises_rather_than_reporting_absent_when_it_cannot_be_read(self):
+        """`None` from this method means one thing, and it has meant two.
+
+        A caller reads it to put a file's own permissions back after
+        rewriting it — the whole reason the method exists — and falls back to
+        a default when it gets `None`. That default is right for a file being
+        created and wrong for one whose bits could not be read: it would put
+        the user's `0600` file back as `0644`. The two facts have to be
+        distinguishable at the port, exactly as `exists` had to stop
+        collapsing absent into unreadable.
+        """
+        blocked = self.root / "blocked"
+        blocked.mkdir()
+        present = blocked / "note.txt"
+        present.write_bytes(b"private")
+        blocked.chmod(0o000)
+        self.addCleanup(blocked.chmod, 0o755)
+
+        with self.assertRaises(FileSystemError):
+            self.fs.mode_of(present)
+
+    def test_mode_of_still_reports_an_absent_path_as_none(self):
+        self.assertIsNone(self.fs.mode_of(self.root / "nada.txt"))
+
     # --- Removing ---
 
     def test_remove_deletes_the_file(self):

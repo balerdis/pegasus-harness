@@ -56,6 +56,14 @@ class FileSystem(Protocol):
         is theirs, not ours. Rewriting one means putting its own permissions
         back, so this exists to make that possible instead of quietly widening
         or narrowing who can read it.
+
+        Raises :class:`FileSystemError` when the path is there and its bits
+        cannot be read, for the same reason `exists` raises rather than
+        answering ``False``: a caller reads this to restore a file's own
+        permissions and falls back to a default when it gets ``None``, and that
+        default is right for a file being created and wrong for one whose bits
+        were merely unreadable — it would put a ``0600`` file back as ``0644``.
+        ``None`` has to mean absent and nothing else.
         """
 
     def list_dir(self, path: Path) -> list[str]:

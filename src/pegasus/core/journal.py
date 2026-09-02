@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 SCHEMA = "pegasus-harness/journal/v4"
@@ -65,6 +65,24 @@ class Record:
     codec: str | None = None
     mode: str | None = None
     ownership: str = OWNED
+    program_relpath: str | None = None
+    """For a ``dependency-tree`` only: the path, relative to ``target``, of the
+    one file a CLI's configuration actually runs -- `dependencies.program_path`
+    or `dependencies.npm_script_path`, whichever the distribution used. This
+    and ``program_digest`` are the pair that lets a later `doctor` check the
+    one thing in the tree whose substitution would matter, without reading
+    the tree it sits in. Both are optional, and only ever together: a record
+    written before this existed carries neither, and must be told apart from
+    a record whose program has gone missing -- the first has nothing to
+    check, the second has something to check that failed."""
+    program_digest: str | None = None
+    """The digest of ``program_relpath``'s bytes at materialization time.
+
+    Deliberately not ``after_digest``: that field identifies the *source*
+    Pegasus fetched (an archive's checksum, a lockfile's integrity string),
+    which for an archive is never the digest of any single extracted member.
+    This is the digest of the placed file itself, the only thing a later
+    read of the tree can cheaply reproduce and compare against."""
 
 
 @dataclass(frozen=True)
@@ -151,7 +169,7 @@ def _record_to_dict(entry: Record) -> dict[str, Any]:
         "ownership": entry.ownership,
         "created_at": entry.created_at,
     }
-    for name in ("pointer", "codec", "mode"):
+    for name in ("pointer", "codec", "mode", "program_relpath", "program_digest"):
         value = getattr(entry, name)
         if value is not None:
             payload[name] = value
@@ -217,6 +235,7 @@ def _record_from_dict(payload: Any, home: Path, cli: str) -> Record:
     pointer = payload.get("pointer")
     if kind == "config-key" and (not isinstance(pointer, str) or not pointer):
         raise JournalError(f"{cli}: {identifier} is a config-key and needs a pointer")
+    program_relpath, program_digest = _program_from_dict(payload, identifier, cli)
 
     return Record(
         id=identifier,
@@ -228,7 +247,50 @@ def _record_from_dict(payload: Any, home: Path, cli: str) -> Record:
         codec=payload.get("codec"),
         mode=payload.get("mode"),
         ownership=OWNED,
+        program_relpath=program_relpath,
+        program_digest=program_digest,
     )
+
+
+def _leaves_the_tree(relpath: str) -> bool:
+    """Whether joining this onto a directory could land outside it.
+
+    Judged by shape and never by resolving anything: this module touches no
+    disk, and a path whose safety depends on what happens to exist when it is
+    judged is not safe.
+    """
+    candidate = PurePosixPath(relpath)
+    return candidate.is_absolute() or ".." in candidate.parts
+
+
+def _program_from_dict(payload: dict[str, Any], identifier: str, cli: str) -> tuple[str | None, str | None]:
+    """A journal written before this pair existed carries neither key at all --
+    that must load exactly as cleanly as one that carries both, since a
+    reader who cannot check the program is a different fact from a reader
+    who found it missing or wrong. Absent, both come back ``None``; present,
+    both must be well-formed, since a half-written pair could never have come
+    from `dependencies.materialize`.
+
+    Well-formed includes staying inside the tree, and that check has to live
+    here because nothing downstream performs it: the reader joins this onto
+    the record's ``target``, and a join is not a boundary. An absolute path
+    discards the tree root whole, and a `..` chain walks out of it — either
+    one aims the program check at a file of somebody's choosing, which then
+    passes forever against a digest they also chose, while the real tree is
+    never read at all. The write side cannot produce such a path, since it
+    derives the value with `relative_to` against the tree root; a journal
+    edited by hand can, and this is the only place that sees it before it is
+    used.
+    """
+    relpath = payload.get("program_relpath")
+    digest = payload.get("program_digest")
+    if relpath is None and digest is None:
+        return None, None
+    if not isinstance(relpath, str) or not relpath or _leaves_the_tree(relpath):
+        raise JournalError(f"{cli}: {identifier} has a malformed program_relpath")
+    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+        raise JournalError(f"{cli}: {identifier} has a malformed program_digest")
+    return relpath, digest
 
 
 def _link_from_dict(payload: Any, cli: str) -> Link:
