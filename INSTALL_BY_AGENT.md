@@ -245,10 +245,13 @@ digas a la persona que la versión nueva ya está activa, ni la asumas vos mismo
 que corras: decile explícitamente que tiene que reiniciar Pegasus (cerrar y volver a invocarlo) para
 que la versión nueva quede en efecto.
 
-Si el JSON trae `"status": "failed"`, mirá `error` -- no hay flag que arregle ninguno de estos:
+Si el JSON trae `"status": "already-current"`, tampoco es un error -- el código de salida es `0`
+igual que con `"upgraded"`. Significa que ya estaba en la versión más nueva publicada (viene en
+`"version"`); decíselo a la persona tal cual, sin reintentar nada ni tratarlo como una falla.
 
-- `"pegasus is already at the newest published version (...)"` -- no hay nada que hacer, decíselo a la
-  persona tal cual.
+Si el JSON trae `"status": "failed"` (código de salida distinto de cero), mirá `error` -- no hay flag
+que arregle ninguno de estos:
+
 - `"could not reach GitHub to check the newest published release -- ..."` -- no hay red. No reintentes
   en loop; avisá y esperá a que haya conexión.
 - `"... is not writable by this process; upgrade refuses to download anything it could not then

@@ -15,6 +15,7 @@ from pegasus.tui.navigator import (
     AgentRow,
     CliOption,
     Entry,
+    GenerationSummary,
     InstallPlanScreen,
     InstallResultScreen,
     InstallTarget,
@@ -383,20 +384,110 @@ class UninstallMenuTest(unittest.TestCase):
         self.assertEqual(navigator, before)
 
 
+def _summary(generation: int, *, taken_at: str = "2026-08-14T00:00:00+00:00", files_restored: int = 1, paths_cleared: int = 0) -> GenerationSummary:
+    return GenerationSummary(
+        generation=generation, taken_at=taken_at, files_restored=files_restored, paths_cleared=paths_cleared
+    )
+
+
 class RestoreMenuTest(unittest.TestCase):
     def test_no_generation_shows_a_placeholder_that_says_why(self):
-        self.assertIsInstance(restore_menu(generations=()), Placeholder)
+        self.assertIsInstance(restore_menu(()), Placeholder)
 
     def test_a_generation_opens_a_menu_naming_it(self):
-        menu = restore_menu(generations=(3, 2, 1))
+        menu = restore_menu((_summary(3), _summary(2), _summary(1)))
         self.assertIsInstance(menu, Menu)
         self.assertEqual([entry.target for entry in menu.entries], [RestoreTarget(3), RestoreTarget(2), RestoreTarget(1)])
 
     def test_choosing_a_generation_directly_does_nothing_by_itself(self):
-        navigator = Navigator.starting().opened(restore_menu(generations=(1,)))
+        navigator = Navigator.starting().opened(restore_menu((_summary(1),)))
         before = navigator
         navigator = navigator.handle(Action.CHOOSE)
         self.assertEqual(navigator, before)
+
+    def test_the_preface_explains_what_a_generation_is(self):
+        menu = restore_menu((_summary(1),))
+        self.assertTrue(menu.preface)
+        self.assertIn("state of the files Pegasus owns", menu.preface[0])
+
+    def test_a_label_shows_a_readable_timestamp_and_what_it_would_touch(self):
+        """Future tense, deliberately. This label sits on a menu nothing has
+        confirmed yet, so a past participle would read as a receipt: "101
+        files restored" on a row a person has not pressed enter on yet claims
+        the restore already happened. `tests/test_planner.py` draws the same
+        line for the same reason -- saying "removed" would claim we did
+        something we did not do.
+        """
+        menu = restore_menu((_summary(4, taken_at="2026-09-02T04:12:00+00:00", files_restored=101, paths_cleared=0),))
+        self.assertEqual(menu.entries[0].label, "Generation 4 — 2 Sep 2026, 04:12 (most recent) · 101 files to put back")
+
+    def test_only_the_first_entry_is_marked_most_recent(self):
+        menu = restore_menu((_summary(3), _summary(2)))
+        self.assertIn("(most recent)", menu.entries[0].label)
+        self.assertNotIn("(most recent)", menu.entries[1].label)
+
+    def test_a_label_reports_files_restored_and_paths_cleared_separately(self):
+        menu = restore_menu((_summary(1, files_restored=2, paths_cleared=3),))
+        self.assertIn("2 files to put back", menu.entries[0].label)
+        self.assertIn("3 to remove", menu.entries[0].label)
+
+    def test_a_generation_that_captured_nothing_says_so(self):
+        menu = restore_menu((_summary(1, files_restored=0, paths_cleared=0),))
+        self.assertIn("nothing captured", menu.entries[0].label)
+
+    def test_a_garbage_taken_at_still_renders_a_menu_instead_of_raising(self):
+        menu = restore_menu((_summary(1, taken_at="not-a-timestamp"),))
+        self.assertIsInstance(menu, Menu)
+        self.assertIn("not-a-timestamp", menu.entries[0].label)
+
+    def test_a_skipped_generation_is_named_in_the_preface_without_hiding_the_rest(self):
+        menu = restore_menu((_summary(2),), skipped=(1,))
+        self.assertIsInstance(menu, Menu)
+        self.assertEqual(len(menu.entries), 1)
+        self.assertTrue(any("could not be read" in line for line in menu.preface))
+
+    def test_a_skipped_generation_is_named_by_number_rather_than_by_relative_age(self):
+        """Counting them forced a word onto the sentence -- "1 older
+        generation could not be read" -- that the count itself could not
+        support. When the corrupt folder is the NEWEST one, "older" is simply
+        false, and it is false in the direction that matters: a person told
+        an ancient snapshot broke will stop looking, when what actually broke
+        is the one they came here for. The number is a fact this screen
+        already holds, so it says that instead of a comparison.
+        """
+        menu = restore_menu((_summary(1),), skipped=(2,))
+        note = next(line for line in menu.preface if "could not be read" in line)
+        self.assertIn("Generation 2", note)
+        self.assertNotIn("older", note)
+
+    def test_several_skipped_generations_are_all_named(self):
+        menu = restore_menu((_summary(1),), skipped=(4, 3))
+        note = next(line for line in menu.preface if "could not be read" in line)
+        self.assertEqual(note, "Generations 4 and 3 could not be read and are left off this list.")
+
+    def test_three_skipped_generations_read_as_a_list_rather_than_a_pile(self):
+        menu = restore_menu((_summary(1),), skipped=(5, 4, 3))
+        note = next(line for line in menu.preface if "could not be read" in line)
+        self.assertEqual(note, "Generations 5, 4 and 3 could not be read and are left off this list.")
+
+    def test_one_skipped_generation_stays_singular(self):
+        menu = restore_menu((_summary(1),), skipped=(2,))
+        note = next(line for line in menu.preface if "could not be read" in line)
+        self.assertEqual(note, "Generation 2 could not be read and is left off this list.")
+
+    def test_the_most_recent_marker_is_withheld_when_a_newer_generation_is_unreadable(self):
+        """The marker's whole job is to point at the last thing that
+        happened. When the last thing that happened is the generation this
+        screen cannot open, pointing it at the runner-up would hand a person
+        a wrong answer to the exact question they came with.
+        """
+        menu = restore_menu((_summary(1),), skipped=(2,))
+        self.assertNotIn("(most recent)", menu.entries[0].label)
+
+    def test_the_most_recent_marker_survives_a_genuinely_older_skip(self):
+        menu = restore_menu((_summary(3), _summary(2)), skipped=(1,))
+        self.assertIn("(most recent)", menu.entries[0].label)
+        self.assertNotIn("(most recent)", menu.entries[1].label)
 
 
 class ConfirmTargetsTest(unittest.TestCase):
@@ -587,7 +678,7 @@ class BusyMessageOnMenuTest(unittest.TestCase):
         self.assertIn("7", restore_message)
 
     def test_restore_target_names_the_generation(self):
-        menu = restore_menu((3, 1))
+        menu = restore_menu((_summary(3), _summary(1)))
         message = busy_message_for(menu, 0, Action.CHOOSE)
         self.assertIn("3", message)
 

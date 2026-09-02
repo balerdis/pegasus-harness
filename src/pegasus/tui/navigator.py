@@ -10,6 +10,7 @@ without a terminal at all: there is nothing here for one to be needed by.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import Enum, auto
 from typing import Union
 
@@ -258,6 +259,76 @@ class RestoreResultScreen:
     print for the run that just happened."""
 
     report: dict
+
+
+@dataclass(frozen=True)
+class GenerationSummary:
+    """What `session` learned about one generation by actually reading its
+    manifest, carried here for `restore_menu` to turn into a label. A bare
+    ordinal answers "which folder is this", not "which one do I want" -- a
+    person recognises what they did at 4am, not what "Generation 3" means,
+    so the fact this screen exists to show is *when* the snapshot was taken.
+
+    `files_restored` and `paths_cleared` split `Manifest.entries` the same
+    way `Entry.existed` already splits it: the first is bytes this
+    generation would put back, the second is addresses it would empty again
+    (see `core.snapshot.Entry`). They mean different things to someone about
+    to press enter, so neither is folded into the other.
+
+    There is deliberately no field for a Pegasus release: `Manifest` never
+    records one (see `core.snapshot.Manifest`), and inventing one here would
+    put a fact on screen that nothing on disk actually backs.
+    """
+
+    generation: int
+    taken_at: str
+    files_restored: int
+    paths_cleared: int
+
+
+def _readable_timestamp(taken_at: str) -> str:
+    """`taken_at` rendered the way a person reads a clock, or itself
+    unchanged when it will not parse.
+
+    A manifest's `taken_at` is a string written to a file on disk, by
+    whichever version wrote it -- this screen must not assume that string
+    always parses just because every version so far has produced one that
+    does. The restore screen is the recovery path; a corrupt timestamp
+    turning it unreachable would be strictly worse than showing the raw
+    value and letting the rest of the row still say what it can.
+    """
+    try:
+        parsed = datetime.fromisoformat(taken_at)
+    except (TypeError, ValueError):
+        return taken_at
+    return f"{parsed.day} {parsed.strftime('%b %Y, %H:%M')}"
+
+
+def _touch_summary(files_restored: int, paths_cleared: int) -> str:
+    """`files_restored` and `paths_cleared` as the phrase a label ends with,
+    in the future tense on purpose.
+
+    This phrase sits on a row nobody has confirmed yet, one `CHOOSE` away
+    from a preview screen and two from any write at all. A past participle
+    there would read as a receipt -- "101 files restored" against a
+    generation a person is still deciding about claims the restore already
+    happened, which is the one thing this screen must never imply. Same line
+    `core.planner` already draws for its own reporting: naming a completed
+    action is a claim, and a claim has to be true when it is made.
+    """
+    parts = []
+    if files_restored:
+        parts.append(f"{files_restored} file{'' if files_restored == 1 else 's'} to put back")
+    if paths_cleared:
+        parts.append(f"{paths_cleared} to remove")
+    return ", ".join(parts) if parts else "nothing captured"
+
+
+def _generation_label(summary: GenerationSummary, *, most_recent: bool) -> str:
+    when = _readable_timestamp(summary.taken_at)
+    marker = " (most recent)" if most_recent else ""
+    touched = _touch_summary(summary.files_restored, summary.paths_cleared)
+    return f"Generation {summary.generation} — {when}{marker} · {touched}"
 
 
 @dataclass(frozen=True)
@@ -540,14 +611,71 @@ def uninstall_menu(installed: tuple[CliOption, ...]) -> Union[Menu, Placeholder]
     )
 
 
-def restore_menu(generations: tuple[int, ...]) -> Union[Menu, Placeholder]:
+#: The restore screen's own explanation of what it is choosing between --
+#: shown above every menu it builds, since the screen exists precisely
+#: because a bare "Generation 4" answers "which folder" and not "which one do
+#: I want" (see `GenerationSummary`).
+_RESTORE_PREFACE = (
+    "A generation is the state of the files Pegasus owns, saved just before "
+    "a write overwrote them. Restoring puts that state back.",
+)
+
+
+def _skipped_note(skipped: tuple[int, ...]) -> str:
+    """The generations this screen had to leave out, named by number.
+
+    Named rather than counted, because a count cannot be put into a sentence
+    without implying something about *which* ones they were. The count this
+    replaced said "N older generations could not be read", and "older" was
+    false in the one case that matters most: when the folder that will not
+    parse is the newest one, a person told an ancient snapshot broke stops
+    looking, while what actually broke is the generation they came here for.
+    The number is a fact already in hand, so it goes on screen unadorned.
+    """
+    numbers = [str(generation) for generation in skipped]
+    if len(numbers) == 1:
+        return f"Generation {numbers[0]} could not be read and is left off this list."
+    listed = ", ".join(numbers[:-1]) + f" and {numbers[-1]}"
+    return f"Generations {listed} could not be read and are left off this list."
+
+
+def restore_menu(summaries: tuple[GenerationSummary, ...], *, skipped: tuple[int, ...] = ()) -> Union[Menu, Placeholder]:
     """One entry per generation `restore` could still read, most recent
-    first; nothing captured yet is the same placeholder shape as elsewhere."""
-    if not generations:
+    first, labelled with when it was taken and what it would touch rather
+    than the bare ordinal `RestoreTarget` still carries underneath --
+    nothing captured yet is the same placeholder shape as elsewhere.
+
+    `summaries` must already be ordered most-recent-first, the same order
+    `session` has always supplied. `skipped` names the generations `session`
+    could not read at all -- `readable_generations` only checks that a
+    manifest file exists, not that it parses (see `ports.snapshot_store`'s
+    module docstring), so `session.read`-ing every one of them for this
+    screen can now find one that is present but broken. Such a generation is
+    left out of `summaries` entirely rather than offered as a choice that
+    would only fail the moment it was picked, and `_skipped_note` is how the
+    screen still accounts for it instead of just being silently shorter.
+
+    The "(most recent)" marker is withheld when anything in `skipped` is
+    newer than `summaries[0]`. The marker exists to point at the last thing
+    that happened, and when the last thing that happened is precisely the
+    generation this screen cannot open, moving the marker down to the
+    runner-up would answer the question a person came with -- "where is the
+    state from just before I broke it?" -- with the wrong snapshot.
+    """
+    if not summaries:
         return Placeholder("Restore", "There is no snapshot generation to restore.")
+    preface = _RESTORE_PREFACE + ((_skipped_note(skipped),) if skipped else ())
+    newest_is_readable = not any(generation > summaries[0].generation for generation in skipped)
     return Menu(
         title="Restore which generation?",
-        entries=tuple(Entry(f"Generation {generation}", RestoreTarget(generation)) for generation in generations),
+        preface=preface,
+        entries=tuple(
+            Entry(
+                _generation_label(summary, most_recent=index == 0 and newest_is_readable),
+                RestoreTarget(summary.generation),
+            )
+            for index, summary in enumerate(summaries)
+        ),
     )
 
 

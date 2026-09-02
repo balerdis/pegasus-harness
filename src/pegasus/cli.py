@@ -1036,7 +1036,14 @@ def upgrade(
     current_version = pegasus.__version__
     latest_version = _fetch_latest_version(runtime)
     if latest_version == current_version:
-        raise CommandError(f"pegasus is already at the newest published version ({current_version})")
+        # Being current already is not a refusal -- it is exactly what asking
+        # to be current was for, the same way `install`/`update` count files
+        # that needed no change as "already current" rather than a failure,
+        # and `models unset` reports `"already-unset"` rather than raising
+        # when there was nothing to remove. A person who is already running
+        # the newest release did not fail to upgrade; there was simply
+        # nothing left to do.
+        return {"status": "already-current", "version": current_version, "destination": str(destination)}
     if dry_run:
         return {
             "status": "planned",
@@ -2207,6 +2214,8 @@ def _prose(report: dict[str, Any]) -> str:
                 f"Would replace {report['destination']} ({report['old_version']}) with "
                 f"{report['new_version']}. Nothing was written -- this was a dry run."
             )
+        if report["status"] == "already-current":
+            return f"Already running the newest published version ({report['version']}) -- nothing to do."
         return (
             f"Replaced {report['destination']}: {report['old_version']} -> {report['new_version']}. "
             f"Restart pegasus to run the new version -- this process is still running "

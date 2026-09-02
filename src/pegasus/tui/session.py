@@ -28,6 +28,7 @@ from pegasus.tui.navigator import (
     AgentRow,
     CliOption,
     Entry,
+    GenerationSummary,
     InstallPlanScreen,
     InstallResultScreen,
     InstallTarget,
@@ -151,6 +152,43 @@ def _uninstall_preview(cli_option: CliOption, runtime: cli.Runtime) -> Menu:
         preface=preface,
         entries=(Entry("Cancel — leave it installed", CANCEL), Entry("Confirm — remove it", UninstallConfirm(cli_option))),
     )
+
+
+def _generation_summaries(runtime: cli.Runtime) -> tuple[tuple[GenerationSummary, ...], tuple[int, ...]]:
+    """Every generation the restore menu can actually open, most recent
+    first, plus the numbers of the ones `readable_generations` claimed that
+    turned out not to be.
+
+    `readable_generations` only checks that a generation's manifest file is
+    *present* -- it says nothing about whether the JSON inside it parses
+    (see `ports.snapshot_store`'s module docstring on that asymmetry).
+    Building labelled entries needs the manifest's actual contents, so this
+    reads every one of them with `SnapshotStore.read`, which is strict and
+    raises `SnapshotStoreError` on exactly the folder `readable_generations`
+    was lenient about. One such folder is dropped here rather than left to
+    raise once the menu is already open: the whole point of this screen is
+    to reach a generation that is still good, so a single bad one must never
+    blind it to every other, honest generation next to it.
+    """
+    store = cli.snapshot_store(runtime)
+    generations = tuple(reversed(store.readable_generations()))
+    summaries: list[GenerationSummary] = []
+    skipped: list[int] = []
+    for generation in generations:
+        try:
+            manifest = store.read(generation)
+        except cli.SnapshotStoreError:
+            skipped.append(generation)
+            continue
+        summaries.append(
+            GenerationSummary(
+                generation=generation,
+                taken_at=manifest.taken_at,
+                files_restored=sum(1 for entry in manifest.entries if entry.existed),
+                paths_cleared=sum(1 for entry in manifest.entries if not entry.existed),
+            )
+        )
+    return tuple(summaries), tuple(skipped)
 
 
 def _restore_preview(generation: int, runtime: cli.Runtime) -> Menu:
@@ -394,12 +432,14 @@ def _upgrade_preview(runtime: cli.Runtime) -> InstallPlanScreen | InstallResultS
     for the `CliOption` every other flow's plan and result screen carry,
     since `upgrade` has none of its own. Like `_update_preview`, this can
     already fail here -- not running from an installed executable, an
-    unwritable destination, no network, or already current -- and a
-    refusal has nothing left to preview or confirm, so it opens straight
-    onto a result screen instead of a plan with nothing real to show.
+    unwritable destination, or no network -- and a refusal has nothing left
+    to preview or confirm, so it opens straight onto a result screen instead
+    of a plan with nothing real to show. Being already current is not a
+    refusal, but it belongs on the same result screen for the same reason:
+    there is no plan to preview when there is nothing to do.
     """
     code, report = cli.safe_report("upgrade", lambda: cli.upgrade(runtime, dry_run=True))
-    if code != cli.OK:
+    if code != cli.OK or report.get("status") == "already-current":
         return InstallResultScreen(cli=PEGASUS_PROGRAM, report=report, command="upgrade")
     return InstallPlanScreen(cli=PEGASUS_PROGRAM, report=report, command="upgrade")
 
@@ -454,8 +494,8 @@ def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigato
             )
         return navigator.opened(InstallResultScreen(cli=screen.cli, report=report, command=screen.command))
     if isinstance(screen, StatusScreen) and action is Action.CHOOSE:
-        generations = tuple(reversed(cli.snapshot_store(runtime).readable_generations()))
-        return navigator.opened(restore_menu(generations))
+        summaries, skipped = _generation_summaries(runtime)
+        return navigator.opened(restore_menu(summaries, skipped=skipped))
     return navigator.handle(action)
 
 

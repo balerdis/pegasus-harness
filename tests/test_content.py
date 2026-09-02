@@ -1222,6 +1222,27 @@ class ShippedContentTest(unittest.TestCase):
                 self.assertIn("skill", agent.requires_tools)
                 self.assertIn("ask", agent.requires_tools)
 
+    def test_every_voice_that_faces_the_user_declares_a_register(self):
+        """A primary agent is the one a person actually talks to, and a prompt
+        that is all procedure and no register does not become neutral -- it
+        inherits whatever the underlying model defaults to. That is how the
+        orchestrator came to read as a dispatcher next to `king-pegasus`: same
+        product, same session, two unrelated voices, because only one of the
+        two files said anything about how it speaks.
+
+        Structural on purpose, never a judgment about English: this asserts
+        that a user-facing agent settles its language and its tone somewhere in
+        its own body, not that either section is any good. An executor is
+        exempt -- it reports to the orchestrator, and a register there would be
+        noise in a machine-read report.
+        """
+        for agent in self.content.agents:
+            if agent.mode is not AgentMode.PRIMARY:
+                continue
+            with self.subTest(agent=agent.name):
+                self.assertIn("## Language", agent.body)
+                self.assertIn("## Tone", agent.body)
+
     def test_no_executor_can_reach_the_skills_or_ask(self):
         """The other side of the same line. An executor receives a task and a
         named procedure it loads by path, so it needs no inventory; and it
