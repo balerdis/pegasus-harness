@@ -1116,16 +1116,40 @@ def _digest_of_file(filesystem: FileSystem, entry: Record) -> str | None:
 
 
 def _digest_of_dependency_tree(filesystem: FileSystem, entry: Record) -> str | None:
-    """A tree that is there is all this can honestly report.
+    """What this can honestly report is bounded by what it would cost to find out.
 
-    The digest a dependency-tree record carries is the identity of what was
-    materialized — the checksum of the archive, or the integrity the lockfile
-    pinned — not a hash of the directory as it stands. So being present is
-    the whole of what can be checked here, and answering with the recorded
-    digest says exactly that and nothing more. Telling a tampered tree from
-    an intact one needs a different check than this field can give.
+    Hashing the whole tree would need a recursive read — cheap for a single
+    binary, prohibitive for a `node_modules` with tens of thousands of files —
+    so this never does that, and `Record.after_digest` says why at length: it
+    names the *source* Pegasus fetched, not a hash of the directory as it
+    stands, and proves nothing about what is on disk now.
+
+    What this checks instead is smaller and cheaper: the one file inside the
+    tree a CLI's configuration is actually told to run — `entry.program_relpath`,
+    recorded by `dependencies.materialize` or `materialize_npm` alongside its
+    own digest. That is a single read, not a walk, and it proves exactly one
+    thing: whether the program Pegasus placed is still the program Pegasus
+    placed. It proves nothing about any other file the tree contains — a
+    substituted dependency three levels into `node_modules` is invisible to
+    this, on purpose, because catching it would cost the walk this function
+    exists to avoid.
+
+    A record written before this pair existed carries neither field, and that
+    is a different fact from the program having gone missing or been swapped:
+    there was never anything to check, so nothing here can be asserted one
+    way or the other. Returning ``entry.after_digest`` unconditionally is how
+    that distinction survives into `doctor`'s bucketing — the caller compares
+    this return value against ``entry.after_digest`` to decide "drifted", so
+    a value engineered to always equal it is the only way to say "not proven
+    wrong" without also claiming "proven right".
     """
-    return entry.after_digest
+    if entry.program_relpath is None or entry.program_digest is None:
+        return entry.after_digest
+    program = entry.target / entry.program_relpath
+    if not filesystem.exists(program):
+        return None
+    current = ownership.digest_of_bytes(filesystem.read_bytes(program))
+    return entry.after_digest if current == entry.program_digest else current
 
 
 def _digest_of_config_key(filesystem: FileSystem, entry: Record) -> str | None:

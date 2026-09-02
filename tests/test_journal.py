@@ -105,6 +105,22 @@ class RoundTripTest(unittest.TestCase):
         payload = journal_module.to_dict(journal)
         self.assertEqual(journal_module.from_dict(payload, HOME), journal)
 
+    def test_a_dependency_trees_program_fields_survive_serialization(self):
+        entry = dependency_record(
+            program_relpath="node_modules/probe-mcp/cli.js", program_digest="sha256:" + "e" * 64
+        )
+        journal = Journal(pegasus_version="4.0.0", installs=(install(entry),))
+        payload = journal_module.to_dict(journal)
+        self.assertEqual(journal_module.from_dict(payload, HOME), journal)
+
+    def test_a_dependency_tree_without_program_fields_omits_them(self):
+        """A record predating the program-digest pair must not fabricate
+        either field on the way back out to disk."""
+        payload = journal_module.to_dict(Journal(pegasus_version="4.0.0", installs=(install(dependency_record()),)))
+        entry = payload["installs"][0]["entries"][0]
+        self.assertNotIn("program_relpath", entry)
+        self.assertNotIn("program_digest", entry)
+
 
 class ValidationTest(unittest.TestCase):
     def payload(self, **overrides):
@@ -142,6 +158,34 @@ class ValidationTest(unittest.TestCase):
         payload["installs"][0]["entries"][0]["kind"] = "registry-key"
         with self.assertRaises(JournalError):
             journal_module.from_dict(payload, HOME)
+
+    def test_a_malformed_program_digest_is_refused(self):
+        payload = self.payload()
+        entry = payload["installs"][0]["entries"][0]
+        entry["program_relpath"] = "cli.js"
+        entry["program_digest"] = "deadbeef"
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("program_digest", str(raised.exception))
+
+    def test_an_empty_program_relpath_is_refused(self):
+        payload = self.payload()
+        entry = payload["installs"][0]["entries"][0]
+        entry["program_relpath"] = ""
+        entry["program_digest"] = "sha256:" + "a" * 64
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("program_relpath", str(raised.exception))
+
+    def test_a_journal_from_before_this_pair_existed_still_loads(self):
+        """Neither field is a plain absence, not a defect -- an entry with no
+        knowledge of the program-digest pair at all must load exactly as
+        cleanly as it did before the pair was invented."""
+        payload = self.payload()
+        parsed = journal_module.from_dict(payload, HOME)
+        entry = parsed.installs[0].entries[0]
+        self.assertIsNone(entry.program_relpath)
+        self.assertIsNone(entry.program_digest)
 
     def test_a_dependency_tree_kind_is_accepted(self):
         payload = journal_module.to_dict(Journal(pegasus_version="4.0.0", installs=(install(dependency_record()),)))

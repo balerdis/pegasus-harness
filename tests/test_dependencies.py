@@ -99,6 +99,17 @@ class MaterializeTest(unittest.TestCase):
         self.assertEqual(record.target, dependencies.target_dir(DEPENDENCIES_DIR, item))
         self.assertEqual(record.after_digest, item.checksum)
 
+    def test_the_record_also_names_the_program_a_cli_would_run_and_its_digest(self):
+        """A bare binary *is* the program, so its digest is read back from the
+        very bytes `write_atomic` placed -- proof this is not just repeating
+        `item.checksum` under a new name.
+        """
+        item, content = download_server()
+        downloader = FakeDownloader({item.endpoint: content})
+        record = self.materialize(item, downloader)
+        self.assertEqual(record.program_relpath, "probe-linux-x64")
+        self.assertEqual(record.program_digest, ownership.digest_of_bytes(content))
+
     def test_a_checksum_mismatch_is_refused_naming_expected_and_arrived(self):
         item, _ = download_server()
         wrong = b"not the bytes anyone pinned"
@@ -182,6 +193,18 @@ class MaterializeArchiveTest(unittest.TestCase):
         self.assertEqual(record.kind, "dependency-tree")
         self.assertEqual(record.target, dependencies.target_dir(DEPENDENCIES_DIR, item))
         self.assertEqual(record.after_digest, item.checksum)
+
+    def test_the_record_names_the_declared_executable_member_not_the_archive(self):
+        """The archive's own digest (`after_digest`) identifies the whole
+        tarball; the program a CLI's configuration actually runs is one
+        member inside it, whose bytes hash to something else entirely --
+        proof the two are never conflated.
+        """
+        item, archive = archive_server()
+        record = self.materialize(item, FakeDownloader({item.endpoint: archive}))
+        self.assertEqual(record.program_relpath, "probe")
+        self.assertEqual(record.program_digest, ownership.digest_of_bytes(b"the real program bytes"))
+        self.assertNotEqual(record.program_digest, record.after_digest)
 
     def test_a_checksum_mismatch_is_refused_before_the_archive_is_ever_opened(self):
         item, _ = archive_server()
@@ -353,6 +376,31 @@ class MaterializeNpmTest(unittest.TestCase):
         self.assertEqual(record.kind, "dependency-tree")
         self.assertEqual(record.target, dependencies.target_dir(DEPENDENCIES_DIR, item))
         self.assertEqual(record.after_digest, item.integrity)
+
+    def test_a_fake_installer_that_writes_nothing_leaves_the_program_unrecorded(self):
+        """`FakeNpmInstaller` never touches the filesystem -- real `npm ci`
+        would have written the entry script this reads back, so with the
+        fake there is nothing there to read. `materialize_npm` must not
+        raise over that; it is `npm ci`'s own write being absent, not this
+        module's, and the fields it cannot fill are exactly what a journal
+        written before they existed also carries.
+        """
+        item = npm_server()
+        record = self.materialize(item, FakeNpmInstaller())
+        self.assertIsNone(record.program_relpath)
+        self.assertIsNone(record.program_digest)
+
+    def test_the_record_names_the_entry_script_when_it_is_there_to_read(self):
+        """Standing in for what a real `npm ci` would have placed: the entry
+        script written directly into the fake filesystem, at exactly the path
+        `npm_script_path` names, before `materialize_npm` ever reads it back.
+        """
+        item = npm_server()
+        script = b"#!/usr/bin/env node\nconsole.log('probe');\n"
+        self.filesystem.write_atomic(dependencies.npm_script_path(DEPENDENCIES_DIR, item), script)
+        record = self.materialize(item, FakeNpmInstaller())
+        self.assertEqual(record.program_relpath, "node_modules/probe-mcp/cli.js")
+        self.assertEqual(record.program_digest, ownership.digest_of_bytes(script))
 
     def test_a_missing_node_is_refused_before_anything_is_written(self):
         item = npm_server()

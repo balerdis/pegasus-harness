@@ -1176,11 +1176,16 @@ class DoctorTest(RealHomeTestCase):
         self.assertEqual(entry["drifted"], [])
         self.assertEqual(entry["missing"], [])
 
-    def claim_a_dependency_tree(self, target: Path) -> None:
+    def claim_a_dependency_tree(
+        self, target: Path, *, program_relpath: str | None = None, program_digest: str | None = None
+    ) -> None:
         """Put a record for a materialized dependency into the journal.
 
         Nothing materializes one yet, so the record is written by hand — but
         the kind is real, and `doctor` reads whatever the journal claims.
+        Leaving ``program_relpath``/``program_digest`` unset is itself a real
+        case: a record written before `dependencies.materialize` recorded
+        that pair at all.
         """
         store = self.store()
         journal = store.load()
@@ -1191,6 +1196,8 @@ class DoctorTest(RealHomeTestCase):
             target=target,
             after_digest=ownership.digest_of_bytes(b"whatever the archive hashed to"),
             created_at=AT,
+            program_relpath=program_relpath,
+            program_digest=program_digest,
         )
         grown = replace(install, entries=(*install.entries, claimed))
         store.save(journal_module.with_install(journal, grown))
@@ -1221,6 +1228,74 @@ class DoctorTest(RealHomeTestCase):
     def test_doctor_reports_a_dependency_tree_that_is_gone_as_missing(self):
         self.install()
         self.claim_a_dependency_tree(self.home / "deps" / "probe" / "1.0.0")
+
+        _, report = self.run_cli("doctor")
+
+        self.assertIn("dependency:probe", report["clis"][0]["missing"])
+
+    def test_doctor_reports_a_dependency_tree_whose_program_is_untouched_as_healthy(self):
+        """The program named by `program_relpath` still hashes to
+        `program_digest`, so this is the intact case, distinct from the older
+        "the tree is merely present" case above only in that it was actually
+        checked rather than left unchecked.
+        """
+        self.install()
+        tree = self.home / "deps" / "probe" / "1.0.0"
+        tree.mkdir(parents=True)
+        program = tree / "probe"
+        program.write_bytes(b"the real program bytes")
+        self.claim_a_dependency_tree(
+            tree,
+            program_relpath="probe",
+            program_digest=ownership.digest_of_bytes(b"the real program bytes"),
+        )
+
+        code, report = self.run_cli("doctor")
+
+        self.assertEqual(code, 0)
+        entry = report["clis"][0]
+        self.assertNotIn("dependency:probe", entry["drifted"])
+        self.assertNotIn("dependency:probe", entry["missing"])
+        self.assertNotIn("dependency:probe", entry["unreadable"])
+
+    def test_doctor_reports_a_substituted_program_as_drifted(self):
+        """The tree is there, and the program `program_relpath` names is
+        there too -- but its bytes no longer hash to `program_digest`, which
+        is exactly the substitution this check exists to catch: the one file
+        whose replacement would matter, being something other than what
+        Pegasus placed.
+        """
+        self.install()
+        tree = self.home / "deps" / "probe" / "1.0.0"
+        tree.mkdir(parents=True)
+        program = tree / "probe"
+        program.write_bytes(b"the real program bytes")
+        self.claim_a_dependency_tree(
+            tree,
+            program_relpath="probe",
+            program_digest=ownership.digest_of_bytes(b"the real program bytes"),
+        )
+        program.write_bytes(b"a substituted binary, not what pegasus placed")
+
+        _, report = self.run_cli("doctor")
+
+        self.assertIn("dependency:probe", report["clis"][0]["drifted"])
+
+    def test_doctor_reports_an_absent_program_as_missing_even_though_the_tree_is_there(self):
+        """The tree directory itself still exists -- only the one file inside
+        it that a CLI's configuration would actually run is gone. That must
+        land in `missing`, the same bucket an entirely absent tree lands in,
+        since a configuration pointed at this program can no longer run it
+        either way.
+        """
+        self.install()
+        tree = self.home / "deps" / "probe" / "1.0.0"
+        tree.mkdir(parents=True)
+        self.claim_a_dependency_tree(
+            tree,
+            program_relpath="probe",
+            program_digest=ownership.digest_of_bytes(b"the real program bytes"),
+        )
 
         _, report = self.run_cli("doctor")
 
