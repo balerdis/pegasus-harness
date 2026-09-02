@@ -1553,6 +1553,28 @@ class BoundMcpTest(unittest.TestCase):
         )
         self.content = content.Content(agents=(self.agent,), mcp=(self.server,))
 
+    def test_a_key_that_could_act_as_a_wildcard_is_refused(self):
+        """The bound key becomes a permission rule verbatim, on both sides.
+
+        A grant is written as `f"{key}*"`, so a key that is itself `*` renders
+        `**` — a rule that matches every action name there is. Placed after the
+        deny baseline it becomes the last matching rule for everything the
+        agent was never granted, which does not merely weaken this feature: it
+        removes the whole per-agent restriction the baseline exists to impose.
+        Refused where the value is read, because by the time it is a rule
+        nothing can tell it from one somebody meant.
+        """
+        for key in ("*", "?", "cbm*", "a?b"):
+            with self.subTest(key=key):
+                with self.assertRaises(content.ContentError) as raised:
+                    content.parse_mcp_choice(f"cbm={key}")
+                self.assertIn(key, str(raised.exception))
+
+    def test_the_keys_real_servers_use_are_still_accepted(self):
+        for key in ("codebase-memory-mcp", "engram", "context7", "my.server_2"):
+            with self.subTest(key=key):
+                self.assertEqual(content.parse_mcp_choice(f"cbm={key}"), ("cbm", key))
+
     def test_an_unbound_choice_leaves_the_server_unbound(self):
         selected = content.select_mcp(self.content, ["cbm"])
         self.assertIsNone(selected.mcp[0].bound_to)
@@ -1719,6 +1741,10 @@ class ContentErrorSitesTest(unittest.TestCase):
         "parse_mcp_choice#1": (
             _run_mcp_choice("cbm="),
             "Same: a value the user typed, quoted back, with no file to name.",
+        ),
+        "parse_mcp_choice#2": (
+            _run_mcp_choice("cbm=*"),
+            "Same: a value the user typed, refused before it can become a rule.",
         ),
         "select_mcp#0": (
             _run_select_mcp_unknown_id,
