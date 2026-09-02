@@ -43,6 +43,14 @@ UNSELECTED = "    "
 PREVIEW_BANNER = "PREVIEW — nothing has been written yet."
 INSTALLED_BANNER = "INSTALLED."
 FAILED_BANNER = "INSTALL FAILED."
+UPDATED_BANNER = "UPDATED."
+UPDATE_FAILED_BANNER = "UPDATE FAILED."
+#: The one banner that does not read as "done" -- a replaced binary is not a
+#: running one. `_render_install_result`'s own prose (`cli.prose_for`'s
+#: `"upgrade"` branch) already says to restart; this banner says it too,
+#: right where a person's eye lands first.
+UPGRADED_BANNER = "UPGRADED — restart pegasus to run the new version."
+UPGRADE_FAILED_BANNER = "UPGRADE FAILED."
 UNINSTALLED_BANNER = "UNINSTALLED."
 UNINSTALL_FAILED_BANNER = "UNINSTALL FAILED."
 RESTORED_BANNER = "RESTORED."
@@ -234,17 +242,31 @@ def _render_placeholder(screen: Placeholder) -> tuple[Line, ...]:
     )
 
 
+#: What to call each flow on screen, keyed by `InstallPlanScreen.command` /
+#: `InstallResultScreen.command`. Both screens are shared between Install and
+#: Update -- see either dataclass's own docstring -- so this is the one place
+#: that turns which one ran into the word a person actually reads.
+_COMMAND_LABEL = {"install": "Install", "update": "Update", "upgrade": "Upgrade"}
+
+
 def _render_install_plan(screen: InstallPlanScreen) -> tuple[Line, ...]:
-    lines = [Line(f"Install · {screen.cli.display_name}"), Line(""), Line(PREVIEW_BANNER), Line("")]
+    label = _COMMAND_LABEL.get(screen.command, screen.command.capitalize())
+    lines = [Line(f"{label} · {screen.cli.display_name}"), Line(""), Line(PREVIEW_BANNER), Line("")]
     lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
-    lines += [Line(""), Line("enter: install now · esc: back, nothing written")]
+    lines += [Line(""), Line(f"enter: {screen.command} now · esc: back, nothing written")]
     return tuple(lines)
 
 
 def _render_install_result(screen: InstallResultScreen, width: int) -> tuple[Line, ...]:
     failed = screen.report.get("status") == "failed"
-    banner = FAILED_BANNER if failed else INSTALLED_BANNER
-    lines = [Line(f"Install · {screen.cli.display_name}"), Line("")]
+    label = _COMMAND_LABEL.get(screen.command, screen.command.capitalize())
+    if screen.command == "update":
+        banner = UPDATE_FAILED_BANNER if failed else UPDATED_BANNER
+    elif screen.command == "upgrade":
+        banner = UPGRADE_FAILED_BANNER if failed else UPGRADED_BANNER
+    else:
+        banner = FAILED_BANNER if failed else INSTALLED_BANNER
+    lines = [Line(f"{label} · {screen.cli.display_name}"), Line("")]
     if not failed:
         variant = _wordmark_variant(width)
         if variant is not None:

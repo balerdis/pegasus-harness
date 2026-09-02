@@ -16,7 +16,7 @@ without a filesystem.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -104,6 +104,21 @@ class Install:
     release: dict[str, Any]
     entries: tuple[Record, ...] = ()
     links: tuple[Link, ...] = ()
+    mcp_bindings: dict[str, str] = field(default_factory=dict)
+    """The server key each bound MCP id was granted against, on this install.
+
+    A binding is never a fact about the release, always about one
+    installation (see `Mcp.bound_to`'s docstring), and `Install` is precisely
+    the per-installation object -- so this is where the fact belongs, not
+    threaded through the artifact/step/`Record` pipeline that renders and
+    journals per-artifact facts.
+
+    Additive, the same way `program_relpath`/`program_digest` are: a journal
+    written before this field existed carries no `mcp_bindings` key at all,
+    and that must load exactly as cleanly as one that carries it, with the
+    resulting install carrying an empty mapping -- never an invented key,
+    never a crash, and never confused with a mapping that legitimately holds
+    nothing because this install bound no server."""
 
 
 @dataclass(frozen=True)
@@ -150,7 +165,7 @@ def to_dict(journal: Journal) -> dict[str, Any]:
 
 
 def _install_to_dict(install: Install) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "cli": install.cli,
         "installed_at": install.installed_at,
         "config_dir": str(install.config_dir),
@@ -158,6 +173,9 @@ def _install_to_dict(install: Install) -> dict[str, Any]:
         "entries": [_record_to_dict(entry) for entry in install.entries],
         "links": [{"id": link.id, "target": link.target, "ownership": link.ownership} for link in install.links],
     }
+    if install.mcp_bindings:
+        payload["mcp_bindings"] = dict(install.mcp_bindings)
+    return payload
 
 
 def _record_to_dict(entry: Record) -> dict[str, Any]:
@@ -215,7 +233,23 @@ def _install_from_dict(payload: Any, home: Path) -> Install:
         release=payload.get("release") if isinstance(payload.get("release"), dict) else {},
         entries=tuple(_record_from_dict(item, home, cli) for item in payload.get("entries", [])),
         links=tuple(_link_from_dict(item, cli) for item in payload.get("links", [])),
+        mcp_bindings=_mcp_bindings_from_dict(payload.get("mcp_bindings"), cli),
     )
+
+
+def _mcp_bindings_from_dict(value: Any, cli: str) -> dict[str, str]:
+    """Absent means a journal from before this field existed -- an empty
+    mapping, not an error and not a fabricated binding. Present, it must be a
+    mapping of id to server key, both non-empty strings: anything else could
+    never have come from `select_mcp`, so it can only be a hand edit."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise JournalError(f"{cli}: mcp_bindings must be an object")
+    for mcp_id, key in value.items():
+        if not isinstance(mcp_id, str) or not mcp_id or not isinstance(key, str) or not key:
+            raise JournalError(f"{cli}: mcp_bindings must map non-empty ids to non-empty server keys")
+    return dict(value)
 
 
 def _record_from_dict(payload: Any, home: Path, cli: str) -> Record:

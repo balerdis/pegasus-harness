@@ -7,6 +7,7 @@ import unittest
 
 from pegasus import cli
 from pegasus.tui.navigator import (
+    PEGASUS_PROGRAM,
     AgentRow,
     CliOption,
     Entry,
@@ -69,6 +70,32 @@ PLANNED_REPORT = {
 INSTALLED_REPORT = {**PLANNED_REPORT, "status": "installed", "placed": 1, "unaccounted": [], "journal": "/x/j"}
 FAILED_REPORT = {
     "schema": cli.SCHEMA, "command": "install", "status": "failed", "error": "disk is full", "rolled_back": True,
+}
+UPDATE_PLANNED_REPORT = {**PLANNED_REPORT, "command": "update"}
+UPDATED_REPORT = {**INSTALLED_REPORT, "command": "update"}
+MULTI_LINE_ERROR = (
+    "demo has bound mcp server(s) x whose server key was never recorded (an install made before this was "
+    "tracked); update cannot reapply them without guessing, and guessing would retire the very binding it "
+    "exists to preserve. Run this once instead:\n"
+    "  pegasus install --cli demo --mcp x=<key>\n"
+    "After that one run, update needs no flags ever again. doctor lists the bound ids; the keys themselves "
+    "live in the CLI's own configuration."
+)
+UPDATE_UNRESOLVED_BINDINGS_REPORT = {
+    "schema": cli.SCHEMA, "command": "update", "status": "failed", "error": MULTI_LINE_ERROR,
+}
+UPGRADE_PLANNED_REPORT = {
+    "schema": cli.SCHEMA, "command": "upgrade", "status": "planned",
+    "old_version": "5.10.0", "new_version": "5.11.0", "destination": "/opt/pegasus/pegasus",
+    "restart_required": True,
+}
+UPGRADED_REPORT = {
+    "schema": cli.SCHEMA, "command": "upgrade", "status": "upgraded",
+    "old_version": "5.10.0", "new_version": "5.11.0", "destination": "/opt/pegasus/pegasus",
+    "restart_required": True,
+}
+UPGRADE_FAILED_REPORT = {
+    "schema": cli.SCHEMA, "command": "upgrade", "status": "failed", "error": "5.10.0 is not writable",
 }
 
 
@@ -218,6 +245,116 @@ class InstallResultRenderingTest(unittest.TestCase):
         lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=INSTALLED_REPORT), cursor=0)]
         for expected in cli.prose_for(INSTALLED_REPORT).splitlines():
             self.assertIn(expected, lines)
+
+
+class UpdatePlanRenderingTest(unittest.TestCase):
+    """`InstallPlanScreen` with `command="update"`: the same preview screen,
+    worded for the flow it is actually previewing."""
+
+    def test_the_title_and_footer_name_update_not_install(self):
+        screen = InstallPlanScreen(cli=SAMPLE, report=UPDATE_PLANNED_REPORT, command="update")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn(f"Update · {SAMPLE.display_name}", lines)
+        self.assertIn("enter: update now · esc: back, nothing written", lines)
+        self.assertFalse(any("Install ·" in text for text in lines))
+
+    def test_it_still_says_nothing_has_been_written_yet(self):
+        screen = InstallPlanScreen(cli=SAMPLE, report=UPDATE_PLANNED_REPORT, command="update")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn("PREVIEW — nothing has been written yet.", lines)
+
+
+class UpdateResultRenderingTest(unittest.TestCase):
+    """`InstallResultScreen` with `command="update"`: same shape as an
+    install result, its own banners and title."""
+
+    def test_a_successful_update_says_so_unmistakably(self):
+        screen = InstallResultScreen(cli=SAMPLE, report=UPDATED_REPORT, command="update")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn(f"Update · {SAMPLE.display_name}", lines)
+        self.assertIn("UPDATED.", lines)
+        self.assertNotIn("INSTALLED.", lines)
+
+    def test_a_failed_update_says_so_and_carries_no_traceback(self):
+        report = {**FAILED_REPORT, "command": "update"}
+        screen = InstallResultScreen(cli=SAMPLE, report=report, command="update")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn("UPDATE FAILED.", lines)
+        self.assertNotIn("INSTALL FAILED.", lines)
+        self.assertFalse(any("Traceback" in text for text in lines))
+
+    def test_the_multi_line_unresolved_bindings_refusal_is_not_flattened_to_one_line(self):
+        """`update`'s refusal for an install with unrecorded mcp binding keys
+        is several lines long -- the command to run, and why. Each embedded
+        newline in the report's own `error` string must become its own
+        `Line`, not one giant row that gets clipped by `draw`'s own window
+        width the way a single overlong line would be."""
+        screen = InstallResultScreen(cli=SAMPLE, report=UPDATE_UNRESOLVED_BINDINGS_REPORT, command="update")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn("UPDATE FAILED.", lines)
+        prose = cli.prose_for(UPDATE_UNRESOLVED_BINDINGS_REPORT)
+        for expected in prose.splitlines():
+            self.assertIn(expected, lines, f"line {expected!r} was flattened into a longer one")
+        # And no rendered line is the whole multi-line message glued together.
+        self.assertFalse(any("\n" in text for text in lines))
+        self.assertIn("pegasus install --cli demo --mcp x=<key>", "\n".join(lines))
+
+
+class UpgradePlanRenderingTest(unittest.TestCase):
+    """`InstallPlanScreen` with `command="upgrade"`: the preview `pegasus
+    upgrade --dry-run` would report, worded for its own flow rather than
+    borrowing Install's or Update's."""
+
+    def test_the_title_and_footer_name_upgrade_not_install_or_update(self):
+        screen = InstallPlanScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_PLANNED_REPORT, command="upgrade")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn(f"Upgrade · {PEGASUS_PROGRAM.display_name}", lines)
+        self.assertIn("enter: upgrade now · esc: back, nothing written", lines)
+        self.assertFalse(any("Install ·" in text or "Update ·" in text for text in lines))
+
+    def test_it_still_says_nothing_has_been_written_yet(self):
+        screen = InstallPlanScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_PLANNED_REPORT, command="upgrade")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn("PREVIEW — nothing has been written yet.", lines)
+
+    def test_it_carries_the_exact_prose_the_flag_would_print(self):
+        screen = InstallPlanScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_PLANNED_REPORT, command="upgrade")
+        lines = [line.text for line in render(screen, cursor=0)]
+        for expected in cli.prose_for(UPGRADE_PLANNED_REPORT).splitlines():
+            self.assertIn(expected, lines)
+
+
+class UpgradeResultRenderingTest(unittest.TestCase):
+    """`InstallResultScreen` with `command="upgrade"`: says a restart is
+    required and never claims the running process itself is now the new
+    version -- it is still running the code it started with."""
+
+    def test_a_successful_upgrade_says_so_and_names_a_restart(self):
+        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADED_REPORT, command="upgrade")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn(f"Upgrade · {PEGASUS_PROGRAM.display_name}", lines)
+        joined = "\n".join(lines)
+        self.assertIn("restart", joined.lower())
+        self.assertNotIn("INSTALLED.", lines)
+        self.assertNotIn("UPDATED.", lines)
+
+    def test_a_successful_upgrade_never_claims_this_process_is_now_the_new_version(self):
+        """The process that reports success is still running the old code --
+        `write_atomic`'s replace only changes what a *future* launch runs."""
+        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADED_REPORT, command="upgrade")
+        lines = [line.text for line in render(screen, cursor=0)]
+        joined = "\n".join(lines)
+        self.assertIn("5.10.0", joined)  # the old version this process is still running.
+        self.assertIn("5.11.0", joined)  # the new version now on disk.
+
+    def test_a_failed_upgrade_says_so_and_carries_no_traceback(self):
+        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_FAILED_REPORT, command="upgrade")
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertTrue(any("FAILED" in text for text in lines))
+        self.assertTrue(any("not writable" in text for text in lines))
+        self.assertFalse(any("Traceback" in text for text in lines))
+        self.assertNotIn("INSTALL FAILED.", lines)
+        self.assertNotIn("UPDATE FAILED.", lines)
 
 
 class UninstallResultRenderingTest(unittest.TestCase):

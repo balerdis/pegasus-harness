@@ -17,6 +17,17 @@ from fakes import DEFAULT_DIR_MODE, DEFAULT_MODE, FakeFileSystem
 ROOT = Path("/home/probe")
 
 
+class FakeFileSystemIsWritableTest(unittest.TestCase):
+    def test_a_path_not_named_unwritable_is_writable_by_default(self):
+        filesystem = FakeFileSystem()
+        self.assertTrue(filesystem.is_writable(ROOT / "pegasus"))
+
+    def test_a_path_named_unwritable_answers_false(self):
+        target = ROOT / "pegasus"
+        filesystem = FakeFileSystem(unwritable={target})
+        self.assertFalse(filesystem.is_writable(target))
+
+
 class FakeFileSystemMakeDirTest(unittest.TestCase):
     def test_make_dir_records_the_requested_mode(self):
         filesystem = FakeFileSystem()

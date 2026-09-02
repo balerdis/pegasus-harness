@@ -51,7 +51,7 @@ def dependency_record(**overrides) -> Record:
     return Record(**fields)
 
 
-def install(*entries, cli="opencode", links=()) -> Install:
+def install(*entries, cli="opencode", links=(), mcp_bindings=None) -> Install:
     return Install(
         cli=cli,
         installed_at=AT,
@@ -59,6 +59,7 @@ def install(*entries, cli="opencode", links=()) -> Install:
         release={"version": "4.0.0", "catalog_digest": "sha256:" + "c" * 64},
         entries=tuple(entries),
         links=tuple(links),
+        mcp_bindings=dict(mcp_bindings) if mcp_bindings else {},
     )
 
 
@@ -120,6 +121,28 @@ class RoundTripTest(unittest.TestCase):
         entry = payload["installs"][0]["entries"][0]
         self.assertNotIn("program_relpath", entry)
         self.assertNotIn("program_digest", entry)
+
+    def test_mcp_bindings_survive_serialization(self):
+        journal = Journal(
+            pegasus_version="4.0.0",
+            installs=(install(record(), mcp_bindings={"cbm": "codebase-memory-mcp"}),),
+        )
+        payload = journal_module.to_dict(journal)
+        self.assertEqual(journal_module.from_dict(payload, HOME), journal)
+
+    def test_an_install_with_no_bindings_omits_the_key(self):
+        payload = journal_module.to_dict(self.journal)
+        self.assertNotIn("mcp_bindings", payload["installs"][0])
+
+    def test_a_journal_from_before_bindings_existed_still_loads(self):
+        """A journal written by an earlier Pegasus has no `mcp_bindings` key at
+        all -- that must load exactly as cleanly as one that carries it, and
+        the resulting install must carry an empty mapping rather than raise or
+        invent a key."""
+        payload = journal_module.to_dict(self.journal)
+        self.assertNotIn("mcp_bindings", payload["installs"][0])
+        parsed = journal_module.from_dict(payload, HOME)
+        self.assertEqual(parsed.installs[0].mcp_bindings, {})
 
 
 class ValidationTest(unittest.TestCase):

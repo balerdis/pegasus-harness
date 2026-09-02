@@ -18,7 +18,7 @@ from unittest import mock
 
 from pegasus.tui import app as app_module
 from pegasus.tui.app import accent_choice, action_for, draw
-from pegasus.tui.navigator import Action
+from pegasus.tui.navigator import Action, BehindInstall, CliOption, InstallPlanScreen, Navigator, UpdateNotice
 from pegasus.tui.view import Line, Span, Style
 
 
@@ -232,7 +232,7 @@ class RunInstallTest(unittest.TestCase):
             raise TypeError("sink chain exploded")
 
         with (
-            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.session, "plan_task", return_value=task),
             mock.patch.object(app_module.curses, "flushinp"),
         ):
             with self.assertRaises(TypeError) as caught:
@@ -248,7 +248,7 @@ class RunInstallTest(unittest.TestCase):
             raise OSError("No space left on device")
 
         with (
-            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.session, "plan_task", return_value=task),
             mock.patch.object(app_module.curses, "flushinp"),
         ):
             with self.assertRaises(OSError) as caught:
@@ -266,7 +266,7 @@ class RunInstallTest(unittest.TestCase):
         window = _FakeInstallWindow(getch_script=[KeyboardInterrupt])
 
         with (
-            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.session, "plan_task", return_value=task),
             mock.patch.object(app_module.curses, "flushinp") as flushinp,
         ):
             with self.assertRaises(KeyboardInterrupt):
@@ -286,7 +286,7 @@ class RunInstallTest(unittest.TestCase):
         window = _FakeInstallWindow(width=120, getch_script=[KeyboardInterrupt])
 
         with (
-            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.session, "plan_task", return_value=task),
             mock.patch.object(app_module.curses, "flushinp"),
         ):
             with self.assertRaises(KeyboardInterrupt):
@@ -301,7 +301,7 @@ class RunInstallTest(unittest.TestCase):
             return "install-result"
 
         with (
-            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.session, "plan_task", return_value=task),
             mock.patch.object(app_module.curses, "flushinp") as flushinp,
         ):
             result = app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
@@ -309,6 +309,207 @@ class RunInstallTest(unittest.TestCase):
         self.assertEqual(result, "install-result")
         self.assertIn(-1, window.timeouts)
         flushinp.assert_called_once()
+
+
+class UpdateCheckHolderTest(unittest.TestCase):
+    """Same lock-guarded-value shape `_ProgressHolder` already uses, for the
+    same reason -- proven the same way, no thread required to exercise it."""
+
+    def test_starts_undone(self):
+        holder = app_module._UpdateCheckHolder()
+        done, latest = holder.snapshot()
+        self.assertFalse(done)
+        self.assertIsNone(latest)
+
+    def test_set_marks_it_done_and_carries_the_answer(self):
+        holder = app_module._UpdateCheckHolder()
+        holder.set("5.11.0")
+        done, latest = holder.snapshot()
+        self.assertTrue(done)
+        self.assertEqual(latest, "5.11.0")
+
+    def test_set_to_none_is_still_done(self):
+        """`None` is a legitimate answer -- disabled, or every failure mode
+        `cli.check_for_update` collapses to -- and must not read the same as
+        `snapshot`'s own initial, not-yet-answered state."""
+        holder = app_module._UpdateCheckHolder()
+        holder.set(None)
+        done, latest = holder.snapshot()
+        self.assertTrue(done)
+        self.assertIsNone(latest)
+
+
+class StartUpdateCheckTest(unittest.TestCase):
+    """`_start_update_check`: the background version check now gets the
+    same exception boundary and join-ability `_run_install`'s own worker
+    already has, rather than a bare `threading.Thread(...)` with neither.
+    """
+
+    def test_the_happy_path_still_reaches_the_holder(self):
+        with mock.patch.object(app_module.cli, "check_for_update", return_value="5.11.0"):
+            holder = app_module._UpdateCheckHolder()
+            thread = app_module._start_update_check(runtime=None, holder=holder)
+            thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(holder.snapshot(), (True, "5.11.0"))
+
+    def test_an_exception_from_check_for_update_does_not_escape_the_thread(self):
+        """Regression pin: the old bare `threading.Thread(target=lambda: ...)`
+        had no `try/except` at all, so anything `check_for_update` failed to
+        collapse to `None` itself would vanish through `threading.excepthook`
+        instead of leaving `holder` with a legitimate answer."""
+        with mock.patch.object(app_module.cli, "check_for_update", side_effect=RuntimeError("boom")):
+            holder = app_module._UpdateCheckHolder()
+            thread = app_module._start_update_check(runtime=None, holder=holder)
+            thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(holder.snapshot(), (True, None))
+
+    def test_the_returned_thread_is_a_daemon(self):
+        with mock.patch.object(app_module.cli, "check_for_update", return_value=None):
+            holder = app_module._UpdateCheckHolder()
+            thread = app_module._start_update_check(runtime=None, holder=holder)
+            thread.join(timeout=1)
+        self.assertTrue(thread.daemon)
+
+
+class MergedNoticeTest(unittest.TestCase):
+    """`_merged_notice`: folding the remote answer into the navigator once
+    it lands, without ever touching a window or a clock."""
+
+    def test_still_waiting_leaves_the_navigator_untouched(self):
+        navigator = Navigator.starting()
+        holder = app_module._UpdateCheckHolder()
+        notice = UpdateNotice(running="5.10.0")
+        merged, done = app_module._merged_notice(navigator, notice, holder)
+        self.assertFalse(done)
+        self.assertIs(merged, navigator)
+
+    def test_a_resolved_answer_is_folded_into_the_main_menu(self):
+        navigator = Navigator.starting()
+        holder = app_module._UpdateCheckHolder()
+        holder.set("5.11.0")
+        notice = UpdateNotice(running="5.10.0")
+        merged, done = app_module._merged_notice(navigator, notice, holder)
+        self.assertTrue(done)
+        self.assertTrue(any("5.11.0" in line for line in merged.current.preface))
+
+    def test_a_resolved_none_answer_is_folded_in_as_no_remote_fact(self):
+        navigator = Navigator.starting()
+        holder = app_module._UpdateCheckHolder()
+        holder.set(None)
+        notice = UpdateNotice(running="5.10.0")
+        merged, done = app_module._merged_notice(navigator, notice, holder)
+        self.assertTrue(done)
+        self.assertEqual(merged.current.preface, ())
+
+    def test_the_local_half_of_the_notice_survives_the_merge(self):
+        local_behind = (BehindInstall(display_name="Demo CLI", recorded="5.9.0"),)
+        navigator = Navigator.starting(notice=UpdateNotice(running="5.10.0", local_behind=local_behind))
+        holder = app_module._UpdateCheckHolder()
+        holder.set("5.11.0")
+        notice = UpdateNotice(running="5.10.0", local_behind=local_behind)
+        merged, done = app_module._merged_notice(navigator, notice, holder)
+        self.assertTrue(done)
+        self.assertTrue(any("Update" in line for line in merged.current.preface))
+        self.assertTrue(any("5.11.0" in line for line in merged.current.preface))
+
+
+class MainLoopUpdateCheckTest(unittest.TestCase):
+    """`_main_loop`: the menu answers keys from its very first tick, and the
+    background update check never blocks it -- proven here by resolving the
+    check only after several ordinary key presses have already been acted
+    on, then checking that blocking input (`timeout(-1)`) is restored once
+    it does resolve.
+    """
+
+    def test_navigation_works_before_the_check_resolves_and_input_blocks_again_after(self):
+        navigator = Navigator.starting()
+        holder = app_module._UpdateCheckHolder()
+        notice = UpdateNotice(running="5.10.0")
+        exit_index = len(navigator.current.entries) - 1
+
+        # Reach and choose Exit while the check is still pending for the
+        # first two polls -- if the loop ever blocked on the check instead
+        # of acting on these keys, `final.quit` below would never be true.
+        window = _FakeInstallWindow(getch_script=[curses.KEY_DOWN] * exit_index + [curses.KEY_ENTER])
+
+        calls = {"n": 0}
+        real_snapshot = holder.snapshot
+
+        def snapshot():
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                return False, None
+            return real_snapshot()
+
+        holder.set(None)  # the answer that will be picked up once `snapshot` stops faking "pending"
+        window.timeout(app_module.UPDATE_CHECK_POLL_MS)  # what `run` does before entering `_main_loop`
+        with mock.patch.object(holder, "snapshot", side_effect=snapshot):
+            final = app_module._main_loop(
+                window, navigator, runtime=None, accent_attr=curses.A_BOLD, notice=notice, holder=holder
+            )
+
+        self.assertTrue(final.quit, "the menu never reached Exit -- navigation was blocked by the update check")
+        self.assertIn(app_module.UPDATE_CHECK_POLL_MS, window.timeouts)
+        self.assertIn(-1, window.timeouts)
+        # Blocking is restored only once the check resolves, never before.
+        self.assertEqual(window.timeouts[0], app_module.UPDATE_CHECK_POLL_MS)
+
+    def test_entering_install_while_the_check_is_pending_does_not_break_the_poll_window(self):
+        """Regression pin: `_run_install`'s `finally` used to hardcode
+        `window.timeout(-1)`, clobbering `_main_loop`'s own poll window
+        whenever an install was confirmed before the background check
+        resolved. Once `_run_install` returns, `_main_loop` must reassert
+        its own poll timeout on its very next iteration -- before blocking
+        on the next `getch` -- rather than leaving the terminal in blocking
+        mode for however long the check has left.
+        """
+        starting = Navigator.starting()
+        exit_index = len(starting.current.entries) - 1
+        navigator = starting.opened(
+            InstallPlanScreen(cli=CliOption(id="demo", display_name="Demo", config_dir="", tier="full"), report={})
+        )
+        holder = app_module._UpdateCheckHolder()  # never resolved: `checking` stays True throughout
+        notice = UpdateNotice(running="5.10.0")
+
+        window = _FakeInstallWindow(
+            getch_script=[curses.KEY_ENTER]
+            + [-1] * 20
+            + [curses.KEY_DOWN] * exit_index
+            + [curses.KEY_ENTER]
+        )
+        window.timeout(app_module.UPDATE_CHECK_POLL_MS)  # what `run` does before entering `_main_loop`
+
+        def task(_sink):
+            return starting  # a fresh, non-quit navigator to land the outer loop back on
+
+        with (
+            mock.patch.object(app_module.session, "plan_task", return_value=task),
+            mock.patch.object(app_module.curses, "flushinp"),
+        ):
+            final = app_module._main_loop(
+                window, navigator, runtime=None, accent_attr=curses.A_BOLD, notice=notice, holder=holder
+            )
+
+        self.assertTrue(final.quit)
+        finally_index = window.timeouts.index(-1)
+        self.assertEqual(
+            window.timeouts[finally_index + 1],
+            app_module.UPDATE_CHECK_POLL_MS,
+            f"poll timeout was not reasserted right after the install's own timeout(-1): {window.timeouts}",
+        )
+
+    def test_quitting_while_the_check_is_still_pending_still_works(self):
+        navigator = Navigator.starting()
+        holder = app_module._UpdateCheckHolder()  # never resolved
+        notice = UpdateNotice(running="5.10.0")
+        exit_index = len(navigator.current.entries) - 1
+        window = _FakeInstallWindow(
+            getch_script=[curses.KEY_DOWN] * exit_index + [curses.KEY_ENTER]
+        )
+        final = app_module._main_loop(window, navigator, runtime=None, accent_attr=curses.A_BOLD, notice=notice, holder=holder)
+        self.assertTrue(final.quit)
 
 
 if __name__ == "__main__":

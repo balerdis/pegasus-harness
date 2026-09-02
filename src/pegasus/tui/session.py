@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+import pegasus
 from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import content as content_module
@@ -22,6 +23,7 @@ from pegasus.core import model_assignments as model_assignments_module
 from pegasus.tui.navigator import (
     CANCEL,
     EFFORT_OPTIONS,
+    PEGASUS_PROGRAM,
     Action,
     AgentRow,
     CliOption,
@@ -46,6 +48,10 @@ from pegasus.tui.navigator import (
     UninstallConfirm,
     UninstallResultScreen,
     UninstallTarget,
+    UpdateNotice,
+    UpdateTarget,
+    UpgradeTarget,
+    BehindInstall,
     restore_menu,
 )
 
@@ -98,6 +104,36 @@ def detect_installed(runtime: cli.Runtime) -> tuple[CliOption, ...]:
             )
         )
     return tuple(options)
+
+
+def local_update_notice(runtime: cli.Runtime, installed: tuple[CliOption, ...]) -> UpdateNotice:
+    """The local half of `UpdateNotice`: no network, always available, so
+    unlike the remote half this needs no thread and can be built before the
+    very first frame.
+
+    Reads each installed CLI's own journal entry -- the same `Install.release`
+    `doctor` already reports -- and names every one, not just an arbitrary
+    oldest one, since `update_notice_lines` now names each CLI on its own
+    line. For each, also decides whether `cli.update` would actually reapply
+    it: `cli.update_unresolved_bindings` is the exact same classification
+    `update` itself refuses on, so this can never recommend `Update` for an
+    installation that would refuse it -- the one thing this fixes. When it
+    would refuse, `cli.install_command_for` builds the one-time remedy from
+    the same source `update`'s own refusal message already builds it from,
+    so the two can never name a different command.
+    """
+    journal = cli.journal_store(runtime).load()
+    behind = []
+    for option in installed:
+        install = journal_module.install_for(journal, option.id)
+        if install is None:
+            continue
+        unresolved = cli.update_unresolved_bindings(install)
+        remedy = cli.install_command_for(option.id, unresolved) if unresolved else None
+        behind.append(
+            BehindInstall(display_name=option.display_name, recorded=install.release.get("version"), remedy_command=remedy)
+        )
+    return UpdateNotice(running=pegasus.__version__, local_behind=tuple(behind))
 
 
 def _uninstall_preview(cli_option: CliOption, runtime: cli.Runtime) -> Menu:
@@ -282,6 +318,92 @@ def install_task(
     return run
 
 
+def update_task(
+    navigator: Navigator, runtime: cli.Runtime, screen: InstallPlanScreen
+) -> Callable[[Callable[[cli.Progress], None]], Navigator]:
+    """`install_task`'s twin for the Update flow: the same worker-thread
+    seam, running `cli.update` instead of `cli.install`. Kept apart from
+    `install_task` rather than folded into it, since `update` recomputes its
+    own `--mcp` selection fresh from the journal at the moment it runs --
+    reusing `screen.mcp`, frozen at preview time, would risk a second,
+    slightly different implementation of exactly what `update` already
+    does.
+    """
+
+    def run(sink: Callable[[cli.Progress], None]) -> Navigator:
+        _, report = cli.safe_report("update", lambda: cli.update(screen.cli.id, runtime, on_progress=sink))
+        return navigator.opened(InstallResultScreen(cli=screen.cli, report=report, command="update"))
+
+    return run
+
+
+def upgrade_task(
+    navigator: Navigator, runtime: cli.Runtime, screen: InstallPlanScreen
+) -> Callable[[Callable[[cli.Progress], None]], Navigator]:
+    """`install_task`'s twin for the Upgrade flow: the same worker-thread
+    seam, running `cli.upgrade` instead of `cli.install`. `screen.cli` is
+    `PEGASUS_PROGRAM`, never read by `cli.upgrade` itself (which takes no
+    CLI id at all) -- it is carried only so the result screen this returns
+    still has something to render a heading from, same as the plan screen
+    it confirms.
+    """
+
+    def run(sink: Callable[[cli.Progress], None]) -> Navigator:
+        _, report = cli.safe_report("upgrade", lambda: cli.upgrade(runtime, on_progress=sink))
+        return navigator.opened(InstallResultScreen(cli=screen.cli, report=report, command="upgrade"))
+
+    return run
+
+
+def plan_task(
+    navigator: Navigator, runtime: cli.Runtime, screen: InstallPlanScreen
+) -> Callable[[Callable[[cli.Progress], None]], Navigator]:
+    """Which real engine call a confirmed `InstallPlanScreen` actually needs
+    -- `install_task`, `update_task`, or `upgrade_task` -- decided from
+    `screen.command` the same way every other place shared between the
+    flows reads it. This is the one seam `app.py`'s worker thread reaches
+    through, so it never has to know how many flows exist as anything but
+    one screen.
+    """
+    if screen.command == "update":
+        return update_task(navigator, runtime, screen)
+    if screen.command == "upgrade":
+        return upgrade_task(navigator, runtime, screen)
+    return install_task(navigator, runtime, screen)
+
+
+def _update_preview(cli_option: CliOption, runtime: cli.Runtime) -> InstallPlanScreen | InstallResultScreen:
+    """What choosing `UpdateTarget(cli_option)` opens: a preview of what
+    `update` would reapply, fetched through the same `cli.update(...,
+    dry_run=True)` the flag itself runs. Unlike an install, this can already
+    fail here -- an unresolved mcp binding key refuses before `install` is
+    ever reached -- and a refusal has nothing left to preview or confirm, so
+    it opens straight onto a result screen instead of a plan with nothing
+    real to show.
+    """
+    code, report = cli.safe_report("update", lambda: cli.update(cli_option.id, runtime, dry_run=True))
+    if code != cli.OK:
+        return InstallResultScreen(cli=cli_option, report=report, command="update")
+    return InstallPlanScreen(cli=cli_option, report=report, command="update")
+
+
+def _upgrade_preview(runtime: cli.Runtime) -> InstallPlanScreen | InstallResultScreen:
+    """What choosing `UpgradeTarget()` opens: a preview of what `pegasus
+    upgrade` would replace, fetched through `cli.upgrade(..., dry_run=True)`
+    -- the same call `--dry-run` itself runs. `PEGASUS_PROGRAM` stands in
+    for the `CliOption` every other flow's plan and result screen carry,
+    since `upgrade` has none of its own. Like `_update_preview`, this can
+    already fail here -- not running from an installed executable, an
+    unwritable destination, no network, or already current -- and a
+    refusal has nothing left to preview or confirm, so it opens straight
+    onto a result screen instead of a plan with nothing real to show.
+    """
+    code, report = cli.safe_report("upgrade", lambda: cli.upgrade(runtime, dry_run=True))
+    if code != cli.OK:
+        return InstallResultScreen(cli=PEGASUS_PROGRAM, report=report, command="upgrade")
+    return InstallPlanScreen(cli=PEGASUS_PROGRAM, report=report, command="upgrade")
+
+
 def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigator:
     """One key's worth of navigation, running whichever engine call it needs.
 
@@ -309,6 +431,10 @@ def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigato
             return navigator.opened(RestoreResultScreen(report=report))
         if isinstance(target, ModelsTarget):
             return navigator.opened(_models_screen(target.cli, runtime))
+        if isinstance(target, UpdateTarget):
+            return navigator.opened(_update_preview(target.cli, runtime))
+        if isinstance(target, UpgradeTarget):
+            return navigator.opened(_upgrade_preview(runtime))
     if isinstance(screen, ModelsScreen):
         stepped = _models_write(screen, navigator, runtime, action)
         if stepped is not None:
@@ -318,10 +444,15 @@ def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigato
         if stepped is not None:
             return stepped
     if isinstance(screen, InstallPlanScreen) and action is Action.CHOOSE:
-        _, report = cli.safe_report(
-            "install", lambda: cli.install(screen.cli.id, runtime, mcp=list(screen.mcp))
-        )
-        return navigator.opened(InstallResultScreen(cli=screen.cli, report=report))
+        if screen.command == "update":
+            _, report = cli.safe_report("update", lambda: cli.update(screen.cli.id, runtime))
+        elif screen.command == "upgrade":
+            _, report = cli.safe_report("upgrade", lambda: cli.upgrade(runtime))
+        else:
+            _, report = cli.safe_report(
+                "install", lambda: cli.install(screen.cli.id, runtime, mcp=list(screen.mcp))
+            )
+        return navigator.opened(InstallResultScreen(cli=screen.cli, report=report, command=screen.command))
     if isinstance(screen, StatusScreen) and action is Action.CHOOSE:
         generations = tuple(reversed(cli.snapshot_store(runtime).readable_generations()))
         return navigator.opened(restore_menu(generations))

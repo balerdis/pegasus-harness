@@ -23,10 +23,11 @@ import curses
 import io
 import threading
 import time
+from dataclasses import replace
 
 from pegasus import cli
 from pegasus.tui import session
-from pegasus.tui.navigator import STARTUP_MESSAGE, Action, InstallPlanScreen, Navigator, busy_message_for
+from pegasus.tui.navigator import STARTUP_MESSAGE, Action, InstallPlanScreen, Navigator, UpdateNotice, busy_message_for
 from pegasus.tui.view import Line, Style, render, render_busy, render_progress
 
 KEYS: dict[int, Action] = {
@@ -184,7 +185,7 @@ def _run_install(window, navigator: Navigator, runtime: cli.Runtime, accent_attr
     off it through a lock.
     """
     message = busy_message_for(navigator.current, navigator.cursor, Action.CHOOSE)
-    task = session.install_task(navigator, runtime, navigator.current)
+    task = session.plan_task(navigator, runtime, navigator.current)
     holder = _ProgressHolder()
     outcome: list[Navigator] = []
     failure: list[BaseException] = []
@@ -257,15 +258,96 @@ def _render_current(window, navigator: Navigator) -> tuple[Line, ...]:
     return render(navigator.current, navigator.cursor, width=width)
 
 
-def run(window, runtime: cli.Runtime) -> None:
-    curses.curs_set(0)
-    window.keypad(True)
-    accent_attr = _init_colors()
-    draw(window, render_busy(STARTUP_MESSAGE), accent_attr=accent_attr)
-    navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
-    draw(window, _render_current(window, navigator), accent_attr=accent_attr)
+#: How often the main loop polls while the background update check is still
+#: pending, in milliseconds. Unlike `PROGRESS_TICK_MS` this drives nothing
+#: visible -- nothing here animates -- so it only has to be short enough
+#: that a key press still feels instant; the check itself can otherwise take
+#: as long as the downloader's own timeout allows without the person ever
+#: noticing a difference from ordinary, unblocked navigation.
+UPDATE_CHECK_POLL_MS = 100
+
+
+class _UpdateCheckHolder:
+    """Where the background update-check thread leaves its answer for the
+    main loop to read back -- the same lock-guarded-value shape
+    `_ProgressHolder` uses, and for the same reason: one immutable value,
+    one lock around the reference to it. `None` is itself a legitimate
+    answer (disabled, or any of the failures `cli.check_for_update` collapses
+    into silence), so "has an answer arrived at all" is tracked separately
+    from what that answer was.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._done = False
+        self._latest: str | None = None
+
+    def set(self, latest: str | None) -> None:
+        with self._lock:
+            self._latest = latest
+            self._done = True
+
+    def snapshot(self) -> tuple[bool, str | None]:
+        with self._lock:
+            return self._done, self._latest
+
+
+def _merged_notice(
+    navigator: Navigator, notice: UpdateNotice, holder: _UpdateCheckHolder
+) -> tuple[Navigator, bool]:
+    """`navigator` with the remote half of `notice` folded in, once `holder`
+    has an answer -- `(navigator, False)`, unchanged, while there is still
+    nothing to fold in. `notice` already carries the local half decided
+    before the first frame; only `remote_latest` is new here.
+    """
+    done, latest = holder.snapshot()
+    if not done:
+        return navigator, False
+    return navigator.with_notice(replace(notice, remote_latest=latest)), True
+
+
+def _main_loop(
+    window,
+    navigator: Navigator,
+    runtime: cli.Runtime,
+    accent_attr: int,
+    notice: UpdateNotice,
+    holder: _UpdateCheckHolder,
+) -> Navigator:
+    """Ordinary navigation, plus folding in the update check's answer the
+    moment it lands.
+
+    `window.timeout(UPDATE_CHECK_POLL_MS)` is what makes this possible
+    without a second concurrency mechanism: the very same technique
+    `_run_install`'s animation loop already uses, except here a `-1` from a
+    timed-out `getch` is not the whole story the way it is there -- this
+    loop still has a real key to act on once one arrives, so `checking`
+    tracks whether blocking input has been restored yet, and the check
+    itself never delays a key from being handled.
+
+    The timeout is reasserted at the top of every iteration while `checking`
+    is still true, rather than trusted to still hold from whenever it was
+    last set. A nested call this loop makes -- `_run_install` today, and
+    curses gives no way to read a window's current timeout back to restore
+    it afterwards -- may leave the mode however it pleases before returning;
+    reasserting here, unconditionally, the moment control comes back is what
+    keeps that nested call's own choice of timeout from ever leaking past
+    its own return, no matter what a future one turns out to do.
+    """
+    checking = True
     while not navigator.quit:
-        action = action_for(window.getch())
+        if checking:
+            window.timeout(UPDATE_CHECK_POLL_MS)
+        key = window.getch()
+        if checking:
+            navigator, done = _merged_notice(navigator, notice, holder)
+            if done:
+                draw(window, _render_current(window, navigator), accent_attr=accent_attr)
+                window.timeout(-1)
+                checking = False
+        if key == -1:
+            continue
+        action = action_for(key)
         if action is None:
             continue
         if action is Action.CHOOSE and isinstance(navigator.current, InstallPlanScreen):
@@ -277,6 +359,67 @@ def run(window, runtime: cli.Runtime) -> None:
             draw(window, render_busy(message), accent_attr=accent_attr)
         navigator = session.step(navigator, runtime, action)
         draw(window, _render_current(window, navigator), accent_attr=accent_attr)
+    return navigator
+
+
+def _start_update_check(runtime: cli.Runtime, holder: _UpdateCheckHolder) -> threading.Thread:
+    """Start the background version check on its own daemon thread, boxed
+    the same defensive way `_run_install`'s own worker is boxed just above
+    -- this file should not hold two different answers to the same
+    question. `check_for_update` already collapses every failure it knows
+    about to `None`, but a thread's exception does not propagate to
+    whoever joins it regardless: left uncaught, one this function does not
+    yet know about would go straight to `threading.excepthook`, which would
+    print into a curses-controlled terminal and be lost.
+
+    Returns the already-started thread so `run` can join it once the main
+    loop is done -- not at startup, where joining would delay the very
+    first frame this check must never hold up, but at shutdown, where
+    `check_for_update` may still be mid-write to its own on-disk cache
+    (`_save_cache`) and letting the process exit out from under a daemon
+    thread would risk tearing that write, the same hazard `_run_install`'s
+    own join already guards against for an install's artifacts.
+    """
+
+    def worker() -> None:
+        try:
+            holder.set(cli.check_for_update(runtime))
+        except BaseException:  # noqa: BLE001 - crossing a thread boundary, see docstring above
+            holder.set(None)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return thread
+
+
+def run(window, runtime: cli.Runtime) -> None:
+    curses.curs_set(0)
+    window.keypad(True)
+    accent_attr = _init_colors()
+    draw(window, render_busy(STARTUP_MESSAGE), accent_attr=accent_attr)
+    installed = session.detect_installed(runtime)
+    # The local half needs no network and nothing asynchronous -- it is
+    # already known at this point, straight off the journal -- so it rides
+    # in the very first `Navigator` rather than waiting for anything.
+    notice = session.local_update_notice(runtime, installed)
+    navigator = Navigator.starting(session.detect_clis(runtime), installed, notice=notice)
+    draw(window, _render_current(window, navigator), accent_attr=accent_attr)
+
+    # The remote half does need the network, so it runs on a worker thread
+    # and must never delay this first frame or any key press after it --
+    # see `_main_loop`'s own docstring for how `window.timeout(...)` makes
+    # that possible without a second concurrency mechanism.
+    holder = _UpdateCheckHolder()
+    update_check_thread = _start_update_check(runtime, holder)
+    window.timeout(UPDATE_CHECK_POLL_MS)
+    try:
+        _main_loop(window, navigator, runtime, accent_attr, notice, holder)
+    finally:
+        # Joined here, not at startup -- see `_start_update_check`'s own
+        # docstring for why waiting until shutdown is what keeps this from
+        # ever delaying the menu while still giving the thread's own
+        # on-disk write a chance to finish before the process does.
+        update_check_thread.join()
 
 
 def main() -> None:

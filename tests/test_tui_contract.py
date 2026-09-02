@@ -25,10 +25,13 @@ from pegasus.tui.navigator import (
     StatusRequest,
     UninstallConfirm,
     UninstallTarget,
+    UpdateTarget,
+    UpgradeTarget,
     main_menu,
     models_menu,
     restore_menu,
     uninstall_menu,
+    update_menu,
 )
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
@@ -43,7 +46,7 @@ class TuiNamesAnExistingCommandTest(unittest.TestCase):
             self.assertIn(entry.target.command, cli.COMMANDS)
 
     def test_the_status_entry_names_the_doctor_command(self):
-        target = main_menu().entries[2].target
+        target = next(entry.target for entry in main_menu().entries if entry.label == "Status and diagnostics")
         self.assertIsInstance(target, StatusRequest)
         self.assertIn(target.command, cli.COMMANDS)
 
@@ -75,6 +78,18 @@ class TuiNamesAnExistingCommandTest(unittest.TestCase):
         for entry in menu.entries:
             self.assertIsInstance(entry.target, ModelsTarget)
             self.assertIn(entry.target.command, cli.COMMANDS)
+
+    def test_every_update_choice_names_a_command_the_flags_expose(self):
+        menu = update_menu(installed=(SAMPLE,))
+        self.assertIsInstance(menu, Menu)
+        for entry in menu.entries:
+            self.assertIsInstance(entry.target, UpdateTarget)
+            self.assertIn(entry.target.command, cli.COMMANDS)
+
+    def test_the_upgrade_entry_names_the_upgrade_command(self):
+        target = next(entry.target for entry in main_menu().entries if entry.label == "Upgrade")
+        self.assertIsInstance(target, UpgradeTarget)
+        self.assertIn(target.command, cli.COMMANDS)
 
     def test_no_menu_entry_still_claims_to_be_unbuilt(self):
         menu = main_menu(detections=(SAMPLE,), installed=(SAMPLE,))

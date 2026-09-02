@@ -153,16 +153,125 @@ $ pegasus doctor
 OpenCode: present at /home/.config/opencode, Pegasus not installed.
 ```
 
+## 5. Actualizar una instalación existente
+
+Hay dos cosas distintas que se llaman "actualizar", y confundirlas es el error fácil de cometer acá.
+
+**`pegasus update --cli <id>` actualiza la instalación.** Reaplica la selección que esa instalación ya
+tiene registrada — MCPs atados incluidos — sin que tengas que repetir ningún flag:
+
+```sh
+pegasus update --cli opencode --dry-run
+pegasus update --cli opencode
+```
+
+Esto existe porque volver a correr `install` exige repetir exactamente el mismo `--mcp` que usaste la
+primera vez: un servidor no nombrado no se instala, así que un `pegasus install --cli opencode` a
+secas **retira tus convenciones de MCP existentes**. Nadie se imagina eso solo, por eso se dice acá de
+frente: es el dato más útil de toda esta sección. `update` acepta `--dry-run` y `--json`, igual que
+`install`.
+
+`update` se niega en dos casos, con estos mensajes exactos:
+
+- Si esa CLI no tiene nada instalado todavía:
+
+  ```
+  opencode has nothing installed to update; run install instead
+  ```
+
+- Si algún servidor MCP atado quedó registrado sin su clave — una instalación hecha antes de que
+  Pegasus empezara a guardar esa atadura —, `update` se niega en vez de adivinar: reaplicar sin la
+  clave retiraría justo la atadura que existe para preservar. Nombra los ids afectados e imprime el
+  comando de `install` que corresponde, con un `<clave>` de relleno por cada uno:
+
+  ```
+  opencode has bound mcp server(s) cbm whose server key was never recorded (an install made before
+  this was tracked); update cannot reapply them without guessing, and guessing would retire the very
+  binding it exists to preserve. Run this once instead:
+    pegasus install --cli opencode --mcp cbm=<key>
+  After that one run, update needs no flags ever again. doctor lists the bound ids; the keys
+  themselves live in the CLI's own configuration.
+  ```
+
+  Después de correr ese `install` una sola vez, `update` vuelve a funcionar sin flags. `doctor` imprime
+  ese mismo comando cuando lista un id atado cuya clave no conoce.
+
+**`pegasus upgrade` actualiza el programa.** Descarga el `pegasus` más nuevo publicado, lo verifica
+contra el `pegasus.sha256` de ese release, y reemplaza el binario en ejecución con un único rename
+atómico. No lleva `--cli` — no se trata de ninguna instalación. Acepta `--dry-run` y `--json`.
+
+```sh
+pegasus upgrade --dry-run
+pegasus upgrade
+```
+
+**Después hay que reiniciar Pegasus**, y vale la pena decir por qué: un proceso en ejecución conserva
+el inode del archivo con el que arrancó, así que el proceso que acaba de hacer el upgrade sigue siendo,
+en memoria, la versión vieja.
+
+`upgrade` se niega, en este orden y antes de bajar nada, en estos casos:
+
+- Ya estás en la versión más nueva publicada:
+
+  ```
+  pegasus is already at the newest published version (5.9.0)
+  ```
+
+- No hay red para consultar el release más nuevo — se niega a adivinar en vez de reportar "no hay
+  nada nuevo" cuando en realidad no pudo verificar:
+
+  ```
+  could not reach GitHub to check the newest published release -- upgrade refuses to guess, so it
+  will not report there is nothing new when it simply could not check; try again once you have
+  network access
+  ```
+
+- El destino no se puede escribir — se niega *antes* de descargar nada, y da el comando manual:
+
+  ```
+  /home/vos/.local/bin/pegasus is not writable by this process; upgrade refuses to download anything
+  it could not then install. Instead, download the newest release from
+  https://github.com/balerdis/pegasus-harness/releases, verify it against its published
+  pegasus.sha256, then place it over /home/vos/.local/bin/pegasus yourself (as whichever user can
+  write there -- root or sudo, if that is what installed it).
+  ```
+
+- No estás corriendo desde un ejecutable instalado — por ejemplo, un checkout de código fuente no
+  tiene binario que reemplazar:
+
+  ```
+  pegasus is not running from an installed executable -- this looks like a source checkout, not the
+  zipapp the release ships, so there is no binary here for upgrade to replace
+  ```
+
 ## La interfaz interactiva
 
 Ejecutar `pegasus` sin ningún subcomando, en una terminal, abre un menú interactivo (una TUI) en vez
-de imprimir la ayuda: es lo que vas a ver la primera vez que lo tipeés sin pensarlo. Se maneja
-enteramente con el teclado: flechas o `j`/`k` para moverte, `enter` o `espacio` para elegir (en la
-pantalla de selección de MCPs, cualquiera de los dos tilda o destilda un servidor), `d` para borrar
-donde aplica, `esc` para volver a la pantalla anterior y `q` para salir. Si corrés `pegasus` sin una
-terminal atrás (por ejemplo, con la salida redirigida a un archivo o a una tubería), no hay menú que
-mostrar: imprime la misma línea de uso que `pegasus --help` y termina con código de salida distinto de
-cero.
+de imprimir la ayuda: es lo que vas a ver la primera vez que lo tipeés sin pensarlo. El menú principal
+tiene siete entradas, agrupadas por intención: `Install`, `Update` y `Upgrade` primero — instalar y
+mantenerse al día —, después `Configure models`, después `Status and diagnostics`, y por último
+`Uninstall` antes de `Exit`, para que la entrada destructiva no quede en el medio de la lista donde
+la navegación con flechas la pueda tocar por accidente. `Update` y `Upgrade` corresponden exactamente
+a los dos comandos de la sección anterior. Se maneja enteramente con el teclado: flechas o `j`/`k` para moverte, `enter` o `espacio`
+para elegir (en la pantalla de selección de MCPs, cualquiera de los dos tilda o destilda un servidor),
+`d` para borrar donde aplica, `esc` para volver a la pantalla anterior y `q` para salir. Si corrés
+`pegasus` sin una terminal atrás (por ejemplo, con la salida redirigida a un archivo o a una tubería),
+no hay menú que mostrar: imprime la misma línea de uso que `pegasus --help` y termina con código de
+salida distinto de cero.
+
+Al abrir el menú pueden aparecer, arriba de todo, hasta dos avisos independientes — y son dos avisos
+separados a propósito, porque cada uno se arregla distinto:
+
+- **Local, sin red:** la instalación se hizo con una versión de Pegasus más vieja que el binario que
+  estás corriendo ahora → elegí `Update`.
+- **Remoto:** hay un release más nuevo publicado que el binario que estás corriendo → elegí `Upgrade`.
+
+El chequeo remoto corre en segundo plano: el menú se puede usar desde el primer cuadro, falla en
+silencio ante cualquier problema de red (sin conexión, proxy, límite de tasa — sin error, sin aviso) y
+guarda en caché la respuesta. La variable `PEGASUS_NO_UPDATE_CHECK` desactiva únicamente ese chequeo
+automático en segundo plano; `pegasus upgrade` corrido a mano sigue consultando la red igual, a
+propósito: se lo pediste directamente, así que busca la respuesta fresca y nunca deja que una caché
+ausente se lea como "ya estás actualizado".
 
 Durante una instalación, la TUI muestra una barra de progreso con la unidad que se está procesando en
 ese momento; al terminar con éxito, la pantalla de resultado remata con un banner de bloques
@@ -178,6 +287,7 @@ comandos de esta guía — así que nada de lo que sigue deja de aplicar si pref
 | MCPs opcionales | `pegasus install --cli opencode --mcp <id>` decide qué servidores se instalan; uno no nombrado no se descarga, configura ni registra. También acepta `--mcp <id>=<clave>`, para atar ese id a un servidor que ya administrás vos bajo esa clave: llegan la convención y los permisos, pero no se descarga ni escribe nada en la configuración de mcp para ese servidor. |
 | Credenciales, proveedores y modelos | Nunca se distribuyen ni se imponen acá. La persona configura las credenciales del proveedor con `/connect` y selecciona el modelo con `/models`, dentro de OpenCode. |
 | Rollback | `pegasus restore` devuelve el estado exacto anterior al último comando; `pegasus uninstall --cli opencode` retira sólo lo que el journal reclama como propio. |
+| Actualizaciones | `pegasus update --cli opencode` reaplica la selección ya instalada (MCPs atados incluidos), sin flags. `pegasus upgrade` reemplaza el binario de `pegasus` por el más nuevo publicado y exige reiniciar después. Son cosas distintas — ver "Actualizar una instalación existente" más arriba. |
 
 Si alguno de los servidores elegidos se distribuye por npm (hoy, sólo `playwright`) y no hay `node` en
 el PATH, `install` se niega antes de escribir nada — también en `--dry-run` — con:

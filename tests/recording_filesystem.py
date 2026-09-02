@@ -51,6 +51,15 @@ class RecordingFileSystem:
     def mode_for(self, *, executable: bool) -> int:
         return self._filesystem.mode_for(executable=executable)
 
+    def is_writable(self, path: Path) -> bool:
+        return self._filesystem.is_writable(path)
+
+    def owned_by_current_user(self, path: Path) -> bool:
+        return self._filesystem.owned_by_current_user(path)
+
+    def mode_ensuring_executable(self, mode: int) -> int:
+        return self._filesystem.mode_ensuring_executable(mode)
+
     # --- Writing ---
 
     def write_atomic(self, path: Path, content: bytes, *, mode: int = 0o644) -> None:

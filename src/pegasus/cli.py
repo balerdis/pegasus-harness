@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
+import zipfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +38,7 @@ from pegasus.core import dependencies as dependencies_module
 from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core import ownership, planner, pointer
+from pegasus.core import upgrade as upgrade_module
 from pegasus.core.journal import KINDS, Install, Record
 from pegasus.core import mcp_handshake
 from pegasus.core.types import Capability, Codec, Environment, ModelAssignment
@@ -89,6 +92,20 @@ class Runtime:
     npm_installer: NpmInstaller = field(default_factory=SubprocessNpmInstaller)
     mcp_process: MCPProcess = field(default_factory=SubprocessMCPProcess)
     mcp_handshake_timeout_seconds: float = mcp_handshake.DEFAULT_TIMEOUT_SECONDS
+    #: `sys.path[0]` as the real interpreter actually set it -- read here,
+    #: through `Runtime`, the same seam every other process fact
+    #: (`variables`, `now`) already goes through, rather than `upgrade`
+    #: reaching for `sys.path` itself. This is what `_running_binary_path`
+    #: resolves: for a zipapp (built by `tools/build_zipapp.py`, run via its
+    #: shebang or `python3 <path>`), Python sets this to the exact path the
+    #: archive was invoked with, and `zipfile.is_zipfile` on that path comes
+    #: back `True`; for `python3 -m pegasus` (this repo's own tests, and
+    #: `PYTHONPATH=src` manual checks) it is the current directory, and for a
+    #: plain script it is the script's own containing directory -- neither is
+    #: ever itself a zip. Defaulting to the real `sys.path[0]` is what makes
+    #: `upgrade` correct outside a test without any caller having to know
+    #: this field exists.
+    sys_path0: str = field(default_factory=lambda: sys.path[0] if sys.path else "")
 
     @property
     def environment(self) -> Environment:
@@ -220,6 +237,24 @@ def _parser() -> argparse.ArgumentParser:
             "administer under that key: the convention and the tool grants still "
             "arrive, and nothing is fetched or written into the mcp settings for it"
         ),
+    )
+
+    update = commands.add_parser(
+        "update", help="reapply an installation's own selection -- mcp bindings included, no flags needed"
+    )
+    update.add_argument("--cli", required=True)
+    update.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    update.add_argument("--dry-run", action="store_true", help="report the plan without writing anything")
+
+    # No `--cli`: this replaces the `pegasus` program itself, never an
+    # installation into a CLI's configuration -- see `upgrade`'s own
+    # docstring for why that is a different concern from `update`.
+    upgrade = commands.add_parser(
+        "upgrade", help="replace the running pegasus binary with the newest published one"
+    )
+    upgrade.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    upgrade.add_argument(
+        "--dry-run", action="store_true", help="report what would be replaced and with what version"
     )
 
     uninstall = commands.add_parser("uninstall", help="take Pegasus back out of one CLI")
@@ -558,7 +593,14 @@ def install(
     # written. What it does do is let the journal finally agree with the disk,
     # so `doctor` stops reporting a drift no run could ever clear.
     merged = _merged(
-        journal, adapter, environment, catalog, all_records + applied.reconciled, stale.removed, runtime.now
+        journal,
+        adapter,
+        environment,
+        catalog,
+        all_records + applied.reconciled,
+        stale.removed,
+        runtime.now,
+        content,
     )
     try:
         store.save(journal_module.with_install(journal, merged))
@@ -611,6 +653,421 @@ def install(
     }
 
 
+def _update(arguments, runtime: Runtime) -> dict[str, Any]:
+    return update(arguments.cli, runtime, dry_run=arguments.dry_run)
+
+
+def update(
+    cli_id: str,
+    runtime: Runtime,
+    *,
+    dry_run: bool = False,
+    on_progress: Callable[["Progress"], None] | None = None,
+) -> dict[str, Any]:
+    """Reapply an installation's own `--mcp` selection, with no flags.
+
+    A bare reinstall names nothing, and naming nothing retires every server
+    not repeated on the command line -- so updating used to mean remembering
+    and repeating the exact selection an earlier `install` was given, and a
+    bound server's selection cannot even be read back from the rendered
+    configuration: a binding writes no `/mcp/<id>` key there, only its
+    convention. This reads the recorded installation instead and reconstructs
+    the selection from it, then delegates to `install` for everything else --
+    there is no second implementation of placing artifacts here, only the
+    computation of what `--mcp` would have been.
+    """
+    adapter = _adapter(cli_id)
+    installed = journal_module.install_for(journal_store(runtime).load(), adapter.id)
+    if installed is None:
+        raise CommandError(
+            f"{adapter.id} has nothing installed to update; run install instead"
+        )
+    selection, unresolved = _mcp_update_selection(installed)
+    if unresolved:
+        raise CommandError(_unresolved_bindings_message(adapter.id, unresolved))
+    return install(cli_id, runtime, dry_run=dry_run, mcp=selection, on_progress=on_progress)
+
+
+def _mcp_update_selection(install: Install) -> tuple[list[str], list[str]]:
+    """The `--mcp` selection this install already embodies, and the ids
+    `update` cannot safely reapply because their key was never recorded.
+
+    Reuses `_mcp_entries` and `_bound_checks` -- the same classification
+    `doctor` already draws between a server this install configured on its
+    own and one it was only granted against a key it does not administer --
+    rather than deriving it a third time.
+    """
+    selection = [name for _, name in _mcp_entries(install)]
+    unresolved = []
+    for check in _bound_checks(install):
+        key = install.mcp_bindings.get(check.id)
+        if key is None:
+            unresolved.append(check.id)
+        else:
+            selection.append(f"{check.id}={key}")
+    return selection, sorted(unresolved)
+
+
+def update_unresolved_bindings(install: Install) -> list[str]:
+    """The mcp ids `update(cli_id, ...)` would refuse this install over,
+    without actually calling `update` -- the same classification
+    `_mcp_update_selection` already draws, reused rather than duplicated.
+
+    Built for `session` (the TUI's engine bridge), which has to decide
+    whether to recommend `Update` at all *before* letting someone choose it,
+    so the local update notice and this module's own refusal can never
+    disagree about whether `update` would succeed.
+    """
+    _, unresolved = _mcp_update_selection(install)
+    return unresolved
+
+
+def install_command_for(cli_id: str, ids: list[str]) -> str:
+    """The exact `install` invocation that would (re)record a key for each
+    of ``ids``, one placeholder per id, built from the ids actually
+    affected rather than from a hardcoded example.
+
+    Public rather than the `_install_command_for` it used to be: `session`
+    (the TUI's engine bridge) reuses it to build the same remedy command the
+    local update notice names, so that notice and this module's own refusal
+    can never disagree about what the fix is.
+    """
+    flags = " ".join(f"--mcp {name}=<key>" for name in ids)
+    return f"pegasus install --cli {cli_id} {flags}"
+
+
+def mcp_placeholder_instruction() -> str:
+    """The one explicit instruction both `update`'s refusal
+    (:func:`_unresolved_bindings_message`) and `doctor`'s matching line give
+    beside :func:`install_command_for`'s command.
+
+    Copying that command verbatim -- a very common habit -- runs the literal
+    string ``<key>`` straight into `parse_mcp_choice`, which rejects it with
+    a cryptic ``'<key>' is not usable as a server key`` rather than anything
+    that explains what to do. Defined once so the two messages that show the
+    command cannot drift apart on how they explain it.
+    """
+    return "replacing each <key> placeholder below with that server's actual key, which lives in the CLI's own configuration"
+
+
+def _unresolved_bindings_message(cli_id: str, ids: list[str]) -> str:
+    command = install_command_for(cli_id, ids)
+    return (
+        f"{cli_id} has bound mcp server(s) {', '.join(ids)} whose server key was never recorded "
+        f"(an install made before this was tracked); update cannot reapply them without guessing, "
+        f"and guessing would retire the very binding it exists to preserve. Run this once instead, "
+        f"{mcp_placeholder_instruction()}:\n"
+        f"  {command}\n"
+        f"After that one run, update needs no flags ever again. doctor lists the bound ids."
+    )
+
+
+# --- Checking for a newer release ------------------------------------------
+#
+# This never touches the binary itself -- it only answers "is there a newer
+# one published", so the TUI can say so. Fetching and replacing the running
+# executable is a separate concern this module does not implement.
+
+#: The one remote fact this whole check exists to learn: the tag of the
+#: newest published GitHub release. Unauthenticated, which is what makes the
+#: TTL below matter -- GitHub rate-limits anonymous callers per source IP,
+#: not per install, so a check run on every launch would be shared across
+#: however many machines sit behind the same address.
+UPDATE_CHECK_URL = "https://api.github.com/repos/balerdis/pegasus-harness/releases/latest"
+
+#: This lookup runs in the background on every TUI launch, unlike an MCP
+#: archive download the user is actively waiting on -- `Downloader`'s own
+#: default (30s, tuned for a multi-megabyte archive over a slow link) is
+#: much too long to leave a worker thread alive answering a question nobody
+#: asked yet. A GitHub API JSON response is a few hundred bytes; if it has
+#: not arrived within a handful of seconds the network is not going to
+#: produce one soon, so there is nothing to gain by waiting longer.
+UPDATE_CHECK_TIMEOUT_SECONDS = 5
+
+#: How long a cached answer is trusted before asking again. A release does
+#: not appear more than a few times a year, so this trades a day of possible
+#: staleness for never touching the network on an ordinary launch -- long
+#: enough to matter for the rate limit above, short enough that a person
+#: still learns about a new release within a day of it shipping.
+UPDATE_CHECK_TTL_SECONDS = 24 * 60 * 60
+
+#: How long a *failed* lookup is trusted before trying again -- deliberately
+#: much shorter than the success TTL above. The tension is real: too short
+#: and a machine with no network at all keeps paying the timeout on every
+#: launch; too long and someone who just got back online keeps being told
+#: nothing for a while after they would already get an answer. One hour
+#: means an offline user pays the short timeout at most once an hour instead
+#: of on every single launch (which is the whole defect this exists to fix),
+#: while someone who reconnects mid-session is never more than an hour from
+#: the check working again -- short enough that it is not a noticeable wait
+#: against a TTL that already tolerates a day of staleness on success.
+UPDATE_CHECK_FAILURE_TTL_SECONDS = 60 * 60
+
+#: The cache's own filename under `runtime.filesystem.data_dir(...)` --
+#: Pegasus's own data, same as the journal and snapshot generations, never
+#: anything written into a CLI's configuration.
+_UPDATE_CACHE_NAME = "update-check.json"
+
+
+def _update_cache_path(runtime: Runtime) -> Path:
+    return runtime.filesystem.data_dir(runtime.home) / _UPDATE_CACHE_NAME
+
+
+def _read_update_cache(runtime: Runtime) -> dict[str, Any] | None:
+    """The last answer this machine got, or `None` for anything short of a
+    clean read -- absent, unreadable, or not the JSON object this writes.
+    A cache is an optimization; failing to read one back is never this
+    function's problem to raise about."""
+    path = _update_cache_path(runtime)
+    try:
+        if not runtime.filesystem.exists(path):
+            return None
+        document = json.loads(runtime.filesystem.read_bytes(path).decode("utf-8"))
+    except (FileSystemError, ValueError, UnicodeDecodeError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def _write_update_cache(
+    runtime: Runtime, cache: dict[str, Any] | None, *, latest_version: str | None, succeeded: bool
+) -> None:
+    """Best effort: a cache that fails to write leaves the next launch
+    checking again, which is a slower day, never a broken one.
+
+    Starts from whatever the previous cache held so a failure never erases a
+    version a previous success already learned -- only the field for the
+    outcome that just happened moves. A success also clears any pending
+    failure timestamp: the thing the failure entry existed to suppress (a
+    retry) is no longer a concern once a fetch has actually gone through.
+    """
+    payload: dict[str, Any] = dict(cache or {})
+    payload["latest_version"] = latest_version
+    if succeeded:
+        payload["success_checked_at"] = runtime.now
+        payload.pop("failure_checked_at", None)
+    else:
+        payload["failure_checked_at"] = runtime.now
+    encoded = json.dumps(payload).encode("utf-8")
+    try:
+        runtime.filesystem.write_atomic(
+            _update_cache_path(runtime), encoded, mode=runtime.filesystem.mode_for(executable=False)
+        )
+    except FileSystemError:
+        pass
+
+
+def _timestamp_is_fresh(cache: dict[str, Any], runtime: Runtime, *, key: str, ttl_seconds: float) -> bool:
+    value = cache.get(key)
+    if value is None:
+        return False
+    try:
+        then = datetime.fromisoformat(value)
+        now = datetime.fromisoformat(runtime.now)
+    except (TypeError, ValueError):
+        return False
+    return (now - then).total_seconds() < ttl_seconds
+
+
+def check_for_update(runtime: Runtime) -> str | None:
+    """The newest published release's version, or `None`.
+
+    `None` is the answer to every one of these, indistinguishably: the check
+    is switched off, there is no cache and the network could not be reached,
+    the response was not the shape expected, or anything else at all went
+    wrong. A version check that surfaces an error is worse than one that says
+    nothing -- nobody asked this question, the TUI just wanted to mention the
+    answer if it already had one -- so this catches everything broad on
+    purpose rather than naming every way a JSON body over HTTP can misbehave.
+
+    Reads the off switch through `runtime.variables`, the same seam every
+    other engine function reads the environment through, never `os.environ`
+    directly.
+    """
+    if runtime.variables.get("PEGASUS_NO_UPDATE_CHECK"):
+        return None
+    cache = _read_update_cache(runtime)
+    if cache is not None and _timestamp_is_fresh(
+        cache, runtime, key="failure_checked_at", ttl_seconds=UPDATE_CHECK_FAILURE_TTL_SECONDS
+    ):
+        return cache.get("latest_version")
+    if cache is not None and _timestamp_is_fresh(
+        cache, runtime, key="success_checked_at", ttl_seconds=UPDATE_CHECK_TTL_SECONDS
+    ):
+        return cache.get("latest_version")
+    try:
+        payload = runtime.downloader.fetch(UPDATE_CHECK_URL, timeout_seconds=UPDATE_CHECK_TIMEOUT_SECONDS)
+        document = json.loads(payload.decode("utf-8"))
+        tag = document["tag_name"]
+        if not isinstance(tag, str) or not tag:
+            raise ValueError("empty or non-string tag_name")
+        latest_version = tag[1:] if tag[0] in "vV" else tag
+    except Exception:  # noqa: BLE001 -- every failure here means silence, see docstring above.
+        previous_version = cache.get("latest_version") if cache is not None else None
+        _write_update_cache(runtime, cache, latest_version=previous_version, succeeded=False)
+        return previous_version
+    _write_update_cache(runtime, cache, latest_version=latest_version, succeeded=True)
+    return latest_version
+
+
+# --- Replacing the running binary -------------------------------------------
+#
+# `upgrade` is deliberately not `update`: `update` reapplies an installation's
+# own recorded selection into a CLI's configuration, and never touches the
+# `pegasus` program itself. This replaces the program -- there is no `--cli`,
+# because there is no installation to name.
+#
+# A running process keeps the inode of the file it started from, so the
+# process that just reported "upgraded" is still running the old code in
+# memory -- restarting is the one thing this can never do for itself, which
+# is why every success report says so.
+
+
+def _running_binary_path(runtime: Runtime) -> Path | None:
+    """Where the executing `pegasus` binary actually lives on disk, or
+    `None` when this process is not running from one at all.
+
+    `runtime.sys_path0` is `sys.path[0]` as the real interpreter set it (see
+    `Runtime.sys_path0`'s own docstring for why it is read through here
+    rather than from `sys` directly). For a zipapp -- built by
+    `tools/build_zipapp.py`, invoked through its shebang or as `python3
+    <path>` -- Python sets this to the exact path the archive was given as,
+    and that path is a real zip file `zipfile.is_zipfile` recognises; for
+    `python3 -m pegasus` (this repo's own test suite, and a `PYTHONPATH=src`
+    manual check) it is the current directory, and for a plain script it is
+    the script's own containing directory, neither of which is ever a zip.
+    `zipfile.is_zipfile` is what tells the two apart -- not the path's own
+    shape, since a relative path, a symlink, or a directory can each appear
+    on either side of that question.
+
+    `os.path.realpath` resolves whatever `sys_path0` handed over -- a
+    relative path (`./pegasus`), a symlink, or anything else that is not
+    already the binary's own canonical location -- to the one real file
+    `write_atomic`'s eventual `os.replace` has to land on.
+    """
+    candidate = runtime.sys_path0
+    if not candidate or not zipfile.is_zipfile(candidate):
+        return None
+    return Path(os.path.realpath(candidate))
+
+
+def _manual_upgrade_command(destination: Path) -> str:
+    return (
+        f"download the newest release from https://github.com/balerdis/pegasus-harness/releases, "
+        f"verify it against its published pegasus.sha256, then place it over {destination} yourself "
+        f"(as whichever user can write there -- root or sudo, if that is what installed it)"
+    )
+
+
+def _fetch_latest_version(runtime: Runtime) -> str:
+    """The newest published release's version, fetched fresh -- never the
+    cache `check_for_update` reads and writes.
+
+    `check_for_update` exists to answer a question nobody asked yet, quietly,
+    for a background notice; every one of its failure modes collapses to
+    `None` on purpose (see its own docstring). `upgrade` is the opposite: a
+    person asked directly, so a network failure here has to say so plainly
+    rather than let a stale or absent cache read as "you are already
+    current" -- reporting that would be worse than reporting nothing.
+    """
+    try:
+        payload = runtime.downloader.fetch(UPDATE_CHECK_URL, timeout_seconds=UPDATE_CHECK_TIMEOUT_SECONDS)
+        document = json.loads(payload.decode("utf-8"))
+        tag = document["tag_name"]
+        if not isinstance(tag, str) or not tag:
+            raise ValueError("empty or non-string tag_name")
+    except Exception as error:  # noqa: BLE001 -- every shape of failure gets the same honest refusal.
+        raise CommandError(
+            "could not reach GitHub to check the newest published release -- upgrade refuses to guess, "
+            "so it will not report there is nothing new when it simply could not check; try again once "
+            "you have network access"
+        ) from error
+    return tag[1:] if tag[0] in "vV" else tag
+
+
+def _upgrade(arguments, runtime: Runtime) -> dict[str, Any]:
+    return upgrade(runtime, dry_run=arguments.dry_run)
+
+
+def upgrade(
+    runtime: Runtime,
+    *,
+    dry_run: bool = False,
+    on_progress: Callable[["Progress"], None] | None = None,
+) -> dict[str, Any]:
+    """Replace the running `pegasus` binary with the newest published one.
+
+    Refuses, in this order, before a single byte is ever fetched: not
+    running from an installed executable at all; the destination is not
+    writable; the destination is owned by someone else; the network cannot
+    be reached to learn the newest published version; already at that
+    version. Only past every one of those does this fetch anything -- the
+    checksum first, then the binary, verified against it
+    (`upgrade_module.fetch_and_verify`; "verified" there means
+    checksum-matched, not authenticated -- see that module's own docstring
+    for exactly what that does and does not protect against) -- and only a
+    verified binary ever reaches `upgrade_module.replace_binary`, which
+    itself never writes at the final path until one atomic rename, last (see
+    that module's own docstring). A mismatch or a failed write leaves the
+    binary this process started from untouched -- there is never a moment
+    with no working binary on disk.
+    """
+    destination = _running_binary_path(runtime)
+    if destination is None:
+        raise CommandError(
+            "pegasus is not running from an installed executable -- this looks like a source checkout, "
+            "not the zipapp the release ships, so there is no binary here for upgrade to replace"
+        )
+    if not runtime.filesystem.is_writable(destination):
+        raise CommandError(
+            f"{destination} is not writable by this process; upgrade refuses to download anything it "
+            f"could not then install. Instead, {_manual_upgrade_command(destination)}."
+        )
+    # `is_writable` only ever asks whether the containing directory would
+    # accept the rename (see its own docstring) -- it says nothing about who
+    # owns the file already there, so a separate, explicit check is what
+    # refuses to silently take over someone else's binary. `os.replace`
+    # would otherwise swap it in without a trace of whose file it used to
+    # be, handing its ownership to whoever happened to run this upgrade.
+    if not runtime.filesystem.owned_by_current_user(destination):
+        raise CommandError(
+            f"{destination} is not owned by the user running this upgrade; pegasus refuses to silently "
+            f"take over someone else's file. Instead, {_manual_upgrade_command(destination)}."
+        )
+    current_version = pegasus.__version__
+    latest_version = _fetch_latest_version(runtime)
+    if latest_version == current_version:
+        raise CommandError(f"pegasus is already at the newest published version ({current_version})")
+    if dry_run:
+        return {
+            "status": "planned",
+            "old_version": current_version,
+            "new_version": latest_version,
+            "destination": str(destination),
+            "restart_required": True,
+        }
+    if on_progress is not None:
+        on_progress(Progress(done=0, total=3, phase="checksum", unit=""))
+    try:
+        content = upgrade_module.fetch_and_verify(runtime.downloader, latest_version)
+    except upgrade_module.UpgradeError as error:
+        raise CommandError(str(error)) from error
+    if on_progress is not None:
+        on_progress(Progress(done=2, total=3, phase="binary", unit=latest_version))
+    try:
+        upgrade_module.replace_binary(runtime.filesystem, destination, content)
+    except upgrade_module.UpgradeError as error:
+        raise CommandError(str(error)) from error
+    if on_progress is not None:
+        on_progress(Progress(done=3, total=3, phase="replace", unit=str(destination)))
+    return {
+        "status": "upgraded",
+        "old_version": current_version,
+        "new_version": latest_version,
+        "destination": str(destination),
+        "restart_required": True,
+    }
+
+
 def _resolve_model_overrides(
     runtime: Runtime, adapter, environment: Environment, content: content_module.Content
 ) -> tuple[dict[str, str], tuple[str, ...]]:
@@ -630,7 +1087,7 @@ def _resolve_model_overrides(
     return model_assignments_module.resolve_for_render(assignments, adapter.id, configurable, catalog)
 
 
-def _merged(journal, adapter, environment, catalog, records, retired_ids, now: str) -> Install:
+def _merged(journal, adapter, environment, catalog, records, retired_ids, now: str, content) -> Install:
     """Add what this run placed to what earlier runs already owned.
 
     Replacing the record instead of extending it is how an install becomes
@@ -649,6 +1106,15 @@ def _merged(journal, adapter, environment, catalog, records, retired_ids, now: s
     it. Dropping the ids that *were* confirmed is what keeps a retired entry
     from being merged straight back in as if this run had never stopped
     asking for it.
+
+    ``mcp_bindings`` is not merged the way ``entries`` is: it is replaced
+    outright by what this run's own `--mcp` selection binds, from
+    ``content.mcp`` after `select_mcp` has already applied it. Unlike an
+    artifact, a binding has no persistent identity of its own to carry
+    forward when the run that follows falls silent about it -- silence about
+    `--mcp` already means "select nothing" (`_select_mcp`), and a binding this
+    run did not ask for must not linger just because an earlier run recorded
+    it.
     """
     previous = journal_module.install_for(journal, adapter.id)
     entries = records
@@ -663,6 +1129,7 @@ def _merged(journal, adapter, environment, catalog, records, retired_ids, now: s
         release={"version": pegasus.__version__, "catalog_digest": catalog.digest},
         entries=entries,
         links=previous.links if previous is not None else (),
+        mcp_bindings={server.name: server.bound_to for server in content.mcp if server.is_bound},
     )
 
 
@@ -1149,10 +1616,23 @@ def _health(
     # everybody types. Its own key, rather than joining `mcp_servers`: that one
     # is documented as the result of launching things, and would otherwise hold
     # entries nothing launched.
+    bound_checks = _bound_checks(install)
     health["mcp_bound"] = [
-        {"id": check.id, "status": check.status, "detail": check.detail}
-        for check in _bound_checks(install)
+        {"id": check.id, "status": check.status, "detail": check.detail, "key": install.mcp_bindings.get(check.id)}
+        for check in bound_checks
     ]
+
+    # Named rather than left for the prose alone to say: a machine-readable
+    # consumer needs the same fact -- which ids, and the exact command that
+    # would resolve them -- without parsing a sentence for it. Absent
+    # whenever every bound id's key is already known: there is nothing to
+    # fix, so there is nothing to say.
+    unknown_key_ids = sorted(check.id for check in bound_checks if install.mcp_bindings.get(check.id) is None)
+    if unknown_key_ids:
+        health["mcp_bound_unknown_keys"] = {
+            "ids": unknown_key_ids,
+            "command": install_command_for(adapter.id, unknown_key_ids),
+        }
 
     if start_mcp_servers:
         health["mcp_servers"] = [
@@ -1193,30 +1673,44 @@ def _bound_checks(install) -> list[mcp_handshake.ServerCheck]:
     beside it is exactly the shape a binding leaves behind, and it is enough
     to say the true thing instead.
 
-    What is said stops where the journal's knowledge stops, and it stops twice.
-    The key the server was bound to was never recorded, so it is not named: a
-    report that guessed it would be the same kind of falsehood this exists to
-    remove. And a binding is not the only cause of this shape -- `retire` walks
-    kinds in sorted order, `config-key` before `file`, so an uninstall that
-    removed the configuration key and then failed on the convention leaves the
-    journal holding exactly this. Nothing here separates the two, so neither is
-    asserted; both readings are named instead. Starting the server is out of
-    reach for the same reason as the key: there is nothing recorded to start.
+    The key the server was bound to now travels on `Install.mcp_bindings`
+    (`select_mcp` computes it; `_merged` records it), so what is said no
+    longer stops at "no configuration of its own" the way it used to. A
+    binding is still not the only cause of this shape -- `retire` walks kinds
+    in sorted order, `config-key` before `file`, so an uninstall that removed
+    the configuration key and then failed on the convention leaves the journal
+    holding exactly this too -- but that shape never populates
+    `mcp_bindings`, since nothing but `select_mcp`/`_merged` ever writes it.
+    So a present key is proof this really is a binding, and the detail says so
+    plainly; an absent key stays exactly as ambiguous as before, and names
+    both readings the same way it always has. Starting the server is out of
+    reach either way: bound or half-uninstalled, there is no configuration
+    here to start it from.
     """
     configured = {name for _, name in _mcp_entries(install)}
-    return [
-        mcp_handshake.ServerCheck(
-            entry.id[len(_MCP_CONVENTION_PREFIX):],
-            "bound",
-            "no configuration of its own in this install: either bound to a server you "
-            "administer, whose tools Pegasus grants and whose convention it ships without "
-            "installing or starting it, or a convention left behind by an uninstall that "
-            "did not finish",
-        )
-        for entry in install.entries
-        if entry.id.startswith(_MCP_CONVENTION_PREFIX)
-        and entry.id[len(_MCP_CONVENTION_PREFIX):] not in configured
-    ]
+    checks = []
+    for entry in install.entries:
+        if not entry.id.startswith(_MCP_CONVENTION_PREFIX):
+            continue
+        name = entry.id[len(_MCP_CONVENTION_PREFIX):]
+        if name in configured:
+            continue
+        key = install.mcp_bindings.get(name)
+        if key is not None:
+            detail = (
+                f"no configuration of its own in this install: bound to {key!r}, a server you "
+                f"administer, whose tools Pegasus grants and whose convention it ships without "
+                f"installing or starting it"
+            )
+        else:
+            detail = (
+                "no configuration of its own in this install: either bound to a server you "
+                "administer, whose tools Pegasus grants and whose convention it ships without "
+                "installing or starting it, or a convention left behind by an uninstall that "
+                "did not finish"
+            )
+        checks.append(mcp_handshake.ServerCheck(name, "bound", detail))
+    return checks
 
 
 def _mcp_entries(install) -> list[tuple[Record, str]]:
@@ -1357,6 +1851,8 @@ def _attached_to_a_terminal() -> bool:
 
 COMMANDS = {
     "install": _install,
+    "update": _update,
+    "upgrade": _upgrade,
     "uninstall": _uninstall,
     "doctor": _doctor,
     "restore": _restore,
@@ -1676,7 +2172,7 @@ def _prose(report: dict[str, Any]) -> str:
             f"removed {len(report['removed'])}."
         ]
         return "\n".join(_and_retention(lines, report))
-    if command == "install":
+    if command in ("install", "update"):
         planned = report["status"] == "planned"
         lines = [
             f"{report['cli']}: {'would create' if planned else 'created'} {len(report['created'])} artifacts, "
@@ -1705,6 +2201,17 @@ def _prose(report: dict[str, Any]) -> str:
             lines.append("Model assignments that could not be honoured:")
             lines.extend(f"  {warning}" for warning in report["model_warnings"])
         return "\n".join(_and_retention(_and_activation(lines, report), report))
+    if command == "upgrade":
+        if report["status"] == "planned":
+            return (
+                f"Would replace {report['destination']} ({report['old_version']}) with "
+                f"{report['new_version']}. Nothing was written -- this was a dry run."
+            )
+        return (
+            f"Replaced {report['destination']}: {report['old_version']} -> {report['new_version']}. "
+            f"Restart pegasus to run the new version -- this process is still running "
+            f"{report['old_version']}."
+        )
     if command == "models":
         return _models_prose(report)
 
@@ -1792,7 +2299,13 @@ def _cli_prose(entry: dict[str, Any]) -> str:
         line += "".join(f"\n    {step}" for step in steps)
     if entry.get("mcp_bound"):
         line += "\n  MCP servers you administer, granted but not installed by Pegasus:"
-        line += "".join(f"\n    {check['id']}" for check in entry["mcp_bound"])
+        line += "".join(
+            f"\n    {check['id']} (bound to {check['key']!r})" if check.get("key") else f"\n    {check['id']}"
+            for check in entry["mcp_bound"]
+        )
+    if entry.get("mcp_bound_unknown_keys"):
+        line += f"\n  To find out the key(s) above, run this once, {mcp_placeholder_instruction()}:"
+        line += f"\n    {entry['mcp_bound_unknown_keys']['command']}"
     if "mcp_servers" in entry:
         if entry["mcp_servers"]:
             line += "\n  MCP servers:"
