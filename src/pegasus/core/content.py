@@ -447,9 +447,12 @@ def parse_mcp_choice(spelling: str) -> tuple[str, str | None]:
     wildcard. So `=*` renders `**`, a rule matching every action name there is,
     written after the deny baseline and therefore beating it for everything the
     agent was never granted: not a weakened grant but the removal of the whole
-    per-agent restriction that baseline exists to impose. A rule cannot be told
-    apart from one somebody meant once it is in the map, so the refusal has to
-    happen here, where the value is still something a person typed.
+    per-agent restriction that baseline exists to impose. The same key is
+    spliced into the other side of the grant too -- a withheld tool is denied
+    as `f"{key}_{tool}"` -- where the failure is the mirror image: a deny that
+    matches nothing while looking exactly like protection. A rule cannot be
+    told apart from one somebody meant once it is in the map, so the refusal
+    has to happen here, where the value is still something a person typed.
     """
     if "=" not in spelling:
         return spelling.strip(), None
