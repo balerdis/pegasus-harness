@@ -105,6 +105,29 @@ class DoctorStartMcpServersTest(RealHomeTestCase):
         report = self.run_doctor()
         self.assertEqual(self.entry(report)["mcp_servers"], [])
 
+    def test_a_bound_server_is_named_rather_than_passed_over_in_silence(self):
+        """A bound server writes no `/mcp/<id>` key, only its convention.
+
+        `_mcp_entries` looks for the key, so a bound server is invisible to
+        this check — and an install whose only servers are bound reports "No
+        MCP servers configured", which is not a gap in the report but a false
+        statement about the machine. What can honestly be said is that the
+        server is the user's own: Pegasus grants its tools and ships its
+        convention, and neither installs nor starts it. Which key it was bound
+        to is deliberately not claimed here — the journal never recorded it,
+        and a report inventing the answer would be the same kind of falsehood
+        this test exists to remove.
+        """
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        servers = self.entry(self.run_doctor())["mcp_servers"]
+        self.assertEqual([check["id"] for check in servers], ["cbm"])
+        self.assertEqual(servers[0]["status"], "bound")
+        self.assertIn("administered by you", servers[0]["detail"])
+
     def test_a_remote_server_is_reported_but_never_launched(self):
         self.install()
         self.claim_mcp_entry("context7", {"type": "remote", "url": "https://example.invalid", "enabled": True})
