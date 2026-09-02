@@ -12,8 +12,8 @@ no, y qué hacer si falla.
 TUI) que espera teclas de una persona; un agente no tiene con qué manejarlo. Sin terminal (stdin y
 stdout no conectados a una), no hay menú: imprime la misma línea de uso que `--help` y termina con
 código de salida distinto de cero -- que tampoco es un resultado útil para vos. Usá siempre un
-subcomando explícito (`doctor`, `install`, `uninstall`, `restore`, `models`), y agregá `--json` cuando
-necesites un resultado que puedas parsear en vez de prosa.
+subcomando explícito (`doctor`, `install`, `update`, `upgrade`, `uninstall`, `restore`, `models`), y
+agregá `--json` cuando necesites un resultado que puedas parsear en vez de prosa.
 
 ## 1. Ubicar el checkout y confirmar la cuenta
 
@@ -179,6 +179,86 @@ materializado no dispara esto: no hay nada que buscar, así que no hace falta No
 
 Mostrale el plan a la persona antes de aplicar. Recién con su confirmación, repetí el mismo comando sin
 `--dry-run`.
+
+## Actualizar una instalación existente
+
+Hay dos comandos que actualizan cosas distintas. No los confundas ni los uses uno por el otro.
+
+### `pegasus update --cli <id>`: reaplica la selección ya instalada
+
+Usalo cuando la persona pide "actualizar" una instalación que ya existe (por ejemplo, después de que
+vos mismo la actualizaste con `pegasus upgrade`, o simplemente porque pasó tiempo). **No corras
+`pegasus install --cli <id>` a secas para esto:** un `install` sin `--mcp` no nombra ningún servidor, y
+un servidor no nombrado se retira -- eso te comería en silencio cualquier atadura de MCP que la
+instalación ya tuviera. `update` existe exactamente para evitar ese error: reaplica la selección
+propia registrada, MCPs atados incluidos, sin que vos tengas que reconstruirla.
+
+```sh
+pegasus update --cli opencode --dry-run --json
+```
+
+Mostrale el plan a la persona (o resumíselo) antes de aplicar. Con su confirmación, repetí sin
+`--dry-run`:
+
+```sh
+pegasus update --cli opencode --json
+```
+
+**Si el JSON trae `"status": "failed"`, no reintentes con otros flags -- `update` no tiene ninguno más
+que ayude.** Mirá `error` y actuá según cuál de estos dos mensajes es:
+
+- `"opencode has nothing installed to update; run install instead"` -- no hay nada instalado ahí
+  todavía. No es un fallo tuyo: contale a la persona que no hay instalación previa para esa CLI y, si
+  quiere una, seguí la sección "Instalar en OpenCode y elegir MCPs" de arriba (`install`, no `update`).
+
+- Un mensaje que empieza con `"... has bound mcp server(s) ... whose server key was never recorded"`
+  -- `update` se niega a adivinar la clave de un servidor atado que quedó registrado antes de que
+  Pegasus la guardara, porque adivinar retiraría justo esa atadura. El mensaje mismo trae, listo para
+  copiar, el comando `pegasus install --cli <id> --mcp <id>=<key>` que hace falta correr una vez por
+  cada id afectado -- con un `<key>` de relleno en cada uno. **Vos no sabés esa clave.** Conseguila de
+  la configuración propia de esa CLI (no es algo que Pegasus guarde) o preguntale a la persona; nunca
+  inventes un valor para `<key>`. Corré ese `install` una sola vez con la clave real, y a partir de ahí
+  `update` vuelve a funcionar sin flags. `pegasus doctor --json` también imprime este mismo comando,
+  bajo `mcp_bound_unknown_keys`, si preferís detectar el caso antes de intentar `update`.
+
+### `pegasus upgrade`: reemplaza el binario de `pegasus`
+
+Esto descarga un ejecutable nuevo y lo instala en lugar del actual. **Nunca lo corras por tu cuenta:**
+necesitás el visto bueno explícito de la persona antes de ejecutarlo sin `--dry-run`, igual que con
+cualquier escritura sobre su cuenta. Empezá siempre por el `--dry-run`:
+
+```sh
+pegasus upgrade --dry-run --json
+```
+
+Si el plan muestra una versión nueva y la persona confirma, corré el upgrade real y **reportá el
+resultado de la verificación, no solo "listo"**:
+
+```sh
+pegasus upgrade --json
+```
+
+Con éxito, el JSON trae `"status": "upgraded"`, `"old_version"`, `"new_version"` y
+`"restart_required": true`. Ese último campo no es adorno: **el proceso de `pegasus` que hizo el
+upgrade sigue siendo la versión vieja** -- conserva el inode del archivo con el que arrancó. No le
+digas a la persona que la versión nueva ya está activa, ni la asumas vos mismo en el siguiente comando
+que corras: decile explícitamente que tiene que reiniciar Pegasus (cerrar y volver a invocarlo) para
+que la versión nueva quede en efecto.
+
+Si el JSON trae `"status": "failed"`, mirá `error` -- no hay flag que arregle ninguno de estos:
+
+- `"pegasus is already at the newest published version (...)"` -- no hay nada que hacer, decíselo a la
+  persona tal cual.
+- `"could not reach GitHub to check the newest published release -- ..."` -- no hay red. No reintentes
+  en loop; avisá y esperá a que haya conexión.
+- `"... is not writable by this process; upgrade refuses to download anything it could not then
+  install. Instead, ..."` -- el mensaje mismo trae el comando manual (descargar, verificar contra
+  `pegasus.sha256`, y copiar el archivo a mano, con `root`/`sudo` si hace falta). No intentes escalar
+  privilegios vos mismo; pasale ese comando a la persona.
+- `"pegasus is not running from an installed executable -- ..."` -- estás corriendo desde un checkout
+  de código fuente, no desde el zipapp del release. No hay binario que reemplazar acá; si la persona
+  quiere el ejecutable, seguí la sección de instalación de este mismo instructivo en la cuenta
+  correspondiente.
 
 ## Respetar el estado existente
 
