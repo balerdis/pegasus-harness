@@ -106,6 +106,27 @@ class MovementTest(unittest.TestCase):
         self.assertIs(navigator.current, before)
 
 
+class ToggleIsInertElsewhereTest(unittest.TestCase):
+    """Space only means something on the mcp selection screen's server rows
+    -- every other screen must treat `Action.TOGGLE` as a no-op, the same
+    inert reading a stray key gets everywhere `handle` falls through to
+    `return self`."""
+
+    def test_toggle_does_nothing_on_the_main_menu(self):
+        navigator = Navigator.starting()
+        before = navigator
+        navigator = navigator.handle(Action.TOGGLE)
+        self.assertEqual(navigator, before)
+
+    def test_toggle_does_nothing_on_a_result_screen(self):
+        navigator = Navigator.starting(detections=(SAMPLE,)).handle(Action.CHOOSE).opened(
+            InstallResultScreen(cli=SAMPLE, report={"status": "installed"})
+        )
+        before = navigator
+        navigator = navigator.handle(Action.TOGGLE)
+        self.assertEqual(navigator, before)
+
+
 class EnteringAndLeavingAScreenTest(unittest.TestCase):
     def test_choosing_an_entry_enters_the_screen_it_names(self):
         expected = Navigator.starting().current.entries[0].target
@@ -283,6 +304,26 @@ class McpSelectionScreenTest(unittest.TestCase):
         navigator = navigator.opened(_mcp_screen())
         navigator = navigator.handle(Action.BACK)
         self.assertIsInstance(navigator.current, Menu)
+
+    def test_toggle_checks_an_unchecked_server_the_same_way_choose_does(self):
+        navigator = Navigator.starting().opened(_mcp_screen())
+        navigator = navigator.handle(Action.TOGGLE)
+        self.assertEqual(navigator.current.chosen, ("cbm",))
+        self.assertEqual(navigator.cursor, 0)
+
+    def test_toggle_unchecks_a_checked_server(self):
+        navigator = Navigator.starting().opened(_mcp_screen(chosen=("cbm",)))
+        navigator = navigator.handle(Action.TOGGLE)
+        self.assertEqual(navigator.current.chosen, ())
+
+    def test_toggle_on_continue_does_nothing_by_itself(self):
+        """Space means "toggle this", and Continue is not a togglable thing."""
+        navigator = Navigator.starting().opened(_mcp_screen())
+        for _ in range(len(MCP_OPTIONS)):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        before = navigator
+        navigator = navigator.handle(Action.TOGGLE)
+        self.assertEqual(navigator, before)
 
 
 class StatusEntryTest(unittest.TestCase):
@@ -551,6 +592,11 @@ class BusyMessageOnMcpSelectionTest(unittest.TestCase):
 
     def test_movement_says_nothing(self):
         self.assertIsNone(busy_message_for(self.screen, 0, Action.MOVE_DOWN))
+
+    def test_toggle_says_nothing(self):
+        self.assertIsNone(busy_message_for(self.screen, 0, Action.TOGGLE))
+        continue_row = len(self.screen.options)
+        self.assertIsNone(busy_message_for(self.screen, continue_row, Action.TOGGLE))
 
 
 class BusyMessageOnInstallPlanTest(unittest.TestCase):

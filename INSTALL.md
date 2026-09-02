@@ -4,6 +4,8 @@ Pegasus 5 es un solo archivo: `pegasus`. No hay wheel, no hay venv privado, no h
 descarga, se verifica su checksum, se lo deja ejecutable en el PATH, y listo. Este es el recorrido
 corto que probamos con una cuenta Linux limpia. No hace falta `sudo` en ningún paso.
 
+Hace falta Python 3.12 o más nuevo ya instalado en el sistema (`pegasus` no lo trae ni lo instala).
+
 ## 1. Elegir la cuenta
 
 Si querés practicar sin tocar tu usuario normal, creá una cuenta separada y entrá en ella:
@@ -17,10 +19,10 @@ Si lo vas a instalar en tu cuenta actual, omití esas dos líneas.
 
 ## 2. Descargar y verificar
 
-Usá el tag que quieras instalar. El ejemplo usa `v5.0.0`; sustituilo por el último publicado.
+Usá el tag que quieras instalar. El ejemplo usa `v5.9.0`; sustituilo por el último publicado.
 
 ```sh
-RELEASE_TAG="v5.0.0"
+RELEASE_TAG="v5.9.0"
 mkdir -p "$HOME/Downloads/pegasus-$RELEASE_TAG"
 cd "$HOME/Downloads/pegasus-$RELEASE_TAG"
 
@@ -105,7 +107,7 @@ $ BIN_DIR=/tmp/.../home/.local/bin; case ":$PATH:" in *":$BIN_DIR:"*) echo prese
 
 Pegasus 4.x dejaba un shim en `~/.local/bin/pegasus` que arrancaba un venv privado propio, en
 `~/.local/share/pegasus-harness/venv` (o `$XDG_DATA_HOME/pegasus-harness/venv` si esa variable
-estaba definida). El paso 3 de arriba pisa ese shim con el archivo único de 5.0.0 — eso ya está
+estaba definida). El paso 3 de arriba pisa ese shim con el archivo único de la serie 5.x — eso ya está
 comprobado y es lo esperado. Lo que el paso 3 no toca es ese venv viejo: queda en disco, sin nada
 que lo use.
 
@@ -127,8 +129,9 @@ vas a ver:
 ```
 
 con código de salida 127. No es que el archivo esté roto: `env` no encuentra un intérprete llamado
-exactamente `python3`. Si ese `python` es Python 3 (comprobalo con `python --version`), corré el
-archivo pasándoselo como argumento en vez de ejecutarlo directo — probado acá, funciona igual:
+exactamente `python3`. Comprobá con `python --version` que sea 3.12 o más nuevo — es lo que
+`pyproject.toml` exige — y si lo es, corré el archivo pasándoselo como argumento en vez de ejecutarlo
+directo — probado acá, funciona igual:
 
 ```sh
 python "$BIN_DIR/pegasus" doctor
@@ -150,15 +153,42 @@ $ pegasus doctor
 OpenCode: present at /home/.config/opencode, Pegasus not installed.
 ```
 
+## La interfaz interactiva
+
+Ejecutar `pegasus` sin ningún subcomando, en una terminal, abre un menú interactivo (una TUI) en vez
+de imprimir la ayuda: es lo que vas a ver la primera vez que lo tipeés sin pensarlo. Se maneja
+enteramente con el teclado: flechas o `j`/`k` para moverte, `enter` o `espacio` para elegir (en la
+pantalla de selección de MCPs, cualquiera de los dos tilda o destilda un servidor), `d` para borrar
+donde aplica, `esc` para volver a la pantalla anterior y `q` para salir. Si corrés `pegasus` sin una
+terminal atrás (por ejemplo, con la salida redirigida a un archivo o a una tubería), no hay menú que
+mostrar: imprime la misma línea de uso que `pegasus --help` y termina con código de salida distinto de
+cero.
+
+Durante una instalación, la TUI muestra una barra de progreso con la unidad que se está procesando en
+ese momento; al terminar con éxito, la pantalla de resultado remata con un banner de bloques
+"PEGASUS HARNESS". Es la misma instalación de siempre por debajo — la TUI llama al mismo motor que los
+comandos de esta guía — así que nada de lo que sigue deja de aplicar si preferís usarla.
+
 ## Lo que sigue bajo su control
 
 | Tema | Cómo trabaja Pegasus |
 | --- | --- |
 | OpenCode | Usted instala, actualiza y configura el cliente anfitrión. Pegasus no lo hace por usted. |
 | Archivos y claves de configuración existentes | Se detectan y se preservan. Una colisión se informa; no se sobreescribe. |
-| MCPs opcionales | `pegasus install --cli opencode --mcp <id>` decide qué servidores se instalan; uno no nombrado no se descarga, configura ni registra. |
+| MCPs opcionales | `pegasus install --cli opencode --mcp <id>` decide qué servidores se instalan; uno no nombrado no se descarga, configura ni registra. También acepta `--mcp <id>=<clave>`, para atar ese id a un servidor que ya administrás vos bajo esa clave: llegan la convención y los permisos, pero no se descarga ni escribe nada en la configuración de mcp para ese servidor. |
 | Credenciales, proveedores y modelos | Nunca se distribuyen ni se imponen acá. La persona configura las credenciales del proveedor con `/connect` y selecciona el modelo con `/models`, dentro de OpenCode. |
 | Rollback | `pegasus restore` devuelve el estado exacto anterior al último comando; `pegasus uninstall --cli opencode` retira sólo lo que el journal reclama como propio. |
+
+Si alguno de los servidores elegidos se distribuye por npm (hoy, sólo `playwright`) y no hay `node` en
+el PATH, `install` se niega antes de escribir nada — también en `--dry-run` — con:
+
+```
+playwright needs Node to install, and node is not on PATH; installing Node is the user's own
+responsibility, so change the selection or make node available before retrying
+```
+
+Esto no aplica a una reinstalación de un servidor que ya está materializado: como no hay nada que
+descargar, no hace falta Node para esa reinstalación.
 
 Para el uso diario, seguí [MANUAL.md](MANUAL.md). Para la política de ownership y rollback, consultá
 [docs/arquitectura/arquitectura.md](docs/arquitectura/arquitectura.md).

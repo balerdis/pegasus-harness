@@ -12,6 +12,7 @@ process boundary.
 """
 from __future__ import annotations
 
+import io
 import os
 import pty
 import select
@@ -23,6 +24,11 @@ import unittest
 from pathlib import Path
 
 import no_network  # noqa: F401  -- importing it is what installs the refusal
+from pegasus import cli
+from pegasus.adapters import available
+from pegasus.core.types import Environment
+from pegasus.infra.fs_posix import PosixFileSystem
+from pegasus.tui import wordmark
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "src"
@@ -154,6 +160,51 @@ class LiveFeedbackTest(unittest.TestCase):
         output = self.session.output_so_far(quiet_for=0.5)
         self.assertNotIn(STARTUP_NEEDLE, output)
         self.assertNotIn(STATUS_BUSY_NEEDLE, output)
+
+
+class WordmarkRenderingTest(unittest.TestCase):
+    """Proof that the real curses loop draws the wordmark itself, on a real
+    terminal, rather than only proving `view.render` would produce it in
+    isolation. An installed state is arranged here on purpose -- a throwaway
+    home with nothing installed would only exercise the plain-title fallback
+    `MenuWordmarkTest` in `test_tui_view` already covers, never the art this
+    change adds, which is the one thing this file exists to catch that a
+    pure-layer test cannot.
+    """
+
+    def setUp(self):
+        if os.geteuid() == 0:
+            self.skipTest("root is not refused by permission bits, and Pegasus refuses to install as root")
+        self.directory = tempfile.TemporaryDirectory(dir=_scratch_root())
+        self.addCleanup(self.directory.cleanup)
+        self.home = Path(self.directory.name)
+        cli_id = available().ids()[0]
+        layout = available().get(cli_id).layout(Environment(home=self.home))
+        layout.config_dir.mkdir(parents=True, exist_ok=True)
+        runtime = cli.Runtime(
+            filesystem=PosixFileSystem(),
+            home=self.home,
+            now="2026-08-14T00:00:00+00:00",
+            out=io.StringIO(),
+            variables={"PATH": ""},
+        )
+        cli.install(cli_id, runtime)
+        self.session = _RealTerminalSession(self.home)
+        self.addCleanup(self.session.close)
+
+    def test_the_main_menu_draws_the_wordmark_once_something_is_installed(self):
+        """The two halves of the mark are drawn as separate spans -- a dim
+        `PEGASUS` and a plain `HARNESS` -- so a real terminal writes an
+        attribute-reset escape between them, and the row no longer appears
+        as one contiguous string the way `wordmark.wordmark_rows` builds it.
+        Each half's own text, still contiguous within its own span, is what
+        proves the real loop drew the art rather than only the pure layer.
+        """
+        output = self.session.output_so_far()
+        pegasus_rows = wordmark.word_rows(wordmark.PEGASUS)
+        harness_rows = wordmark.word_rows(wordmark.HARNESS)
+        self.assertIn(pegasus_rows[0], output)
+        self.assertIn(harness_rows[0], output)
 
 
 if __name__ == "__main__":

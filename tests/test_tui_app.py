@@ -1,14 +1,25 @@
 """The one thing in the drawing layer worth testing on its own: turning a key
 code into an :class:`Action`. It is a lookup table, not a decision, and
 reading `curses`'s key constants needs no terminal — only starting one does,
-and nothing here does that."""
+and nothing here does that.
+
+`draw` and `accent_choice` are tested too, against a fake window and fake
+curses facts respectively -- neither needs a real terminal, only real curses
+constants, which are plain module attributes available without one.
+"""
 from __future__ import annotations
 
 import curses
+import threading
+import time
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
-from pegasus.tui.app import action_for
+from pegasus.tui import app as app_module
+from pegasus.tui.app import accent_choice, action_for, draw
 from pegasus.tui.navigator import Action
+from pegasus.tui.view import Line, Span, Style
 
 
 class KeyMappingTest(unittest.TestCase):
@@ -33,8 +44,271 @@ class KeyMappingTest(unittest.TestCase):
     def test_d_removes(self):
         self.assertEqual(action_for(ord("d")), Action.REMOVE)
 
+    def test_space_toggles(self):
+        self.assertEqual(action_for(ord(" ")), Action.TOGGLE)
+
     def test_an_unmapped_key_means_nothing(self):
         self.assertIsNone(action_for(ord("z")))
+
+
+class _FakeWindow:
+    """Just enough of a curses window for `draw` to write into and for a
+    test to inspect what it wrote: every `addstr` call recorded verbatim,
+    and the one call `curses` itself would refuse -- the bottom-right cell.
+    """
+
+    def __init__(self, height: int, width: int) -> None:
+        self.height = height
+        self.width = width
+        self.calls: list[tuple[int, int, str, int]] = []
+
+    def erase(self) -> None:
+        self.calls.clear()
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return self.height, self.width
+
+    def addstr(self, row: int, column: int, text: str, attribute: int) -> None:
+        if row == self.height - 1 and column + len(text) >= self.width:
+            raise curses.error("cannot write to the bottom-right cell")
+        self.calls.append((row, column, text, attribute))
+
+    def refresh(self) -> None:
+        pass
+
+
+class DrawSpanTest(unittest.TestCase):
+    def test_each_span_becomes_its_own_addstr_call_advancing_the_column(self):
+        window = _FakeWindow(height=5, width=80)
+        line = Line((Span("PEGASUS  ", Style.DIM), Span("HARNESS", Style.NORMAL)))
+        draw(window, (line,))
+        texts = [(column, text) for _, column, text, _ in window.calls]
+        self.assertEqual(texts, [(0, "PEGASUS  "), (9, "HARNESS")])
+
+    def test_dim_style_carries_the_dim_attribute(self):
+        window = _FakeWindow(height=5, width=80)
+        draw(window, (Line((Span("x", Style.DIM),)),))
+        _, _, _, attribute = window.calls[0]
+        self.assertTrue(attribute & curses.A_DIM)
+
+    def test_accent_style_carries_the_given_accent_attribute(self):
+        window = _FakeWindow(height=5, width=80)
+        marker = curses.A_UNDERLINE
+        draw(window, (Line((Span("x", Style.ACCENT),)),), accent_attr=marker)
+        _, _, _, attribute = window.calls[0]
+        self.assertTrue(attribute & marker)
+
+    def test_highlighted_reverses_every_span_on_the_line(self):
+        window = _FakeWindow(height=5, width=80)
+        draw(window, (Line((Span("a"), Span("b")), highlighted=True),))
+        for _, _, _, attribute in window.calls:
+            self.assertTrue(attribute & curses.A_REVERSE)
+
+    def test_a_line_longer_than_the_width_is_clipped_not_raised(self):
+        window = _FakeWindow(height=5, width=10)
+        draw(window, (Line("x" * 50),))  # would raise if handed to addstr whole
+        _, _, text, _ = window.calls[0]
+        self.assertEqual(len(text), 10)
+
+    def test_the_bottom_right_cell_is_never_written_to(self):
+        """Writing to it raises in real curses; `draw` must leave one column
+        of room on the last row instead of ever attempting it."""
+        window = _FakeWindow(height=3, width=10)
+        lines = tuple(Line("x" * 10) for _ in range(3))
+        draw(window, lines)  # would raise via _FakeWindow.addstr if this room were not left
+        last_row_text = next(text for row, _, text, _ in window.calls if row == 2)
+        self.assertEqual(len(last_row_text), 9)
+
+    def test_rows_past_the_window_height_are_simply_not_drawn(self):
+        window = _FakeWindow(height=2, width=80)
+        lines = tuple(Line(f"row {i}") for i in range(5))
+        draw(window, lines)
+        drawn_rows = {row for row, _, _, _ in window.calls}
+        self.assertEqual(drawn_rows, {0, 1})
+
+
+class AccentChoiceTest(unittest.TestCase):
+    """What `draw`'s accent attribute should be, decided from plain facts a
+    real terminal may or may not offer -- no terminal needed to test it."""
+
+    def test_full_256_colour_support_picks_the_installers_own_colour(self):
+        kind, value = accent_choice(has_colors=True, colors=256)
+        self.assertEqual(kind, "color")
+        self.assertEqual(value, 214)
+
+    def test_more_than_256_colours_still_picks_the_installers_own_colour(self):
+        kind, value = accent_choice(has_colors=True, colors=16777216)
+        self.assertEqual(kind, "color")
+        self.assertEqual(value, 214)
+
+    def test_only_eight_or_sixteen_colours_falls_back_to_a_named_colour(self):
+        kind, value = accent_choice(has_colors=True, colors=8)
+        self.assertEqual(kind, "color")
+        self.assertEqual(value, curses.COLOR_YELLOW)
+
+    def test_no_colour_support_falls_back_to_a_plain_attribute(self):
+        kind, value = accent_choice(has_colors=False, colors=0)
+        self.assertEqual(kind, "attr")
+        self.assertEqual(value, curses.A_BOLD)
+
+
+class InitColorsTest(unittest.TestCase):
+    """`_init_colors` is the one place `accent_choice`'s decision actually
+    touches curses state -- these calls can fail even when `accent_choice`
+    thought colour was safe, and that must not take the whole TUI down."""
+
+    def test_a_terminal_that_lies_about_colour_support_falls_back_to_plain(self):
+        with (
+            mock.patch.object(app_module.curses, "has_colors", return_value=True),
+            mock.patch.object(app_module.curses, "COLORS", 256, create=True),
+            mock.patch.object(app_module.curses, "start_color"),
+            mock.patch.object(
+                app_module.curses, "use_default_colors", side_effect=curses.error("no such capability")
+            ),
+            mock.patch.object(app_module.curses, "init_pair"),
+        ):
+            attribute = app_module._init_colors()
+        self.assertEqual(attribute, curses.A_BOLD)
+
+
+class _FakeInstallWindow:
+    """Just enough of a curses window for `_run_install`'s animation loop:
+    `getch` can be scripted to return plain tick values or to raise, the way
+    a real blocked `getch` raises `KeyboardInterrupt` when `SIGINT` arrives
+    during it.
+    """
+
+    def __init__(self, height: int = 10, width: int = 40, getch_script=None) -> None:
+        self.height = height
+        self.width = width
+        self.calls: list[tuple[int, int, str, int]] = []
+        self.timeouts: list[int] = []
+        self._getch_script = list(getch_script or [])
+
+    def erase(self) -> None:
+        self.calls.clear()
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return self.height, self.width
+
+    def addstr(self, row: int, column: int, text: str, attribute: int) -> None:
+        self.calls.append((row, column, text, attribute))
+
+    def refresh(self) -> None:
+        pass
+
+    def timeout(self, milliseconds: int) -> None:
+        self.timeouts.append(milliseconds)
+
+    def getch(self) -> int:
+        if self._getch_script:
+            item = self._getch_script.pop(0)
+            if isinstance(item, type) and issubclass(item, BaseException):
+                raise item
+            return item
+        return -1
+
+    def drawn_text(self) -> str:
+        return " ".join(text for _, _, text, _ in self.calls)
+
+
+class RunInstallTest(unittest.TestCase):
+    """`_run_install` has never had a test of its own -- precisely why a
+    worker exception collapsing into a meaningless `IndexError`, and a
+    `Ctrl+C` abandoning an in-flight install on a daemon thread, both shipped
+    unnoticed. These pin the two fixes down."""
+
+    def _navigator(self) -> SimpleNamespace:
+        # `busy_message_for` falls through to `None` for a screen it does
+        # not recognise, so a bare stand-in is enough -- `_run_install` never
+        # inspects the screen itself beyond handing it to `session`, which
+        # every test here replaces.
+        return SimpleNamespace(current=None, cursor=0)
+
+    def test_a_non_command_error_from_the_worker_surfaces_unchanged(self):
+        window = _FakeInstallWindow()
+
+        def task(_sink):
+            raise TypeError("sink chain exploded")
+
+        with (
+            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.curses, "flushinp"),
+        ):
+            with self.assertRaises(TypeError) as caught:
+                app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+        self.assertEqual(str(caught.exception), "sink chain exploded")
+
+    def test_a_bare_os_error_from_the_worker_also_surfaces_unchanged(self):
+        # `cli.safe_report` only catches `COMMAND_ERRORS`; a disk-full or
+        # permission failure is a bare `OSError` that escapes it entirely.
+        window = _FakeInstallWindow()
+
+        def task(_sink):
+            raise OSError("No space left on device")
+
+        with (
+            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.curses, "flushinp"),
+        ):
+            with self.assertRaises(OSError) as caught:
+                app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+        self.assertEqual(str(caught.exception), "No space left on device")
+
+    def test_keyboard_interrupt_still_joins_the_worker_and_restores_blocking_input(self):
+        finished = threading.Event()
+
+        def task(_sink):
+            time.sleep(0.05)
+            finished.set()
+            return "install-result"
+
+        window = _FakeInstallWindow(getch_script=[KeyboardInterrupt])
+
+        with (
+            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.curses, "flushinp") as flushinp,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+
+        # The join in `finally` must have actually waited -- if it merely
+        # detached, the worker's `Event` would still be unset here.
+        self.assertTrue(finished.is_set())
+        self.assertIn(-1, window.timeouts)
+        flushinp.assert_called_once()
+
+    def test_keyboard_interrupt_draws_a_waiting_message_before_blocking_on_join(self):
+        def task(_sink):
+            time.sleep(0.02)
+            return "install-result"
+
+        window = _FakeInstallWindow(width=120, getch_script=[KeyboardInterrupt])
+
+        with (
+            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.curses, "flushinp"),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+
+        self.assertIn("cannot be safely interrupted", window.drawn_text())
+
+    def test_the_happy_path_still_returns_the_worker_outcome(self):
+        window = _FakeInstallWindow(getch_script=[-1, -1, -1])
+
+        def task(_sink):
+            return "install-result"
+
+        with (
+            mock.patch.object(app_module.session, "install_task", return_value=task),
+            mock.patch.object(app_module.curses, "flushinp") as flushinp,
+        ):
+            result = app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+
+        self.assertEqual(result, "install-result")
+        self.assertIn(-1, window.timeouts)
+        flushinp.assert_called_once()
 
 
 if __name__ == "__main__":

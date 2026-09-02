@@ -347,7 +347,9 @@ def _occupied(artifact: ConfigKeyArtifact, document: Any, digest: str) -> bool:
 # --- Applying --------------------------------------------------------------
 
 
-def apply(filesystem: FileSystem, plan: Plan, *, at: str) -> Applied:
+def apply(
+    filesystem: FileSystem, plan: Plan, *, at: str, on_step: Callable[[str], None] | None = None
+) -> Applied:
     """Write everything the plan creates, or leave the home as it was found.
 
     Files go first and configuration documents second, so a failure has one
@@ -358,10 +360,32 @@ def apply(filesystem: FileSystem, plan: Plan, *, at: str) -> Applied:
     record is not only a fingerprint: it also carries what the user had before
     Pegasus took the address over, and that debt outlives every version written
     since.
+
+    ``on_step``, when given, is told once per `Step` in ``plan.placements`` --
+    never a document, even though several keys can share one write -- as soon
+    as that step's own work is durable, naming it by the artifact's own `id`.
+    This module reports the fact that a unit finished; it never counts a total
+    or a fraction, because it does not know the plan's siblings -- dependencies
+    fetched outside it, or retirements from a separate call -- that a caller
+    composing a whole install's progress needs to add in.
+
+    A caller's callback raising is that caller's bug, not this function's, but
+    it must not be allowed to leave the home half-installed: the same rollback
+    that answers a filesystem failure answers a broken callback too, and the
+    original exception is what surfaces, so the bug is never swallowed.
     """
     created: list[Path] = []
     restorable: dict[Path, tuple[bytes | None, int | None]] = {}
     records: list[Record] = []
+
+    def _notify(unit: str) -> None:
+        if on_step is None:
+            return
+        try:
+            on_step(unit)
+        except Exception as error:
+            raise PlannerError(_undone(filesystem, created, restorable, error)) from error
+
     try:
         for step in plan.placements:
             if isinstance(step.artifact, FileArtifact):
@@ -380,6 +404,7 @@ def apply(filesystem: FileSystem, plan: Plan, *, at: str) -> Applied:
                 if step.action == CREATE:
                     created.append(step.artifact.path)
                 records.append(_file_record(filesystem, step, at))
+                _notify(step.artifact.id)
         for path, steps in _by_file(plan.placements).items():
             codec = _codec(steps)
             document = _read_document(filesystem, path, codec)
@@ -398,6 +423,8 @@ def apply(filesystem: FileSystem, plan: Plan, *, at: str) -> Applied:
                 )
             _write_document(filesystem, path, document, codec, restorable[path][1])
             records.extend(_key_record(step, at) for step in steps)
+            for step in steps:
+                _notify(step.artifact.id)
     except (FileSystemError, codecs.CodecError, pointer.PointerError) as error:
         raise PlannerError(_undone(filesystem, created, restorable, error)) from error
     return Applied(
@@ -575,14 +602,26 @@ def _key_record(step: Step, at: str) -> Record:
 # --- Retiring --------------------------------------------------------------
 
 
-def _retire_files(filesystem: FileSystem, entries: list[Record], outcomes: dict[str, list[str]]) -> None:
+def _retire_files(
+    filesystem: FileSystem,
+    entries: list[Record],
+    outcomes: dict[str, list[str]],
+    on_step: Callable[[str], None] | None,
+) -> None:
     for entry in entries:
         if filesystem.exists(entry.target):
             filesystem.remove(entry.target)
         outcomes["removed"].append(entry.id)
+        if on_step is not None:
+            on_step(entry.id)
 
 
-def _retire_config_keys(filesystem: FileSystem, entries: list[Record], outcomes: dict[str, list[str]]) -> None:
+def _retire_config_keys(
+    filesystem: FileSystem,
+    entries: list[Record],
+    outcomes: dict[str, list[str]],
+    on_step: Callable[[str], None] | None,
+) -> None:
     for path, group in _group(entries, lambda entry: entry.target).items():
         codec = Codec(group[0].codec or Codec.JSON.value)
         document = _read_document(filesystem, path, codec)
@@ -591,19 +630,29 @@ def _retire_config_keys(filesystem: FileSystem, entries: list[Record], outcomes:
             # items included: nothing survives that could be a changed version
             # of ours, so there is nothing ambiguous to report.
             outcomes["removed"].extend(entry.id for entry in group)
+            if on_step is not None:
+                for entry in group:
+                    on_step(entry.id)
             continue
         mode = filesystem.mode_of(path)
         original = document
         for entry in group:
             document, outcome = _retire_key(document, entry)
             outcomes[outcome].append(entry.id)
+            if on_step is not None:
+                on_step(entry.id)
         if document != original:
             # Rewriting an unchanged file would reformat it for nothing. The
             # user's spacing is theirs, and we only spend it when we must.
             _write_document(filesystem, path, document, codec, mode)
 
 
-def _retire_dependency_trees(filesystem: FileSystem, entries: list[Record], outcomes: dict[str, list[str]]) -> None:
+def _retire_dependency_trees(
+    filesystem: FileSystem,
+    entries: list[Record],
+    outcomes: dict[str, list[str]],
+    on_step: Callable[[str], None] | None,
+) -> None:
     """A dependency tree is a directory Pegasus materialized, not a file it
     wrote — taking it back means removing the whole tree, unconditionally,
     with the same "already gone counts as done" posture `remove` gives a
@@ -612,9 +661,13 @@ def _retire_dependency_trees(filesystem: FileSystem, entries: list[Record], outc
     for entry in entries:
         filesystem.remove_dir(entry.target)
         outcomes["removed"].append(entry.id)
+        if on_step is not None:
+            on_step(entry.id)
 
 
-RETIRE_HANDLERS: dict[str, Callable[[FileSystem, list[Record], dict[str, list[str]]], None]] = {
+RETIRE_HANDLERS: dict[
+    str, Callable[[FileSystem, list[Record], dict[str, list[str]], Callable[[str], None] | None], None]
+] = {
     "file": _retire_files,
     "config-key": _retire_config_keys,
     "dependency-tree": _retire_dependency_trees,
@@ -635,7 +688,9 @@ if _UNHANDLED_KINDS:
     raise PlannerError("no retirement handler for kind(s): " + ", ".join(_UNHANDLED_KINDS))
 
 
-def retire(filesystem: FileSystem, install: Install) -> Retired:
+def retire(
+    filesystem: FileSystem, install: Install, *, on_step: Callable[[str], None] | None = None
+) -> Retired:
     """Take back what the journal records, and only that.
 
     An address the journal records is removed unconditionally, whether or not
@@ -645,6 +700,12 @@ def retire(filesystem: FileSystem, install: Install) -> Retired:
     There is no rollback here, and none is needed: every operation is a no-op
     the second time, so an interrupted uninstall is finished by running it
     again.
+
+    ``on_step``, when given, is told once per retired record, named by its own
+    `id` -- the same identifier `apply` reported when it placed that record in
+    the first place. There is no total here either, for the same reason
+    ``apply`` has none: a caller composing one install's or uninstall's whole
+    progress knows the record count from elsewhere already.
     """
     outcomes: dict[str, list[str]] = {"removed": [], "unaccounted": []}
 
@@ -653,7 +714,7 @@ def retire(filesystem: FileSystem, install: Install) -> Retired:
         by_kind[entry.kind].append(entry)
 
     for kind in sorted(KINDS):
-        RETIRE_HANDLERS[kind](filesystem, by_kind[kind], outcomes)
+        RETIRE_HANDLERS[kind](filesystem, by_kind[kind], outcomes, on_step)
 
     return Retired(
         removed=tuple(outcomes["removed"]),

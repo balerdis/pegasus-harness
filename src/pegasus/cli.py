@@ -273,7 +273,49 @@ def _install(arguments, runtime: Runtime) -> dict[str, Any]:
     return install(arguments.cli, runtime, dry_run=arguments.dry_run, mcp=arguments.mcp)
 
 
-def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[str] | None = None) -> dict[str, Any]:
+@dataclass(frozen=True)
+class Progress:
+    """One tick of an installation in progress, for a caller that wants to
+    render it -- the TUI's install screen, though nothing here names it.
+
+    The total spans every phase an install can touch, not only the artifacts
+    the engine places, and that is deliberate: a `download` or `npm` fetch is
+    network-bound and can dominate wall-clock time while being one or two
+    units of work, so a total counting artifacts alone would sit at 0% through
+    the slowest part of the run. Only `install` sees the plan, the dependency
+    set and the retirement set together, which is why the total is computed
+    here in the application layer and not in `core.planner`, which reports a
+    finished unit but never knows how many siblings it has.
+
+    `unit` is the human-recognizable name of whatever just finished -- an
+    artifact's id, a dependency's name, or one of the two fixed phases
+    (`"snapshot"`, `"journal"`) -- and `phase` is one of `"snapshot"`,
+    `"dependencies"`, `"artifacts"`, `"retire"`, `"journal"`. Wording and
+    layout are for whoever renders this, so nothing here formats any text.
+    """
+
+    done: int
+    total: int
+    phase: str
+    unit: str
+
+    @property
+    def fraction(self) -> float:
+        return self.done / self.total
+
+    @property
+    def percent(self) -> float:
+        return 100 * self.fraction
+
+
+def install(
+    cli_id: str,
+    runtime: Runtime,
+    *,
+    dry_run: bool = False,
+    mcp: list[str] | None = None,
+    on_progress: Callable[["Progress"], None] | None = None,
+) -> dict[str, Any]:
     """Place Pegasus into one CLI's configuration, and report what happened.
 
     This is the engine path itself, parsed flags peeled away: `_install`
@@ -297,24 +339,39 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
     # cannot be extended, and finding that out after placing the artifacts would
     # leave them on disk with nothing recording them — and `doctor` failing
     # against the same unreadable journal, so no way left to find out they exist.
+    # None of this has to be the very first thing, only ahead of the snapshot
+    # and the first artifact -- a promise every step below still keeps.
+    #
+    # `content` is resolved here, ahead of `build`/`render` below, because the
+    # Node guard further down needs the chosen servers' distributions -- and
+    # reading the content tree is a read, not a write, so doing it this early
+    # costs the preflight nothing. `build` and `render` still get exactly one
+    # read of it: the object resolved here is the same one passed to them,
+    # never reloaded. Resolved before `store.ensure_writable()` on purpose: a
+    # typo in `--mcp` is a mistake the user just made and can fix on the spot,
+    # which is more actionable than a filesystem permission fact, so it is the
+    # one they see when both are true at once.
+    content = _select_mcp(mcp)
     store = journal_store(runtime)
     store.ensure_writable()
     snapshot = snapshot_store(runtime)
     snapshot.ensure_writable()
     journal = store.load()
+    # `installed` has to exist before the Node guard can ask it anything: the
+    # guard needs to tell "this run would fetch it" apart from "this run would
+    # just keep what is already there", and that distinction lives in the
+    # journal. Reading it here, ahead of `build`/`render`, costs the preflight
+    # nothing new -- `plan` below already needed this same lookup, so this
+    # only moves an existing read earlier rather than adding one.
+    installed = journal_module.install_for(journal, adapter.id)
+    _require_node_if_needed(content, runtime, installed)
     # Asked before anything is written, so an adapter that cannot answer costs a
     # message instead of a traceback over a finished installation.
     activation = list(adapter.activation_steps())
 
-    # One read of the content tree, one application of the user's choice — not
-    # two of each. `build` and `render` walk the same content, and reloading
-    # for the second would risk handing them two objects that could in
-    # principle differ, for no reason beyond having asked disk twice.
-    content = _select_mcp(mcp)
     catalog = catalog_module.build(content, adapter)
     model_overrides, model_warnings = _resolve_model_overrides(runtime, adapter, environment, content)
     artifacts = catalog_module.render(content, adapter, environment, model_overrides=model_overrides)
-    installed = journal_module.install_for(journal, adapter.id)
     plan = planner.plan(
         runtime.filesystem,
         cli=adapter.id,
@@ -383,6 +440,24 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
         | dependency_targets,
         key=str,
     )
+
+    # Every phase this run can touch, added up before the first one starts, so
+    # the caller can render a real denominator from the very first tick. Only
+    # the application layer can know this: it is the one place holding the
+    # plan, the dependency set and the retirement set all at once. The `+ 2`
+    # is the pre-write snapshot and the journal write below, each a single
+    # unit regardless of how many bytes it happens to move.
+    total_units = len(plan.placements) + len(dependency_targets) + len(retirements) + 2
+    progress_done = 0
+
+    def _tick(phase: str, unit: str) -> None:
+        nonlocal progress_done
+        progress_done += 1
+        on_progress(Progress(done=progress_done, total=total_units, phase=phase, unit=unit))
+
+    if on_progress is not None:
+        on_progress(Progress(done=0, total=total_units, phase="snapshot", unit=""))
+
     try:
         snapshot.save(
             capture_paths(runtime.filesystem, touched, directories=frozenset(dependency_targets)),
@@ -393,6 +468,8 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
             f"a snapshot of what this install is about to overwrite could not be taken, "
             f"so nothing was written: {error}"
         ) from error
+    if on_progress is not None:
+        _tick("snapshot", "snapshot")
 
     # Which configuration files were already there. Retiring gives back the keys
     # Pegasus owns, never the file itself, so this is how a rollback can tell the
@@ -406,11 +483,22 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
     # never sees. A mismatch here raises before a single byte reaches disk,
     # so the whole install fails exactly as cleanly as a collision would.
     try:
-        kept_dependencies, new_dependencies = _materialize_dependencies(runtime, layout, content, installed)
+        kept_dependencies, new_dependencies = _materialize_dependencies(
+            runtime,
+            layout,
+            content,
+            installed,
+            on_step=(lambda name: _tick("dependencies", name)) if on_progress is not None else None,
+        )
     except dependencies_module.MaterializeError as error:
         raise CommandError(str(error)) from error
 
-    applied = planner.apply(runtime.filesystem, plan, at=runtime.now)
+    applied = planner.apply(
+        runtime.filesystem,
+        plan,
+        at=runtime.now,
+        on_step=(lambda name: _tick("artifacts", name)) if on_progress is not None else None,
+    )
     config_dir = layout.config_dir
     dependency_records = kept_dependencies + new_dependencies
     all_records = applied.records + dependency_records
@@ -442,7 +530,11 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
     # retiring the rest — there is nothing here for `unplace` to undo except
     # this run's own placements.
     try:
-        stale = planner.retire(runtime.filesystem, replace(placed, entries=retirements))
+        stale = planner.retire(
+            runtime.filesystem,
+            replace(placed, entries=retirements),
+            on_step=(lambda name: _tick("retire", name)) if on_progress is not None else None,
+        )
     except (FileSystemError, planner.PlannerError) as error:
         removed, failures = _undo_placements(runtime.filesystem, applied, placed)
         _undo_dependencies(runtime.filesystem, new_dependencies)
@@ -470,6 +562,8 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
     )
     try:
         store.save(journal_module.with_install(journal, merged))
+        if on_progress is not None:
+            _tick("journal", "journal")
     except JournalStoreError as error:
         removed, failures = _undo_placements(runtime.filesystem, applied, placed)
         _undo_dependencies(runtime.filesystem, new_dependencies)
@@ -594,6 +688,43 @@ def _materializes(item) -> bool:
     return not item.is_bound and item.distribution in _MATERIALIZED_DISTRIBUTIONS
 
 
+def _dependency_digest(item) -> str:
+    """The fingerprint that identifies *which* release of a materialized
+    server this is -- a checksum for `download`, a lockfile integrity hash
+    for `npm`. Shared by every place that has to ask "is what is already on
+    disk still what this render wants", so the two distributions' different
+    notion of "version" never has to be reconciled twice.
+    """
+    return item.checksum if item.distribution is content_module.Distribution.DOWNLOAD else item.integrity
+
+
+def _kept_dependency(runtime: Runtime, owned: dict[str, Record], item) -> Record | None:
+    """The journal entry for `item` that this run would keep untouched, or
+    `None` if this run would have to materialize it.
+
+    "Keep" means exactly: a journal entry exists for this server, its digest
+    matches what this render still asks for, and the tree it points at is
+    still really there. All three have to hold, or the server gets fetched
+    fresh. This is the one place that test is written -- `_materialize_dependencies`,
+    `_prospective_dependency_targets` and the Node preflight guard all ask it
+    through here rather than each carrying their own copy, so the three can
+    never quietly drift apart on what "already there" means.
+
+    Callers still have to check `_materializes(item)` first: a `remote` or
+    bound server is never in `owned` under this id, but a caller that skipped
+    that check would silently read that as "would fetch it" rather than "the
+    question does not apply".
+    """
+    existing = owned.get(f"dependency:{item.name}")
+    if existing is None:
+        return None
+    if existing.after_digest != _dependency_digest(item):
+        return None
+    if not runtime.filesystem.exists(existing.target):
+        return None
+    return existing
+
+
 def _stale_dependencies(installed: Install | None, content: content_module.Content) -> tuple[Record, ...]:
     """`download` and `npm` servers this render no longer names.
 
@@ -620,26 +751,28 @@ def _prospective_dependency_targets(
     Asked before `_materialize_dependencies` runs, so the pre-write snapshot
     can name a tree's address while it still has nothing there to read — the
     one moment `capture_paths` can honestly say something about a directory.
-    The "already kept, nothing to materialize" half of that function's own
-    decision is repeated here rather than shared with it, because sharing
-    would mean returning `kept` and `created` from a function that has not
-    fetched anything yet to decide between them.
+    The "already kept, nothing to materialize" test itself comes from
+    `_kept_dependency`, shared with that function and with the Node preflight
+    guard; only what to do with the answer differs here — name the address
+    instead of returning the record.
     """
     owned = {entry.id: entry for entry in (installed.entries if installed else ())}
     targets: set[Path] = set()
     for item in content.mcp:
         if not _materializes(item):
             continue
-        digest = item.checksum if item.distribution is content_module.Distribution.DOWNLOAD else item.integrity
-        existing = owned.get(f"dependency:{item.name}")
-        if existing is not None and existing.after_digest == digest and runtime.filesystem.exists(existing.target):
+        if _kept_dependency(runtime, owned, item) is not None:
             continue
         targets.add(dependencies_module.target_dir(layout.dependencies_dir, item))
     return targets
 
 
 def _materialize_dependencies(
-    runtime: Runtime, layout, content: content_module.Content, installed: Install | None
+    runtime: Runtime,
+    layout,
+    content: content_module.Content,
+    installed: Install | None,
+    on_step: Callable[[str], None] | None = None,
 ) -> tuple[tuple[Record, ...], tuple[Record, ...]]:
     """Fetch and place every `download` or `npm` server this run still names.
 
@@ -650,6 +783,10 @@ def _materialize_dependencies(
     call already placed for a *previous* server on disk, which the caller
     cleans up alongside everything else once it knows the whole install is
     being undone.
+
+    ``on_step``, when given, is told once per server this call actually
+    fetches -- never for one already `kept`, since that one cost no work --
+    named by the server's own name, the same one `--mcp` takes.
     """
     owned = {entry.id: entry for entry in (installed.entries if installed else ())}
     node_present = shutil.which(NODE_BINARY, path=runtime.variables.get("PATH")) is not None
@@ -658,13 +795,8 @@ def _materialize_dependencies(
     for item in content.mcp:
         if not _materializes(item):
             continue
-        digest = item.checksum if item.distribution is content_module.Distribution.DOWNLOAD else item.integrity
-        existing = owned.get(f"dependency:{item.name}")
-        if (
-            existing is not None
-            and existing.after_digest == digest
-            and runtime.filesystem.exists(existing.target)
-        ):
+        existing = _kept_dependency(runtime, owned, item)
+        if existing is not None:
             kept.append(existing)
             continue
         try:
@@ -675,6 +807,8 @@ def _materialize_dependencies(
             # journal yet, so this is the only chance to take it back out.
             _undo_dependencies(runtime.filesystem, tuple(created))
             raise
+        if on_step is not None:
+            on_step(item.name)
     return tuple(kept), tuple(created)
 
 
@@ -1261,6 +1395,65 @@ def _require_present(adapter, environment: Environment) -> None:
     raise CommandError(
         f"{adapter.display_name} was not found on this machine, and installing into a CLI that is not "
         f"here would only leave files nothing reads"
+    )
+
+
+def _node_present(runtime: Runtime) -> bool:
+    """Whether `node` resolves on the `PATH` this run's environment carries.
+
+    The same lookup `_materialize_dependencies` performs, factored out so the
+    preflight guard below and the port contract inside `materialize_npm` never
+    drift apart on how "present" is decided. It stays here, at the
+    application layer, rather than in `core`: an external binary's presence
+    on `PATH` is an infrastructure fact, and `shutil` has no business being
+    imported by domain code.
+    """
+    return shutil.which(NODE_BINARY, path=runtime.variables.get("PATH")) is not None
+
+
+def _require_node_if_needed(
+    content: content_module.Content, runtime: Runtime, installed: Install | None
+) -> None:
+    """Refuse an `npm` selection with no Node on `PATH`, before anything else
+    this install would do -- but only for a server this run would actually
+    have to fetch.
+
+    `materialize_npm` already refuses this on its own, deep inside
+    `_materialize_dependencies` -- that guard stays exactly as it is, as the
+    port's own contract and this preflight's defence in depth. What changes
+    is when the user finds out: without this, they wait through the whole
+    plan, the pre-write snapshot, and every artifact this run places, only to
+    have the very last step undo it all. This asks the same question first,
+    against the servers `--mcp` actually chose, so a missing runtime costs a
+    message instead of a finished-then-reverted install.
+
+    ``installed`` is what makes "actually have to fetch" answerable at all: a
+    reinstall that keeps an `npm` server exactly as it already sits on disk
+    fetches nothing and needs no Node, and `_kept_dependency` -- the same test
+    `_materialize_dependencies` uses to decide the same thing -- is what tells
+    the two cases apart. Without it, this guard could only ask "is an `npm`
+    server named", which is true on every reinstall regardless of whether
+    this run would touch it.
+
+    Fires for a dry run too, and deliberately so: the TUI's plan-preview
+    screen *is* a dry run, and raising here is what lets it surface the
+    missing runtime at selection time instead of at the point of no return —
+    for a server this run would genuinely have to fetch.
+    """
+    owned = {entry.id: entry for entry in (installed.entries if installed else ())}
+    needy = sorted(
+        item.name
+        for item in content.mcp
+        if item.distribution is content_module.Distribution.NPM
+        and _materializes(item)
+        and _kept_dependency(runtime, owned, item) is None
+    )
+    if not needy or _node_present(runtime):
+        return
+    raise CommandError(
+        f"{', '.join(needy)} need{'s' if len(needy) == 1 else ''} Node to install, and node is not on "
+        f"PATH; installing Node is the user's own responsibility, so change the selection or make node "
+        f"available before retrying"
     )
 
 

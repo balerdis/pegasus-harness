@@ -171,6 +171,38 @@ class InstallNpmTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI, "--mcp", "probe", npm_installer=installer)
         self.assertEqual(installer.calls, [self.target()])
 
+    def test_reinstalling_the_same_version_needs_no_node_on_path(self, _load):
+        """A reinstall that keeps exactly the version already on disk fetches
+        nothing, so it needs no Node at all -- but the preflight guard used to
+        fire on `distribution is NPM` alone, before the journal was even read,
+        with no way to tell "would keep it" apart from "would fetch it". Node
+        installed through `nvm` is routinely absent from a non-interactive
+        `PATH` (scripts, cron, CI), which made this a real regression, not a
+        corner case.
+        """
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        code, report = self.run_cli(
+            "install", "--cli", CLI, "--mcp", "probe", node_on_path=False
+        )
+        self.assertEqual(code, cli.OK)
+        self.assertEqual(report["status"], "installed")
+        self.assertIn("dependency:probe", [item["id"] for item in report["unchanged"]])
+
+    def test_reinstalling_the_same_version_needs_no_node_on_a_dry_run_either(self, _load):
+        """The `--dry-run` twin of the reinstall case above: the TUI's plan
+        preview always runs with `dry_run=True`, so this is what keeps a
+        reinstall preview from being refused for a runtime the reinstall would
+        never actually need.
+        """
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        code, report = self.run_cli(
+            "install", "--cli", CLI, "--mcp", "probe", "--dry-run", node_on_path=False
+        )
+        self.assertEqual(code, cli.OK)
+        self.assertEqual(report["status"], "planned")
+
 
 @patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
 class UninstallNpmTest(RealHomeTestCase):
