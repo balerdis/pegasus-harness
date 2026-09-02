@@ -260,6 +260,30 @@ class AgentRenderTest(unittest.TestCase):
             {"*": False, "read": True, "bash": True, "context7*": True},
         )
 
+    def test_a_denied_mcp_tool_is_turned_back_off_after_the_wildcard_grant(self):
+        agent = self.agent(
+            optional_mcp=("cbm",),
+            denied_mcp_tools=("cbm_delete_project", "cbm_ingest_traces"),
+        )
+        tools = self.value(agent)["tools"]
+        self.assertEqual(
+            tools,
+            {
+                "*": False,
+                "cbm*": True,
+                "cbm_delete_project": False,
+                "cbm_ingest_traces": False,
+            },
+        )
+        keys = list(tools)
+        self.assertLess(keys.index("cbm*"), keys.index("cbm_delete_project"))
+        self.assertLess(keys.index("cbm*"), keys.index("cbm_ingest_traces"))
+
+    def test_no_denies_rendered_when_nothing_is_withheld(self):
+        agent = self.agent(optional_mcp=("context7",))
+        tools = self.value(agent)["tools"]
+        self.assertEqual(tools, {"*": False, "context7*": True})
+
     def test_the_deny_baseline_is_written_before_anything_it_is_meant_to_lose_to(self):
         """The order of these keys decides whether any agent has any tool.
 
@@ -326,6 +350,26 @@ class AgentRenderTest(unittest.TestCase):
     def test_an_optional_mcp_id_is_granted_as_a_wildcard_in_permission_too(self):
         agent = self.agent(optional_mcp=("context7",))
         self.assertEqual(self.value(agent)["permission"]["context7*"], "allow")
+
+    def test_a_denied_mcp_tool_is_written_after_the_wildcard_and_before_task(self):
+        agent = self.agent(
+            optional_mcp=("cbm",),
+            denied_mcp_tools=("cbm_delete_project", "cbm_ingest_traces"),
+        )
+        permission = self.value(agent)["permission"]
+        self.assertEqual(permission["cbm_delete_project"], "deny")
+        self.assertEqual(permission["cbm_ingest_traces"], "deny")
+        keys = list(permission)
+        self.assertLess(keys.index("cbm*"), keys.index("cbm_delete_project"))
+        self.assertLess(keys.index("cbm_delete_project"), keys.index("task"))
+
+    def test_no_permission_denies_rendered_when_nothing_is_withheld(self):
+        agent = self.agent(optional_mcp=("context7",))
+        permission = self.value(agent)["permission"]
+        self.assertEqual(
+            permission,
+            {"*": "deny", "context7*": "allow", "task": {"*": "deny"}},
+        )
 
     def test_permission_merges_native_tools_mcp_and_delegation_together(self):
         agent = self.agent(
@@ -1185,6 +1229,31 @@ class ShippedContentRenderTest(unittest.TestCase):
                 value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
                 self.assertNotIn("skill", value["tools"])
                 self.assertNotIn("question", value["tools"])
+
+    def test_every_agent_granted_a_server_with_withheld_tools_denies_exactly_those(self):
+        """A guardian, not a fixture test: whichever server ships with
+        `withheld_tools` set, every agent selection grants to it must carry
+        the matching denies -- this is the property the debt exists to close,
+        proven against the real shipped descriptors and agents rather than a
+        hand-built stand-in for them.
+        """
+        selected = content_module.select_mcp(self.loaded, [server.name for server in self.loaded.mcp])
+        withheld_by_id = {server.name: server.withheld_tools for server in selected.mcp}
+        checked_any = False
+        for agent in selected.agents:
+            expected = tuple(
+                f"{mcp_id}_{tool}"
+                for mcp_id in agent.optional_mcp
+                for tool in withheld_by_id.get(mcp_id, ())
+            )
+            if expected:
+                checked_any = True
+            self.assertEqual(set(agent.denied_mcp_tools), set(expected), agent.name)
+            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            for name in expected:
+                self.assertIs(value["tools"][name], False, f"{agent.name}: {name}")
+                self.assertEqual(value["permission"][name], "deny", f"{agent.name}: {name}")
+        self.assertTrue(checked_any, "fixture drifted: no shipped server withholds any tool")
 
     def test_the_orchestrator_renders_its_declared_allows_on_top_of_the_deny_baseline(self):
         orchestrator = next(a for a in self.loaded.agents if a.name == "pegasus-orchestrator")

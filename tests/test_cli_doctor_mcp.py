@@ -105,6 +105,60 @@ class DoctorStartMcpServersTest(RealHomeTestCase):
         report = self.run_doctor()
         self.assertEqual(self.entry(report)["mcp_servers"], [])
 
+    def test_a_bound_server_is_named_rather_than_passed_over_in_silence(self):
+        """A bound server writes no `/mcp/<id>` key, only its convention.
+
+        `_mcp_entries` looks for the key, so a bound server is invisible to
+        this check — and an install whose only servers are bound reports "No
+        MCP servers configured", which is not a gap in the report but a false
+        statement about the machine. What can honestly be said is that the
+        server has no configuration of its own here. Which key it was bound to
+        is deliberately not claimed — the journal never recorded it, and a
+        report inventing the answer would be the same kind of falsehood this
+        test exists to remove. The test below covers the other reason this
+        shape occurs, which is why the wording names both.
+        """
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        servers = self.entry(self.run_doctor())["mcp_servers"]
+        self.assertEqual([check["id"] for check in servers], ["cbm"])
+        self.assertEqual(servers[0]["status"], "bound")
+        self.assertIn("no configuration of its own", servers[0]["detail"])
+
+    def test_a_convention_left_by_an_unfinished_uninstall_is_not_claimed_as_bound(self):
+        """The same journal shape has two causes, and only one is a binding.
+
+        `retire` walks kinds in sorted order — `config-key` before `file` — so
+        an uninstall that removed the configuration key and then failed on the
+        convention file leaves the journal holding the convention and not the
+        key: exactly what a binding leaves. Nothing in the journal separates
+        the two, so the report may not claim it is a binding. It says what is
+        actually known — that the server has no configuration of its own here
+        — and names both readings.
+        """
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        detail = self.entry(self.run_doctor())["mcp_servers"][0]["detail"]
+        self.assertIn("no configuration of its own", detail)
+        self.assertIn("did not finish", detail)
+
+    def test_a_bound_and_a_configured_server_are_both_reported(self):
+        """One of each, so neither path hides the other."""
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        self.claim_mcp_entry("context7", {"type": "remote", "url": "https://example.invalid", "enabled": True})
+        servers = {check["id"]: check["status"] for check in self.entry(self.run_doctor())["mcp_servers"]}
+        self.assertEqual(servers, {"context7": "remote", "cbm": "bound"})
+
     def test_a_remote_server_is_reported_but_never_launched(self):
         self.install()
         self.claim_mcp_entry("context7", {"type": "remote", "url": "https://example.invalid", "enabled": True})

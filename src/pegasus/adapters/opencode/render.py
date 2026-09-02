@@ -398,6 +398,14 @@ def _tools(item: Agent) -> dict[str, bool]:
     # id IS the server key OpenCode matches tools against, and `f"{id}*"` is that
     # same key with the wildcard OpenCode uses to grant every tool under it.
     granted.update({f"{mcp_id}*": True for mcp_id in item.optional_mcp})
+    # `denied_mcp_tools` is already the fully-qualified names `select_mcp`
+    # resolved for this agent (`content.py`), so nothing here needs to know
+    # which server a name belongs to or which key it was granted under.
+    # Written after the wildcard above for the same resolution-order reason
+    # the deny baseline is written first: the runtime keeps the *last* rule
+    # that matches a given name, so a narrower `False` only wins over the
+    # broader `f"{mcp_id}*": True` grant by being the later entry.
+    granted.update({name: False for name in item.denied_mcp_tools})
     return {"*": False, **granted}
 
 
@@ -458,6 +466,12 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     # matches its tool-call actions against, and the wildcard grants every
     # tool that server exposes.
     granted.update({f"{mcp_id}*": "allow" for mcp_id in item.optional_mcp})
+    # Same fact, same ordering reason as `_tools` above: a name already
+    # qualified by `select_mcp`, written after the wildcard it narrows so the
+    # runtime's last-match resolution lands on the deny, and before `task` and
+    # `external_directory` below since neither of those shares this
+    # namespace and their own position is unaffected by it either way.
+    granted.update({name: "deny" for name in item.denied_mcp_tools})
     if any(name in READS_OUTSIDE_THE_WORKTREE for name in names):
         granted["external_directory"] = {"*": "deny", f"{layout.skills_dir.as_posix()}/*": "allow"}
     granted["task"] = {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}

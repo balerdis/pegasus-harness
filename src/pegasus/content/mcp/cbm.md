@@ -7,9 +7,23 @@ version: 0.10.8
 checksum: sha256:e5cba4cad6ca8254a85f45041fc8a831908d7d5cb64f98fc3f8eb70a58671793
 archive_members: [codebase-memory-mcp, LICENSE, install.sh, THIRD_PARTY_NOTICES.md]
 archive_executable: codebase-memory-mcp
+withheld_tools: [delete_project, ingest_traces]
 ---
 
 # Codebase Memory Convention (reference documentation)
+
+<!--
+`withheld_tools` above takes `delete_project` and `ingest_traces` back out of
+the wildcard grant this server otherwise gets in full, and stops there.
+`delete_project` destroys an entire index with no confirmation step this
+convention controls; `ingest_traces` writes trace data into the graph, an
+input channel no agent needs to drive by hand for the discovery work this
+convention describes. `index_repository` is deliberately NOT here: the
+"Index Freshness -- Repair, Don't Skip" section below prescribes it as the
+repair action for a missing or stale index, so withholding it would take
+back the one tool that section tells an agent to reach for.
+-->
+
 
 This project uses `codebase-memory-mcp` to maintain a knowledge graph of the codebase.
 ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery: structural

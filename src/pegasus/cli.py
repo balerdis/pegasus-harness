@@ -1001,6 +1001,7 @@ def _health(
 
 
 _MCP_ENTRY_PREFIX = "mcp:"
+_MCP_CONVENTION_PREFIX = "mcp-convention:"
 
 
 def _mcp_checks(runtime: Runtime, install) -> list[mcp_handshake.ServerCheck]:
@@ -1012,8 +1013,44 @@ def _mcp_checks(runtime: Runtime, install) -> list[mcp_handshake.ServerCheck]:
     Pegasus itself placed. Nothing named anywhere else is ever a candidate.
     """
     return [
-        _mcp_checks_one(runtime, entry, name)
-        for entry, name in _mcp_entries(install)
+        *(_mcp_checks_one(runtime, entry, name) for entry, name in _mcp_entries(install)),
+        *_bound_checks(install),
+    ]
+
+
+def _bound_checks(install) -> list[mcp_handshake.ServerCheck]:
+    """The servers this install granted without ever configuring them.
+
+    A bound server writes no `/mcp/<id>` key — only its convention — so
+    `_mcp_entries` cannot see it, and an install whose servers are all bound
+    reported "No MCP servers configured": not a gap in the report but a false
+    statement about the machine. A convention entry with no configuration key
+    beside it is exactly the shape a binding leaves behind, and it is enough
+    to say the true thing instead.
+
+    What is said stops where the journal's knowledge stops, and it stops twice.
+    The key the server was bound to was never recorded, so it is not named: a
+    report that guessed it would be the same kind of falsehood this exists to
+    remove. And a binding is not the only cause of this shape -- `retire` walks
+    kinds in sorted order, `config-key` before `file`, so an uninstall that
+    removed the configuration key and then failed on the convention leaves the
+    journal holding exactly this. Nothing here separates the two, so neither is
+    asserted; both readings are named instead. Starting the server is out of
+    reach for the same reason as the key: there is nothing recorded to start.
+    """
+    configured = {name for _, name in _mcp_entries(install)}
+    return [
+        mcp_handshake.ServerCheck(
+            entry.id[len(_MCP_CONVENTION_PREFIX):],
+            "bound",
+            "no configuration of its own in this install: either bound to a server you "
+            "administer, whose tools Pegasus grants and whose convention it ships without "
+            "installing or starting it, or a convention left behind by an uninstall that "
+            "did not finish",
+        )
+        for entry in install.entries
+        if entry.id.startswith(_MCP_CONVENTION_PREFIX)
+        and entry.id[len(_MCP_CONVENTION_PREFIX):] not in configured
     ]
 
 

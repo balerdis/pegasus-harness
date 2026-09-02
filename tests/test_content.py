@@ -858,6 +858,19 @@ class McpTest(TemporaryContent):
             self.load_mcp(MCP.replace("distribution: remote", "distribution: bundled"))
         self.assertIn("bundled", str(raised.exception))
 
+    def test_withheld_tools_defaults_to_empty(self):
+        mcp = self.load_mcp(MCP)
+        self.assertEqual(mcp.withheld_tools, ())
+
+    def test_withheld_tools_is_read(self):
+        mcp = self.load_mcp(
+            MCP.replace(
+                "endpoint: https://example.test/mcp\n",
+                "endpoint: https://example.test/mcp\nwithheld_tools: [delete_project, ingest_traces]\n",
+            )
+        )
+        self.assertEqual(mcp.withheld_tools, ("delete_project", "ingest_traces"))
+
     def test_provides_tools_is_gone(self):
         """The permission an agent gets is derived from the server's id, not
         tabulated on the server: a hand-maintained list here would be
@@ -1982,6 +1995,85 @@ class ContentErrorSitesTest(unittest.TestCase):
                 with self.assertRaises(ContentError) as raised:
                     content.load(zipfile.Path(zip_file))
                 self.assertIn(expected, str(raised.exception))
+
+
+class WithheldMcpToolsTest(unittest.TestCase):
+    """`select_mcp` is the one place that knows both a server's descriptor and
+    the key an agent's grant actually resolves against, so it is where the
+    fully-qualified names a wildcard grant must not reach get built.
+    """
+
+    def setUp(self):
+        self.server = content.Mcp(
+            name="cbm",
+            description="Code graph",
+            body="Convention body.",
+            distribution=Distribution.DOWNLOAD,
+            endpoint="https://example.test/cbm.tar.gz",
+            checksum="sha256:" + "a" * 64,
+            source=PurePosixPath("mcp/cbm.md"),
+            withheld_tools=("delete_project", "ingest_traces"),
+        )
+        self.plain_server = content.Mcp(
+            name="context7",
+            description="Docs",
+            body="Convention body.",
+            distribution=Distribution.REMOTE,
+            endpoint="https://example.test/mcp",
+            source=PurePosixPath("mcp/context7.md"),
+        )
+        self.agent = content.Agent(
+            name="probe-agent",
+            description="Probes things",
+            body="x",
+            mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/probe-agent.md"),
+            optional_mcp=("cbm", "context7"),
+        )
+        self.content = content.Content(agents=(self.agent,), mcp=(self.server, self.plain_server))
+
+    def test_an_unbound_grant_denies_the_ids_own_tool_names(self):
+        selected = content.select_mcp(self.content, ["cbm", "context7"])
+        self.assertEqual(
+            selected.agents[0].denied_mcp_tools,
+            ("cbm_delete_project", "cbm_ingest_traces"),
+        )
+
+    def test_a_bound_grant_denies_tool_names_built_from_the_bound_key(self):
+        """The deny has to name a tool the runtime can actually resolve --
+        which only exists under the key the grant was rewritten to, not under
+        Pegasus's own id for the server.
+        """
+        selected = content.select_mcp(
+            self.content, ["cbm=codebase-memory-mcp", "context7"]
+        )
+        self.assertEqual(
+            selected.agents[0].denied_mcp_tools,
+            ("codebase-memory-mcp_delete_project", "codebase-memory-mcp_ingest_traces"),
+        )
+
+    def test_a_server_with_nothing_withheld_contributes_no_denies(self):
+        selected = content.select_mcp(self.content, ["context7"])
+        self.assertEqual(selected.agents[0].denied_mcp_tools, ())
+
+    def test_choosing_nothing_leaves_no_denies(self):
+        selected = content.select_mcp(self.content, [])
+        self.assertEqual(selected.agents[0].denied_mcp_tools, ())
+
+    def test_an_agent_that_never_declares_the_server_carries_no_denies(self):
+        untouched = content.Agent(
+            name="other-agent",
+            description="d",
+            body="x",
+            mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/other-agent.md"),
+        )
+        with_untouched = content.Content(
+            agents=(self.agent, untouched), mcp=(self.server, self.plain_server)
+        )
+        selected = content.select_mcp(with_untouched, ["cbm"])
+        other = next(a for a in selected.agents if a.name == "other-agent")
+        self.assertEqual(other.denied_mcp_tools, ())
 
 
 if __name__ == "__main__":
