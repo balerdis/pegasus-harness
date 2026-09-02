@@ -12,6 +12,8 @@ untouched.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import content as content_module
@@ -255,6 +257,29 @@ def _models_write(screen: ModelsScreen, navigator: Navigator, runtime: cli.Runti
         )
         return navigator.replaced(_models_screen(screen.cli, runtime))
     return None
+
+
+def install_task(
+    navigator: Navigator, runtime: cli.Runtime, screen: InstallPlanScreen
+) -> Callable[[Callable[[cli.Progress], None]], Navigator]:
+    """The real install behind `InstallPlanScreen`'s own confirmation,
+    packaged as a plain callable rather than run here directly.
+
+    `session` knows everything about the engine call -- the same
+    `cli.install`, run through the same `cli.safe_report`, that
+    `step`'s own synchronous branch below calls -- but nothing about how or
+    where it runs. `app.py` is the one place that owns a worker thread; this
+    only hands it something to run on one, and the sink to feed
+    `on_progress` into so the thread that owns the window can read it back.
+    """
+
+    def run(sink: Callable[[cli.Progress], None]) -> Navigator:
+        _, report = cli.safe_report(
+            "install", lambda: cli.install(screen.cli.id, runtime, mcp=list(screen.mcp), on_progress=sink)
+        )
+        return navigator.opened(InstallResultScreen(cli=screen.cli, report=report))
+
+    return run
 
 
 def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigator:

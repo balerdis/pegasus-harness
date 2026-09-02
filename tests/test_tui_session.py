@@ -310,6 +310,59 @@ class ParityWithCliInstallMcpTest(SessionTestCase):
             self.assertEqual(_journal_shape(self.home), _journal_shape(other_home))
 
 
+class InstallTaskTest(SessionTestCase):
+    """`session.install_task` is the seam `app.py` runs on a worker thread:
+    a plain callable that performs the real install, reports every tick
+    through the sink it is handed, and returns the same `Navigator` update
+    `session.step`'s own `InstallPlanScreen` branch produces -- without
+    `session` itself ever importing `threading` or `time`.
+    """
+
+    def test_it_reports_progress_through_the_given_sink(self):
+        _present(self.home)
+        runtime = self.runtime()
+        navigator = Navigator.starting(session.detect_clis(runtime)).handle(Action.CHOOSE)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the mcp selection
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # fetches the plan
+        plan_screen = navigator.current
+
+        run = session.install_task(navigator, runtime, plan_screen)
+        events = []
+        result = run(events.append)
+
+        self.assertTrue(events, "no Progress event reached the sink")
+        self.assertEqual(events[-1].done, events[-1].total)
+        self.assertIsInstance(result, Navigator)
+        self.assertIsInstance(result.current, InstallResultScreen)
+        self.assertEqual(result.current.report["status"], "installed")
+
+    def test_it_matches_session_steps_own_synchronous_result(self):
+        with tempfile.TemporaryDirectory(dir=self.home.parent) as other:
+            other_home = Path(other)
+            for home in (self.home, other_home):
+                _present(home)
+
+            sync_runtime = self.runtime(self.home)
+            navigator = Navigator.starting(session.detect_clis(sync_runtime)).handle(Action.CHOOSE)
+            navigator = session.step(navigator, sync_runtime, Action.CHOOSE)
+            navigator = self.to_continue(navigator)
+            navigator = session.step(navigator, sync_runtime, Action.CHOOSE)
+            sync_result = session.step(navigator, sync_runtime, Action.CHOOSE)
+
+            task_runtime = self.runtime(other_home)
+            navigator = Navigator.starting(session.detect_clis(task_runtime)).handle(Action.CHOOSE)
+            navigator = session.step(navigator, task_runtime, Action.CHOOSE)
+            navigator = self.to_continue(navigator)
+            navigator = session.step(navigator, task_runtime, Action.CHOOSE)
+            task_result = session.install_task(navigator, task_runtime, navigator.current)(lambda progress: None)
+
+            self.assertEqual(
+                _sans(sync_result.current.report, str(self.home)),
+                _sans(task_result.current.report, str(other_home)),
+            )
+
+
 class InstallFailureThroughTheTuiTest(SessionTestCase):
     def test_a_real_failure_reaches_the_result_screen_as_a_report_not_a_traceback(self):
         _present(self.home)

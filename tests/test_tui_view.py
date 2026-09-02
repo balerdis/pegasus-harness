@@ -24,7 +24,8 @@ from pegasus.tui.navigator import (
     StatusScreen,
     UninstallResultScreen,
 )
-from pegasus.tui.view import render, render_busy
+from pegasus.tui import wordmark
+from pegasus.tui.view import Line, Span, Style, render, render_busy, render_progress
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
 DOCTOR_REPORT = {
@@ -196,6 +197,10 @@ class McpSelectionRenderingTest(unittest.TestCase):
         lines = render(self.screen(), cursor=0)
         self.assertEqual(sum(1 for line in lines if line.highlighted), 1)
 
+    def test_the_footer_names_both_ways_to_toggle(self):
+        lines = [line.text for line in render(self.screen(), cursor=0)]
+        self.assertIn("enter/space: toggle a server, or continue · esc: back", lines)
+
 
 class InstallResultRenderingTest(unittest.TestCase):
     def test_a_successful_install_says_so_unmistakably(self):
@@ -338,6 +343,190 @@ class BusyRenderingTest(unittest.TestCase):
     def test_nothing_on_it_is_highlighted(self):
         lines = render_busy("Running diagnostics…")
         self.assertFalse(any(line.highlighted for line in lines))
+
+
+class LineSpanTest(unittest.TestCase):
+    """`Line` carries a tuple of styled `Span`s so one physical row can mix
+    emphases -- the wordmark's own bicolor split needs exactly this. A bare
+    `str` is still accepted and normalized into a single `NORMAL` span, so
+    every construction that predates spans still works."""
+
+    def test_a_bare_string_becomes_a_single_normal_span(self):
+        line = Line("text")
+        self.assertEqual(line.spans, (Span("text", Style.NORMAL),))
+
+    def test_the_text_property_concatenates_every_span(self):
+        line = Line((Span("PEGASUS", Style.DIM), Span("HARNESS", Style.NORMAL)))
+        self.assertEqual(line.text, "PEGASUSHARNESS")
+
+    def test_a_span_defaults_to_normal_style(self):
+        self.assertEqual(Span("text").style, Style.NORMAL)
+
+    def test_a_line_can_carry_a_dim_span(self):
+        line = Line((Span("text", Style.DIM),))
+        self.assertEqual(line.spans[0].style, Style.DIM)
+
+    def test_a_line_can_carry_an_accent_span(self):
+        line = Line((Span("text", Style.ACCENT),))
+        self.assertEqual(line.spans[0].style, Style.ACCENT)
+
+    def test_highlighted_still_defaults_to_false(self):
+        self.assertFalse(Line("text").highlighted)
+
+
+class MenuWordmarkTest(unittest.TestCase):
+    """The main menu's title becomes the wordmark once something is actually
+    installed -- an empty machine keeps the plain title it always had."""
+
+    def menu(self, *, installed: bool) -> Menu:
+        return Menu(
+            title="Pegasus Harness 9.9.9",
+            entries=(Entry("Exit", QUIT),),
+            installed=installed,
+            version="9.9.9",
+        )
+
+    def test_nothing_installed_keeps_the_plain_title(self):
+        lines = [line.text for line in render(self.menu(installed=False), cursor=0, width=200)]
+        self.assertEqual(lines[0], "Pegasus Harness 9.9.9")
+        self.assertNotIn(wordmark.wordmark_rows()[0], lines)
+
+    def test_something_installed_draws_the_wordmark_when_it_fits(self):
+        lines = [line.text for line in render(self.menu(installed=True), cursor=0, width=200)]
+        for row in wordmark.wordmark_rows():
+            self.assertIn(row, lines)
+        self.assertNotIn("Pegasus Harness 9.9.9", lines)
+
+    def test_the_version_sits_on_its_own_line_right_aligned_to_the_art(self):
+        lines = [line.text for line in render(self.menu(installed=True), cursor=0, width=200)]
+        version_line = lines[len(wordmark.wordmark_rows())]
+        self.assertEqual(version_line, "9.9.9".rjust(wordmark.WORDMARK_WIDTH))
+
+    def test_installed_but_too_narrow_for_the_full_mark_falls_back_to_pegasus_alone(self):
+        lines = [line.text for line in render(self.menu(installed=True), cursor=0, width=40)]
+        for row in wordmark.pegasus_rows():
+            self.assertIn(row, lines)
+        for row in wordmark.wordmark_rows():
+            self.assertNotIn(row, lines)
+
+    def test_installed_but_too_narrow_for_any_mark_keeps_the_plain_title(self):
+        lines = [line.text for line in render(self.menu(installed=True), cursor=0, width=20)]
+        self.assertEqual(lines[0], "Pegasus Harness 9.9.9")
+
+    def test_the_full_marks_pegasus_half_is_dim_and_harness_half_is_normal(self):
+        """The reference banner dims only `PEGASUS`, leaving `HARNESS` beside
+        it in plain text on the very same row -- the whole reason `Line`
+        gained spans. Each art row is exactly two spans: the dim `PEGASUS`
+        glyph columns, then the normal `HARNESS` ones (the two-space gap
+        travels with the first span, matching how `wordmark.wordmark_rows`
+        joins them)."""
+        lines = render(self.menu(installed=True), cursor=0, width=200)
+        art_lines = lines[: len(wordmark.wordmark_rows())]
+        for index, line in enumerate(art_lines):
+            self.assertEqual(len(line.spans), 2)
+            dim_span, normal_span = line.spans
+            self.assertEqual(dim_span.style, Style.DIM)
+            self.assertEqual(normal_span.style, Style.NORMAL)
+            self.assertEqual(dim_span.text + normal_span.text, wordmark.wordmark_rows()[index])
+            self.assertEqual(dim_span.text, wordmark.pegasus_rows()[index] + "  ")
+
+    def test_the_solo_mark_is_entirely_dim(self):
+        """The narrow variant is `PEGASUS` alone -- the brand mark on its
+        own, without the second word there is nothing to split, and dim is
+        the emphasis the full mark already gives that half."""
+        lines = render(self.menu(installed=True), cursor=0, width=40)
+        art_lines = lines[: len(wordmark.pegasus_rows())]
+        for line in art_lines:
+            self.assertEqual(len(line.spans), 1)
+            self.assertEqual(line.spans[0].style, Style.DIM)
+
+
+class InstallResultWordmarkTest(unittest.TestCase):
+    def test_a_successful_install_draws_the_wordmark_above_the_banner(self):
+        lines = render(InstallResultScreen(cli=SAMPLE, report=INSTALLED_REPORT), cursor=0, width=200)
+        texts = [line.text for line in lines]
+        self.assertIn(wordmark.wordmark_rows()[0], texts)
+        self.assertLess(texts.index(wordmark.wordmark_rows()[0]), texts.index("INSTALLED."))
+
+    def test_a_failed_install_draws_no_wordmark_at_all(self):
+        lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=FAILED_REPORT), cursor=0, width=200)]
+        self.assertNotIn(wordmark.wordmark_rows()[0], lines)
+        self.assertNotIn(wordmark.pegasus_rows()[0], lines)
+
+    def test_no_room_for_any_mark_still_shows_the_banner_plainly(self):
+        lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=INSTALLED_REPORT), cursor=0, width=20)]
+        self.assertIn("INSTALLED.", lines)
+        self.assertNotIn(wordmark.wordmark_rows()[0], lines)
+        self.assertNotIn(wordmark.pegasus_rows()[0], lines)
+
+
+class ProgressRenderingTest(unittest.TestCase):
+    """`render_progress` turns one `cli.Progress` snapshot plus a frame
+    counter into the busy-install layout: the message and a spinner, the
+    bar in `Style.ACCENT`, and the current unit's name dimmed underneath.
+    The clock and the engine call both live outside this function -- `frame`
+    and `progress` are handed in as plain data.
+    """
+
+    def test_the_message_and_a_spinner_glyph_appear_on_the_first_line(self):
+        progress = cli.Progress(done=5, total=10, phase="artifacts", unit="a.md")
+        lines = render_progress("Installing into Demo CLI…", progress, frame=0, width=80)
+        self.assertIn("Installing into Demo CLI…", lines[0].text)
+
+    def test_the_spinner_glyph_changes_with_the_frame(self):
+        progress = cli.Progress(done=5, total=10, phase="artifacts", unit="a.md")
+        first = render_progress("Installing…", progress, frame=0, width=80)[0].text
+        second = render_progress("Installing…", progress, frame=1, width=80)[0].text
+        self.assertNotEqual(first, second)
+
+    def test_the_bar_row_is_accent_styled(self):
+        progress = cli.Progress(done=5, total=10, phase="artifacts", unit="a.md")
+        lines = render_progress("Installing…", progress, frame=0, width=80)
+        bar_line = lines[1]
+        self.assertTrue(all(span.style is Style.ACCENT for span in bar_line.spans))
+
+    def test_the_bar_shows_filled_and_empty_cells_and_a_percentage(self):
+        progress = cli.Progress(done=5, total=10, phase="artifacts", unit="a.md")
+        bar_text = render_progress("Installing…", progress, frame=0, width=80)[1].text
+        self.assertIn("■", bar_text)
+        self.assertIn("･", bar_text)
+        self.assertIn(" 50%", bar_text)
+
+    def test_a_full_bar_shows_a_hundred_percent(self):
+        progress = cli.Progress(done=10, total=10, phase="journal", unit="")
+        bar_text = render_progress("Installing…", progress, frame=0, width=80)[1].text
+        self.assertIn("100%", bar_text)
+
+    def test_the_current_unit_is_shown_dim_beneath_the_bar(self):
+        progress = cli.Progress(done=5, total=10, phase="dependencies", unit="some-package")
+        lines = render_progress("Installing…", progress, frame=0, width=80)
+        unit_line = next(line for line in lines if "some-package" in line.text)
+        self.assertTrue(all(span.style is Style.DIM for span in unit_line.spans))
+
+    def test_a_done_greater_than_total_still_draws_a_bar_at_most_full(self):
+        """`done`/`total` come from arithmetic this layer did not perform --
+        a miscounted `Progress` must never draw past a full bar."""
+        progress = cli.Progress(done=15, total=10, phase="artifacts", unit="a.md")
+        bar_text = render_progress("Installing…", progress, frame=0, width=80)[1].text
+        self.assertIn("100%", bar_text)
+        self.assertNotIn("150%", bar_text)
+
+    def test_a_zero_total_does_not_divide_by_zero(self):
+        progress = cli.Progress(done=0, total=0, phase="snapshot", unit="")
+        lines = render_progress("Installing…", progress, frame=0, width=80)
+        self.assertIn("0%", lines[1].text)
+
+    def test_a_narrow_width_shrinks_the_bar_instead_of_overflowing(self):
+        progress = cli.Progress(done=5, total=10, phase="artifacts", unit="a.md")
+        lines = render_progress("Installing…", progress, frame=0, width=20)
+        for line in lines:
+            self.assertLessEqual(len(line.text), 20)
+
+
+class RenderWidthDefaultTest(unittest.TestCase):
+    def test_render_without_a_width_still_works_for_ordinary_screens(self):
+        lines = render(Menu(title="t", entries=(Entry("a", QUIT),)), cursor=0)
+        self.assertEqual(lines[0].text, "t")
 
 
 if __name__ == "__main__":

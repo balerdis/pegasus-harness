@@ -25,6 +25,7 @@ class Action(Enum):
     BACK = auto()
     QUIT = auto()
     REMOVE = auto()
+    TOGGLE = auto()
 
 
 class Quit:
@@ -331,11 +332,21 @@ class Menu:
     """A vertical list of entries with one of them selected. `preface` is
     read-only context shown above the entries — never itself selectable —
     empty by default, so a menu that predates it renders exactly as before.
+
+    `installed` and `version` exist for exactly one screen, the main menu:
+    whether Pegasus is recorded as installed in at least one CLI is already
+    known at the boundary that builds this (`session.detect_installed`), and
+    handing it over as data here is what lets `view` choose the wordmark
+    over the plain title without ever probing the filesystem itself to find
+    that fact out. `False` and `""` by default, so a menu that predates
+    either field keeps rendering exactly as it always did.
     """
 
     title: str
     entries: tuple[Entry, ...]
     preface: tuple[str, ...] = ()
+    installed: bool = False
+    version: str = ""
 
 
 Screen = Union[
@@ -509,6 +520,8 @@ def main_menu(detections: tuple[CliOption, ...] = (), installed: tuple[CliOption
             Entry("Uninstall", uninstall_menu(installed)),
             Entry("Exit", QUIT),
         ),
+        installed=bool(installed),
+        version=pegasus.__version__,
     )
 
 
@@ -641,6 +654,13 @@ class Navigator:
                 # Continue: fetching the plan for this selection is real
                 # engine work, left to `session` — see the screen's own
                 # docstring.
+                return self
+            return self._swapped(_toggled(screen, self.cursor))
+        if action is Action.TOGGLE:
+            # A second spelling of the same toggle `CHOOSE` already does on a
+            # server row — but Continue is not a togglable thing, so unlike
+            # `CHOOSE` there is nothing for it to do there.
+            if self.cursor == len(screen.options):
                 return self
             return self._swapped(_toggled(screen, self.cursor))
         return self
