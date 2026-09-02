@@ -118,6 +118,67 @@ class FileSystem(Protocol):
         the same question always get the same answer here, on one platform.
         """
 
+    def is_writable(self, path: Path) -> bool:
+        """Whether replacing or creating ``path`` would succeed, without writing anything.
+
+        What actually governs that is the *containing directory's* write
+        permission — plus, on POSIX, its sticky bit — never ``path``'s own
+        permission bits. `os.replace` and creating a new file both act on the
+        directory entry, not on the file's content in place, so this always
+        asks the parent, whether ``path`` exists yet or not: an existing
+        read-only file in a directory the caller may freely write into is
+        writable by this definition, and a caller does not need to try and
+        fail to find that out.
+
+        Deliberately narrower than "would this exact call fully succeed": it
+        says nothing about who owns ``path`` once it exists, only whether the
+        operation itself is permitted at the filesystem level. A caller that
+        must also refuse to take over a file it does not own — `pegasus
+        upgrade` replacing its own binary, precisely — pairs this with
+        :meth:`owned_by_current_user` rather than getting that from here. The
+        two are kept separate on purpose: an earlier version of this method
+        tested the target's own bits instead of the parent's, which was wrong
+        on both sides (a read-only file in a writable directory answered
+        `False` when the replace would in fact succeed; a world-writable
+        sticky directory answered `True` for a file only its owner may
+        replace) — and, as a side effect of testing the wrong thing, it also
+        happened to block replacing a file owned by someone else. That
+        protection now lives in :meth:`owned_by_current_user`, called
+        explicitly wherever ownership actually matters, instead of riding
+        along by accident.
+
+        Exists so a caller that must refuse *before* doing anything else at
+        all — `pegasus upgrade` replacing its own binary, chiefly, which must
+        never reach the network when it already knows the replace could not
+        land — can ask up front rather than fetch first and discover the
+        refusal only once there is something to clean up.
+
+        Never raises: an answer that cannot be told for certain is `False`,
+        the same posture as a probe that failed — "unwritable" is always the
+        safe reading when writability itself could not be determined.
+        """
+
+    def mode_ensuring_executable(self, mode: int) -> int:
+        """``mode``, widened only enough to guarantee something with it can run.
+
+        `pegasus upgrade` preserves whatever mode the binary it replaces
+        already carries, rather than overwriting it with `mode_for`'s plain
+        executable default -- an admin who deliberately narrowed it keeps
+        exactly what they chose (see `pegasus.core.upgrade.replace_binary`'s
+        own docstring). The one case a straight carry-through would make
+        worse is a mode with no execute bit left in it at all, which would
+        leave an unrunnable program in place after every upgrade -- strictly
+        worse than the widening this whole scheme exists to avoid. This is
+        where that one exception is applied: a mode that already lets its
+        owner execute it passes through completely unchanged; one that does
+        not gets just enough added to run, and nothing else about it --
+        including any narrowed group or other permission -- is touched.
+
+        What "just enough" means is itself a platform fact this method keeps
+        on this side of the port, same as `mode_for`: an owner-only execute
+        bit on POSIX, whatever the nearest equivalent is anywhere else.
+        """
+
     # --- Writing ---
 
     def write_atomic(self, path: Path, content: bytes, *, mode: int) -> None:
@@ -171,6 +232,26 @@ class FileSystem(Protocol):
         traversable is exactly the distinction this call exists to state, and
         a port that assumed one for a caller who forgot would decide it by
         accident.
+        """
+
+    def owned_by_current_user(self, path: Path) -> bool:
+        """Whether the user running this process owns ``path``.
+
+        `os.replace` swaps the inode outright, so a caller that writes over
+        someone else's file ends up handing its ownership to whoever ran the
+        process — silently, since nothing about a successful replace records
+        whose file it used to be. This is how a caller refuses that takeover
+        *before* it happens: `pegasus upgrade` calls it on the binary it is
+        about to replace, paired with :meth:`is_writable` rather than folded
+        into it, because a directory being writable and a file being *yours*
+        are two different facts, and a caller may need either one without the
+        other.
+
+        `False` for a path that does not exist, is owned by someone else, or
+        whose owner could not be determined — the same posture
+        :meth:`writable_on_behalf_of_owner` takes: an answer that cannot be
+        told for certain reads as "not mine", never as a guess in either
+        direction.
         """
 
     # --- Who is running ---

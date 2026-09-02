@@ -14,6 +14,7 @@ from unittest import mock
 
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.ports.filesystem import FileSystem, FileSystemError
+from platform_conditions import make_unwritable
 
 
 class PosixFileSystemTest(unittest.TestCase):
@@ -337,6 +338,61 @@ class PosixFileSystemTest(unittest.TestCase):
 
         with self.assertRaises(FileSystemError):
             self.fs.list_dir(target)
+
+
+    # --- Writability ---
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses permission bits")
+    def test_is_writable_is_true_for_an_existing_writable_file(self):
+        target = self.root / "existing.txt"
+        target.write_bytes(b"content")
+        self.assertTrue(self.fs.is_writable(target))
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses permission bits")
+    def test_is_writable_is_true_for_a_read_only_file_in_a_writable_directory(self):
+        """What governs a replace is the containing directory, not the
+        file's own bits -- see `PosixFileSystem.is_writable`'s own
+        docstring. A read-only file here would previously have been refused
+        even though `os.replace` over it would succeed."""
+        target = self.root / "readonly.txt"
+        target.write_bytes(b"content")
+        target.chmod(0o444)
+        self.addCleanup(target.chmod, 0o644)
+        self.assertTrue(self.fs.is_writable(target))
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses permission bits")
+    def test_is_writable_is_true_for_an_absent_path_whose_parent_directory_accepts_new_files(self):
+        target = self.root / "not-yet-there.txt"
+        self.assertFalse(target.exists())
+        self.assertTrue(self.fs.is_writable(target))
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses permission bits")
+    def test_is_writable_is_false_when_the_containing_directory_refuses_new_files(self):
+        locked = self.root / "locked-dir"
+        locked.mkdir()
+        undo = make_unwritable(locked)
+        self.addCleanup(undo)
+        self.assertFalse(self.fs.is_writable(locked / "would-be-new.txt"))
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses permission bits")
+    def test_is_writable_is_false_for_an_existing_file_in_a_directory_that_refuses_replacement(self):
+        locked = self.root / "locked-dir"
+        locked.mkdir()
+        existing = locked / "existing.txt"
+        existing.write_bytes(b"content")
+        undo = make_unwritable(locked)
+        self.addCleanup(undo)
+        self.assertFalse(self.fs.is_writable(existing))
+
+    # --- Ownership ---
+
+    def test_owned_by_current_user_is_true_for_a_file_this_process_created(self):
+        target = self.root / "mine.txt"
+        target.write_bytes(b"content")
+        self.assertTrue(self.fs.owned_by_current_user(target))
+
+    def test_owned_by_current_user_is_false_for_a_missing_path(self):
+        self.assertFalse(self.fs.owned_by_current_user(self.root / "absent.txt"))
 
 
 if __name__ == "__main__":

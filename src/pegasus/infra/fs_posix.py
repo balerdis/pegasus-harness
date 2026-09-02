@@ -28,6 +28,10 @@ from pegasus.ports.filesystem import FileSystemError
 TEMPORARY_PREFIX = ".pegasus-"
 TEMPORARY_SUFFIX = ".partial"
 
+#: `stat.S_IXUSR`, spelled as the plain `chmod` digit it already is -- not
+#: worth an `import stat` of its own here.
+_OWNER_EXECUTE_BIT = 0o100
+
 
 class PosixFileSystem:
     """A filesystem backed by the real one, on Linux and other POSIX systems.
@@ -119,6 +123,38 @@ class PosixFileSystem:
 
     def mode_for(self, *, executable: bool) -> int:
         return 0o755 if executable else 0o644
+
+    def is_writable(self, path: Path) -> bool:
+        # What actually governs `os.replace`/creating a new file at `path` is
+        # the *containing directory's* write permission, never `path`'s own
+        # bits -- both operations act on the directory entry, not on the
+        # file's content in place. Checking only the parent is deliberate,
+        # not an oversight: a version of this that checked the target's own
+        # bits when it existed was wrong on both sides (a read-only file in a
+        # writable directory answered `False` when the replace would in fact
+        # succeed; a world-writable sticky directory answered `True` for a
+        # file only its owner may replace) -- and, purely as a side effect of
+        # testing the wrong thing, it also happened to block replacing a file
+        # owned by someone else. That protection now lives in
+        # `owned_by_current_user`, called explicitly wherever ownership
+        # actually matters -- see `pegasus.cli.upgrade` -- rather than riding
+        # along by accident here.
+        try:
+            parent = path.parent
+            return parent.exists() and os.access(parent, os.W_OK)
+        except OSError:
+            return False
+
+    def owned_by_current_user(self, path: Path) -> bool:
+        try:
+            return path.stat().st_uid == os.geteuid()
+        except OSError:
+            return False
+
+    def mode_ensuring_executable(self, mode: int) -> int:
+        if mode & _OWNER_EXECUTE_BIT:
+            return mode
+        return mode | _OWNER_EXECUTE_BIT
 
     # --- Writing ---
 

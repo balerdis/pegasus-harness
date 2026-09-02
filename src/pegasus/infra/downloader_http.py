@@ -21,9 +21,10 @@ TIMEOUT_SECONDS = 30
 class HttpDownloader:
     """Fetches a URL's whole body over HTTP(S)."""
 
-    def fetch(self, url: str) -> bytes:
+    def fetch(self, url: str, *, timeout_seconds: float | None = None) -> bytes:
+        timeout = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
         try:
-            with urllib.request.urlopen(url, timeout=TIMEOUT_SECONDS) as response:  # noqa: S310
+            with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
                 return response.read()
         except (OSError, ValueError) as error:
             raise DownloaderError(f"cannot fetch {url}: {error}") from error

@@ -890,6 +890,34 @@ class InstallMcpTest(RealHomeTestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("cbm", self.settings().get("mcp", {}))
 
+    def test_a_binding_is_recorded_on_the_journal(self):
+        """The key was computed by `select_mcp` and then never written down
+        anywhere durable; recording it on `Install` is what lets a later
+        `doctor` name it instead of losing it the moment this process exits."""
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        install = journal_module.install_for(self.store().load(), CLI)
+        self.assertEqual(install.mcp_bindings, {"cbm": "codebase-memory-mcp"})
+
+    def test_reinstalling_with_a_different_key_replaces_the_recorded_binding(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=other-server-key")
+        self.assertEqual(code, 0)
+        install = journal_module.install_for(self.store().load(), CLI)
+        self.assertEqual(install.mcp_bindings, {"cbm": "other-server-key"})
+
+    def test_reinstalling_without_the_server_drops_its_recorded_binding(self):
+        """A binding dropped from the selection must not linger on the journal
+        once the reinstall that dropped it is recorded."""
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        code, _ = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        install = journal_module.install_for(self.store().load(), CLI)
+        self.assertEqual(install.mcp_bindings, {})
+
     def test_a_malformed_binding_is_refused_with_the_value_quoted(self):
         self.present()
         code, report = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=")

@@ -20,5 +20,14 @@ class DownloaderError(Exception):
 class Downloader(Protocol):
     """Everything Pegasus needs to bring a remote asset's bytes home."""
 
-    def fetch(self, url: str) -> bytes:
-        """Fetch the whole content at ``url``. Raises :class:`DownloaderError` if it cannot be fetched."""
+    def fetch(self, url: str, *, timeout_seconds: float | None = None) -> bytes:
+        """Fetch the whole content at ``url``. Raises :class:`DownloaderError` if it cannot be fetched.
+
+        ``timeout_seconds`` is optional so every caller written before it
+        existed keeps its exact behaviour: ``None`` means "use whatever this
+        implementation already considered its default" -- for
+        :class:`~pegasus.infra.downloader_http.HttpDownloader` that is the
+        30 seconds tuned for an MCP server archive. A caller with a tighter
+        deadline, such as a background version check, passes an explicit
+        value instead of inheriting that default.
+        """

@@ -145,11 +145,10 @@ class DoctorStartMcpServersTest(RealHomeTestCase):
         this check — and an install whose only servers are bound reports "No
         MCP servers configured", which is not a gap in the report but a false
         statement about the machine. What can honestly be said is that the
-        server has no configuration of its own here. Which key it was bound to
-        is deliberately not claimed — the journal never recorded it, and a
-        report inventing the answer would be the same kind of falsehood this
-        test exists to remove. The test below covers the other reason this
-        shape occurs, which is why the wording names both.
+        server has no configuration of its own here. The key it was bound to
+        *is* now recorded, on `Install.mcp_bindings`, and reported here — the
+        one thing that was never claimed before is exactly what the test below
+        pins.
         """
         self.present()
         code = cli.main(
@@ -162,6 +161,45 @@ class DoctorStartMcpServersTest(RealHomeTestCase):
         self.assertIn("no configuration of its own", entry["mcp_bound"][0]["detail"])
         self.assertEqual(entry["mcp_servers"], [], "launching produced nothing, so it lists nothing")
 
+    def test_the_recorded_key_is_reported_in_the_json(self):
+        """The whole point of this change: the key the server was bound to
+        is now a recorded fact, not something the user has to recover by
+        reading their own configuration file by hand."""
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        entry = self.entry(self.run_doctor())
+        self.assertEqual(entry["mcp_bound"][0]["key"], "codebase-memory-mcp")
+
+    def test_a_recorded_key_makes_the_prose_line_name_it(self):
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        context = self.runtime()
+        cli.main(["doctor"], runtime=context)
+        output = context.out.getvalue()
+        self.assertIn("cbm", output)
+        self.assertIn("codebase-memory-mcp", output)
+
+    def test_a_recorded_key_is_positive_evidence_of_a_completed_binding(self):
+        """A present key can only have been written by `select_mcp` recording
+        a real `--mcp id=key` choice at install time -- nothing else in this
+        codebase ever writes `mcp_bindings`. So once the key is known, the
+        ambiguity with an uninstall that stopped between kinds no longer
+        applies, and the report may say so plainly instead of hedging."""
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        detail = self.entry(self.run_doctor())["mcp_bound"][0]["detail"]
+        self.assertNotIn("did not finish", detail)
+        self.assertIn("codebase-memory-mcp", detail)
+
     def test_a_convention_left_by_an_unfinished_uninstall_is_not_claimed_as_bound(self):
         """The same journal shape has two causes, and only one is a binding.
 
@@ -169,18 +207,82 @@ class DoctorStartMcpServersTest(RealHomeTestCase):
         an uninstall that removed the configuration key and then failed on the
         convention file leaves the journal holding the convention and not the
         key: exactly what a binding leaves. Nothing in the journal separates
-        the two, so the report may not claim it is a binding. It says what is
-        actually known — that the server has no configuration of its own here
-        — and names both readings.
+        the two by itself, so the report may not claim a binding for a
+        convention entry with no recorded key. It says what is actually known
+        — that the server has no configuration of its own here — and names
+        both readings. Simulated directly, since a real install now always
+        records the key alongside the convention it places.
         """
         self.present()
         code = cli.main(
             ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
         )
         self.assertEqual(code, cli.OK)
+        store = self.store()
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        store.save(journal_module.with_install(journal, replace(install, mcp_bindings={})))
         detail = self.entry(self.run_doctor())["mcp_bound"][0]["detail"]
         self.assertIn("no configuration of its own", detail)
         self.assertIn("did not finish", detail)
+
+    def test_an_install_from_before_bindings_were_recorded_still_reports_the_hedge(self):
+        """A journal written by an earlier Pegasus has no `mcp_bindings` at
+        all. `doctor` must degrade to exactly today's wording -- never an
+        invented key, never a crash."""
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        store = self.store()
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        store.save(journal_module.with_install(journal, replace(install, mcp_bindings={})))
+        entry = self.entry(self.run_doctor())
+        self.assertIsNone(entry["mcp_bound"][0]["key"])
+        self.assertIn("no configuration of its own", entry["mcp_bound"][0]["detail"])
+        self.assertIn("did not finish", entry["mcp_bound"][0]["detail"])
+
+    def test_an_unknown_key_tells_the_user_how_to_find_out(self):
+        """`doctor` cannot recover a key it never recorded, but it can say
+        exactly how the person finds one out: the `install` invocation that
+        would (re)record it, built from the ids actually affected."""
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        store = self.store()
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        store.save(journal_module.with_install(journal, replace(install, mcp_bindings={})))
+
+        entry = self.entry(self.run_doctor())
+        self.assertEqual(entry["mcp_bound_unknown_keys"]["ids"], ["cbm"])
+        self.assertEqual(
+            entry["mcp_bound_unknown_keys"]["command"],
+            f"pegasus install --cli {CLI} --mcp cbm=<key>",
+        )
+
+        context = self.runtime()
+        cli.main(["doctor"], runtime=context)
+        self.assertIn(f"pegasus install --cli {CLI} --mcp cbm=<key>", context.out.getvalue())
+        self.assertIn("CLI's own configuration", context.out.getvalue())
+        # Copied verbatim, `<key>` typed literally bounces off
+        # `parse_mcp_choice`'s cryptic rejection -- the same explicit
+        # instruction `update`'s own refusal gives, from the same source,
+        # must appear here too.
+        self.assertIn(cli.mcp_placeholder_instruction(), context.out.getvalue())
+
+    def test_nothing_extra_is_said_once_every_key_is_known(self):
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        entry = self.entry(self.run_doctor())
+        self.assertNotIn("mcp_bound_unknown_keys", entry)
 
     def test_a_bound_and_a_configured_server_are_both_reported(self):
         """One of each, so neither path hides the other."""

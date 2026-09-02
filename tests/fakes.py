@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import no_network  # noqa: F401  -- importing it is what installs the refusal
+from pegasus.infra.downloader_http import TIMEOUT_SECONDS as _DEFAULT_DOWNLOAD_TIMEOUT_SECONDS
 from pegasus.ports.downloader import DownloaderError
 from pegasus.ports.filesystem import FileSystemError
 from pegasus.ports.mcp_process import MCPExchange
@@ -26,6 +27,7 @@ from pegasus.ports.npm_installer import NpmInstallerError
 DEFAULT_MODE = 0o644
 DEFAULT_DIR_MODE = 0o755
 EXECUTABLE_MODE = 0o755
+_OWNER_EXECUTE_BIT = 0o100
 
 
 class FakeDownloader:
@@ -39,9 +41,14 @@ class FakeDownloader:
     def __init__(self, responses: dict[str, bytes] | None = None):
         self.responses: dict[str, bytes] = dict(responses or {})
         self.calls: list[str] = []
+        # Mirrors what `HttpDownloader` actually does with `timeout_seconds`:
+        # `None` collapses to its real default, so a test can tell a caller
+        # that asked for the long default apart from one that asked short.
+        self.timeouts: list[float] = []
 
-    def fetch(self, url: str) -> bytes:
+    def fetch(self, url: str, *, timeout_seconds: float | None = None) -> bytes:
         self.calls.append(url)
+        self.timeouts.append(_DEFAULT_DOWNLOAD_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds)
         if url not in self.responses:
             raise DownloaderError(f"no fake response registered for {url}")
         return self.responses[url]
@@ -110,6 +117,8 @@ class FakeFileSystem:
         fail_read: set[Path] | None = None,
         fail_exists: set[Path] | None = None,
         fail_mode: set[Path] | None = None,
+        unwritable: set[Path] | None = None,
+        unowned: set[Path] | None = None,
     ):
         self.files: dict[Path, bytes] = dict(files or {})
         self.modes: dict[Path, int] = dict(modes or {})
@@ -124,6 +133,20 @@ class FakeFileSystem:
         self.fail_read: set[Path] = set(fail_read or ())
         self.fail_mode: set[Path] = set(fail_mode or ())
         self.fail_exists: set[Path] = set(fail_exists or ())
+        # Paths `is_writable` answers `False` for, regardless of whether they
+        # exist -- a test's way of putting a destination or a directory into
+        # the same "cannot be written to" condition `make_unwritable` puts a
+        # real one into, without a real filesystem to apply a permission bit
+        # against.
+        self.unwritable: set[Path] = set(unwritable or ())
+        # Paths `owned_by_current_user` answers `False` for -- a test's way
+        # of putting a destination into the same "belongs to someone else"
+        # condition a real file owned by another uid is in, without a real
+        # filesystem to apply a different uid against. A path both here and
+        # in `files`/`directories` is exactly "exists, but is not mine";
+        # absent from both collapses to `False` too, matching the port's own
+        # contract for a path that does not exist.
+        self.unowned: set[Path] = set(unowned or ())
         self.writes: list[Path] = []
         self.removals: list[Path] = []
 
@@ -178,6 +201,19 @@ class FakeFileSystem:
 
     def mode_for(self, *, executable: bool) -> int:
         return EXECUTABLE_MODE if executable else DEFAULT_MODE
+
+    def is_writable(self, path: Path) -> bool:
+        return path not in self.unwritable
+
+    def owned_by_current_user(self, path: Path) -> bool:
+        if path not in self.files and path not in self.directories:
+            return False
+        return path not in self.unowned
+
+    def mode_ensuring_executable(self, mode: int) -> int:
+        if mode & _OWNER_EXECUTE_BIT:
+            return mode
+        return mode | _OWNER_EXECUTE_BIT
 
     # --- Writing ---
 
