@@ -122,21 +122,36 @@ class InstallPlanScreen:
     is written. `report` is the exact document the flag produces — this
     screen renders it, it does not recompute it. `mcp` is the selection that
     produced it, carried forward so confirming this plan installs exactly
-    what it previewed rather than falling back to naming none at all."""
+    what it previewed rather than falling back to naming none at all.
+
+    `command` is `"install"` or `"update"` -- the two flows share this screen
+    and `InstallResultScreen` rather than each carrying its own, since a
+    preview and its result mean the same thing either way: what confirming
+    it would place, or did place. It is what `view` and `busy_message_for`
+    read to say "Update" instead of "Install" without either screen needing
+    a second, near-identical twin. Defaults to `"install"` so every plan
+    built before this field existed still renders exactly as it always did.
+    """
 
     cli: CliOption
     report: dict
     mcp: tuple[str, ...] = ()
+    command: str = "install"
 
 
 @dataclass(frozen=True)
 class InstallResultScreen:
     """What the real install left behind — or, on failure, what was rolled
     back and what was not. Same report shape either way, the one `install
-    --json` would print for the run that just happened."""
+    --json` would print for the run that just happened.
+
+    `command` carries the same distinction `InstallPlanScreen.command` does,
+    for the same reason -- an update's result is not an install's, even
+    though both are `cli.safe_report`'s document for whichever one ran."""
 
     cli: CliOption
     report: dict
+    command: str = "install"
 
 
 @dataclass(frozen=True)
@@ -155,6 +170,39 @@ class StatusScreen:
     `restore` from, since someone here has already looked at the state."""
 
     report: dict
+
+
+@dataclass(frozen=True)
+class UpdateTarget:
+    """Chosen a CLI to reapply its own recorded selection into -- like
+    `InstallTarget`, fetching the preview is real engine work, so choosing
+    this is only a request for one, not a screen of its own."""
+
+    cli: CliOption
+    command: str = "update"
+
+
+@dataclass(frozen=True)
+class UpgradeTarget:
+    """The main menu's `Upgrade` entry: replace the running `pegasus`
+    binary itself, not any CLI's installation -- unlike every other target
+    here, this carries no `CliOption` at all, because `pegasus upgrade`
+    takes no `--cli`. Fetching the plan (checking the newest published
+    release, and whether the destination is writable) is real engine work,
+    so choosing this is only a request for one, the same as `InstallTarget`."""
+
+    command: str = "upgrade"
+
+
+#: The `CliOption` `UpgradeTarget`'s own preview and result screens carry as
+#: their `cli` field -- `InstallPlanScreen` and `InstallResultScreen` are
+#: shared across every flow that previews-then-confirms a real engine call,
+#: and both need one to render a "<Verb> · <name>" heading and to feed
+#: `busy_message_for`. `Upgrade` has no CLI of its own to name, so this
+#: stands in for "the program itself" -- its `id` is never read by anything
+#: `upgrade` calls (`cli.upgrade` takes no CLI id at all), only its
+#: `display_name`, by `view` and by `busy_message_for`.
+PEGASUS_PROGRAM = CliOption(id="pegasus", display_name="Pegasus", config_dir="", tier="full")
 
 
 @dataclass(frozen=True)
@@ -324,6 +372,8 @@ class Entry:
         RestoreTarget,
         RestoreConfirm,
         ModelsTarget,
+        UpdateTarget,
+        UpgradeTarget,
     ]
 
 
@@ -369,6 +419,7 @@ one asks for a screen, real engine work away, not open one directly."""
 #: menu, each is a no-op here; `session.step` recognizes the type and acts.
 _ENGINE_TARGETS = (
     InstallTarget, StatusRequest, UninstallTarget, UninstallConfirm, RestoreTarget, RestoreConfirm, ModelsTarget,
+    UpdateTarget, UpgradeTarget,
 )
 
 #: What to say before probing every adapter, the one engine call `run` makes
@@ -398,7 +449,15 @@ def busy_message_for(screen: Screen, cursor: int, action: Action) -> str | None:
     if isinstance(screen, McpSelectionScreen):
         return _busy_message_for_mcp_selection(screen, cursor, action)
     if isinstance(screen, InstallPlanScreen):
-        return f"Installing into {screen.cli.display_name}…" if action is Action.CHOOSE else None
+        if action is not Action.CHOOSE:
+            return None
+        if screen.command == "update":
+            verb = "Updating"
+        elif screen.command == "upgrade":
+            verb = "Downloading and verifying"
+        else:
+            verb = "Installing into"
+        return f"{verb} {screen.cli.display_name}…"
     if isinstance(screen, StatusScreen):
         return "Reading snapshot generations…" if action is Action.CHOOSE else None
     if isinstance(screen, ModelsScreen):
@@ -424,6 +483,10 @@ def _busy_message_for_menu(screen: Menu, cursor: int, action: Action) -> str | N
         return f"Restoring generation {target.generation}…"
     if isinstance(target, ModelsTarget):
         return f"Reading the model catalog for {target.cli.display_name}…"
+    if isinstance(target, UpdateTarget):
+        return f"Checking the update plan for {target.cli.display_name}…"
+    if isinstance(target, UpgradeTarget):
+        return "Checking for a newer release…"
     return None
 
 
@@ -488,6 +551,22 @@ def restore_menu(generations: tuple[int, ...]) -> Union[Menu, Placeholder]:
     )
 
 
+def update_menu(installed: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
+    """One entry per CLI Pegasus is recorded as installed into -- the same
+    set `uninstall_menu` offers, for the same reason: `update` refuses a CLI
+    with nothing installed exactly the way `uninstall` does, and offering a
+    choice that can only fail is worse than not offering it."""
+    if not installed:
+        return Placeholder("Update", "Pegasus is not recorded as installed in any CLI on this machine.")
+    return Menu(
+        title="Reapply Pegasus's recorded selection into which CLI?",
+        entries=tuple(
+            Entry(f"{option.display_name:<18} {option.config_dir:<32} {option.tier}", UpdateTarget(option))
+            for option in installed
+        ),
+    )
+
+
 def models_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
     """One entry per detected CLI, the same set `install_menu` offers: a CLI
     that is not present has no model catalog this release can read either."""
@@ -502,24 +581,164 @@ def models_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
     )
 
 
-def main_menu(detections: tuple[CliOption, ...] = (), installed: tuple[CliOption, ...] = ()) -> Menu:
-    """The menu from the architecture doc, in the order it lists them.
+def _parse_version(text: str | None) -> tuple[int, ...] | None:
+    """`text` split on `.` into plain ints, or `None` for anything that does
+    not look exactly like that -- comparing versions must never guess an
+    ordering from a string that failed to parse."""
+    if not text:
+        return None
+    parts = text.split(".")
+    if not parts or not all(part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
 
-    `restore` has no entry of its own here on purpose: the doc's menu is
-    five entries, Install through Exit, and a sixth for a command the doc
-    never lists would break that parity for no reason `restore` itself
-    needs — it is reached from the status screen instead, see
-    :class:`StatusScreen`.
+
+def _is_older(candidate: str | None, than: str | None) -> bool:
+    """Whether `candidate` sorts strictly before `than`, numerically.
+
+    `False` whenever either side does not parse -- never an exception, and
+    never a guess. This is the one place both halves of `UpdateNotice`
+    (local and remote) decide "is this actually behind", so the same
+    defensiveness protects both.
+    """
+    left = _parse_version(candidate)
+    right = _parse_version(than)
+    if left is None or right is None:
+        return False
+    return left < right
+
+
+@dataclass(frozen=True)
+class BehindInstall:
+    """One installed CLI's own recorded version, already fetched from its
+    journal entry by `session` -- not yet known to actually be behind
+    `UpdateNotice.running`; `update_notice_lines` still checks that itself,
+    the same defensive way it always has, so a missing, malformed, equal, or
+    newer `recorded` produces silence about that CLI rather than a wrong
+    claim.
+
+    `remedy_command` is engine knowledge decided outside this pure layer:
+    whether `cli.update` would actually reapply this installation, or refuse
+    it over a bound mcp server key it was never given. `None` means `Update`
+    works; otherwise it is the exact one-time command to run instead, so the
+    notice can never recommend an action the engine itself will refuse --
+    `navigator` never probes an installation to find this out, it only
+    renders what `session` already decided.
+    """
+
+    display_name: str
+    recorded: str | None
+    remedy_command: str | None = None
+
+
+#: The remedy line for a newer *published* release -- the remote half of
+#: `UpdateNotice`. `Update` only ever reapplies an installation's own
+#: recorded selection; it cannot fetch a new binary, so its remedy can never
+#: name `Update` the way the local half's does. It names `Upgrade` instead --
+#: the menu entry that downloads, verifies, and replaces the running binary.
+REMOTE_UPDATE_REMEDY = "choose Upgrade"
+
+
+@dataclass(frozen=True)
+class UpdateNotice:
+    """Two independent, already-decided facts about how current this
+    installation is -- plain version strings, so this stays provable without
+    a clock, a socket, or the filesystem anywhere near it.
+
+    `running` is `pegasus.__version__`, the binary actually executing right
+    now. `local_behind` is every installed CLI's own recorded version, one
+    :class:`BehindInstall` each, in the order `session` found them -- empty
+    when nothing is installed. Naming each one, rather than collapsing them
+    to a single oldest version the way an earlier version of this notice
+    did, is what lets more than one installed CLI each get its own accurate
+    line instead of one arbitrary CLI speaking for all of them. `remote_latest`
+    is the newest published release a caller already looked up -- or `None`
+    for every one of "the check is disabled", "it has not answered yet", and
+    "it failed", which collapse to the same thing here on purpose: none of
+    them is worth saying anything about.
+    """
+
+    running: str
+    local_behind: tuple[BehindInstall, ...] = ()
+    remote_latest: str | None = None
+
+
+def update_notice_lines(notice: UpdateNotice) -> tuple[str, ...]:
+    """The main menu's preface: one line per installed CLI actually behind
+    the running binary, plus up to one more for a newer published release --
+    each naming its own remedy and never the other's.
+
+    A local install behind the running binary names `Update` as the remedy,
+    unless its own `BehindInstall.remedy_command` says `Update` would refuse
+    it -- reapplying its own recorded selection is exactly what brings it
+    current, when that reapplication is actually possible; when it is not,
+    naming `Update` anyway would send someone straight into a refusal, so
+    the one-time remedy command is named instead. A newer published release
+    never names `Update`: it cannot fetch a new binary, so its own line
+    points at :data:`REMOTE_UPDATE_REMEDY` instead. Any number of these can
+    be true at once, and all of them then appear, each on its own line so
+    none reads as the answer to another's problem.
+    """
+    lines: list[str] = []
+    for behind in notice.local_behind:
+        if not _is_older(behind.recorded, notice.running):
+            continue
+        if behind.remedy_command is not None:
+            lines.append(
+                f"{behind.display_name} was installed with Pegasus {behind.recorded}; the running binary is "
+                f"{notice.running}, but Update cannot reapply its bound mcp server key(s) without guessing -- "
+                f"run this once instead: {behind.remedy_command}"
+            )
+        else:
+            lines.append(
+                f"{behind.display_name} was installed with Pegasus {behind.recorded}; the running binary is "
+                f"{notice.running} -- choose Update to bring it current."
+            )
+    if _is_older(notice.running, notice.remote_latest):
+        lines.append(
+            f"A newer release, {notice.remote_latest}, has been published (this binary is {notice.running}) -- "
+            f"{REMOTE_UPDATE_REMEDY}."
+        )
+    return tuple(lines)
+
+
+def main_menu(
+    detections: tuple[CliOption, ...] = (),
+    installed: tuple[CliOption, ...] = (),
+    notice: UpdateNotice | None = None,
+) -> Menu:
+    """Grouped by intent rather than by when each entry was added: get
+    working and keep current (`Install`, `Update`, `Upgrade`), then configure
+    (`Configure models`), then inspect (`Status and diagnostics`), then
+    remove -- `Uninstall` last before `Exit` so it does not sit where
+    arrow-key navigation, moving one step at a time, can land on the
+    destructive entry by accident.
+
+    `restore` has no entry of its own here on purpose: a seventh entry for a
+    command the doc never lists would break that parity for no reason
+    `restore` itself needs — it is reached from the status screen instead,
+    see :class:`StatusScreen`. `Update` and `Upgrade` break that same parity
+    anyway, because unlike `restore` they are exactly the flows this and an
+    earlier change added.
+
+    `notice`, when given, becomes the menu's `preface` -- two independent
+    facts about how current this installation is, already decided by
+    whoever built it (`session` for the local half, `app` for the remote
+    half once its background check resolves); `None` here means "nothing
+    decided yet", not "checked and found nothing to say".
     """
     return Menu(
         title=f"Pegasus Harness {pegasus.__version__}",
         entries=(
             Entry("Install", install_menu(detections)),
+            Entry("Update", update_menu(installed)),
+            Entry("Upgrade", UpgradeTarget()),
             Entry("Configure models", models_menu(detections)),
             Entry("Status and diagnostics", StatusRequest()),
             Entry("Uninstall", uninstall_menu(installed)),
             Entry("Exit", QUIT),
         ),
+        preface=update_notice_lines(notice) if notice is not None else (),
         installed=bool(installed),
         version=pegasus.__version__,
     )
@@ -540,8 +759,12 @@ class Navigator:
     quit: bool = False
 
     @staticmethod
-    def starting(detections: tuple[CliOption, ...] = (), installed: tuple[CliOption, ...] = ()) -> "Navigator":
-        return Navigator(_stack=(main_menu(detections, installed),), _cursors=(0,))
+    def starting(
+        detections: tuple[CliOption, ...] = (),
+        installed: tuple[CliOption, ...] = (),
+        notice: UpdateNotice | None = None,
+    ) -> "Navigator":
+        return Navigator(_stack=(main_menu(detections, installed, notice),), _cursors=(0,))
 
     @property
     def current(self) -> Screen:
@@ -686,6 +909,20 @@ class Navigator:
         because whoever ran the engine call `session` holds no `Navigator`
         internals of its own to build the next state from."""
         return replace(self, _stack=self._stack + (screen,), _cursors=self._cursors + (0,))
+
+    def with_notice(self, notice: UpdateNotice) -> "Navigator":
+        """Attach `notice` to the main menu at the bottom of the stack --
+        even if navigation has already moved on since it was drawn.
+
+        The remote half of a notice starts a background check before the
+        first frame even exists, and can resolve at any point after --
+        including well after a person has walked several screens deep. The
+        main menu they will eventually return to is still `_stack[0]`
+        regardless of where they are now, so this rewrites exactly that
+        entry, cursor and everything else on the stack left untouched.
+        """
+        main = replace(self._stack[0], preface=update_notice_lines(notice))
+        return replace(self, _stack=(main,) + self._stack[1:])
 
     def _handle_on_placeholder(self, action: Action) -> "Navigator":
         # There is nothing to do here yet but leave: both keys acknowledge the

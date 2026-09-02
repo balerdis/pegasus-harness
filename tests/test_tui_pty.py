@@ -23,11 +23,15 @@ import time
 import unittest
 from pathlib import Path
 
+from dataclasses import replace
+
 import no_network  # noqa: F401  -- importing it is what installs the refusal
 from pegasus import cli
 from pegasus.adapters import available
+from pegasus.core import journal as journal_module
 from pegasus.core.types import Environment
 from pegasus.infra.fs_posix import PosixFileSystem
+from pegasus.infra.journal_store_file import FileJournalStore
 from pegasus.tui import wordmark
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -61,6 +65,12 @@ class _RealTerminalSession:
             os.environ["HOME"] = str(home)
             os.environ["XDG_DATA_HOME"] = str(home / ".local" / "share")
             os.environ.setdefault("TERM", "xterm")
+            # This is a real, separate process: `no_network`'s socket patch
+            # is process-local and does not reach it. The background update
+            # check would otherwise be the one place a test in this suite
+            # could touch the real network, so it is switched off here
+            # rather than left to depend on that machine's own connectivity.
+            os.environ["PEGASUS_NO_UPDATE_CHECK"] = "1"
             os.chdir(str(REPO_ROOT))
             sys.path.insert(0, str(SRC))
             os.execv(
@@ -143,7 +153,7 @@ class LiveFeedbackTest(unittest.TestCase):
 
     def test_choosing_status_shows_what_is_happening_before_the_report(self):
         self.session.output_so_far()  # let the main menu settle first.
-        self.session.press("jj")  # Install, Configure models, Status and diagnostics.
+        self.session.press("jjjj")  # Install, Update, Upgrade, Configure models, Status and diagnostics.
         self.session.press("\r")
         output = self.session.output_so_far()
         self.assertIn(STATUS_BUSY_NEEDLE, output, "no frame named the diagnostics run before it finished")
@@ -205,6 +215,53 @@ class WordmarkRenderingTest(unittest.TestCase):
         harness_rows = wordmark.word_rows(wordmark.HARNESS)
         self.assertIn(pegasus_rows[0], output)
         self.assertIn(harness_rows[0], output)
+
+
+class LocalUpdateNoticeTest(unittest.TestCase):
+    """Proof that the real loop shows the local half of the update notice on
+    its very first frame, straight off the journal, with the remote check
+    (switched off for every pty test -- see `_RealTerminalSession`) never in
+    the way of it."""
+
+    def setUp(self):
+        if os.geteuid() == 0:
+            self.skipTest("root is not refused by permission bits, and Pegasus refuses to install as root")
+        self.directory = tempfile.TemporaryDirectory(dir=_scratch_root())
+        self.addCleanup(self.directory.cleanup)
+        self.home = Path(self.directory.name)
+        cli_id = available().ids()[0]
+        layout = available().get(cli_id).layout(Environment(home=self.home))
+        layout.config_dir.mkdir(parents=True, exist_ok=True)
+        filesystem = PosixFileSystem()
+        runtime = cli.Runtime(
+            filesystem=filesystem,
+            home=self.home,
+            now="2026-08-14T00:00:00+00:00",
+            out=io.StringIO(),
+            variables={"PATH": ""},
+        )
+        cli.install(cli_id, runtime)
+
+        # Backdate the journal's own recorded version, the same fact
+        # `session.local_update_notice` reads, so the running binary looks
+        # newer than what this installation was made with.
+        store = FileJournalStore(filesystem, home=self.home, pegasus_version=cli.pegasus.__version__)
+        journal = store.load()
+        install = journal_module.install_for(journal, cli_id)
+        store.save(journal_module.with_install(journal, replace(install, release={**install.release, "version": "0.0.1"})))
+
+        self.session = _RealTerminalSession(self.home)
+        self.addCleanup(self.session.close)
+
+    def test_the_main_menu_names_update_as_the_remedy_for_a_stale_local_install(self):
+        output = self.session.output_so_far()
+        self.assertIn("0.0.1", output)
+        self.assertIn("Update", output)
+        # An install is recorded, so the main menu draws the wordmark rather
+        # than the plain "Pegasus Harness" title -- this is what proves the
+        # menu itself still rendered around the notice, not just the notice.
+        self.assertIn("Install", output)
+        self.assertIn("Exit", output)
 
 
 if __name__ == "__main__":

@@ -12,11 +12,14 @@ import io
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
+import pegasus
 from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import content as content_module
+from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core.types import Environment
 from pegasus.infra.fs_posix import PosixFileSystem
@@ -403,13 +406,188 @@ class DetectInstalledTest(SessionTestCase):
         self.assertEqual([option.id for option in session.detect_installed(runtime)], [CLI])
 
 
+class LocalUpdateNoticeTest(SessionTestCase):
+    """`session.local_update_notice`: the local half of `UpdateNotice`, read
+    straight off the journal -- no network, always available."""
+
+    def test_nothing_installed_says_nothing(self):
+        notice = session.local_update_notice(self.runtime(), installed=())
+        self.assertEqual(notice.local_behind, ())
+        self.assertEqual(notice.running, pegasus.__version__)
+
+    def test_an_install_made_with_an_older_release_is_named(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        store = cli.journal_store(runtime)
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        older_release = {**install.release, "version": "0.0.1"}
+        store.save(journal_module.with_install(journal, replace(install, release=older_release)))
+
+        notice = session.local_update_notice(runtime, installed=session.detect_installed(runtime))
+        self.assertEqual(len(notice.local_behind), 1)
+        behind = notice.local_behind[0]
+        self.assertEqual(behind.recorded, "0.0.1")
+        self.assertIsNone(behind.remedy_command)
+
+    def test_an_install_made_with_the_running_release_says_nothing(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        notice = session.local_update_notice(runtime, installed=session.detect_installed(runtime))
+        self.assertEqual(len(notice.local_behind), 1)
+        self.assertIsNone(notice.local_behind[0].remedy_command)
+        from pegasus.tui.navigator import update_notice_lines
+
+        self.assertEqual(update_notice_lines(notice), ())
+
+    def test_an_install_whose_update_would_refuse_names_the_remedy_not_update(self):
+        """The primary fix: an installation with a bound mcp server whose
+        key was never recorded (an install made before `mcp_bindings` was
+        tracked) makes `update` refuse outright -- the notice must never
+        send someone into that refusal by recommending `Update`."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["cbm=codebase-memory-mcp"])
+        store = cli.journal_store(runtime)
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        older_release = {**install.release, "version": "0.0.1"}
+        store.save(
+            journal_module.with_install(journal, replace(install, release=older_release, mcp_bindings={}))
+        )
+
+        notice = session.local_update_notice(runtime, installed=session.detect_installed(runtime))
+        self.assertEqual(len(notice.local_behind), 1)
+        behind = notice.local_behind[0]
+        self.assertEqual(behind.recorded, "0.0.1")
+        self.assertIsNotNone(behind.remedy_command)
+        self.assertEqual(behind.remedy_command, cli.install_command_for(CLI, ["cbm"]))
+
+        from pegasus.tui.navigator import update_notice_lines
+
+        lines = update_notice_lines(notice)
+        self.assertEqual(len(lines), 1)
+        self.assertNotIn("choose Update", lines[0])
+        self.assertIn(behind.remedy_command, lines[0])
+
+
+class UpdateThroughTheTuiTest(SessionTestCase):
+    """`Update`: mirrors the Install flow's menu-plan-confirm shape, but the
+    plan comes from `cli.update` -- an installation's own recorded
+    selection reapplied, no fresh choice ever asked for."""
+
+    def to_update_menu(self, runtime) -> Navigator:
+        navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
+        update_index = [entry.label for entry in navigator.current.entries].index("Update")
+        for _ in range(update_index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        return session.step(navigator, runtime, Action.CHOOSE)  # opens the update submenu
+
+    def test_the_update_entry_offers_only_installed_clis(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        navigator = self.to_update_menu(runtime)
+        self.assertIsInstance(navigator.current, Menu)
+        self.assertEqual([entry.target.cli.id for entry in navigator.current.entries], [CLI])
+
+    def test_choosing_an_installed_cli_fetches_a_plan_preview_and_writes_nothing(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["context7"])
+        before = _tree(self.home)
+        navigator = self.to_update_menu(runtime)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # fetches the update plan
+        self.assertIsInstance(navigator.current, InstallPlanScreen)
+        self.assertEqual(navigator.current.command, "update")
+        self.assertEqual(navigator.current.report["status"], "planned")
+        self.assertEqual(_tree(self.home), before)
+
+    def test_confirming_matches_the_equivalent_cli_update_on_a_separate_home(self):
+        with tempfile.TemporaryDirectory(dir=self.home.parent) as other:
+            other_home = Path(other)
+            for home in (self.home, other_home):
+                _present(home)
+                cli.install(CLI, self.runtime(home), mcp=["context7"])
+
+            cli_runtime = self.runtime(self.home)
+            cli_code = cli.main(["update", "--cli", CLI, "--json"], runtime=cli_runtime)
+            cli_report = json.loads(cli_runtime.out.getvalue())
+
+            tui_runtime = self.runtime(other_home)
+            navigator = self.to_update_menu(tui_runtime)
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)  # fetches the plan
+            navigator = session.step(navigator, tui_runtime, Action.CHOOSE)  # confirms it
+
+            self.assertEqual(cli_code, 0)
+            self.assertIsInstance(navigator.current, InstallResultScreen)
+            self.assertEqual(navigator.current.command, "update")
+            self.assertEqual(navigator.current.report["status"], "installed")
+            self.assertEqual(_sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home)))
+
+    def test_an_unresolved_mcp_binding_goes_straight_to_a_result_screen_naming_the_fix(self):
+        """No plan to preview and nothing to confirm: `update` refuses before
+        ever calling `install`, so this must land directly on a result
+        screen carrying the refusal -- not a plan screen that has nothing
+        real to show."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["cbm=codebase-memory-mcp"])
+        store = cli.journal_store(runtime)
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        store.save(journal_module.with_install(journal, replace(install, mcp_bindings={})))
+
+        navigator = self.to_update_menu(runtime)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+
+        self.assertIsInstance(navigator.current, InstallResultScreen)
+        self.assertEqual(navigator.current.command, "update")
+        report = navigator.current.report
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("cbm", report["error"])
+        self.assertIn(f"pegasus install --cli {CLI} --mcp cbm=<key>", report["error"])
+
+    def test_update_task_reports_progress_through_the_sink_and_matches_the_synchronous_result(self):
+        with tempfile.TemporaryDirectory(dir=self.home.parent) as other:
+            other_home = Path(other)
+            for home in (self.home, other_home):
+                _present(home)
+                cli.install(CLI, self.runtime(home), mcp=["context7"])
+
+            sync_runtime = self.runtime(self.home)
+            navigator = self.to_update_menu(sync_runtime)
+            navigator = session.step(navigator, sync_runtime, Action.CHOOSE)  # fetches the plan
+            sync_result = session.step(navigator, sync_runtime, Action.CHOOSE)
+
+            task_runtime = self.runtime(other_home)
+            navigator = self.to_update_menu(task_runtime)
+            navigator = session.step(navigator, task_runtime, Action.CHOOSE)  # fetches the plan
+            plan_screen = navigator.current
+
+            events = []
+            run = session.plan_task(navigator, task_runtime, plan_screen)
+            task_result = run(events.append)
+
+            self.assertTrue(events, "no Progress event reached the sink")
+            self.assertIsInstance(task_result.current, InstallResultScreen)
+            self.assertEqual(task_result.current.command, "update")
+            self.assertEqual(
+                _sans(sync_result.current.report, str(self.home)),
+                _sans(task_result.current.report, str(other_home)),
+            )
+
+
 class StatusScreenTest(SessionTestCase):
     def test_choosing_status_from_the_main_menu_matches_doctor(self):
         _present(self.home)
         runtime = self.runtime()
         cli.install(CLI, runtime)
         navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
-        for _ in range(2):
+        status_index = [entry.label for entry in navigator.current.entries].index("Status and diagnostics")
+        for _ in range(status_index):
             navigator = navigator.handle(Action.MOVE_DOWN)
         self.assertIsInstance(navigator.current.entries[navigator.cursor].target, StatusRequest)
         navigator = session.step(navigator, runtime, Action.CHOOSE)
@@ -420,7 +598,9 @@ class StatusScreenTest(SessionTestCase):
     def test_choosing_restore_from_status_with_nothing_captured_says_so(self):
         runtime = self.runtime()
         navigator = Navigator.starting()
-        navigator = navigator.handle(Action.MOVE_DOWN).handle(Action.MOVE_DOWN)
+        status_index = [entry.label for entry in navigator.current.entries].index("Status and diagnostics")
+        for _ in range(status_index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
         navigator = session.step(navigator, runtime, Action.CHOOSE)  # StatusScreen
         navigator = session.step(navigator, runtime, Action.CHOOSE)  # asks for the restore menu
         self.assertIsInstance(navigator.current, Placeholder)
@@ -429,7 +609,8 @@ class StatusScreenTest(SessionTestCase):
 class UninstallThroughTheTuiTest(SessionTestCase):
     def to_preview(self, runtime) -> "Navigator":
         navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
-        for _ in range(3):
+        uninstall_index = [entry.label for entry in navigator.current.entries].index("Uninstall")
+        for _ in range(uninstall_index):
             navigator = navigator.handle(Action.MOVE_DOWN)
         navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the CLI choice
         navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the preview
@@ -501,7 +682,9 @@ class RestoreThroughTheTuiTest(SessionTestCase):
 
     def to_generation_preview(self, runtime) -> "Navigator":
         navigator = Navigator.starting()
-        navigator = navigator.handle(Action.MOVE_DOWN).handle(Action.MOVE_DOWN)
+        status_index = [entry.label for entry in navigator.current.entries].index("Status and diagnostics")
+        for _ in range(status_index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
         navigator = session.step(navigator, runtime, Action.CHOOSE)  # StatusScreen
         navigator = session.step(navigator, runtime, Action.CHOOSE)  # RestoreMenuScreen
         self.assertIsInstance(navigator.current, Menu)
@@ -564,7 +747,9 @@ class ModelsScreenTestCase(SessionTestCase):
     def to_models_screen(self, runtime: cli.Runtime) -> Navigator:
         _present(self.home)
         navigator = Navigator.starting(session.detect_clis(runtime), session.detect_installed(runtime))
-        navigator = navigator.handle(Action.MOVE_DOWN)  # onto "Configure models"
+        models_index = [entry.label for entry in navigator.current.entries].index("Configure models")
+        for _ in range(models_index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
         navigator = session.step(navigator, runtime, Action.CHOOSE)  # the per-CLI choice, pure
         return session.step(navigator, runtime, Action.CHOOSE)  # fetches the catalog
 
