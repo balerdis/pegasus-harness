@@ -1,6 +1,8 @@
-# Pegasus Harness v4: núcleo agnóstico y adapters por CLI
+# Pegasus Harness: núcleo agnóstico y adapters por CLI
 
-Pegasus v4 separa **qué distribuye** (contenido común a cualquier CLI de agentes) de **cómo lo materializa** (un adapter por CLI). El motor deja de conocer nombres de CLIs: recibe contenido del núcleo, se lo da al adapter, y el adapter decide dónde va y con qué forma. Es un rediseño con ruptura de compatibilidad respecto de v3.1.x.
+Pegasus separa **qué distribuye** (contenido común a cualquier CLI de agentes) de **cómo lo materializa** (un adapter por CLI). El motor deja de conocer nombres de CLIs: recibe contenido del núcleo, se lo da al adapter, y el adapter decide dónde va y con qué forma. Fue un rediseño con ruptura de compatibilidad respecto de v3.1.x, entregado como v4 y continuado desde entonces.
+
+Este documento se escribió para ese rediseño y siguió creciendo con el producto. El corte numerado de unidades es el plan de v4 y su ejecución, y está cerrado; lo que se agregó después vive en su propia sección, y no lleva número porque no salió de un plan sino de instalaciones reales. Al 5.8.0 lo que sigue acá es la arquitectura vigente, no un registro histórico — cuando una parte deja de serlo, se corrige o se anota como deuda, nunca se deja parada.
 
 Este documento fija la arquitectura antes de escribir código. No es un plan de tareas.
 
@@ -1209,6 +1211,8 @@ La clasificación de la unidad 10 responde una pregunta —qué causa un `False`
 2. **Unidad 4.** Launcher, empaquetado de un solo archivo. Destraba la TUI.
 3. **Unidades 5 y 6.** La TUI.
 
+Ese orden se ejecutó entero. Las unidades 4, 5 y 6 están entregadas —el `zipapp` es el único punto de entrada y la TUI existe con sus pantallas de instalación y de modelos—, y con ellas el corte numerado quedó cerrado. Lo que vino después no siguió este plan y no pretende hacerlo: vive en "Lo que se agregó después del corte".
+
 Ya entregado, en este orden: el cierre de la unidad 3 —el `.env` real del skill registry y el retiro de los marcadores sin lector—; la unidad 7, que fue temprano por ser la herramienta con la que se verifica todo lo que viene después; la **8a1**, con la categoría `mcp/` y el primer servidor instalado de verdad; la **unidad 9**, en cadena de cuatro PRs; la **8a2**, que cerró la cadena 8a con la selección del usuario y un retiro que salió genérico; y la **unidad 10**, el contrato del puerto de filesystem.
 
 El presupuesto de revisión es de **800 líneas cambiadas por PR**. Cada unidad se mide al planificar sus tareas; la que se pase se parte en una cadena, con la estrategia definida antes de empezar a escribir código. La unidad 1 ya se midió y por eso está partida en 1a y 1b.
@@ -1341,4 +1345,8 @@ Y salió del árbol lo que quedaba de la distribución de v3: el binario vendori
 
 **Después de 4.1.0, Pegasus se quedó sin dependencias de terceros.** Con eso resuelto, el venv privado dejó de aislar nada, así que el punto de entrada cambió de shim más venv a un único `zipapp` con shebang y bit ejecutable (`tools/build_zipapp.py`), acompañado de su `.sha256`. Instalar pasa a ser bajar dos archivos, verificar el checksum y dejar el ejecutable en el PATH — sin wheel, sin `pip install`, sin `pegasus setup`. Esto sólo era viable porque, en paralelo, el contenido y los assets de los adapters aprendieron a leerse también desde adentro de un zip.
 
-**Lo que sigue.** La migración de tests que la unidad 10 dejó a medio camino: `tests/test_dependencies.py` y `tests/test_model_assignment_store.py` siguen enteros sobre el doble en memoria, sin la contraparte contra disco real que sus vecinos ya tienen. Y el resto vive en "Deudas sin unidad asignada", acarreado a propósito.
+**De 5.1.0 a 5.8.0 el producto dejó de crecer por plan y empezó a crecer por evidencia.** Nueve releases, y casi ninguna nació de una unidad: nacieron de mirar una instalación viva y encontrar que el producto prometía algo que no cumplía. La línea de base `{"*": "deny"}` negaba el `skill` que pone el inventario delante de un agente, y también el `external_directory` sin el cual ningún agente podía leer las skills que Pegasus le instala; el contrato común de engram no llegaba a nadie porque ningún agente declaraba el servidor; los párrafos de un MCP quedaban en el prompt aunque el servidor no se hubiera elegido; el comodín de un grant alcanzaba lo que destruye estado; `doctor` afirmaba que no había servidores configurados en una máquina que tenía seis. Todo eso está en "Lo que se agregó después del corte" y en las deudas resueltas.
+
+La lección que deja esa serie es de método y no de diseño: **cada uno de esos defectos era invisible desde el repositorio y evidente desde una instalación**. La suite verificaba que el archivo se escribiera; lo que faltaba era preguntarle al runtime qué había entendido. `opencode debug agent`, un handshake real, un `chmod` sobre un árbol de dos archivos — las herramientas que encontraron los defectos fueron siempre las que ejercitan, no las que inspeccionan.
+
+**Lo que sigue.** La migración de tests que la unidad 10 dejó a medio camino: `tests/test_dependencies.py` y `tests/test_model_assignment_store.py` siguen enteros sobre el doble en memoria, sin la contraparte contra disco real que `test_journal_store.py` y `test_snapshot_store.py` ya tienen. Sigue abierta después de nueve releases, que es su propio dato. Y el resto vive en "Deudas sin unidad asignada", acarreado a propósito.

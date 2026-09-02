@@ -161,7 +161,7 @@ OpenCode: present at /home/.config/opencode, Pegasus not installed.
 | Rollback | `pegasus restore` devuelve el estado exacto anterior al último comando; `pegasus uninstall --cli opencode` retira sólo lo que el journal reclama como propio. |
 
 Para el uso diario, seguí [MANUAL.md](MANUAL.md). Para la política de ownership y rollback, consultá
-[docs/pegasus-v4/arquitectura.md](docs/pegasus-v4/arquitectura.md).
+[docs/arquitectura/arquitectura.md](docs/arquitectura/arquitectura.md).
 
 Si un agente te asiste, usá [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md) antes de recibir comandos de
 instalación. Esa guía no lee ni imprime tu configuración o credenciales de OpenCode.

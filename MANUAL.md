@@ -81,4 +81,4 @@ El journal vive en `$XDG_DATA_HOME/pegasus-harness/journal-v4.json` (o `~/.local
 
 - Para el recorrido completo de instalación: [INSTALL.md](INSTALL.md).
 - Para instalación asistida por un agente: [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md).
-- Para la arquitectura y las decisiones de diseño de v4: [docs/pegasus-v4/arquitectura.md](docs/pegasus-v4/arquitectura.md).
+- Para la arquitectura y las decisiones de diseño de v4: [docs/arquitectura/arquitectura.md](docs/arquitectura/arquitectura.md).

@@ -66,7 +66,7 @@ La ruta asistida por agente empieza en [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md
 ## Más allá de instalar
 
 Para el uso diario, seguí [MANUAL.md](MANUAL.md). Para el diseño hexagonal, los puertos y las
-decisiones detrás de esta versión, consultá [docs/pegasus-v4/arquitectura.md](docs/pegasus-v4/arquitectura.md).
+decisiones detrás de esta versión, consultá [docs/arquitectura/arquitectura.md](docs/arquitectura/arquitectura.md).
 
 ## Licencia
 
