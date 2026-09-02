@@ -13,6 +13,7 @@ from pegasus.core import content as content_module
 from pegasus.tui.navigator import (
     Action,
     CliOption,
+    GenerationSummary,
     InstallTarget,
     McpOption,
     McpSelectionScreen,
@@ -62,7 +63,11 @@ class TuiNamesAnExistingCommandTest(unittest.TestCase):
         self.assertIn(confirm.command, cli.COMMANDS)
 
     def test_every_restore_choice_names_a_command_the_flags_expose(self):
-        menu = restore_menu(generations=(2, 1))
+        summaries = (
+            GenerationSummary(generation=2, taken_at="2026-08-14T00:00:00+00:00", files_restored=1, paths_cleared=0),
+            GenerationSummary(generation=1, taken_at="2026-08-14T00:00:00+00:00", files_restored=1, paths_cleared=0),
+        )
+        menu = restore_menu(summaries)
         self.assertIsInstance(menu, Menu)
         for entry in menu.entries:
             self.assertIsInstance(entry.target, RestoreTarget)

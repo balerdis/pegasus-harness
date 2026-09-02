@@ -24,7 +24,7 @@ from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core.types import Environment
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import journal_path
-from pegasus.infra.snapshot_store_file import snapshots_root
+from pegasus.infra.snapshot_store_file import MANIFEST_FILENAME, snapshots_root
 from pegasus.tui import session
 from pegasus.tui.navigator import (
     Action,
@@ -725,6 +725,59 @@ class RestoreThroughTheTuiTest(SessionTestCase):
             self.assertIsInstance(navigator.current, RestoreResultScreen)
             self.assertEqual(navigator.current.report["status"], "restored")
             self.assertEqual(_sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home)))
+
+    def to_restore_menu(self, runtime) -> "Navigator":
+        navigator = Navigator.starting()
+        status_index = [entry.label for entry in navigator.current.entries].index("Status and diagnostics")
+        for _ in range(status_index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # StatusScreen
+        return session.step(navigator, runtime, Action.CHOOSE)  # RestoreMenuScreen
+
+    def test_the_restore_menu_labels_each_generation_with_when_it_was_taken(self):
+        """The bug report this closes: a bare "Generation 4" tells nobody
+        which snapshot is the one they want. `session.step` now reads each
+        generation's own manifest, so the label carries the fact a person
+        actually recognises -- when it was taken -- not just its ordinal."""
+        _present(self.home)
+        runtime = self.runtime(self.home)
+        cli.install(CLI, runtime)
+        cli.install(CLI, runtime)  # a second install captures a second generation
+
+        navigator = self.to_restore_menu(runtime)
+
+        self.assertIsInstance(navigator.current, Menu)
+        labels = [entry.label for entry in navigator.current.entries]
+        self.assertEqual(len(labels), 2)
+        self.assertTrue(labels[0].startswith("Generation 2 — 14 Aug 2026, 00:00 (most recent)"), labels[0])
+        self.assertTrue(labels[1].startswith("Generation 1 — 14 Aug 2026, 00:00"))
+        self.assertNotIn("(most recent)", labels[1])
+
+    def test_an_unreadable_generation_is_skipped_without_hiding_a_good_one(self):
+        """`readable_generations` only checks a manifest file exists, not
+        that it parses (see `ports.snapshot_store`'s module docstring), so a
+        generation it still names can raise `SnapshotStoreError` once this
+        screen actually reads it. One corrupt folder must not blank out the
+        whole recovery screen -- the good generation must still be offered,
+        and the screen must say one was left out rather than pretend there
+        never was another."""
+        _present(self.home)
+        runtime = self.runtime(self.home)
+        cli.install(CLI, runtime)
+        cli.install(CLI, runtime)  # generations 1 and 2
+        corrupt_manifest = snapshots_root(runtime.filesystem, self.home) / "000002" / MANIFEST_FILENAME
+        corrupt_manifest.write_bytes(b"not json at all")
+
+        navigator = self.to_restore_menu(runtime)
+
+        self.assertIsInstance(navigator.current, Menu)
+        self.assertEqual([entry.label.split(" ")[1] for entry in navigator.current.entries], ["1"])
+        note = next(line for line in navigator.current.preface if "could not be read" in line)
+        # The corrupt folder here is generation 2, the NEWEST one, so the note
+        # has to name it and the surviving entry must not claim to be the most
+        # recent snapshot Pegasus took -- it is only the most recent it can open.
+        self.assertIn("Generation 2", note)
+        self.assertNotIn("(most recent)", navigator.current.entries[0].label)
 
 
 def _write_catalog(home: Path, payload: dict) -> None:
