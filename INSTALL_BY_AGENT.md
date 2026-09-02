@@ -8,6 +8,13 @@ Pegasus 5 es un solo archivo: `pegasus`. No hay wheel, no hay venv, no hay `pip 
 descarga, se verifica y se deja ejecutable en el PATH. Cada paso de esta guía dice si necesita red o
 no, y qué hacer si falla.
 
+**Nunca invoques `pegasus` sin subcomando.** Corrido en una terminal abre un menú interactivo (una
+TUI) que espera teclas de una persona; un agente no tiene con qué manejarlo. Sin terminal (stdin y
+stdout no conectados a una), no hay menú: imprime la misma línea de uso que `--help` y termina con
+código de salida distinto de cero -- que tampoco es un resultado útil para vos. Usá siempre un
+subcomando explícito (`doctor`, `install`, `uninstall`, `restore`, `models`), y agregá `--json` cuando
+necesites un resultado que puedas parsear en vez de prosa.
+
 ## 1. Ubicar el checkout y confirmar la cuenta
 
 ```sh
@@ -16,16 +23,28 @@ id -u
 ```
 
 Si el segundo comando imprime `0`, detenete: no instales como root. Si el primero falla, no estás en
-el checkout de `pegasus-harness`; pedile a la persona la ruta correcta antes de seguir. (Instalar
-Pegasus no exige un checkout — este chequeo es sólo para confirmar dónde estás parado si trabajás
-sobre uno.)
+el checkout de `pegasus-harness` — y no importa: instalar Pegasus no exige ninguno. No le pidas nada a
+la persona por esto; seguí directamente con el paso 2 desde el directorio que sea.
 
 ## 2. Descargar el asset del release y verificarlo
 
-Sustituí `RELEASE_TAG` por el tag que la persona pidió.
+Sustituí `RELEASE_TAG` por el tag que la persona pidió. Si no nombró ninguno — "instalame pegasus", sin
+más — no le preguntes por un número de versión: resolvé vos el último tag publicado, con `gh` si está
+disponible y con la API si no.
 
 ```sh
-RELEASE_TAG="v5.0.0"
+gh release view --repo balerdis/pegasus-harness --json tagName -q .tagName
+
+# sin gh:
+curl -fsSL https://api.github.com/repos/balerdis/pegasus-harness/releases/latest \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])"
+```
+
+Si ninguna de las dos resuelve (sin red, sin `gh`, API caída), no adivines un número: decíselo a la
+persona y pedile el tag.
+
+```sh
+RELEASE_TAG="v5.9.0"
 DOWNLOAD_DIR="$HOME/Downloads/pegasus-$RELEASE_TAG"
 mkdir -p "$DOWNLOAD_DIR"
 cd "$DOWNLOAD_DIR"
@@ -59,15 +78,16 @@ internet.
 
 *No ejecutado en esta verificación: `curl` contra GitHub necesita red, prohibida en este entorno de
 trabajo. Lo que sí se probó, contra un artefacto construido localmente con `tools/build_zipapp.py` y
-su propio `release-manifest.json` generado por `tools/build_release_evidence.py --tag v4.1.2`, es que
-`sha256sum -c` y la comparación de `schema`/`tag`/`assets` distinguen exactamente un archivo correcto
-de uno alterado — corrida real:*
+su propio `release-manifest.json` generado por `tools/build_release_evidence.py --tag v5.9.0` (el
+mismo tag de ejemplo que la sección anterior, para que ambas corridas queden coherentes entre sí), es
+que `sha256sum -c` y la comparación de `schema`/`tag`/`assets` distinguen exactamente un archivo
+correcto de uno alterado — corrida real:*
 
 ```
 $ sha256sum -c pegasus.sha256
 pegasus: OK
 $ python3 -c "... (script de arriba) ..."
-release-manifest.json: coincide con v4.1.2 7afef58e6739b81030511e98a3f288cc0eb11343
+release-manifest.json: coincide con v5.9.0 57d58ccd2d942043a32a20f7696c48fc075e6e5d
 ```
 
 *y, contra la misma copia con un byte agregado a mano:*
@@ -137,6 +157,25 @@ simplemente no se instala:
 ```sh
 pegasus install --cli opencode --dry-run --mcp context7
 ```
+
+Si la persona ya corre uno de estos servidores por su cuenta bajo una clave propia, no lo instales de
+nuevo: usá `--mcp <id>=<clave>` (por ejemplo `--mcp cbm=codebase-memory-mcp`). Esa forma pide a Pegasus
+la convención y los permisos del servidor, sin descargar nada ni tocar la configuración de mcp para
+ese id -- es lo que corresponde cuando la persona dice "eso ya lo tengo corriendo yo".
+
+**Preflight de Node:** si alguno de los servidores elegidos se distribuye por npm -- hoy, sólo
+`playwright` -- e `install` no encuentra `node` en el PATH, se niega antes de escribir nada,
+*incluso en `--dry-run`*, con:
+
+```
+playwright needs Node to install, and node is not on PATH; installing Node is the user's own
+responsibility, so change the selection or make node available before retrying
+```
+
+Esto no es un bug ni algo que el agente deba resolver instalando Node por su cuenta: contale a la
+persona que ese servidor necesita Node y dale las dos salidas reales -- instalar Node ella misma, o
+sacar ese servidor de la selección -- y esperá su decisión. (Reinstalar un servidor npm que ya está
+materializado no dispara esto: no hay nada que buscar, así que no hace falta Node.)
 
 Mostrale el plan a la persona antes de aplicar. Recién con su confirmación, repetí el mismo comando sin
 `--dry-run`.
