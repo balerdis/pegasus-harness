@@ -978,6 +978,91 @@ class RetireTest(RealHomeTestCase):
         self.assertEqual(second.unaccounted, ())
 
 
+class OnStepTest(RealHomeTestCase):
+    """`on_step` opens the seam a caller uses to render progress. `apply` and
+    `retire` only ever report a fact -- "this unit is done, it is called X" --
+    never a fraction; the arithmetic belongs one layer up."""
+
+    def install(self, *entries, links=()) -> Install:
+        return Install(
+            cli=CLI, installed_at=AT, config_dir=self.CONFIG, release={}, entries=tuple(entries), links=tuple(links)
+        )
+
+    def file_entry(self, content: bytes = b"hello", **overrides) -> Record:
+        fields = dict(
+            id="skill:alpha",
+            kind="file",
+            target=self.SKILL,
+            after_digest=ownership.digest_of_bytes(content),
+            created_at=AT,
+            mode="0644",
+        )
+        fields.update(overrides)
+        return Record(**fields)
+
+    def key_entry(self, value=None, **overrides) -> Record:
+        value = {"model": "vendor/model"} if value is None else value
+        fields = dict(
+            id="agent:alpha",
+            kind="config-key",
+            target=self.SETTINGS,
+            pointer="/agent/alpha",
+            codec="json",
+            after_digest=ownership.digest_of_value(value),
+            created_at=AT,
+        )
+        fields.update(overrides)
+        return Record(**fields)
+
+    # --- apply ---
+
+    def test_apply_notifies_once_per_placement_step(self):
+        artifacts = (self.a_file(), self.a_key(identifier="agent:beta", ptr="/agent/beta"))
+        seen: list[str] = []
+        plan = self.plan_for(*artifacts)
+        planner.apply(self.filesystem, plan, at=AT, on_step=seen.append)
+        self.assertEqual(len(seen), len(plan.placements))
+        self.assertEqual(set(seen), {"skill:alpha", "agent:beta"})
+
+    def test_apply_notifies_once_per_key_even_when_they_share_one_document(self):
+        """Two keys in one document cost a single write but must still be two
+        notifications, one per `Step`, or a caller's running total would never
+        reconcile with `len(plan.placements)`."""
+        artifacts = (self.a_key(), self.a_key(identifier="agent:beta", ptr="/agent/beta"))
+        seen: list[str] = []
+        planner.apply(self.filesystem, self.plan_for(*artifacts), at=AT, on_step=seen.append)
+        self.assertEqual(seen, ["agent:alpha", "agent:beta"])
+
+    def test_apply_without_on_step_behaves_exactly_as_before(self):
+        applied = planner.apply(self.filesystem, self.plan_for(self.a_file()), at=AT)
+        self.assertEqual(len(applied.records), 1)
+
+    def test_a_step_callback_that_raises_still_rolls_back_fully(self):
+        """The callback is the caller's business, not the engine's, but a bug in
+        it must not leave the home half-installed: the same rollback that
+        answers a filesystem failure answers this one too."""
+
+        def boom(_unit: str) -> None:
+            raise ValueError("caller bug")
+
+        plan = self.plan_for(self.a_file())
+        with self.assertRaises(planner.PlannerError):
+            planner.apply(self.filesystem, plan, at=AT, on_step=boom)
+        self.assertFalse(self.SKILL.exists())
+
+    # --- retire ---
+
+    def test_retire_notifies_once_per_retired_record(self):
+        seen: list[str] = []
+        planner.retire(self.filesystem, self.install(self.file_entry(), self.key_entry()), on_step=seen.append)
+        self.assertEqual(set(seen), {"skill:alpha", "agent:alpha"})
+        self.assertEqual(len(seen), 2)
+
+    def test_retire_without_on_step_behaves_exactly_as_before(self):
+        retired = planner.retire(self.filesystem, self.install(self.file_entry()))
+        self.assertEqual(retired.removed, ("skill:alpha",))
+
+
 class _DefaultModeSpy:
     """Records the mode an undo path actually asked for, if any.
 

@@ -397,6 +397,20 @@ class InstallTest(RealHomeTestCase):
         self.assertEqual(report["status"], "failed")
         self.assert_no_artifacts_written()
 
+    def test_a_bad_mcp_value_is_reported_before_an_unwritable_journal(self):
+        """Both failures are present at once, and only one message can reach
+        the user. `--mcp` is resolved before `store.ensure_writable()`, and
+        that ordering is a decision, not an accident: a typo the user just
+        typed is more actionable than a filesystem permission fact they did
+        not, so it is what they see first. This pins that order so a future
+        reshuffle of the preflight has to break this test on purpose.
+        """
+        self.present()
+        self.addCleanup(self.make_journal_unwritable())
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "bogus")
+        self.assertNotEqual(code, 0)
+        self.assertIn("bogus", report["error"])
+
     def test_a_dry_run_also_refuses_an_unreadable_journal(self):
         self.present()
         self.store().path.parent.mkdir(parents=True, exist_ok=True)
@@ -600,9 +614,9 @@ class DriftReconciliationTest(RealHomeTestCase):
         plan_artifacts = None
         real_apply = planner.apply
 
-        def capture(filesystem, plan, *, at):
+        def capture(filesystem, plan, *, at, on_step=None):
             nonlocal plan_artifacts
-            applied = real_apply(filesystem, plan, at=at)
+            applied = real_apply(filesystem, plan, at=at, on_step=on_step)
             plan_artifacts = applied
             return applied
 
@@ -1026,6 +1040,66 @@ class InstallMcpTest(RealHomeTestCase):
     # handler already reporting a retirement failure — lives in
     # `SecondaryFaultTest`, against a real home. Both conditions it needs are
     # permissions, and the double has none.
+
+
+class InstallNodePreflightTest(RealHomeTestCase):
+    """Choosing an `npm` server without Node on `PATH` used to run the whole
+    install and fail at the very last step, inside `materialize_npm`. This is
+    the preflight guard that catches the same fact before the first artifact
+    is written — including on a `--dry-run`, so the TUI's plan-preview screen
+    can surface it at selection time rather than at the point of no return.
+    """
+
+    def with_node_on_path(self) -> dict[str, str]:
+        """A throwaway `PATH` entry holding an executable file named `node`,
+        so `shutil.which` finds it exactly the way it would find a real
+        Node installation."""
+        bin_dir = self.home / "fake-bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        node = bin_dir / "node"
+        node.write_text("#!/bin/sh\nexit 0\n")
+        node.chmod(0o755)
+        return {"PATH": str(bin_dir)}
+
+    def test_choosing_an_npm_server_without_node_is_refused_before_anything_is_written(self):
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "playwright")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("playwright", report["error"])
+        self.assertIn("node", report["error"])
+        self.assert_disk_untouched()
+
+    def test_the_refusal_fires_on_a_dry_run_too(self):
+        """A dry run is what the TUI's plan-preview screen runs, so this is
+        what makes the user learn about the missing runtime at selection time
+        instead of at the point of no return."""
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "playwright", "--dry-run")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "failed")
+        self.assertIn("playwright", report["error"])
+        self.assert_disk_untouched()
+
+    def test_choosing_no_npm_server_does_not_require_node(self):
+        """`context7` is a `remote` server: nothing about its selection should
+        ever need Node on `PATH`."""
+        self.present()
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "context7")
+        self.assertEqual(code, 0)
+
+    def test_node_present_lets_the_npm_server_selection_through(self):
+        """With Node on `PATH`, the preflight guard has nothing to say, and
+        the run proceeds to its normal dry-run report."""
+        self.present()
+        context = cli.Runtime(
+            filesystem=self.filesystem, home=self.home, now=AT, out=io.StringIO(),
+            variables=self.with_node_on_path(),
+        )
+        code = cli.main(["install", "--cli", CLI, "--mcp", "playwright", "--dry-run", "--json"], runtime=context)
+        report = json.loads(context.out.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(report["status"], "planned")
 
 
 class InstallUnaccountedRetirementTest(RealHomeTestCase):
