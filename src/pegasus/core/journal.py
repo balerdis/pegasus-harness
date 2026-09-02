@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 SCHEMA = "pegasus-harness/journal/v4"
@@ -252,6 +252,17 @@ def _record_from_dict(payload: Any, home: Path, cli: str) -> Record:
     )
 
 
+def _leaves_the_tree(relpath: str) -> bool:
+    """Whether joining this onto a directory could land outside it.
+
+    Judged by shape and never by resolving anything: this module touches no
+    disk, and a path whose safety depends on what happens to exist when it is
+    judged is not safe.
+    """
+    candidate = PurePosixPath(relpath)
+    return candidate.is_absolute() or ".." in candidate.parts
+
+
 def _program_from_dict(payload: dict[str, Any], identifier: str, cli: str) -> tuple[str | None, str | None]:
     """A journal written before this pair existed carries neither key at all --
     that must load exactly as cleanly as one that carries both, since a
@@ -259,12 +270,23 @@ def _program_from_dict(payload: dict[str, Any], identifier: str, cli: str) -> tu
     who found it missing or wrong. Absent, both come back ``None``; present,
     both must be well-formed, since a half-written pair could never have come
     from `dependencies.materialize`.
+
+    Well-formed includes staying inside the tree, and that check has to live
+    here because nothing downstream performs it: the reader joins this onto
+    the record's ``target``, and a join is not a boundary. An absolute path
+    discards the tree root whole, and a `..` chain walks out of it — either
+    one aims the program check at a file of somebody's choosing, which then
+    passes forever against a digest they also chose, while the real tree is
+    never read at all. The write side cannot produce such a path, since it
+    derives the value with `relative_to` against the tree root; a journal
+    edited by hand can, and this is the only place that sees it before it is
+    used.
     """
     relpath = payload.get("program_relpath")
     digest = payload.get("program_digest")
     if relpath is None and digest is None:
         return None, None
-    if not isinstance(relpath, str) or not relpath:
+    if not isinstance(relpath, str) or not relpath or _leaves_the_tree(relpath):
         raise JournalError(f"{cli}: {identifier} has a malformed program_relpath")
     if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
         raise JournalError(f"{cli}: {identifier} has a malformed program_digest")

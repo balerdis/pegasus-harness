@@ -974,6 +974,13 @@ def _health(
         "drifted": [],
         "missing": [],
         "unreadable": [],
+        # Not a fourth way of being wrong: a way of not being checkable. A
+        # dependency tree recorded before the program pair existed, or one whose
+        # program `npm ci` never wrote where the descriptor said it would, has
+        # nothing to compare against — so it reports no drift, and would read as
+        # verified if nothing said otherwise. Naming it is the difference
+        # between "checked and fine" and "never checked".
+        "unverified": [],
     }
     if install is None:
         return health
@@ -993,6 +1000,8 @@ def _health(
         except FileSystemError:
             health["unreadable"].append(entry.id)
             continue
+        if entry.kind == "dependency-tree" and entry.program_digest is None:
+            health["unverified"].append(entry.id)
         if current is None:
             health["missing"].append(entry.id)
         elif current != entry.after_digest:
@@ -1030,11 +1039,14 @@ def _mcp_checks(runtime: Runtime, install) -> list[mcp_handshake.ServerCheck]:
     Only what `_mcp_entries` finds is ever executed: a `config-key` entry
     whose id this same install wrote, read back from the configuration file
     Pegasus itself placed. Nothing named anywhere else is ever a candidate.
+
+    A bound server is not here, and that is the point of it living in
+    `mcp_bound` instead: this list is what launching produced, and a server
+    with no configuration of its own was never launched. It used to be
+    appended here as well, so a report with the flag named the same server
+    twice under two headings that disagreed about what it was.
     """
-    return [
-        *(_mcp_checks_one(runtime, entry, name) for entry, name in _mcp_entries(install)),
-        *_bound_checks(install),
-    ]
+    return [_mcp_checks_one(runtime, entry, name) for entry, name in _mcp_entries(install)]
 
 
 def _bound_checks(install) -> list[mcp_handshake.ServerCheck]:
@@ -1572,6 +1584,10 @@ def _cli_prose(entry: dict[str, Any]) -> str:
         ("changed by hand", "drifted"),
         ("missing", "missing"),
         ("could not be checked", "unreadable"),
+        # Reads next to the others on purpose: the difference between an
+        # artifact that came back wrong and one that was never checkable is
+        # exactly what this line exists to keep visible.
+        ("carrying no record of their own program, so unverified", "unverified"),
     ):
         if entry.get(key):
             line += f" {len(entry[key])} {label}: {', '.join(entry[key])}."

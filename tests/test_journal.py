@@ -168,6 +168,27 @@ class ValidationTest(unittest.TestCase):
             journal_module.from_dict(payload, HOME)
         self.assertIn("program_digest", str(raised.exception))
 
+    def test_a_program_relpath_that_leaves_the_tree_is_refused(self):
+        """The path is joined onto the tree root, and a join is not a boundary.
+
+        `Path('/deps/cbm/1.0') / '/etc/passwd'` is `/etc/passwd` — the left
+        operand is discarded whole — and a `..` chain walks out the same way.
+        A journal that names either points `doctor`'s tamper check at a file
+        of somebody's choosing: hash a file they control, record its digest
+        here, and the check passes forever while the real tree is never read
+        at all. It is the one input to that check nobody else validates, so it
+        is refused where it is read.
+        """
+        for relpath in ("/etc/passwd", "../../../etc/passwd", "node_modules/../../escape"):
+            with self.subTest(relpath=relpath):
+                payload = self.payload()
+                entry = payload["installs"][0]["entries"][0]
+                entry["program_relpath"] = relpath
+                entry["program_digest"] = "sha256:" + "e" * 64
+                with self.assertRaises(JournalError) as raised:
+                    journal_module.from_dict(payload, HOME)
+                self.assertIn("program_relpath", str(raised.exception))
+
     def test_an_empty_program_relpath_is_refused(self):
         payload = self.payload()
         entry = payload["installs"][0]["entries"][0]

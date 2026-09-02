@@ -1036,6 +1036,34 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class UnreadableModeTest(unittest.TestCase):
+    """`mode_of` can raise now, and the planner has to mean something by it.
+
+    Deciding `UNCHANGED` against `UPDATE` compares the bits on disk with the
+    ones this artifact wants, so a mode that cannot be read is not a detail:
+    it is the second half of the comparison missing. Answering anyway would
+    mean guessing, and both guesses are wrong — "unchanged" leaves a wrong bit
+    in place, "update" rewrites a file for a reason nobody established.
+
+    The suite proved this against a double that could only ever answer, so
+    what it proved was that the condition never happens. It happens; the
+    double can express it now.
+    """
+
+    def test_a_mode_that_cannot_be_read_stops_the_plan_instead_of_guessing(self):
+        path = Path("/home/probe.md")
+        artifact = FileArtifact(id="probe", path=path, content=b"body\n", executable=False)
+        filesystem = fakes.FakeFileSystem(fail_mode={path})
+        filesystem.write_atomic(path, artifact.content)
+        installed = Install(
+            cli="probe-cli", installed_at=AT, config_dir=Path("/home"), release={},
+            entries=(Record(id="probe", kind="file", target=path,
+                            after_digest=ownership.digest(artifact), created_at=AT),),
+        )
+        with self.assertRaises(FileSystemError):
+            planner.plan(filesystem, cli="probe-cli", artifacts=[artifact], installed=installed)
+
+
 class OverwrittenByHandTest(unittest.TestCase):
     """An update that lands on somebody's own edit has to say so.
 

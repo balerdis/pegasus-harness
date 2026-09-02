@@ -64,14 +64,16 @@ class PosixFileSystem:
             raise FileSystemError(f"cannot read {path}: {error}") from error
 
     def mode_of(self, path: Path) -> int | None:
-        if not self.exists(path):
-            # Asked through `exists` rather than caught below, so that an
-            # unreadable parent raises from there with its own message instead
-            # of arriving here as one more `OSError` indistinguishable from a
-            # missing file.
-            return None
         try:
             return stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            # The one `OSError` that already means absent, so it answers the
+            # contract's ``None`` directly. Caught here rather than probed for
+            # with `exists` first, because a probe and a `stat` are two moments:
+            # a file removed between them would answer "there" and then raise,
+            # and the contract would be broken by the gap rather than by either
+            # call.
+            return None
         except OSError as error:
             # It is there and its bits could not be read. Returning `None` sent
             # that to a caller whose default is right for a file being created

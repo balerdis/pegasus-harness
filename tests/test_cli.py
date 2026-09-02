@@ -480,6 +480,44 @@ class InstallTest(RealHomeTestCase):
     # would only be able to prove it by counting calls.
 
 
+class UnverifiedDependencyReportTest(RealHomeTestCase):
+    """Una verificación que no se encendió tiene que decirse, no deducirse.
+
+    `materialize_npm` deja los dos campos del programa en `None` cuando no
+    puede releer el script de entrada — el `entry` del descriptor quedó viejo,
+    por ejemplo. La instalación sigue, y con razón: eso es una escritura de
+    `npm ci` que faltó, no una de Pegasus que falló. Lo que no puede seguir es
+    en silencio, porque desde ahí `doctor` trata ese árbol igual que uno
+    anterior a la verificación: sin drift para siempre, aunque lo cambien
+    entero.
+    """
+
+    def test_a_tree_whose_program_was_never_recorded_is_named(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        store = self.store()
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        claimed = journal_module.Record(
+            id="dependency:probe", kind="dependency-tree",
+            target=self.home / "share" / "deps" / "probe" / "1.0.0",
+            after_digest="sha256:" + "a" * 64, created_at=AT,
+        )
+        store.save(journal_module.with_install(
+            journal, replace(install, entries=(*install.entries, claimed))
+        ))
+        _, report = self.run_cli("doctor")
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertIn("dependency:probe", entry["unverified"])
+
+    def test_an_install_with_nothing_unverifiable_names_nobody(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        _, report = self.run_cli("doctor")
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertEqual(entry["unverified"], [])
+
+
 class OverwrittenReportTest(RealHomeTestCase):
     """Ganar en silencio no es ganar: es no haber decidido la otra mitad.
 

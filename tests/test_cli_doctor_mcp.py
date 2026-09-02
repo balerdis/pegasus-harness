@@ -156,10 +156,11 @@ class DoctorStartMcpServersTest(RealHomeTestCase):
             ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
         )
         self.assertEqual(code, cli.OK)
-        servers = self.entry(self.run_doctor())["mcp_servers"]
-        self.assertEqual([check["id"] for check in servers], ["cbm"])
-        self.assertEqual(servers[0]["status"], "bound")
-        self.assertIn("no configuration of its own", servers[0]["detail"])
+        entry = self.entry(self.run_doctor())
+        self.assertEqual([check["id"] for check in entry["mcp_bound"]], ["cbm"])
+        self.assertEqual(entry["mcp_bound"][0]["status"], "bound")
+        self.assertIn("no configuration of its own", entry["mcp_bound"][0]["detail"])
+        self.assertEqual(entry["mcp_servers"], [], "launching produced nothing, so it lists nothing")
 
     def test_a_convention_left_by_an_unfinished_uninstall_is_not_claimed_as_bound(self):
         """The same journal shape has two causes, and only one is a binding.
@@ -177,7 +178,7 @@ class DoctorStartMcpServersTest(RealHomeTestCase):
             ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
         )
         self.assertEqual(code, cli.OK)
-        detail = self.entry(self.run_doctor())["mcp_servers"][0]["detail"]
+        detail = self.entry(self.run_doctor())["mcp_bound"][0]["detail"]
         self.assertIn("no configuration of its own", detail)
         self.assertIn("did not finish", detail)
 
@@ -189,8 +190,9 @@ class DoctorStartMcpServersTest(RealHomeTestCase):
         )
         self.assertEqual(code, cli.OK)
         self.claim_mcp_entry("context7", {"type": "remote", "url": "https://example.invalid", "enabled": True})
-        servers = {check["id"]: check["status"] for check in self.entry(self.run_doctor())["mcp_servers"]}
-        self.assertEqual(servers, {"context7": "remote", "cbm": "bound"})
+        entry = self.entry(self.run_doctor())
+        self.assertEqual({c["id"]: c["status"] for c in entry["mcp_servers"]}, {"context7": "remote"})
+        self.assertEqual({c["id"]: c["status"] for c in entry["mcp_bound"]}, {"cbm": "bound"})
 
     def test_a_remote_server_is_reported_but_never_launched(self):
         self.install()
