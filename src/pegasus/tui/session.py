@@ -12,6 +12,7 @@ untouched.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Callable
 
 import pegasus
@@ -53,6 +54,7 @@ from pegasus.tui.navigator import (
     UpdateTarget,
     UpgradeTarget,
     BehindInstall,
+    readable_timestamp,
     restore_menu,
 )
 
@@ -154,6 +156,36 @@ def _uninstall_preview(cli_option: CliOption, runtime: cli.Runtime) -> Menu:
     )
 
 
+def _local_taken_at(taken_at: str) -> str:
+    """A manifest's UTC timestamp moved into the zone the reader lives in.
+
+    A snapshot is recorded in UTC, which is right for a file on disk and
+    wrong for a label: found against a real installation, a generation taken
+    at 18:50 in Buenos Aires was offered as "21:50". A plausible wrong hour
+    is worse than an obviously broken one, because a person believes it --
+    and it undoes the only argument for putting a timestamp on that row,
+    which was that somebody recognises what they did at 4am.
+
+    The conversion sits here, not in `navigator`, because reading the
+    machine's zone is reading the environment: `navigator` stays pure and
+    goes on printing the wall clock of whatever offset it is handed.
+
+    Two shapes are passed through untouched. A string that will not parse is
+    not this function's to repair -- `navigator.readable_timestamp` already
+    shows such a value raw rather than letting the recovery screen fail over
+    a bad date. And a timestamp with no offset at all names no instant to
+    convert from, so guessing one would invent a shift rather than correct
+    one; every version of Pegasus that writes a manifest records the offset.
+    """
+    try:
+        parsed = datetime.fromisoformat(taken_at)
+    except (TypeError, ValueError):
+        return taken_at
+    if parsed.tzinfo is None:
+        return taken_at
+    return parsed.astimezone().isoformat()
+
+
 def _generation_summaries(runtime: cli.Runtime) -> tuple[tuple[GenerationSummary, ...], tuple[int, ...]]:
     """Every generation the restore menu can actually open, most recent
     first, plus the numbers of the ones `readable_generations` claimed that
@@ -183,7 +215,7 @@ def _generation_summaries(runtime: cli.Runtime) -> tuple[tuple[GenerationSummary
         summaries.append(
             GenerationSummary(
                 generation=generation,
-                taken_at=manifest.taken_at,
+                taken_at=_local_taken_at(manifest.taken_at),
                 files_restored=sum(1 for entry in manifest.entries if entry.existed),
                 paths_cleared=sum(1 for entry in manifest.entries if not entry.existed),
             )
@@ -197,10 +229,15 @@ def _restore_preview(generation: int, runtime: cli.Runtime) -> Menu:
     first, for the same reason it does in :func:`_uninstall_preview`."""
     manifest = cli.snapshot_store(runtime).read(generation)
     lines = tuple(f"{'restore' if entry.existed else 'remove'}: {entry.path}" for entry in manifest.entries)
+    # The same two steps the menu's own labels take, for the same reason and
+    # in the same order: a manifest records UTC, and a person reads a wall
+    # clock. Skipping them here quoted the raw ISO-8601 string, so the screen
+    # a person confirms on named a different hour than the row they picked.
+    when = readable_timestamp(_local_taken_at(manifest.taken_at))
     preface = _summarised(
-        f"Taken {manifest.taken_at}. Going back to it will touch",
+        f"Taken {when}. Going back to it will touch",
         lines,
-        f"Taken {manifest.taken_at}. Nothing was captured.",
+        f"Taken {when}. Nothing was captured.",
     )
     return Menu(
         title=f"Restore · generation {generation}",

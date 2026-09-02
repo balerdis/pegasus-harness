@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -115,6 +117,28 @@ def _drop_digests(value):
 
 
 class SessionTestCase(RealHomeTestCase):
+    def in_timezone(self, name: str) -> None:
+        """Pin the zone these labels are read in, for the length of one test.
+
+        A manifest records UTC; a person reads a wall clock. Any assertion
+        about the hour on screen is therefore an assertion about a
+        conversion, and left to the machine's own zone it would pass in
+        Buenos Aires and fail in Berlin. `time.tzset` is what makes
+        `datetime.astimezone` see the change.
+        """
+        previous = os.environ.get("TZ")
+        os.environ["TZ"] = name
+        time.tzset()
+
+        def restore() -> None:
+            if previous is None:
+                del os.environ["TZ"]
+            else:
+                os.environ["TZ"] = previous
+            time.tzset()
+
+        self.addCleanup(restore)
+
     def runtime(self, home: Path | None = None) -> cli.Runtime:
         return cli.Runtime(
             filesystem=PosixFileSystem(), home=home or self.home, now=AT, out=io.StringIO(), variables=NO_BINARY
@@ -691,6 +715,27 @@ class RestoreThroughTheTuiTest(SessionTestCase):
         navigator = session.step(navigator, runtime, Action.CHOOSE)  # generation preview
         return navigator
 
+    def test_the_confirm_screen_agrees_with_the_menu_it_was_reached_from(self):
+        """Found by review: the fix for the menu's labels stopped one screen
+        short. This preview read `manifest.taken_at` straight, so a person
+        who picked "18:50" off the menu landed on a screen quoting a raw
+        `2026-08-13T21:50:00+00:00` -- three hours off, in a shape nobody
+        reads, and disagreeing with the row they had just clicked.
+
+        Two screens in one flow describing the same snapshot must not
+        describe it differently. The hour is asserted here rather than the
+        format alone, because a formatting-only fix would still leave them
+        naming different times.
+        """
+        self.in_timezone("America/Argentina/Buenos_Aires")
+        runtime = self._installed_then_uninstalled(self.home)
+        navigator = self.to_generation_preview(runtime)
+
+        preface = "\n".join(navigator.current.preface)
+        self.assertIn("Taken 13 Aug 2026, 21:00", preface)
+        self.assertNotIn("+00:00", preface)
+        self.assertNotIn("2026-08-14T00:00:00", preface)
+
     def test_the_default_cursor_sits_on_cancel_not_confirm(self):
         runtime = self._installed_then_uninstalled(self.home)
         navigator = self.to_generation_preview(runtime)
@@ -739,6 +784,7 @@ class RestoreThroughTheTuiTest(SessionTestCase):
         which snapshot is the one they want. `session.step` now reads each
         generation's own manifest, so the label carries the fact a person
         actually recognises -- when it was taken -- not just its ordinal."""
+        self.in_timezone("UTC")
         _present(self.home)
         runtime = self.runtime(self.home)
         cli.install(CLI, runtime)
@@ -752,6 +798,31 @@ class RestoreThroughTheTuiTest(SessionTestCase):
         self.assertTrue(labels[0].startswith("Generation 2 — 14 Aug 2026, 00:00 (most recent)"), labels[0])
         self.assertTrue(labels[1].startswith("Generation 1 — 14 Aug 2026, 00:00"))
         self.assertNotIn("(most recent)", labels[1])
+
+    def test_a_label_reads_the_clock_the_person_was_looking_at(self):
+        """Found by running the finished screen against a real installation:
+        `taken_at` is recorded in UTC, and the label was printing that wall
+        clock verbatim. In Buenos Aires a snapshot taken at 18:50 was
+        labelled 21:50 -- not an obviously broken value, which is worse,
+        because a plausible wrong hour is one a person believes.
+
+        That defeats the entire reason this label exists. The justification
+        for putting a timestamp here at all was that somebody recognises
+        what they did at 4am; told it happened at 07:00, they recognise
+        nothing. So the conversion belongs where the manifest is read, and
+        `AT` here is midnight UTC precisely so the shift crosses a date
+        boundary and a half-done fix cannot pass by coincidence.
+        """
+        self.in_timezone("America/Argentina/Buenos_Aires")
+        _present(self.home)
+        runtime = self.runtime(self.home)
+        cli.install(CLI, runtime)
+
+        navigator = self.to_restore_menu(runtime)
+
+        label = navigator.current.entries[0].label
+        self.assertIn("13 Aug 2026, 21:00", label)
+        self.assertNotIn("14 Aug 2026", label)
 
     def test_an_unreadable_generation_is_skipped_without_hiding_a_good_one(self):
         """`readable_generations` only checks a manifest file exists, not

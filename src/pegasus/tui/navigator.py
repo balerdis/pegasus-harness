@@ -286,9 +286,14 @@ class GenerationSummary:
     paths_cleared: int
 
 
-def _readable_timestamp(taken_at: str) -> str:
+def readable_timestamp(taken_at: str) -> str:
     """`taken_at` rendered the way a person reads a clock, or itself
     unchanged when it will not parse.
+
+    Public because two screens in the restore flow show the same fact: this
+    menu's rows and, one `CHOOSE` later, the confirm screen `session` builds.
+    They have to agree, and they only agree by construction if both spell the
+    moment with the same function.
 
     A manifest's `taken_at` is a string written to a file on disk, by
     whichever version wrote it -- this screen must not assume that string
@@ -325,7 +330,7 @@ def _touch_summary(files_restored: int, paths_cleared: int) -> str:
 
 
 def _generation_label(summary: GenerationSummary, *, most_recent: bool) -> str:
-    when = _readable_timestamp(summary.taken_at)
+    when = readable_timestamp(summary.taken_at)
     marker = " (most recent)" if most_recent else ""
     touched = _touch_summary(summary.files_restored, summary.paths_cleared)
     return f"Generation {summary.generation} — {when}{marker} · {touched}"
