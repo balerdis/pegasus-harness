@@ -117,12 +117,11 @@ Ese descriptor no dice nada sobre OpenCode. El adapter de OpenCode lo convierte 
 
 | Categoría | Presente | Pendiente |
 |-----------|---------:|-----------|
-| `skills/` | 27 | Nada |
+| `skills/` | 26, más `_shared/` | Nada |
 | `commands/` | 16 | Nada |
 | `agents/` | 12 | Nada |
 | `system-prompt/` | 1 | Nada |
-| `mcp/` | 0 | Sigue viviendo en `manifests/release-contract.json` |
-| `policies/` | 0 | Sin extraer |
+| `mcp/` | 4 | Nada |
 
 ### Qué salió del frontmatter heredado
 
@@ -668,7 +667,7 @@ Un test de contrato verifica que cada acción de la TUI tenga su comando equival
 
 #### Qué existe hoy
 
-`install`, `uninstall`, `doctor`, `restore` y `setup`, con `--json` en los primeros cuatro y `--dry-run` en install. `install` acepta `--mcp ID` (repetible): un servidor no nombrado no se instala. `models set` y `models unset` asignan y quitan el modelo de un agente. Cada reporte declara su esquema `pegasus/cli-report/v1`.
+`install`, `uninstall`, `doctor`, `restore` y `models`, con `--json` en todos y `--dry-run` en install; `-V` / `--version` responde antes del subcomando y no abre nada. `install` acepta `--mcp ID[=CLAVE]` (repetible): un servidor no nombrado no se instala, y la forma con clave concede sus herramientas y embarca su convención contra un servidor que la instalación ya corre bajo esa clave, sin obtener ni configurar nada. `doctor` acepta `--start-mcp-servers`, la única forma en que deja de ser de sólo lectura. `models set` y `models unset` asignan y quitan el modelo de un agente. Cada reporte declara su esquema `pegasus/cli-report/v1`.
 
 Tres cosas que la CLI hace y conviene no perder:
 
@@ -702,47 +701,68 @@ pegasus-harness/
 ├── src/pegasus/
 │   ├── __main__.py
 │   ├── cli.py                     # flags, modo desatendido
-│   ├── core/
+│   ├── core/                      # 16 módulos, ninguno con nombre de CLI adentro
 │   │   ├── content.py             # carga y valida el núcleo de contenido
 │   │   ├── types.py               # descriptores, Artifact, Layout, Detection
 │   │   ├── registry.py            # registro de adapters, falla cerrado
-│   │   ├── planner.py             # plan, apply, rollback
+│   │   ├── planner.py             # plan, apply, retire, rollback
 │   │   ├── journal.py             # journal v4
-│   │   └── ownership.py           # huellas, colisiones, mutaciones
+│   │   ├── ownership.py           # huellas, colisiones, mutaciones
+│   │   ├── snapshot.py            # lo que había antes de escribir
+│   │   ├── dependencies.py        # materializar un servidor `download` o `npm`
+│   │   ├── mcp_handshake.py       # el `initialize` y la clasificación de su respuesta
+│   │   ├── model_assignments.py   # preferencias de modelo por agente
+│   │   ├── model_catalog.py       # qué modelos alcanza esta máquina
+│   │   ├── catalog.py             # el catálogo embarcado
+│   │   ├── codecs.py              # JSON, TOML, YAML como un solo puerto
+│   │   ├── pointer.py             # direcciones dentro de un documento
+│   │   ├── frontmatter.py         # el parser propio, sin dependencias
+│   │   └── placeholders.py        # el vocabulario cerrado que un cuerpo puede pedir
 │   ├── ports/
 │   │   ├── cli_adapter.py
 │   │   ├── filesystem.py
 │   │   ├── journal_store.py
-│   │   └── dependencies.py
+│   │   ├── snapshot_store.py
+│   │   ├── model_assignment_store.py
+│   │   ├── downloader.py
+│   │   ├── npm_installer.py
+│   │   └── mcp_process.py
 │   ├── adapters/
-│   │   ├── opencode/
-│   │   │   ├── adapter.py
-│   │   │   ├── layout.py
-│   │   │   ├── render.py
-│   │   │   ├── models.py          # proveedores y modelos
-│   │   │   └── manifest.py
-│   │   └── _template/             # esqueleto para un CLI nuevo
-│   ├── infra/
+│   │   └── opencode/              # el único adapter que existe
+│   │       ├── adapter.py
+│   │       ├── layout.py
+│   │       ├── render.py
+│   │       ├── models.py          # proveedores y modelos
+│   │       ├── manifest.py
+│   │       └── assets/            # plugins y binarios que viajan con el adapter
+│   ├── infra/                     # una implementación real por puerto, POSIX
 │   │   ├── fs_posix.py
-│   │   ├── fs_windows.py
 │   │   ├── journal_store_file.py  # el journal como archivo, sobre el puerto FileSystem
-│   │   └── deps_fetcher.py
+│   │   ├── snapshot_store_file.py
+│   │   ├── model_assignment_store_file.py
+│   │   ├── downloader_http.py
+│   │   ├── npm_installer_subprocess.py
+│   │   └── mcp_process_subprocess.py
 │   ├── tui/
 │   │   ├── app.py
-│   │   ├── install.py
-│   │   └── models.py
+│   │   ├── navigator.py           # las pantallas y el paso entre ellas
+│   │   ├── session.py
+│   │   └── view.py
 │   └── content/                   # ← el núcleo, agnóstico
 │       ├── skills/
 │       ├── agents/
-│       ├── prompts/
+│       │   └── mcp/               # la mitad ambiente de cada servidor, y sus overrides
 │       ├── commands/
-│       ├── mcp/
-│       └── policies/
-├── manifests/                     # generados, verificados en CI
+│       ├── mcp/                   # un descriptor por servidor, con su convención adentro
+│       └── system-prompt/
+│           └── mcp/               # la mitad ambiente, para el prompt de sistema
 ├── tools/
 │   ├── build_catalog.py
 │   ├── build_zipapp.py            # empaqueta el paquete en el zipapp ejecutable
-│   └── build_release_evidence.py  # certifica el zipapp y su checksum contra el commit
+│   ├── build_release_evidence.py  # certifica el zipapp y su checksum contra el commit
+│   ├── build_release_manifest.py  # reproduce la evidencia de los tags v3.1.x
+│   ├── check_docs_links.py
+│   └── pegasus_skill_registry.py
 ├── tests/
 └── docs/
 ```
@@ -1214,15 +1234,12 @@ Una deuda de la tabla de arriba puede cerrarse con código en vez de perder el s
 
 | Deuda | Qué la resolvió |
 |-------|------------------|
-| Dos defectos de `codebase-memory-mcp` vistos en instalaciones reales y nunca reportados: PHP con HTML embebido, y un directorio ilegible volteando el indexado entero | Reportados con repro mínimo cada uno: [DeusData/codebase-memory-mcp#2000](https://github.com/DeusData/codebase-memory-mcp/issues/2000) y [#2001](https://github.com/DeusData/codebase-memory-mcp/issues/2001). Los dos repros aíslan una sola variable, y el primero muestra algo más fuerte que el reporte de cobertura: no es que el símbolo del tramo marcado «puede faltar», es que falta — `search_graph` no lo encuentra en un archivo que `php -l` acepta sin errores |
 | El comodín con el que se conceden las herramientas de un servidor MCP alcanzaba también las que destruyen estado, porque su granularidad es el servidor y no la herramienta | Un descriptor nombra ahora, por excepción, lo que el comodín no debe alcanzar: `withheld_tools`. El comodín sigue existiendo para no obligar a enumerar todo lo que un servidor expone, y esto nombra sólo lo que tiene que quedar afuera. `select_mcp` resuelve esos nombres contra la clave que el agente realmente recibió, así que atar un servidor produce `codebase-memory-mcp_delete_project` y no `cbm_delete_project` — denegar una herramienta que no existe no protege de nada. `index_repository` no entra, y la deuda se equivocaba al incluirlo: la convención de CBM lo prescribe como la reparación de un índice viejo o ausente, así que denegarlo rompería una regla que el producto mismo le da a sus agentes |
 | `doctor --start-mcp-servers` no decía nada de un servidor atado. Peor: como un servidor atado no escribe clave `/mcp/<id>`, una instalación cuyos servidores están todos atados reportaba «No MCP servers configured» — no un hueco en el reporte sino una afirmación falsa sobre la máquina | Una entrada de convención sin clave de configuración al lado alcanza para decir la verdad en su lugar. Lo que no se afirma es más de lo que el journal sabe, y son dos cosas: a qué clave se lo ató, que nunca se registró; y que sea una atadura, porque `retire` recorre los tipos en orden alfabético —`config-key` antes que `file`— así que un uninstall que quitó la clave y falló en la convención deja exactamente esta forma. El reporte nombra las dos lecturas en vez de elegir una. Arrancarlo sigue fuera de alcance, y contrastar su versión sigue bloqueado por afuera: el `serverInfo` del handshake no es confiable, engram reporta `0.1.0` corriendo `1.20.0` |
-| Un `Pipeline failed` genérico de `codebase-memory-mcp` impedía indexar la raíz de `ospreviene`, y la causa anotada —checkouts git anidados— era incorrecta | Aislado con un repro mínimo: un árbol de dos archivos con un directorio `chmod 000` falla; el mismo árbol con ese directorio legible indexa. La causa es un directorio que el usuario que indexa no puede leer, y el mensaje —«Check repo_path exists and contains source files»— apunta al lado equivocado. Excluyendo ese único directorio, la raíz indexa en modo `full` con los checkouts anidados dentro del alcance, que es la prueba de que nunca fueron el problema. El defecto de origen sigue siendo de otro producto y queda para reportar |
-| No se sabía si las librerías de un solo archivo de `leannec-backend` —`class.phpmailer.php`, `class.smtp.php`, `class.pop3.php`— eran copias intactas o modificadas, así que no se podía decidir si excluirlas del índice | Comparadas contra PHPMailer 2.2.1 original: las tres están modificadas, así que las tres se quedan indexadas — excluir una copia que el proyecto tocó esconde código que sí es suyo. `class.phpmailer.php` difiere en 21 líneas, `class.smtp.php` en una que evita un aviso de PHP, y `class.pop3.php` en una que es un `print_r` de depuración olvidado que escribe en la salida |
 | Un `refresh failed` del plugin del skill registry quedaba sólo en `console.error`, que no llega a nadie: el registry servía un inventario viejo o vacío y nada lo decía | El plugin encamina sus dos fallas por un solo `reportFailure`, que sigue escribiendo en `console.error` —el log de registro— y además muestra un toast por `client.tui.showToast`, con `warning` para el contrato ausente y `error` para la falla del generador. El toast es estrictamente best-effort y va en su propio `try/catch`: un cliente sin TUI, como `opencode run`, no tiene dónde mostrarlo, y que esa llamada falle es un desenlace ordinario y no una segunda falla que reportar. El guardián no mira la prosa: ubica el cuerpo del helper por balanceo de llaves y exige que todo `console.error` del archivo caiga adentro, así que una ruta de falla nueva no puede volver a limitarse al log |
 | `install` decidía "already current" comparando lo deseado contra el disco mientras `doctor` reportaba drift comparando el disco contra el digest del journal, así que una edición a mano que acertara lo que una versión posterior renderiza dejaba drift permanente: no se escribía nada, el journal no se actualizaba, y cada corrida siguiente repetía la conclusión | Se decidió que la pregunta verdadera es la del disco, y que el journal tiene que alcanzarla sin escribir. Un paso `unchanged` ya carga las dos mitades de la respuesta —el digest de lo que se quiere y la entrada contra la que se lo juzgó—, así que `planner._reconciled` produce el registro que el journal debería haber tenido, sin tocar disco, y sólo para los pasos cuya entrada efectivamente discrepa. Viaja en `Applied.reconciled` y no en `Applied.records`, y esa separación es la corrección entera: `records` es lo que un rollback puede sacar, y una reconciliación es un artefacto que esta corrida nunca escribió — ofrecérsela a `unplace` borraría un archivo correcto para deshacer una escritura que no ocurrió. Tampoco entra en el reporte: nada se escribió, así que nada se cuenta como escrito |
 | No había `pegasus --version`: la versión sólo salía de `pegasus doctor --json`, un comando de diagnóstico contestando una pregunta que no es de diagnóstico | `-V` / `--version` lo contesta el parser y nada más — no se abre un home, no se lee un journal, no se resuelve un adapter. El número es del binario y no de ninguna instalación suya, y una máquina con la instalación rota es exactamente donde tiene que seguir funcionando |
-| Los sitios de `content.py` que lanzan `ContentError` no tenían un test de tabla que recorriera todos y afirmara que cada uno nombra una ruta real | `test_content:ContentErrorSitesTest` deriva el conjunto de un recorrido del AST de `content.py` en vez de una lista escrita a mano, con la clave `(función, ordinal)`: un `raise` nuevo rompe el test hasta que alguien lo cubra, que es la misma costumbre de los guardianes. Son 37 sitios, y 35 ya nombraban la ruta —no había mensajes malos escondidos—. Los dos que no la nombran llevan el motivo escrito y no una exclusión silenciosa: uno en `content:split_frontmatter` es inalcanzable, porque `frontmatter.parse` nunca devuelve algo que no sea un mapa sin haber levantado antes; el otro, en `content:select_mcp`, rechaza un id que eligió quien llama y no un archivo, así que ahí la promesa no aplica. La aserción es simétrica en las dos direcciones —un resultado sin ruta tiene que declarar por qué, y un motivo sólo se acepta en un resultado sin ruta—, así que nadie puede acallar un sitio agregándole una excusa. Y un tercer caso repite un subconjunto de los mismos árboles malformados **desde adentro de un zip real**, para que los fixtures no puedan estar esquivando el camino por el que producción lee su contenido |
+| Los sitios de `content.py` que lanzan `ContentError` no tenían un test de tabla que recorriera todos y afirmara que cada uno nombra una ruta real | `test_content:ContentErrorSitesTest` deriva el conjunto de un recorrido del AST de `content.py` en vez de una lista escrita a mano, con la clave `(función, ordinal)`: un `raise` nuevo rompe el test hasta que alguien lo cubra, que es la misma costumbre de los guardianes. Hoy son 44 sitios, y el número sube solo: cada `raise` nuevo entra por el recorrido del AST, no por una lista que alguien tenga que acordarse de tocar. Los 8 que no nombran una ruta llevan el motivo escrito y no una exclusión silenciosa, y son de dos clases: los inalcanzables —`content:split_frontmatter`, porque `frontmatter.parse` nunca devuelve algo que no sea un mapa sin haber levantado antes— y los que refutan un valor que eligió quien llama y no un archivo, como los tres de `content:parse_mcp_choice` y el de `content:select_mcp`, donde no hay ruta que nombrar porque no hay archivo. La aserción es simétrica en las dos direcciones —un resultado sin ruta tiene que declarar por qué, y un motivo sólo se acepta en un resultado sin ruta—, así que nadie puede acallar un sitio agregándole una excusa. Y un tercer caso repite un subconjunto de los mismos árboles malformados **desde adentro de un zip real**, para que los fixtures no puedan estar esquivando el camino por el que producción lee su contenido |
 | El orquestador tenía prohibición absoluta de ejecutar —prosa y `requires_tools` de acuerdo en no concederle nunca `write` ni `edit`— sin ningún umbral que le permitiera resolver algo por su cuenta | Decisión de producto, no corrección de un defecto: se le da al orquestador el mismo criterio de coordinación que ya rige a quien lo dirige a él —¿la acción infla contexto sin necesidad?—, con un umbral concreto (leer hasta 3 archivos o escribir uno solo, mecánico, se hace directo; leer 4 o más, o tocar 2 o más archivos no triviales, se delega entero). `content/agents/pegasus-orchestrator.md:Direct Work Threshold` traduce ese criterio a su propia voz y le agrega `write` y `edit` a `requires_tools`, así que ahora puede aplicar un cambio chico y ya entendido sin abrir una delegación para eso, pero sigue delegando todo lo que cruce el umbral |
 | La voz `king-pegasus` explicaba y no podía aplicar nada de lo que explicaba: declaraba sólo `read` y su cuerpo le prohibía generar cualquier artefacto | Decisión de producto: esta voz pasa a poder aplicar el cambio que acaba de explicar, en vez de dejarle al usuario transcribir la explicación a mano. `content/agents/king-pegasus.md` suma `write` y `edit` a `requires_tools` y reescribe la premisa de apertura y la sección de comportamiento para que aplicar un cambio narre el porqué antes y durante, nunca en silencio como un agente implementador; lo que se preserva a propósito es esa voz que enseña mientras actúa, no la ausencia de acción. Sigue sin `bash`: la regla "Never build after changes" se mantiene, así que aplicar termina en la edición y nunca en correr nada |
 | `restore` no podía devolver un árbol de dependencias: el snapshot excluía esos destinos enteros porque `capture_paths` lee bytes y un árbol es un directorio, así que un install que materializó una dependencia y falló no la deshacía | El alcance que se cerró es más angosto que el que la deuda nombraba, y a propósito: no hace falta que el snapshot sepa leer un árbol entero para que `restore` pueda quitarlo. `cli._prospective_dependency_targets` nombra, antes de que `_materialize_dependencies` escriba nada, la dirección donde un árbol nuevo va a aparecer; en ese instante todavía no tiene bytes, así que capturar "esto no existía" es el mismo caso que `capture_paths` ya resolvía para cualquier ruta ausente. `snapshot.Entry.is_directory` lleva esa marca al manifiesto —siempre con `existed=False`, nunca la claim de haber leído un árbol que ya estaba ahí— y `cli.restore` la lee para llamar `remove_dir` en vez de `remove`. Un árbol que ya existía antes de esta corrida —el caso que sigue pidiendo bytes que nadie captura— se queda exactamente donde estaba: afuera de todo snapshot, tal como hoy. Lo que se destrabó es el caso real detrás de la deuda —una materialización a medio camino, sin journal que la reclame— no la lectura de un directorio completo |
