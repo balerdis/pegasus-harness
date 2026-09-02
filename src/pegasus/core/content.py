@@ -387,6 +387,13 @@ def load(root: ContentRoot = DEFAULT_ROOT) -> Content:
     )
 
 
+#: What a bound server's key may hold. Deliberately narrower than "anything
+#: non-blank": the key becomes a permission rule verbatim, and the runtime reads
+#: `*` and `?` inside a rule name as a pattern. Everything real keys are made of
+#: -- `codebase-memory-mcp`, `engram`, `context7` -- fits inside this.
+_SERVER_KEY = re.compile(r"[A-Za-z0-9._-]+")
+
+
 def parse_mcp_choice(spelling: str) -> tuple[str, str | None]:
     """One `--mcp` value, as an id and the key it is bound to, if any.
 
@@ -399,6 +406,16 @@ def parse_mcp_choice(spelling: str) -> tuple[str, str | None]:
     than guessed: both would otherwise produce a grant naming a server no
     runtime resolves, which fails as tools quietly missing rather than as a
     message anyone reads.
+
+    A key carrying a character the runtime reads as a wildcard is refused for a
+    heavier reason. The key is spliced verbatim into a permission rule -- the
+    grant is written `f"{key}*"` -- and the runtime matches a rule *name* by
+    wildcard. So `=*` renders `**`, a rule matching every action name there is,
+    written after the deny baseline and therefore beating it for everything the
+    agent was never granted: not a weakened grant but the removal of the whole
+    per-agent restriction that baseline exists to impose. A rule cannot be told
+    apart from one somebody meant once it is in the map, so the refusal has to
+    happen here, where the value is still something a person typed.
     """
     if "=" not in spelling:
         return spelling.strip(), None
@@ -408,6 +425,12 @@ def parse_mcp_choice(spelling: str) -> tuple[str, str | None]:
             f"cannot read mcp choice {spelling!r}: expected 'id' or 'id=server-key'"
         )
     server_id, key = (part.strip() for part in parts)
+    if key and not _SERVER_KEY.fullmatch(key):
+        raise ContentError(
+            f"cannot read mcp choice {spelling!r}: {key!r} is not usable as a server key; "
+            f"a key may hold letters, digits, '.', '_' and '-', and nothing a runtime "
+            f"reads as a wildcard"
+        )
     if not server_id or not key:
         raise ContentError(
             f"cannot read mcp choice {spelling!r}: both an id and a server key are required"
