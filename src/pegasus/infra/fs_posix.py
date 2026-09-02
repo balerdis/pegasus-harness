@@ -64,10 +64,19 @@ class PosixFileSystem:
             raise FileSystemError(f"cannot read {path}: {error}") from error
 
     def mode_of(self, path: Path) -> int | None:
+        if not self.exists(path):
+            # Asked through `exists` rather than caught below, so that an
+            # unreadable parent raises from there with its own message instead
+            # of arriving here as one more `OSError` indistinguishable from a
+            # missing file.
+            return None
         try:
             return stat.S_IMODE(path.stat().st_mode)
-        except OSError:
-            return None
+        except OSError as error:
+            # It is there and its bits could not be read. Returning `None` sent
+            # that to a caller whose default is right for a file being created
+            # and wrong for this one: a `0600` file put back as `0644`.
+            raise FileSystemError(f"cannot read the mode of {path}: {error}") from error
 
     def list_dir(self, path: Path) -> list[str]:
         # Delegates to `self.exists` rather than a raw `path.exists()` on
