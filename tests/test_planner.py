@@ -22,6 +22,7 @@ import json
 import unittest
 from pathlib import Path
 
+import fakes
 from pegasus.core import ownership, planner
 from pegasus.core.journal import Install, Link, Record
 from pegasus.core.types import Codec, ConfigKeyArtifact, FileArtifact
@@ -996,3 +997,93 @@ class RollbackDefersAnUnknownModeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReconciliationTest(unittest.TestCase):
+    """What the journal says has to survive a run that wrote nothing.
+
+    `install` decides an artifact is already current by comparing what it wants
+    against what is on disk. `doctor` decides an artifact has drifted by
+    comparing what is on disk against the digest the journal recorded. Those
+    two answers agree until a hand edit lands on exactly the bytes a later
+    release renders: the disk is right, so nothing is written, so the journal
+    keeps a digest from before -- and `doctor` reports drift forever, because
+    every later run reaches the same conclusion and writes nothing again.
+
+    An unchanged step already carries both halves of the answer: the digest of
+    what is wanted, and the journal entry it was judged against. So the record
+    costs no disk access at all -- it is the one the journal should already
+    have had.
+    """
+
+    def setUp(self):
+        self.filesystem = fakes.FakeFileSystem()
+
+    def artifact(self, content: bytes = b"body\n"):
+        return FileArtifact(id="probe", path=Path("/home/probe.md"), content=content, executable=False)
+
+    def stale_install(self, artifact, digest: str):
+        return Install(
+            cli="probe-cli",
+            installed_at=AT,
+            config_dir=Path("/home"),
+            release={},
+            entries=(
+                Record(
+                    id=artifact.id,
+                    kind="file",
+                    target=artifact.path,
+                    after_digest=digest,
+                    created_at=AT,
+                ),
+            ),
+        )
+
+    def test_an_unchanged_artifact_whose_record_disagrees_is_recorded_again(self):
+        artifact = self.artifact()
+        self.filesystem.write_atomic(artifact.path, artifact.content)
+        installed = self.stale_install(artifact, "sha256:" + "0" * 64)
+        plan = planner.plan(self.filesystem, cli="probe-cli", artifacts=[artifact], installed=installed)
+        self.assertEqual([step.action for step in plan.steps], [planner.UNCHANGED])
+        applied = planner.apply(self.filesystem, plan, at=AT)
+        self.assertEqual(applied.records, ())
+        self.assertEqual([record.id for record in applied.reconciled], ["probe"])
+        self.assertEqual(applied.reconciled[0].after_digest, plan.steps[0].digest)
+
+    def test_an_unchanged_artifact_whose_record_already_agrees_is_left_alone(self):
+        """Reconciling what needs no reconciling would put a write in the
+        journal on every run of an install that did nothing at all."""
+        artifact = self.artifact()
+        self.filesystem.write_atomic(artifact.path, artifact.content)
+        digest = ownership.digest(artifact)
+        plan = planner.plan(
+            self.filesystem,
+            cli="probe-cli",
+            artifacts=[artifact],
+            installed=self.stale_install(artifact, digest),
+        )
+        applied = planner.apply(self.filesystem, plan, at=AT)
+        self.assertEqual(applied.reconciled, ())
+
+    def test_a_reconciled_record_keeps_the_date_the_artifact_was_first_placed(self):
+        artifact = self.artifact()
+        self.filesystem.write_atomic(artifact.path, artifact.content)
+        installed = self.stale_install(artifact, "sha256:" + "0" * 64)
+        first = installed.entries[0].created_at
+        plan = planner.plan(self.filesystem, cli="probe-cli", artifacts=[artifact], installed=installed)
+        applied = planner.apply(self.filesystem, plan, at="2099-01-01T00:00:00Z")
+        self.assertEqual(applied.reconciled[0].created_at, first)
+
+    def test_reconciling_writes_nothing_to_disk(self):
+        """The whole point: the bytes were already right."""
+        artifact = self.artifact()
+        self.filesystem.write_atomic(artifact.path, artifact.content)
+        plan = planner.plan(
+            self.filesystem,
+            cli="probe-cli",
+            artifacts=[artifact],
+            installed=self.stale_install(artifact, "sha256:" + "0" * 64),
+        )
+        before = self.filesystem.read_bytes(artifact.path)
+        planner.apply(self.filesystem, plan, at=AT)
+        self.assertEqual(self.filesystem.read_bytes(artifact.path), before)

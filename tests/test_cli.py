@@ -23,6 +23,7 @@ wrinkle in the architecture, not something this module invents.
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import stat
@@ -42,6 +43,7 @@ from pegasus.core import content as content_module
 from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core import ownership
+from pegasus.core import planner
 from pegasus.core.types import Environment, ModelAssignment
 from pegasus.infra.journal_store_file import journal_path
 from pegasus.infra.snapshot_store_file import snapshots_root
@@ -188,6 +190,43 @@ class VersionTest(unittest.TestCase):
         """Two places holding one number is how a release starts lying about itself."""
         metadata = tomllib.loads(Path(__file__).resolve().parents[1].joinpath("pyproject.toml").read_text())
         self.assertEqual(pegasus.__version__, metadata["project"]["version"])
+
+
+class VersionFlagTest(unittest.TestCase):
+    """Asking a program what version it is should not require diagnosing it.
+
+    The number was reachable only through `pegasus doctor --json`, which opens
+    a home, reads a journal and reports on an installation — a great deal of
+    work, and a different question, to answer one that is about the binary and
+    nothing else. It is also the number a person reads out when reporting a
+    problem, so the cost of it being hard to get is paid at the worst moment.
+    """
+
+    def run_flag(self, flag: str) -> tuple[int, str]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                code = cli.main([flag])
+            except SystemExit as exit_code:
+                code = exit_code.code or 0
+        return code, out.getvalue()
+
+    def test_version_is_reported_and_exits_cleanly(self):
+        code, printed = self.run_flag("--version")
+        self.assertEqual(code, 0)
+        self.assertIn(pegasus.__version__, printed)
+
+    def test_the_short_spelling_answers_the_same(self):
+        self.assertEqual(self.run_flag("-V")[1], self.run_flag("--version")[1])
+
+    def test_it_needs_no_home_and_no_journal(self):
+        """It is answered by the parser, before anything opens a file. A
+        version that depended on an installation would fail exactly where it
+        is most needed: on a machine where the installation is broken.
+        """
+        code, printed = self.run_flag("--version")
+        self.assertEqual(code, 0)
+        self.assertEqual(printed.strip().split()[-1], pegasus.__version__)
 
 
 class ArgumentTest(RealHomeTestCase):
@@ -425,6 +464,65 @@ class InstallTest(RealHomeTestCase):
     # artifact is placed, which is the same guarantee. `test_planner`'s
     # `fail_exists` cases cover the plan-time refusal; a second test here
     # would only be able to prove it by counting calls.
+
+
+class DriftReconciliationTest(RealHomeTestCase):
+    """A run that writes nothing still has to leave the journal telling the truth.
+
+    "Already current" is decided against the disk; drift is reported against
+    the journal. A hand edit that lands on exactly what a later release renders
+    makes the two disagree, and the disagreement is self-sustaining: nothing is
+    written, so the journal is never updated, so every later run repeats the
+    conclusion. Reproduced here by staling the recorded digest directly, which
+    is the same state that sequence leaves behind.
+    """
+
+    def stale_one_record(self) -> str:
+        """Rewrite one entry's digest, leaving the artifact on disk correct."""
+        store = self.store()
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        target = next(entry for entry in install.entries if entry.kind == "file")
+        staled = replace(target, after_digest="sha256:" + "0" * 64)
+        entries = tuple(staled if entry.id == target.id else entry for entry in install.entries)
+        store.save(journal_module.with_install(journal, replace(install, entries=entries)))
+        return target.id
+
+    def test_a_run_that_changes_nothing_still_clears_the_drift_it_inherited(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        staled = self.stale_one_record()
+        _, report = self.run_cli("doctor")
+        self.assertIn(staled, json.dumps(report["clis"]), "fixture drifted: doctor should see the drift")
+
+        _, second = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(second["updated"], [], "nothing was written, so nothing may be reported as written")
+
+        _, after = self.run_cli("doctor")
+        self.assertNotIn(staled, json.dumps(after["clis"]))
+
+    def test_the_reconciled_record_is_never_offered_to_a_rollback(self):
+        """The dangerous half. A rollback removes what the journal says this
+        run placed, and a reconciliation was never placed: offering it would
+        delete a correct artifact this run did not touch.
+        """
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        staled = self.stale_one_record()
+        plan_artifacts = None
+        real_apply = planner.apply
+
+        def capture(filesystem, plan, *, at):
+            nonlocal plan_artifacts
+            applied = real_apply(filesystem, plan, at=at)
+            plan_artifacts = applied
+            return applied
+
+        with mock.patch.object(planner, "apply", capture):
+            self.run_cli("install", "--cli", CLI)
+        self.assertTrue(plan_artifacts.reconciled, "fixture drifted: nothing was reconciled")
+        placed = {record.id for record in plan_artifacts.records}
+        self.assertNotIn(staled, placed)
 
 
 class WriteRefusalTest(FakeHomeTestCase):
