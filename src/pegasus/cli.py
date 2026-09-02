@@ -187,6 +187,23 @@ def _parser() -> argparse.ArgumentParser:
     # Accepted on either side of the subcommand. The subparsers suppress their
     # default so an absent flag there cannot overwrite one given here.
     parser.add_argument("--json", action="store_true", help="report as a machine-readable document")
+    # Answered by the parser and nothing else: no home opened, no journal read,
+    # no adapter resolved. The number belongs to the binary, not to any
+    # installation of it, and asking for it on a machine whose installation is
+    # broken is exactly when it has to still work. It was reachable only
+    # through `doctor --json` before, which is a different question entirely
+    # and does all of that work to answer it.
+    #
+    # Unlike `--json` above, this one is NOT repeated on the subparsers, and
+    # the asymmetry is the point: `--json` modifies a report, so it belongs
+    # wherever the command it modifies is written. A version request modifies
+    # nothing — it is its own command — and `pegasus install --cli x --version`
+    # printing a number instead of installing would be a surprising way to not
+    # install something.
+    parser.add_argument(
+        "-V", "--version", action="version", version=f"%(prog)s {pegasus.__version__}",
+        help="report the version of this binary and exit",
+    )
     commands = parser.add_subparsers(dest="command")
 
     install = commands.add_parser("install", help="place Pegasus into one CLI's configuration")
@@ -438,7 +455,18 @@ def install(cli_id: str, runtime: Runtime, *, dry_run: bool = False, mcp: list[s
             removed=removed,
         ) from error
 
-    merged = _merged(journal, adapter, environment, catalog, all_records, stale.removed, runtime.now)
+    # `applied.reconciled` joins the journal here and nowhere else. It never
+    # reaches `placed` above, and that is the whole point of keeping the two
+    # tuples apart: `placed` is what a rollback may take away, and a
+    # reconciliation is an artifact this run never wrote -- offering it to
+    # `unplace` would delete a correct file to undo a write that never
+    # happened. It never reaches the report either, for the milder version of
+    # the same reason: nothing was written, so nothing may be counted as
+    # written. What it does do is let the journal finally agree with the disk,
+    # so `doctor` stops reporting a drift no run could ever clear.
+    merged = _merged(
+        journal, adapter, environment, catalog, all_records + applied.reconciled, stale.removed, runtime.now
+    )
     try:
         store.save(journal_module.with_install(journal, merged))
     except JournalStoreError as error:

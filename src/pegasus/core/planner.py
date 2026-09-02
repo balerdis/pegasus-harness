@@ -115,6 +115,17 @@ class Applied:
     records: tuple[Record, ...]
     skipped: tuple[Step, ...]
     unchanged: tuple[Step, ...] = ()
+    reconciled: tuple[Record, ...] = ()
+    """Records for artifacts this run did not write, because it did not need to.
+
+    Kept apart from ``records`` rather than folded into it, and the separation
+    is the correctness. Both belong in the journal -- they say what Pegasus
+    claims, and Pegasus does claim these. Neither belongs in the same sentence
+    as "placed": a caller reporting `records` is naming what it wrote, and a
+    caller rolling back is naming what it may take away. Putting a
+    reconciliation in either would report a write that never happened, or,
+    far worse, remove a correct artifact this run never touched.
+    """
     replaced: tuple[tuple[Path, bytes, int | None], ...] = ()
     """What each updated file held before this run, for a caller that has to undo it.
 
@@ -354,6 +365,7 @@ def apply(filesystem: FileSystem, plan: Plan, *, at: str) -> Applied:
         records=tuple(records),
         skipped=plan.collisions,
         unchanged=plan.unchanged,
+        reconciled=_reconciled(filesystem, plan, at),
         # Files and configuration documents alike: an update's address is one
         # that already held something, and putting that back is the same act
         # whichever shape lives there. A path this run brought into existence is
@@ -452,6 +464,31 @@ def _write_back(filesystem: FileSystem, path: Path, content: bytes, mode: int | 
         filesystem.write_atomic(path, content)
     else:
         filesystem.write_atomic(path, content, mode=mode)
+
+
+def _reconciled(filesystem: FileSystem, plan: Plan, at: str) -> tuple[Record, ...]:
+    """The journal entries an unchanged artifact should already have had.
+
+    "Already current" is decided against the disk; drift is reported against
+    the journal. The two agree until a hand edit lands on exactly the bytes a
+    later release renders: the disk is right, so nothing is written, so the
+    journal keeps a digest from before -- and every later run reaches the same
+    conclusion and writes nothing again, so the disagreement never resolves on
+    its own. What makes it recoverable here is that an unchanged step already
+    carries both halves of the answer, the digest of what is wanted and the
+    entry it was judged against, so closing the gap costs no disk access at
+    all.
+
+    Only a step whose entry actually disagrees produces one. Recording the rest
+    would put a journal write in every run of an install that did nothing.
+    """
+    return tuple(
+        _file_record(filesystem, step, at)
+        if isinstance(step.artifact, FileArtifact)
+        else _key_record(step, at)
+        for step in plan.unchanged
+        if step.entry is not None and step.entry.after_digest != step.digest
+    )
 
 
 def _file_record(filesystem: FileSystem, step: Step, at: str) -> Record:
