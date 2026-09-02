@@ -1215,6 +1215,56 @@ El presupuesto de revisión es de **800 líneas cambiadas por PR**. Cada unidad 
 
 ---
 
+## Lo que se agregó después del corte
+
+Las unidades de arriba son un plan y su ejecución. Lo que sigue no estaba en ese plan: son mecanismos que aparecieron entre 5.1.0 y 5.8.0, casi todos porque una instalación real mostró que el producto prometía algo que no cumplía. Se anotan acá y no dentro de una unidad para no reescribir la historia de un corte que se entregó como está escrito.
+
+### El contrato de un MCP tiene dos mitades, y las dos responden a la misma elección
+
+El corte dejó una sola: **la convención**, que es el cuerpo del descriptor y viaja a `_shared/mcp/<id>-convention.md` sólo si el servidor se selecciona. Es el detalle operativo —orden de herramientas, presupuesto, formatos— y se lee a demanda.
+
+Falta la otra, que es la que hace que la primera se lea alguna vez: **la referencia fuerte**. Qué es el servidor, qué puede hacer el agente con él, y el puntero a la convención. Se paga en cada turno, así que es corta a propósito.
+
+Vive en `content/agents/mcp/<id>.md`, y `content/agents/mcp/<id>@<agente>.md` la reemplaza para un agente cuyo encuadre lo justifique — el orquestador dice que el descubrimiento estructural en profundidad **no** es suyo, y `king-pegasus` dice lo contrario porque actúa en vez de delegar. El prompt de sistema tiene su propia versión del mismo mecanismo en `content/system-prompt/mcp/<id>.md`.
+
+Cada agente resuelve sus secciones desde su propio `optional_mcp`, que es exactamente la lista que `select_mcp` ya poda. Eso es lo que hace que **un grant y la instrucción que le dice al agente que lo use no puedan discrepar**: salen de la misma fuente. Antes no era así, y un usuario que no elegía un servidor recibía igual los párrafos que le mandaban a leer una convención que nunca se instaló.
+
+### Un servidor se puede atar a uno que la persona ya administra
+
+`--mcp ID=CLAVE` le dice a Pegasus que lo que él llama `cbm` es un servidor que la instalación ya corre bajo otra clave. Concede sus herramientas y embarca su convención; **no obtiene el binario, no escribe la entrada de configuración, no toca la versión**. Existe porque la alternativa era peor: instalar el servidor de Pegasus al lado del que la persona administra deja dos versiones sobre un mismo store.
+
+La clave se valida donde todavía es algo que alguien tipeó. Se empalma textual en reglas de permiso de los dos lados del grant, y el runtime lee `*` y `?` dentro del nombre de una regla como patrón: una clave con comodín renderiza una regla que le gana al deny baseline para todo. Una regla no se distingue de una que alguien quiso una vez que está en el mapa.
+
+### El comodín de un servidor no alcanza lo que destruye
+
+Conceder las herramientas de un servidor se hace con `<clave>*`, y esa granularidad es correcta: un descriptor no debería enumerar todo lo que un servidor expone. `withheld_tools` nombra, **por excepción**, lo que ese comodín no debe alcanzar, y el render lo escribe después del grant, que es lo único que lo hace ganar.
+
+Lo que se retiene se decide por lo que destruye estado, no por lo que parece peligroso: `index_repository` **no** se retiene, porque la convención de CBM lo prescribe como la reparación de un índice viejo, y denegarlo rompería una regla que el producto mismo le da a sus agentes.
+
+### Leer fuera del worktree es un permiso propio
+
+El runtime pregunta por `external_directory` antes que por `read` cuando el destino queda fuera del árbol del proyecto, y los nombres de permiso se matchean por comodín — así que el `{"*": "deny"}` con el que abre cada agente lo alcanzaba y lo negaba sin preguntar. Todo el contrato de lazy-loading vive bajo el directorio de skills, que está fuera de todo worktree, así que estaba ilegible por construcción.
+
+Se concede acotado a ese directorio y no al de configuración que lo contiene: ahí vive el archivo de settings, con lo que sea que la persona haya configurado. Y se gana en vez de darse: sólo lo traen `read`, `grep` y `glob`, que son las tres que preguntan bajo ese nombre.
+
+### Lo que `doctor` puede y no puede afirmar
+
+`--start-mcp-servers` es la única forma en que `doctor` deja de ser de sólo lectura: lanza cada servidor que el journal reclama y clasifica su handshake. Un servidor **atado** no tiene entrada de configuración que lanzar, así que se reporta con estado `bound` — antes no se reportaba, y una instalación con todos sus servidores atados decía «No MCP servers configured», que no era un hueco sino una afirmación falsa.
+
+Lo que no se afirma es más de lo que el journal sabe, y son dos cosas: a qué clave se lo ató, que nunca se registró; y que sea con certeza una atadura, porque `retire` recorre los tipos en orden alfabético y un uninstall interrumpido deja la misma forma.
+
+### El journal alcanza al disco sin escribir
+
+`install` decide "already current" contra el disco; `doctor` reporta drift contra el journal. Una edición a mano que acierte lo que una versión posterior renderiza deja las dos peleadas para siempre: no se escribe nada, el journal no se actualiza, y cada corrida repite la conclusión.
+
+Un paso `unchanged` ya carga las dos mitades de la respuesta, así que el registro que falta no cuesta un acceso a disco. Viaja en `Applied.reconciled` y **no** en `Applied.records`, y esa separación es la corrección entera: `records` es lo que un rollback puede sacar, y una reconciliación es un artefacto que la corrida nunca escribió.
+
+### `pegasus --version`
+
+Lo contesta el parser y nada más: no abre un home, no lee un journal, no resuelve un adapter. El número es del binario y no de ninguna instalación suya, y una máquina con la instalación rota es exactamente donde tiene que seguir funcionando. Sólo antes del subcomando, a diferencia de `--json`: `--json` modifica un reporte y va donde va el comando que modifica, y una consulta de versión no modifica nada.
+
+---
+
 ## Deudas sin unidad asignada
 
 Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a propósito, y cada ítem declara qué lo destraba, para que el acarreo sea una decisión y no un olvido.
