@@ -105,6 +105,39 @@ class DoctorStartMcpServersTest(RealHomeTestCase):
         report = self.run_doctor()
         self.assertEqual(self.entry(report)["mcp_servers"], [])
 
+    def test_bound_servers_are_reported_without_the_flag_that_starts_nothing(self):
+        """The flag authorises running processes; this reads a journal.
+
+        Gating a pure read behind `--start-mcp-servers` left a plain `doctor`
+        silent about the servers an install granted, which is the same blind
+        spot that flag's own report was fixed to remove — only for the
+        invocation almost everyone actually types. It goes in a key of its own
+        rather than into `mcp_servers`, which is documented as the result of
+        launching things and would then hold entries nothing launched.
+        """
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        entry = self.entry(self.run_doctor(start=False))
+        self.assertNotIn("mcp_servers", entry, "the launching report still belongs to the flag")
+        self.assertEqual([check["id"] for check in entry["mcp_bound"]], ["cbm"])
+
+    def test_an_install_with_nothing_bound_reports_an_empty_list(self):
+        self.install()
+        self.assertEqual(self.entry(self.run_doctor(start=False))["mcp_bound"], [])
+
+    def test_the_prose_report_names_them(self):
+        self.present()
+        code = cli.main(
+            ["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=self.runtime()
+        )
+        self.assertEqual(code, cli.OK)
+        context = self.runtime()
+        cli.main(["doctor"], runtime=context)
+        self.assertIn("cbm", context.out.getvalue())
+
     def test_a_bound_server_is_named_rather_than_passed_over_in_silence(self):
         """A bound server writes no `/mcp/<id>` key, only its convention.
 

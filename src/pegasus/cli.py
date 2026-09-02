@@ -998,6 +998,19 @@ def _health(
         elif current != entry.after_digest:
             health["drifted"].append(entry.id)
 
+    # Outside the flag, and deliberately: the flag authorises running someone's
+    # configured processes, and this runs nothing at all -- it reads the journal
+    # for servers this install granted without configuring. Keeping it inside
+    # left a plain `doctor` silent about them, which is the same blind spot the
+    # flag's own report was fixed to remove, only for the invocation almost
+    # everybody types. Its own key, rather than joining `mcp_servers`: that one
+    # is documented as the result of launching things, and would otherwise hold
+    # entries nothing launched.
+    health["mcp_bound"] = [
+        {"id": check.id, "status": check.status, "detail": check.detail}
+        for check in _bound_checks(install)
+    ]
+
     if start_mcp_servers:
         health["mcp_servers"] = [
             {"id": check.id, "status": check.status, "detail": check.detail}
@@ -1544,6 +1557,9 @@ def _cli_prose(entry: dict[str, Any]) -> str:
     if steps:
         line += "\n  If it was already running when Pegasus was installed:"
         line += "".join(f"\n    {step}" for step in steps)
+    if entry.get("mcp_bound"):
+        line += "\n  MCP servers you administer, granted but not installed by Pegasus:"
+        line += "".join(f"\n    {check['id']}" for check in entry["mcp_bound"])
     if "mcp_servers" in entry:
         if entry["mcp_servers"]:
             line += "\n  MCP servers:"
