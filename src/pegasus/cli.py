@@ -1028,19 +1028,25 @@ def _bound_checks(install) -> list[mcp_handshake.ServerCheck]:
     beside it is exactly the shape a binding leaves behind, and it is enough
     to say the true thing instead.
 
-    What is said stops where the journal's knowledge stops. The key the server
-    was bound to was never recorded, so it is not named here: a report that
-    guessed it would be the same kind of falsehood this exists to remove.
-    Starting the server is out of reach for the same reason — there is nothing
-    recorded to start.
+    What is said stops where the journal's knowledge stops, and it stops twice.
+    The key the server was bound to was never recorded, so it is not named: a
+    report that guessed it would be the same kind of falsehood this exists to
+    remove. And a binding is not the only cause of this shape -- `retire` walks
+    kinds in sorted order, `config-key` before `file`, so an uninstall that
+    removed the configuration key and then failed on the convention leaves the
+    journal holding exactly this. Nothing here separates the two, so neither is
+    asserted; both readings are named instead. Starting the server is out of
+    reach for the same reason as the key: there is nothing recorded to start.
     """
     configured = {name for _, name in _mcp_entries(install)}
     return [
         mcp_handshake.ServerCheck(
             entry.id[len(_MCP_CONVENTION_PREFIX):],
             "bound",
-            "administered by you; Pegasus grants its tools and ships its convention, "
-            "and neither installs nor starts it",
+            "no configuration of its own in this install: either bound to a server you "
+            "administer, whose tools Pegasus grants and whose convention it ships without "
+            "installing or starting it, or a convention left behind by an uninstall that "
+            "did not finish",
         )
         for entry in install.entries
         if entry.id.startswith(_MCP_CONVENTION_PREFIX)
