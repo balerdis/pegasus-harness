@@ -8,12 +8,47 @@ Pegasus 5 es un solo archivo: `pegasus`. No hay wheel, no hay venv, no hay `pip 
 descarga, se verifica y se deja ejecutable en el PATH. Cada paso de esta guía dice si necesita red o
 no, y qué hacer si falla.
 
-**Nunca invoques `pegasus` sin subcomando.** Corrido en una terminal abre un menú interactivo (una
-TUI) que espera teclas de una persona; un agente no tiene con qué manejarlo. Sin terminal (stdin y
-stdout no conectados a una), no hay menú: imprime la misma línea de uso que `--help` y termina con
-código de salida distinto de cero -- que tampoco es un resultado útil para vos. Usá siempre un
-subcomando explícito (`doctor`, `install`, `update`, `upgrade`, `uninstall`, `restore`, `models`), y
-agregá `--json` cuando necesites un resultado que puedas parsear en vez de prosa.
+**Nunca invoques `pegasus` sin subcomando, bajo ninguna circunstancia.** Corrido en una terminal abre
+un menú interactivo (una TUI) que espera teclas de una persona; un agente no tiene con qué manejarlo,
+y no hay forma de automatizarlo desde acá -- este instructivo no describe esa interfaz en ningún
+momento, a propósito. Sin terminal (stdin y stdout no conectados a una), tampoco hay menú: imprime la
+misma línea de uso que `--help` y termina con código de salida distinto de cero, que tampoco es un
+resultado útil para vos. Usá siempre un subcomando explícito (`doctor`, `install`, `update`,
+`upgrade`, `uninstall`, `restore`, `models`), y agregá `--json` cuando necesites un resultado que
+puedas parsear en vez de prosa.
+
+## 0. Usar `install.sh`, cuando alcanza
+
+Si lo único que hace falta es dejar `python3` (ya presente), Node, OpenCode y el binario `pegasus`
+instalados -- sin elegir MCPs todavía --, `install.sh` hace eso solo, y es más corto que repetir los
+pasos manuales de este documento. La forma no interactiva, la que un agente debe usar, es:
+
+```sh
+curl -fsSL https://github.com/balerdis/pegasus-harness/releases/latest/download/install.sh \
+  | bash -s -- --yes --no-run
+```
+
+`--yes` salta la confirmación (necesaria: nadie va a escribir "y" en un pipe) y `--no-run` evita que
+el script lance nada al final -- ni la TUI de Pegasus ni `opencode`, ninguno de los dos es algo que un
+agente deba abrir. Repetido sin `--no-run` sí lanzaría uno de los dos según haya instalado algo o no,
+así que un agente nunca lo corre sin ese flag. Para inspeccionar qué falta sin cambiar nada -- por
+ejemplo, para decidir si hace falta seguir con este instructivo o no --, usá `--verify`:
+
+```sh
+curl -fsSL https://github.com/balerdis/pegasus-harness/releases/latest/download/install.sh \
+  | bash -s -- --verify
+```
+
+`--verify` no descarga nada, no crea directorios, y termina con código de salida distinto de cero si
+`python3` está ausente o es más viejo que 3.12 -- el resto de esta guía asume que ese chequeo ya pasó.
+Si `install.sh` se niega por ese motivo, no lo resuelvas vos: instalar o actualizar el Python del
+sistema es una decisión específica de cada distribución, y una elección equivocada puede romper otra
+cosa. Decíselo a la persona con la versión que pide y la que se encontró, tal como el propio script
+las imprime, y esperá su decisión.
+
+Lo que `install.sh` no hace es elegir MCPs ni escribirlos en la configuración de OpenCode -- eso sigue
+siendo tarea de los pasos de abajo (sección "Instalar en OpenCode y elegir MCPs"), porque es ahí donde
+la persona tiene que tomar una decisión explícita por cada servidor.
 
 ## 1. Ubicar el checkout y confirmar la cuenta
 
@@ -28,28 +63,16 @@ la persona por esto; seguí directamente con el paso 2 desde el directorio que s
 
 ## 2. Descargar el asset del release y verificarlo
 
-Sustituí `RELEASE_TAG` por el tag que la persona pidió. Si no nombró ninguno — "instalame pegasus", sin
-más — no le preguntes por un número de versión: resolvé vos el último tag publicado, con `gh` si está
-disponible y con la API si no.
+No hace falta resolver ningún tag ni preguntarle a la persona cuál quiere: `releases/latest/download/`
+es un redirect de GitHub que siempre apunta al último release publicado, así que se descarga directo
+de ahí.
 
 ```sh
-gh release view --repo balerdis/pegasus-harness --json tagName -q .tagName
-
-# sin gh:
-curl -fsSL https://api.github.com/repos/balerdis/pegasus-harness/releases/latest \
-  | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])"
-```
-
-Si ninguna de las dos resuelve (sin red, sin `gh`, API caída), no adivines un número: decíselo a la
-persona y pedile el tag.
-
-```sh
-RELEASE_TAG="v5.9.0"
-DOWNLOAD_DIR="$HOME/Downloads/pegasus-$RELEASE_TAG"
+DOWNLOAD_DIR="$HOME/Downloads/pegasus"
 mkdir -p "$DOWNLOAD_DIR"
 cd "$DOWNLOAD_DIR"
 
-BASE_URL="https://github.com/balerdis/pegasus-harness/releases/download/$RELEASE_TAG"
+BASE_URL="https://github.com/balerdis/pegasus-harness/releases/latest/download"
 
 curl -fL -O "$BASE_URL/pegasus"
 curl -fL -O "$BASE_URL/pegasus.sha256"
@@ -57,10 +80,9 @@ curl -fL -O "$BASE_URL/release-manifest.json"
 
 sha256sum -c pegasus.sha256
 python3 -c "
-import json, sys
+import json
 manifest = json.load(open('release-manifest.json'))
 assert manifest['schema'] == 'pegasus-harness-release/v5', manifest['schema']
-assert manifest['tag'] == '$RELEASE_TAG', manifest['tag']
 names = {a['name'] for a in manifest['assets']}
 assert names == {'pegasus'}, names
 print('release-manifest.json: coincide con', manifest['tag'], manifest['commit'])
@@ -68,9 +90,10 @@ print('release-manifest.json: coincide con', manifest['tag'], manifest['commit']
 ```
 
 **Detenete y no sigas si:** `sha256sum -c` reporta `FAILED`, o el script de Python levanta
-`AssertionError`. Ninguno de los dos casos es recuperable descargando de nuevo del mismo tag: si el
-tag ya publicó bytes que no calzan con su propio manifest, avisale a la persona y esperá
-instrucciones — no lo instales.
+`AssertionError`. Ninguno de los dos casos es recuperable descargando de nuevo en el momento: si el
+release ya publicó bytes que no calzan con su propio manifest, avisale a la persona y esperá
+instrucciones — no lo instales. (Un `FAILED` también puede pasar si se publicó un release nuevo justo
+entre las dos descargas de arriba; en ese caso, volver a descargar los tres archivos sí resuelve.)
 
 Esta es la única sección de toda la instalación que necesita red: descargar el archivo que se va a
 instalar. Pegasus no tiene dependencias de terceros, así que ningún paso posterior vuelve a salir a
@@ -78,10 +101,10 @@ internet.
 
 *No ejecutado en esta verificación: `curl` contra GitHub necesita red, prohibida en este entorno de
 trabajo. Lo que sí se probó, contra un artefacto construido localmente con `tools/build_zipapp.py` y
-su propio `release-manifest.json` generado por `tools/build_release_evidence.py --tag v5.9.0` (el
-mismo tag de ejemplo que la sección anterior, para que ambas corridas queden coherentes entre sí), es
-que `sha256sum -c` y la comparación de `schema`/`tag`/`assets` distinguen exactamente un archivo
-correcto de uno alterado — corrida real:*
+su propio `release-manifest.json` generado por `tools/build_release_evidence.py --tag v5.9.0` (un tag
+de ejemplo cualquiera, sólo para tener uno en la corrida; no hace falta que coincida con nada de la
+sección anterior, que ya no resuelve ningún tag), es que `sha256sum -c` y la comparación de
+`schema`/`assets` distinguen exactamente un archivo correcto de uno alterado — corrida real:*
 
 ```
 $ sha256sum -c pegasus.sha256
