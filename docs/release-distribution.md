@@ -29,12 +29,19 @@ prepara el release.
    para confirmar que el `pegasus_version` que reporta coincide con `pyproject.toml` en ese commit, y
    sólo entonces certifica el commit y el hash (`release-manifest.json` y un `.sha256`). Sin `--tag`,
    describe el `HEAD` limpio; con el worktree sucio, se niega.
-4. Publicá en GitHub Releases, sobre ese mismo tag, los tres archivos que `INSTALL.md` descarga:
-   `pegasus`, su `.sha256`, y `release-manifest.json`. El checksum registra sólo el basename, nunca
-   una ruta de staging, para que `sha256sum -c` funcione tal como se descargó.
+4. Publicá en GitHub Releases, sobre ese mismo tag, los cuatro archivos que `INSTALL.md` nombra:
+   `pegasus`, su `.sha256`, `release-manifest.json`, y `install.sh` (el archivo en la raíz del
+   repositorio, tal cual está en ese commit — no se genera, se sube directo). `install.sh` tiene que
+   publicarse en este mismo release, y no en ningún otro lugar (por ejemplo, servido crudo desde
+   `raw.githubusercontent.com`): todo lo que instala vive detrás de
+   `releases/latest/download/`, así que si el script viviera en una URL aparte podría quedar
+   apuntando a un binario de un release distinto del que lo acompaña, exactamente el tipo de
+   desincronización que este esquema existe para evitar. El checksum de `pegasus` registra sólo el
+   basename, nunca una ruta de staging, para que `sha256sum -c` funcione tal como se descargó.
 5. El release de GitHub debe ser no-draft y no-prerelease para que el contrato `latest` lo ofrezca.
-   Verificá manualmente, descargando cada asset por su ruta versionada y por
-   `.../releases/latest/download/<asset>`, que ambos coinciden en bytes y en el checksum publicado.
+   Verificá manualmente, descargando cada uno de los cuatro assets por su ruta versionada y por
+   `.../releases/latest/download/<asset>`, que ambos coinciden en bytes (y, para `pegasus`, también en
+   el checksum publicado).
 
 `tools/build_release_manifest.py` sigue existiendo y sigue sin tocarse: reproduce la evidencia de los
 tags `v3.1.x` que ya se publicaron con tarball, leyendo sus fuentes con `git show <tag>:ruta` para
