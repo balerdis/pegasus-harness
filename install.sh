@@ -25,6 +25,22 @@ MODO='instalar'
 NO_RUN=0
 CONFIRMAR=1
 
+# Donde el instalador oficial de OpenCode deja el binario -- ver el
+# comentario dentro de instalar_opencode. Se fija acá, una sola vez, porque
+# tanto instalar_opencode como la guía de PATH del final necesitan el mismo
+# valor.
+OPENCODE_BIN_DIR="$HOME/.opencode/bin"
+
+# El PATH tal como llegó, antes de que cualquier "export PATH=..." de este
+# script lo toque. La guía de PATH del final (ver mostrar_guia_path) tiene
+# que juzgar contra ESTE valor, no contra el PATH ya modificado del propio
+# proceso -- si mirara el PATH en vivo después de asegurar_path, un
+# directorio que este mismo script acaba de agregar (sólo para que el exec
+# de más abajo lo encuentre) se vería como "ya estaba", y la persona nunca
+# se enteraría de que en SU terminal real -- la que sigue viva del otro lado
+# del pipe -- ese directorio sigue faltando.
+ORIGINAL_PATH="$PATH"
+
 # Version de OpenCode a instalar. Se fija por el mismo motivo que
 # creacion-usuario.sh fija la suya: sin autenticar, la API de GitHub que
 # resuelve "la última versión" permite 60 pedidos por hora por IP, y una
@@ -172,13 +188,22 @@ detectar_pegasus() {
   fi
 }
 
+# $1: la cadena de PATH a inspeccionar. $2: el directorio buscado. Tomar la
+# cadena de PATH como parámetro (en vez de leer siempre "$PATH" en vivo) es
+# lo que le permite tanto a detectar_path (PATH en vivo, para el preflight)
+# como a mostrar_guia_path (ORIGINAL_PATH, para el cierre) compartir una
+# sola implementación sin pisarse.
+dir_en_path() {
+  case ":$1:" in
+    *":$2:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 BIN_DIR_EN_PATH=0
 
 detectar_path() {
-  case ":${PATH}:" in
-    *":${BIN_DIR}:"*) BIN_DIR_EN_PATH=1 ;;
-    *) BIN_DIR_EN_PATH=0 ;;
-  esac
+  dir_en_path "$PATH" "$BIN_DIR" && BIN_DIR_EN_PATH=1 || BIN_DIR_EN_PATH=0
 }
 
 detectar_todo() {
@@ -315,6 +340,27 @@ Este script no instala Python. Pistas (no ejecutadas por este script):
   ((CURL_PRESENTE)) || fallar 'falta curl: sin él este script no puede descargar nada. Instalalo con el gestor de paquetes de tu distribución (por ejemplo: sudo apt install curl) y volvé a correr este script.'
 }
 
+# --- Terminal controladora ---
+#
+# La usan tanto `confirmar` (para saber si hay a quién preguntarle) como
+# `lanzar` (para saber si el programa final -- pegasus u opencode, los dos
+# TUIs -- va a tener una terminal real, o si más vale no exec'earlo). Una
+# sola función para que las dos nunca puedan quedar en desacuerdo: la
+# razón para extraerla es exactamente la misma que ya se documentó abajo,
+# en el comentario grande de `confirmar`, un escalón más adentro -- el bug
+# original ("exec \"$LANZAR\"" hereda un stdin muerto) es el mismo bug que
+# ya se había resuelto acá, sólo que sin generalizar.
+#
+# El chequeo tiene que ABRIR /dev/tty de verdad, no sólo mirar sus bits de
+# permiso: `[[ -r /dev/tty ]]` da "legible" igual aunque no haya ninguna
+# terminal controladora (el nodo del dispositivo existe y es legible por
+# cualquiera; lo que falla es abrirlo). Se prueba en un subshell para poder
+# silenciar el "No such device or address" que bash imprime solo si el
+# intento de abrir falla adentro del proceso principal.
+hay_terminal_controladora() {
+  (exec 0</dev/tty) 2>/dev/null
+}
+
 confirmar() {
   ((CONFIRMAR)) || return 0
   printf '\n'
@@ -344,14 +390,7 @@ confirmar() {
   #
   # (Si a alguien se le ocurre "simplificar" esto de vuelta a
   # `read -r -p ... respuesta` a secas: no. Es exactamente el bug de arriba.)
-  #
-  # El chequeo de disponibilidad tiene que ABRIR /dev/tty de verdad, no sólo
-  # mirar sus bits de permiso: `[[ -r /dev/tty ]]` da "legible" igual aunque
-  # no haya ninguna terminal controladora (el nodo del dispositivo existe y
-  # es legible por cualquiera; lo que falla es abrirlo). Se prueba en un
-  # subshell para poder silenciar el "No such device or address" que bash
-  # imprime solo si el intento de abrir falla adentro del proceso principal.
-  if ! (exec 0</dev/tty) 2>/dev/null; then
+  if ! hay_terminal_controladora; then
     fallar 'no hay una terminal para pedir confirmación (por ejemplo, corriendo sin tty o con stdin cerrado). Usá --yes para saltear la confirmación.'
   fi
 
@@ -431,9 +470,10 @@ instalar_opencode() {
       || fallar 'falló la instalación de OpenCode; si dice "Failed to fetch version information", es el límite de la API de GitHub: esperá o usá --opencode-version'
   fi
 
-  # El instalador oficial deja el binario en ~/.opencode/bin y sólo lo agrega
-  # a ~/.bashrc; esta shell ya arrancó, así que hace falta lo mismo acá.
-  export PATH="$HOME/.opencode/bin:$PATH"
+  # El instalador oficial deja el binario en $OPENCODE_BIN_DIR y sólo lo
+  # agrega a ~/.bashrc; esta shell ya arrancó, así que hace falta lo mismo
+  # acá.
+  export PATH="$OPENCODE_BIN_DIR:$PATH"
   command -v opencode >/dev/null 2>&1 \
     || fallar 'OpenCode se instaló pero no quedó en el PATH; revisá ~/.bashrc'
   ok "instalado: $(opencode --version 2>&1 | head -1)"
@@ -482,17 +522,85 @@ instalar_pegasus() {
   rm -rf "$PEGASUS_TMPDIR"
 }
 
+# Sólo ajusta el PATH de ESTE proceso -- para que, si esta misma corrida
+# termina en "exec pegasus" más abajo, ese exec encuentre el binario recién
+# instalado. No imprime nada: lo que la persona necesita leer sobre su PATH
+# real (el de la terminal del otro lado del pipe, que este export no toca)
+# lo imprime mostrar_guia_path, al final, no acá en el medio de la
+# instalación.
 asegurar_path() {
   detectar_path
   ((BIN_DIR_EN_PATH)) && return 0
-
   export PATH="$BIN_DIR:$PATH"
+}
+
+# --- Guía de PATH, al cierre ---
+#
+# Reemplaza el aviso que antes daba asegurar_path a mitad de instalación.
+# Dos programas pueden haber quedado fuera del PATH de la terminal real
+# (la que sigue viva del otro lado de un "curl ... | bash"): el binario de
+# pegasus, en $BIN_DIR, y el de OpenCode, en $OPENCODE_BIN_DIR -- éste
+# último lo instala el mecanismo oficial de OpenCode, que sólo agrega la
+# línea a ~/.bashrc, igual que nvm hace con el suyo.
+#
+# Se nombra sólo el/los que de verdad aplican a esta corrida (lo que se
+# instaló y, además, no estaba ya en el PATH con el que arrancó el script --
+# ver ORIGINAL_PATH), y se da una sola línea "export PATH=..." que la
+# persona puede pegar tal cual para arreglar la terminal actual. Se llama
+# desde lanzar(), antes de decidir si hace exec o no -- si el script termina
+# haciendo exec a una TUI, esto es lo último que la persona ve ANTES de esa
+# TUI, no después: después de un exec no queda nada de este script para
+# imprimir nada más.
+# Cierra sobre dos hechos verificados contra /etc/skel en Debian/Ubuntu, que
+# es lo que este instalador apunta:
+#   - ~/.profile agrega ~/.local/bin al PATH, pero sólo si ese directorio YA
+#     existía cuando la sesión arrancó -- justo lo que no pasa acá, porque
+#     recién se acaba de crear.
+#   - ~/.profile además hace `source` de ~/.bashrc (si la shell es bash) --
+#     y es ~/.bashrc donde el instalador oficial de OpenCode dejó SU línea.
+# Por eso "source ~/.profile" (no "source ~/.bashrc" a secas) es lo que
+# arregla las dos cosas de una sola vez en la terminal actual: si alguien
+# prueba sólo ~/.bashrc porque es lo primero que se le ocurre, opencode
+# aparece pero pegasus sigue sin estar, y todo parece un instalador roto.
+# No se ofrece como válido en todos lados: sólo cuando pegasus fue a parar
+# al `~/.local/bin` de siempre -- con `--bin-dir` apuntando a otro lado,
+# ~/.profile no tiene forma de saberlo, y el `export PATH=...` explícito es
+# la única salida correcta.
+mostrar_guia_path() {
+  local falta_pegasus_dir=0 falta_opencode_dir=0
+  ((FALTA_PEGASUS)) && ! dir_en_path "$ORIGINAL_PATH" "$BIN_DIR" && falta_pegasus_dir=1
+  ((FALTA_OPENCODE)) && ! dir_en_path "$ORIGINAL_PATH" "$OPENCODE_BIN_DIR" && falta_opencode_dir=1
+  ((falta_pegasus_dir || falta_opencode_dir)) || return 0
+
   titulo 'PATH'
-  info "$BIN_DIR todavía no está en tu PATH."
-  info 'La mayoría de los sistemas agregan ese directorio al iniciar sesión,'
-  info 'pero sólo si ya existía — y recién se acaba de crear. Cerrar sesión y'
-  info 'volver a entrar es lo que lo resuelve. Editá tu shell sólo si, después'
-  info 'de volver a entrar, todavía no aparece.'
+  ((falta_pegasus_dir)) && info "pegasus, en $BIN_DIR: todavía no está en el PATH de esta terminal."
+  ((falta_opencode_dir)) && info "opencode, en $OPENCODE_BIN_DIR: todavía no está en el PATH de esta terminal."
+
+  local dirs=()
+  ((falta_pegasus_dir)) && dirs+=("$BIN_DIR")
+  ((falta_opencode_dir)) && dirs+=("$OPENCODE_BIN_DIR")
+  local combinado export_linea
+  combinado=$(IFS=:; printf '%s' "${dirs[*]}")
+  export_linea="export PATH=\"$combinado:\$PATH\""
+
+  if ((falta_pegasus_dir)) && [[ "$BIN_DIR" != "$HOME/.local/bin" ]]; then
+    info "Para esta terminal: $export_linea"
+  else
+    info 'Para esta terminal: source ~/.profile'
+    if ((falta_pegasus_dir && falta_opencode_dir)); then
+      info '(no "source ~/.bashrc" sola: esa trae lo que instaló OpenCode, pero no'
+      info 'agrega el bin de pegasus. ~/.profile hace las dos cosas: de paso vuelve'
+      info 'a leer ~/.bashrc, y además agrega ~/.local/bin, que recién se creó.)'
+    elif ((falta_pegasus_dir)); then
+      info '(agrega ~/.local/bin al PATH, ahora que el directorio existe.)'
+    else
+      info '(vuelve a leer ~/.bashrc, donde quedó la línea que agregó el instalador'
+      info 'de OpenCode.)'
+    fi
+    info "Si tu shell no lee ~/.profile (zsh, fish, ...): $export_linea"
+  fi
+
+  info 'Una sesión nueva ya la tiene sola, sin hacer nada de esto.'
 }
 
 # --- Qué queda corriendo al final ---
@@ -523,6 +631,11 @@ decidir_lanzamiento() {
 
 lanzar() {
   decidir_lanzamiento
+
+  # No bajo --verify: ahí nunca se instaló nada de verdad, así que no hay
+  # ningún directorio "recién instalado" del que avisar todavía.
+  [[ "$MODO" == 'verificar' ]] || mostrar_guia_path
+
   titulo 'Para terminar'
 
   if [[ "$MODO" == 'verificar' ]]; then
@@ -534,12 +647,30 @@ lanzar() {
     return 0
   fi
 
-  info "lanzando $LANZAR ($MOTIVO)..."
-  # exec reemplaza este proceso por el de destino en vez de encadenarlo: así
-  # install.sh no queda colgado en el árbol de procesos esperando a que
-  # termine, y no hay nada suyo pendiente por ejecutar después de todos
-  # modos.
-  exec "$LANZAR"
+  # $LANZAR (pegasus u opencode) es una TUI: sin una terminal real en su
+  # stdin, abre, imprime su uso y sale -- ver el bug documentado en
+  # hay_terminal_controladora. Bajo el "curl ... | bash" publicado, el
+  # stdin de ESTE proceso es la tubería que bash ya drenó, no una terminal,
+  # así que un "exec" liso que la heredara reproduciría exactamente eso.
+  if hay_terminal_controladora; then
+    info "lanzando $LANZAR ($MOTIVO)..."
+    # exec reemplaza este proceso por el de destino en vez de encadenarlo:
+    # así install.sh no queda colgado en el árbol de procesos esperando a
+    # que termine, y no hay nada suyo pendiente por ejecutar después de
+    # todos modos. "< /dev/tty" es lo que le da a pegasus/opencode una
+    # terminal real en vez del stdin muerto de este proceso -- la terminal
+    # de quien tipeó el comando sigue disponible ahí aunque este script
+    # haya llegado por una tubería.
+    exec "$LANZAR" < /dev/tty
+  fi
+
+  # Sin terminal controladora no hay a quién abrirle una TUI: exec'ear
+  # igual sólo repetiría el bug (uso impreso, salida inmediata) sin que la
+  # persona nunca vea el mensaje de arriba. La instalación en sí ya
+  # terminó bien -- reportar esto como error confundiría un problema del
+  # lanzamiento final con uno de la instalación, que no lo tuvo.
+  info "no se lanza $LANZAR: no hay una terminal para abrirlo ($MOTIVO)."
+  info "Corré esto para continuar: $LANZAR"
 }
 
 main() {
