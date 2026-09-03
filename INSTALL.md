@@ -1,6 +1,6 @@
 # Instalar Pegasus
 
-## Si estás en Linux, ejecutá esto:
+Pegasus soporta hoy Linux, con OpenCode como único cliente. Ejecutá esto:
 
 ```sh
 curl -fsSL https://github.com/balerdis/pegasus-harness/releases/latest/download/install.sh | bash
@@ -15,9 +15,9 @@ El resto de esta guía explica, en orden, qué hace exactamente ese script, qué
 interfaz interactiva de Pegasus una vez instalado, y qué significa usarlo por línea de comandos —
 para cuando alguna de esas dos formas de operarlo te convenga más que la que uses por default.
 
-*(Este instructivo cubre Linux, que es donde `install.sh` está pensado para correr: sus pistas de
-Python son `apt`/`dnf`, propias de esa familia de sistemas. No decimos nada sobre macOS acá — ni que
-funciona ni que falla — porque no lo probamos.)*
+*(`install.sh` sólo está pensado para Linux: sus pistas de Python son `apt`/`dnf`, propias de esa
+familia de sistemas. No decimos nada sobre macOS acá — ni que funciona ni que falla — porque no lo
+probamos.)*
 
 ## 1. Qué hace `install.sh`
 
