@@ -6,35 +6,28 @@ Pegasus es aditivo. Revisa lo que ya existe, muestra un plan y crea solamente lo
 
 ## Instalación
 
-Pegasus es un solo archivo: `pegasus`. Sin wheel, sin venv, sin `pip install` — se descarga, se
-verifica su checksum y se deja ejecutable en el PATH. No hace falta `sudo`.
-
-Elegí el tag que vas a instalar en la [página de releases](https://github.com/balerdis/pegasus-harness/releases) y reemplazalo abajo:
+Pegasus soporta hoy Linux, con OpenCode como único cliente. Un solo comando detecta qué te falta
+(Node, OpenCode, el binario `pegasus`), te muestra el plan antes de tocar nada, pide confirmación e
+instala sólo eso — no hace falta elegir una versión ni copiar un tag a mano:
 
 ```sh
-RELEASE_TAG="<el último tag publicado>"
-mkdir -p "$HOME/Downloads/pegasus-$RELEASE_TAG"
-cd "$HOME/Downloads/pegasus-$RELEASE_TAG"
-
-BASE_URL="https://github.com/balerdis/pegasus-harness/releases/download/$RELEASE_TAG"
-curl -fL -O "$BASE_URL/pegasus"
-curl -fL -O "$BASE_URL/pegasus.sha256"
-sha256sum -c pegasus.sha256
-
-BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
-mkdir -p "$BIN_DIR"
-install -m 755 pegasus "$BIN_DIR/pegasus"
+curl -fsSL https://github.com/balerdis/pegasus-harness/releases/latest/download/install.sh | bash
 ```
 
-Si `sha256sum -c` falla, no sigas: no tenés lo que el release publicó. Si `$BIN_DIR` no queda en tu
-PATH, [INSTALL.md](INSTALL.md) explica el porqué y qué hacer (un `source ~/.bashrc` no alcanza).
+Termina dejándote en el lugar que corresponde: la interfaz de Pegasus si instaló algo nuevo (todavía
+hay que elegir MCPs y confirmar dentro de OpenCode), o `opencode` directo si tu entorno ya estaba
+completo. [INSTALL.md](INSTALL.md) explica paso a paso qué hace ese script, sus flags (`--verify`,
+`--yes`, `--no-run`, `--bin-dir`, ...), la interfaz interactiva de Pegasus y el uso por línea de
+comandos — incluida la instalación manual, sin el script, para quien prefiera revisar cada paso.
+
+Para confirmar en cualquier momento cómo quedó, y qué está integrado en OpenCode:
 
 ```sh
 pegasus doctor
 ```
 
-`pegasus` es el único archivo que hace falta: no busca un venv, no depende de nada instalado antes que
-él, y es el mismo archivo en Linux y macOS. Es Python 3.12+, sin ninguna dependencia de terceros.
+`pegasus` es un solo archivo: no busca un venv, no depende de nada instalado antes que él, no hace
+falta `sudo`. Es Python 3.12+, sin ninguna dependencia de terceros.
 
 ### Con un agente
 
@@ -57,7 +50,13 @@ Para cambios ejecutables o de configuración, `sdd-verify` es la autoridad final
 
 ## Prerrequisitos de OpenCode
 
-Para `--client opencode`, necesitás OpenCode instalado previamente en la cuenta actual. Si vas a confirmar CBM, verificá que `codebase-memory-mcp --version` y `codebase-memory-mcp --help` respondan desde el ejecutable local. Playwright necesita un navegador compatible instalado por separado antes del apply; Pegasus no descarga navegadores.
+Para `pegasus install --cli opencode` (y para `update`/`uninstall` con ese mismo `--cli`) necesitás
+OpenCode ya instalado en la cuenta: `pegasus` en sí nunca instala OpenCode, sólo se integra con una
+instalación existente. Si instalaste con `install.sh` de la sección anterior, esto ya está resuelto —
+ese script instala Node y OpenCode antes de llegar a `pegasus`. Si vas a confirmar CBM, verificá que
+`codebase-memory-mcp --version` y `codebase-memory-mcp --help` respondan desde el ejecutable local.
+Playwright necesita un navegador compatible instalado por separado antes del apply; Pegasus no
+descarga navegadores.
 
 Pegasus no configura credenciales, proveedor ni modelo: usá `/connect` para las credenciales del proveedor y `/models` para elegir el modelo.
 

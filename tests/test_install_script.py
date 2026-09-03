@@ -522,6 +522,250 @@ class ConfirmationPromptTest(InstallScriptTestCase):
         self.assertEqual(stat.S_IMODE(installed.stat().st_mode), 0o755)
 
 
+class LaunchGetsControllingTerminalTest(InstallScriptTestCase):
+    """The core bug this fix closes: `lanzar` used to end with a bare
+    `exec "$LANZAR"`, which inherits install.sh's own stdin. Under the
+    documented `curl ... | bash`, that stdin is the pipe bash already
+    drained, not a terminal -- so the launched program (pegasus or opencode,
+    both TUIs) printed its usage line and exited immediately instead of
+    opening. The fix execs with `< /dev/tty` explicitly, reusing the same
+    controlling-terminal check `confirmar` already had.
+
+    Each stub/fixture program records whether ITS OWN stdin is a tty
+    (`[ -t 0 ]`) to a marker file -- that is the exact property the bug
+    broke, so these assert that property directly rather than a proxy for it
+    (such as "some output appeared").
+    """
+
+    def test_real_pty_run_execs_freshly_installed_pegasus_with_a_real_terminal(self):
+        """Drives a real (non `--no-run`) install over a pty end to end:
+        types "y" at the confirmation prompt, installs pegasus for real
+        through the `PEGASUS_INSTALL_BASE_URL` fixture seam, and lets the
+        script reach its actual `exec pegasus` -- the downloaded "binary"
+        then checks its own stdin. Also checks the PATH guidance (see
+        ClosingPathGuidanceTest) appears in the transcript BEFORE the exec:
+        once exec happens, this script has nothing left to print."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        marker = self.marker("pegasus-stdin")
+        fixture_dir = Path(self.tmp.name) / "launch-pty-fixture"
+        content = (
+            b'#!/bin/sh\n'
+            b'if [ "$1" = "--version" ] || [ "$1" = "-V" ]; then echo "pegasus fake"; exit 0; fi\n'
+            b'if [ -t 0 ]; then echo tty > "' + str(marker).encode() + b'"; '
+            b'else echo notty > "' + str(marker).encode() + b'"; fi\n'
+            b'echo PEGASUS-LAUNCHED-WITH-TERMINAL\n'
+        )
+        base_url = _make_release_fixture(fixture_dir, content=content)
+
+        env = {
+            "HOME": str(self.home),
+            "PATH": f"{self.stub_bin}:{SYSTEM_PATH}",
+            "PEGASUS_INSTALL_BASE_URL": base_url,
+            "TERM": "xterm",
+        }
+        session = _InstallPtySession(env=env, args=[])
+        self.addCleanup(session.close)
+
+        session.wait_for("[y/N]")
+        session.press("y\n")
+        output = session.wait_for("PEGASUS-LAUNCHED-WITH-TERMINAL", timeout=15.0)
+
+        self.assertTrue(marker.exists(), output)
+        self.assertEqual(marker.read_text(encoding="utf-8").strip(), "tty")
+        path_idx = output.index("export PATH=")
+        launch_idx = output.index("PEGASUS-LAUNCHED-WITH-TERMINAL")
+        self.assertLess(path_idx, launch_idx, output)
+
+    def test_real_pty_run_with_nothing_missing_execs_opencode_with_a_real_terminal(self):
+        """`opencode` is a TUI too and needs exactly the same treatment. With
+        everything already present, `lanzar` execs straight into opencode
+        with no confirmation prompt in between."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub(
+            "pegasus",
+            'if [ "$1" = "--version" ] || [ "$1" = "-V" ]; then echo "pegasus 5.12.1"; exit 0; fi\n',
+        )
+        marker = self.marker("opencode-stdin")
+        self.stub(
+            "opencode",
+            'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n'
+            f'if [ -t 0 ]; then echo tty > "{marker}"; else echo notty > "{marker}"; fi\n'
+            'echo OPENCODE-LAUNCHED-WITH-TERMINAL\n',
+        )
+
+        env = {
+            "HOME": str(self.home),
+            "PATH": f"{self.stub_bin}:{SYSTEM_PATH}",
+            "TERM": "xterm",
+        }
+        session = _InstallPtySession(env=env, args=[])
+        self.addCleanup(session.close)
+
+        output = session.wait_for("OPENCODE-LAUNCHED-WITH-TERMINAL", timeout=15.0)
+
+        self.assertTrue(marker.exists(), output)
+        self.assertEqual(marker.read_text(encoding="utf-8").strip(), "tty")
+
+
+class LaunchWithoutTerminalTest(InstallScriptTestCase):
+    """The other half of the fix: when there genuinely is no controlling
+    terminal to hand the launched program (the CI / fully-detached-session
+    case -- a real `curl ... | bash` from an interactive shell normally
+    keeps one via `/dev/tty`; this is the case where there truly is none),
+    `lanzar` must NOT exec into a program that will just print its usage and
+    exit. It must say so plainly, print the exact command to run, and exit 0
+    -- the install itself still succeeded."""
+
+    def test_no_controlling_terminal_does_not_exec_and_prints_the_command(self):
+        """Mirrors the exact reported bug: a fresh install (pegasus missing)
+        run with no controlling terminal at all. Needs --yes since there is
+        no terminal to confirm on either."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        fixture_dir = Path(self.tmp.name) / "no-tty-launch-fixture"
+        base_url = _make_release_fixture(fixture_dir)
+
+        result = self.run_install(
+            "--yes",
+            extra_env={"PEGASUS_INSTALL_BASE_URL": base_url},
+            start_new_session=True,
+        )
+
+        installed = self.home / ".local" / "bin" / "pegasus"
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(installed.is_file())  # the install itself must still succeed
+        self.assertIn("no se lanza pegasus", result.stdout.lower())
+        self.assertIn("pegasus", result.stdout)
+
+
+class ClosingPathGuidanceTest(InstallScriptTestCase):
+    """Rewrite of the old mid-run PATH nudge: the guidance now appears at the
+    very end (after the launch decision, before any exec), names only the
+    directories that actually apply to this run -- the pegasus bin dir
+    and/or OpenCode's, only the ones just installed and not already on the
+    PATH this run started with -- and hands over one copy-pasteable
+    `export PATH=...` line plus why a new session picks both up on its own.
+    """
+
+    def _stub_curl_that_fakes_the_opencode_installer(self):
+        """Stands in for `curl -fsSL https://opencode.ai/install | bash`:
+        emits (to stdout, so the outer pipe's `bash` runs it) a script that
+        creates a fake `opencode` binary at $OPENCODE_BIN_DIR, exactly what
+        the real official installer does. Any other curl invocation (the
+        pegasus download, which passes `-o` and a `file://` URL) is
+        delegated to the real `curl` from SYSTEM_PATH so that seam still
+        exercises the genuine download-then-verify code path."""
+        self.stub(
+            "curl",
+            "case \"$*\" in\n"
+            "  *opencode.ai/install*)\n"
+            "    cat <<'EOS'\n"
+            'mkdir -p "$HOME/.opencode/bin"\n'
+            "cat > \"$HOME/.opencode/bin/opencode\" <<'BIN'\n"
+            "#!/bin/sh\n"
+            'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n'
+            "BIN\n"
+            'chmod +x "$HOME/.opencode/bin/opencode"\n'
+            "EOS\n"
+            "    ;;\n"
+            "  *)\n"
+            '    exec /usr/bin/curl "$@"\n'
+            "    ;;\n"
+            "esac\n",
+        )
+
+    def test_both_dirs_named_leading_with_source_profile_and_export_as_fallback(self):
+        """`source ~/.profile` (not `~/.bashrc` alone -- that only carries the
+        line OpenCode's installer wrote there, not the pegasus bin dir) must
+        lead, with the explicit `export PATH=...` offered only as the
+        fallback for a shell that doesn't read `~/.profile`. Logging out is
+        mentioned only as a background fact, never as the instruction to
+        follow -- see the coordinator's refinement: telling someone to close
+        their session is heavier than it needs to be."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self._stub_curl_that_fakes_the_opencode_installer()
+        fixture_dir = Path(self.tmp.name) / "both-dirs-fixture"
+        base_url = _make_release_fixture(fixture_dir)
+
+        result = self.run_install(
+            "--yes", "--no-run", extra_env={"PEGASUS_INSTALL_BASE_URL": base_url}
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        bin_dir = str(self.home / ".local" / "bin")
+        opencode_dir = str(self.home / ".opencode" / "bin")
+        self.assertIn(bin_dir, result.stdout)
+        self.assertIn(opencode_dir, result.stdout)
+        self.assertIn(f'export PATH="{bin_dir}:{opencode_dir}:$PATH"', result.stdout)
+        self.assertIn("source ~/.profile", result.stdout)
+        self.assertNotIn("cerrá tu sesión", result.stdout.lower())
+        self.assertNotIn("cerrar sesión", result.stdout.lower())
+        source_idx = result.stdout.index("source ~/.profile")
+        export_idx = result.stdout.index("export PATH=")
+        self.assertLess(source_idx, export_idx, "source ~/.profile must lead, export PATH is the fallback")
+        path_idx = result.stdout.index("=== PATH ===")
+        end_idx = result.stdout.index("=== Para terminar ===")
+        self.assertLess(path_idx, end_idx)
+
+    def test_only_pegasus_dir_named_when_opencode_was_already_present(self):
+        """OpenCode already on PATH (stubbed present) -- only the pegasus bin
+        dir, the one this run actually just installed into, is named."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        fixture_dir = Path(self.tmp.name) / "pegasus-only-fixture"
+        base_url = _make_release_fixture(fixture_dir)
+
+        result = self.run_install(
+            "--yes", "--no-run", extra_env={"PEGASUS_INSTALL_BASE_URL": base_url}
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        bin_dir = str(self.home / ".local" / "bin")
+        opencode_dir = str(self.home / ".opencode" / "bin")
+        self.assertIn(bin_dir, result.stdout)
+        self.assertNotIn(opencode_dir, result.stdout)
+        self.assertIn("source ~/.profile", result.stdout)
+        self.assertIn(f'export PATH="{bin_dir}:$PATH"', result.stdout)
+
+    def test_custom_bin_dir_falls_back_to_plain_export_without_suggesting_profile(self):
+        """`~/.profile`'s snippet only knows how to add `~/.local/bin` -- with
+        `--bin-dir` pointing somewhere else, `source ~/.profile` would not
+        actually fix anything, so it must not be suggested; the explicit
+        `export PATH=...` is the only correct remedy here."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        fixture_dir = Path(self.tmp.name) / "custom-bin-dir-fixture"
+        base_url = _make_release_fixture(fixture_dir)
+        custom_bin_dir = Path(self.tmp.name) / "custom-bin"
+
+        result = self.run_install(
+            "--yes", "--no-run", "--bin-dir", str(custom_bin_dir),
+            extra_env={"PEGASUS_INSTALL_BASE_URL": base_url},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'export PATH="{custom_bin_dir}:$PATH"', result.stdout)
+        self.assertNotIn("source ~/.profile", result.stdout)
+
+    def test_verify_mode_shows_no_closing_path_guidance(self):
+        """--verify never installs anything for real, so there is nothing
+        "just installed" to give closing PATH guidance about -- the only
+        `=== PATH ===` section left is the pre-existing preflight one."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("curl", "exit 0\n")
+
+        result = self.run_install("--verify")
+
+        self.assertEqual(result.stdout.count("=== PATH ==="), 1)
+
+
 class NvmDirectoryParentTest(InstallScriptTestCase):
     """Found by running the script for real against a genuinely empty home.
 
