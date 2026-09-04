@@ -284,6 +284,39 @@ class AgentRenderTest(unittest.TestCase):
         tools = self.value(agent)["tools"]
         self.assertEqual(tools, {"*": False, "context7*": True})
 
+    def test_a_granted_mcp_key_is_written_as_a_wildcard(self):
+        agent = self.agent(granted_mcp=("jira",))
+        self.assertEqual(self.value(agent)["tools"], {"*": False, "jira*": True})
+
+    def test_multiple_granted_mcp_keys_are_all_written(self):
+        agent = self.agent(granted_mcp=("jira", "figma"))
+        self.assertEqual(
+            self.value(agent)["tools"], {"*": False, "jira*": True, "figma*": True}
+        )
+
+    def test_a_granted_mcp_key_never_reopens_a_tool_denied_from_a_shipped_server(self):
+        """The ordering trap: the runtime keeps the *last* rule matching a
+        name. `denied_mcp_tools` narrows a shipped server's wildcard grant by
+        being written after it -- so a user grant must be written *before*
+        `denied_mcp_tools`, never after, or a wildcard the user administers
+        would re-open exactly the tool Pegasus deliberately denied.
+
+        Chosen so the trap actually fires: `denied_mcp_tools` here names
+        `jira_delete_issue`, fully qualified under the same key the user is
+        granted -- had `denied_mcp_tools` been written before the grant
+        instead of after, this assertion would fail.
+        """
+        agent = self.agent(granted_mcp=("jira",), denied_mcp_tools=("jira_delete_issue",))
+        tools = self.value(agent)["tools"]
+        self.assertEqual(tools["jira_delete_issue"], False)
+        keys = list(tools)
+        self.assertLess(keys.index("jira*"), keys.index("jira_delete_issue"))
+
+    def test_a_granted_mcp_key_is_written_after_the_optional_mcp_wildcard(self):
+        agent = self.agent(optional_mcp=("context7",), granted_mcp=("jira",))
+        keys = list(self.value(agent)["tools"])
+        self.assertLess(keys.index("context7*"), keys.index("jira*"))
+
     def test_the_deny_baseline_is_written_before_anything_it_is_meant_to_lose_to(self):
         """The order of these keys decides whether any agent has any tool.
 
@@ -362,6 +395,23 @@ class AgentRenderTest(unittest.TestCase):
         keys = list(permission)
         self.assertLess(keys.index("cbm*"), keys.index("cbm_delete_project"))
         self.assertLess(keys.index("cbm_delete_project"), keys.index("task"))
+
+    def test_a_granted_mcp_key_is_allowed_as_a_wildcard_in_permission_too(self):
+        agent = self.agent(granted_mcp=("jira",))
+        self.assertEqual(self.value(agent)["permission"]["jira*"], "allow")
+
+    def test_a_granted_mcp_key_never_reopens_a_denied_tool_in_permission(self):
+        """The same ordering trap as `tools`, in `permission`: the deny for a
+        shipped server's withheld tool must still win over a user grant's
+        wildcard, because `permission` is the map the runtime actually
+        resolves calls against.
+        """
+        agent = self.agent(granted_mcp=("jira",), denied_mcp_tools=("jira_delete_issue",))
+        permission = self.value(agent)["permission"]
+        self.assertEqual(permission["jira_delete_issue"], "deny")
+        keys = list(permission)
+        self.assertLess(keys.index("jira*"), keys.index("jira_delete_issue"))
+        self.assertLess(keys.index("jira_delete_issue"), keys.index("task"))
 
     def test_no_permission_denies_rendered_when_nothing_is_withheld(self):
         agent = self.agent(optional_mcp=("context7",))

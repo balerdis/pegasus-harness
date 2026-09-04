@@ -298,6 +298,32 @@ def _parser() -> argparse.ArgumentParser:
     list_parser = models_commands.add_parser("list", help="show current model assignments")
     list_parser.add_argument("--cli", default=None, help="limit to one CLI; omit to show every CLI")
     list_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    mcp = commands.add_parser(
+        "mcp", help="grant, revoke, or list MCP server keys you administer yourself"
+    )
+    mcp.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    mcp_commands = mcp.add_subparsers(dest="mcp_command")
+
+    mcp_grant_parser = mcp_commands.add_parser(
+        "grant", help="grant a server key you administer to every agent, and reapply"
+    )
+    mcp_grant_parser.add_argument("--cli", required=True)
+    mcp_grant_parser.add_argument("key")
+    mcp_grant_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    mcp_revoke_parser = mcp_commands.add_parser(
+        "revoke", help="revoke a previously granted server key, and reapply"
+    )
+    mcp_revoke_parser.add_argument("--cli", required=True)
+    mcp_revoke_parser.add_argument("key")
+    mcp_revoke_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    mcp_list_parser = mcp_commands.add_parser(
+        "list", help="show what is granted now, and what else is available to grant"
+    )
+    mcp_list_parser.add_argument("--cli", required=True)
+    mcp_list_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     return parser
 
 
@@ -363,6 +389,7 @@ def install(
     *,
     dry_run: bool = False,
     mcp: list[str] | None = None,
+    granted: list[str] | None = None,
     on_progress: Callable[["Progress"], None] | None = None,
 ) -> dict[str, Any]:
     """Place Pegasus into one CLI's configuration, and report what happened.
@@ -372,6 +399,16 @@ def install(
     values, so anything else that wants the same installation — the TUI's
     install screen, not a second implementation of it — calls this directly
     and renders the report it gets back, the same report `--json` would.
+
+    `granted`, when given, replaces this install's whole set of user-granted
+    MCP keys (`mcp_grant`/`mcp_revoke` always pass the exact set they want
+    recorded). Left `None` — an ordinary `pegasus install --cli x` with no
+    grant-specific flag of its own — it carries the previous install's own
+    `granted_mcp` forward unchanged, the opposite of how `mcp` (the `--mcp`
+    selection) behaves: silence about `--mcp` means select nothing, because
+    every `install` names its whole selection explicitly on the command
+    line, but there is no `--grant` flag on `install` for a grant to go
+    silent about, so a plain reinstall must not read as "revoke everything".
     """
     adapter = _adapter(cli_id)
     environment = runtime.environment
@@ -413,6 +450,39 @@ def install(
     # nothing new -- `plan` below already needed this same lookup, so this
     # only moves an existing read earlier rather than adding one.
     installed = journal_module.install_for(journal, adapter.id)
+    # Resolved here, once `installed` is known, and applied before anything
+    # downstream reads `content` again -- the Node guard included, since a
+    # granted key never carries a distribution to fetch and so never changes
+    # its answer, but every reader from here on must see the final agents.
+    granted_keys = tuple(granted) if granted is not None else (installed.granted_mcp if installed is not None else ())
+    # Every key already on the previous install's own `granted_mcp` is a key
+    # nobody named in this call -- it is only here because a plain `install`
+    # (and `update`, which replays a previous install verbatim) carries the
+    # whole set forward unasked. A key outside that previous set is new to
+    # this call -- the argument `mcp_grant` just added, say -- and a
+    # collision there is a real contradiction in what was just asked for.
+    # See `grant_mcp`'s own docstring for why only the carried-forward half
+    # may be silently dropped.
+    previously_granted = frozenset(installed.granted_mcp) if installed is not None else frozenset()
+    droppable_grants = frozenset(granted_keys) & previously_granted
+    try:
+        content, dropped_grants = content_module.grant_mcp(content, granted_keys, droppable=droppable_grants)
+    except content_module.ContentError as error:
+        raise CommandError(str(error)) from error
+    # A dropped key must never reach the journal: `grant_mcp` already left it
+    # out of the rendered `granted_mcp`, and recording it anyway would be
+    # exactly the journal-vs-render drift this codebase treats as a bug in
+    # itself, not a cosmetic mismatch.
+    if dropped_grants:
+        granted_keys = tuple(key for key in granted_keys if key not in dropped_grants)
+    grant_warnings = [
+        f"{key!r} was already granted per-agent (a shipped mcp server or a key now bound by "
+        f"this install's own --mcp selection); the carried-forward grant to every agent is "
+        f"redundant and was dropped -- the server is still reachable through the agents that "
+        f"declare it, and `pegasus mcp grant --cli {adapter.id} {key}` re-adds it explicitly "
+        f"if that is not what you wanted"
+        for key in dropped_grants
+    ]
     _require_node_if_needed(content, runtime, installed)
     # Asked before anything is written, so an adapter that cannot answer costs a
     # message instead of a traceback over a finished installation.
@@ -453,6 +523,7 @@ def install(
             "skipped": [_left(step) for step in plan.collisions],
             "retired": [_recorded(record) for record in retirements],
             "model_warnings": list(model_warnings),
+            "grant_warnings": grant_warnings,
         }
 
     # Taken before a single byte of this run reaches disk, and never for a dry
@@ -634,6 +705,7 @@ def install(
         stale.removed,
         runtime.now,
         content,
+        granted_keys,
     )
     try:
         store.save(journal_module.with_install(journal, merged))
@@ -683,6 +755,7 @@ def install(
         "journal": str(store.path),
         "retention": _retain(snapshot),
         "model_warnings": list(model_warnings),
+        "grant_warnings": grant_warnings,
     }
 
 
@@ -697,7 +770,8 @@ def update(
     dry_run: bool = False,
     on_progress: Callable[["Progress"], None] | None = None,
 ) -> dict[str, Any]:
-    """Reapply an installation's own `--mcp` selection, with no flags.
+    """Reapply an installation's own `--mcp` selection and granted mcp keys,
+    with no flags.
 
     A bare reinstall names nothing, and naming nothing retires every server
     not repeated on the command line -- so updating used to mean remembering
@@ -708,6 +782,14 @@ def update(
     the selection from it, then delegates to `install` for everything else --
     there is no second implementation of placing artifacts here, only the
     computation of what `--mcp` would have been.
+
+    `granted_mcp` needs no reconstruction the way `--mcp` does: it already
+    lives on the journal verbatim, so it is simply passed through -- but it
+    is passed explicitly rather than left to `install`'s own default, because
+    a bare `install` call defaults to "carry the previous install forward"
+    and this *is* that previous install, so passing it through here keeps
+    the two call sites saying the same thing for the same reason rather than
+    one relying on a default the other cannot rely on.
     """
     adapter = _adapter(cli_id)
     installed = journal_module.install_for(journal_store(runtime).load(), adapter.id)
@@ -718,7 +800,9 @@ def update(
     selection, unresolved = _mcp_update_selection(installed)
     if unresolved:
         raise CommandError(_unresolved_bindings_message(adapter.id, unresolved))
-    return install(cli_id, runtime, dry_run=dry_run, mcp=selection, on_progress=on_progress)
+    return install(
+        cli_id, runtime, dry_run=dry_run, mcp=selection, granted=list(installed.granted_mcp), on_progress=on_progress
+    )
 
 
 def _mcp_update_selection(install: Install) -> tuple[list[str], list[str]]:
@@ -1127,7 +1211,9 @@ def _resolve_model_overrides(
     return model_assignments_module.resolve_for_render(assignments, adapter.id, configurable, catalog)
 
 
-def _merged(journal, adapter, environment, catalog, records, retired_ids, now: str, content) -> Install:
+def _merged(
+    journal, adapter, environment, catalog, records, retired_ids, now: str, content, granted_mcp: tuple[str, ...]
+) -> Install:
     """Add what this run placed to what earlier runs already owned.
 
     Replacing the record instead of extending it is how an install becomes
@@ -1155,6 +1241,15 @@ def _merged(journal, adapter, environment, catalog, records, retired_ids, now: s
     `--mcp` already means "select nothing" (`_select_mcp`), and a binding this
     run did not ask for must not linger just because an earlier run recorded
     it.
+
+    ``granted_mcp`` is threaded in from the caller rather than read off
+    ``content`` for the same reason ``retired_ids`` is threaded in rather
+    than recomputed: by the time this function runs, `install()` has already
+    resolved the one true answer -- either the caller's own explicit set
+    (`mcp_grant`/`mcp_revoke`) or the previous install's own set carried
+    forward -- and it is simply recorded here, replaced outright the same way
+    ``mcp_bindings`` is, since it is likewise a fact about this run's own
+    final choice rather than an artifact with an identity to merge.
     """
     previous = journal_module.install_for(journal, adapter.id)
     entries = records
@@ -1170,6 +1265,7 @@ def _merged(journal, adapter, environment, catalog, records, retired_ids, now: s
         entries=entries,
         links=previous.links if previous is not None else (),
         mcp_bindings={server.name: server.bound_to for server in content.mcp if server.is_bound},
+        granted_mcp=tuple(granted_mcp),
     )
 
 
@@ -1488,6 +1584,117 @@ def models_list(runtime: Runtime, *, cli_id: str | None = None) -> dict[str, Any
     }
 
 
+def _mcp(arguments, runtime: Runtime) -> dict[str, Any]:
+    if arguments.mcp_command == "grant":
+        return mcp_grant(arguments.cli, arguments.key, runtime)
+    if arguments.mcp_command == "revoke":
+        return mcp_revoke(arguments.cli, arguments.key, runtime)
+    if arguments.mcp_command == "list":
+        return mcp_list(arguments.cli, runtime)
+    raise CommandError("mcp needs a subcommand: grant, revoke, or list")
+
+
+def mcp_grant(cli_id: str, key: str, runtime: Runtime) -> dict[str, Any]:
+    """Grant a server key the user administers themselves to every agent,
+    and reapply so the grant actually reaches the rendered configuration.
+
+    Peeled the same way `install` and `models_set` are: a plain function an
+    agent or another program can call directly, with `_mcp` doing only the
+    argparse unpacking.
+
+    Refuses a key nothing in the CLI's own configuration declares. A
+    mistyped id would otherwise grant a permission nobody notices is
+    missing -- the exact class of bug `_require_mcp_convention_referenced`
+    exists to catch for a shipped server, and there is no equivalent
+    catch for a key Pegasus never heard of, so it has to happen here
+    instead, against the one source of truth for what the user actually
+    administers. Granting it anyway with a warning was considered and
+    rejected: a warning is easy to miss, and a missing tool is often
+    invisible until someone goes looking for exactly the moment it would
+    have mattered.
+    """
+    adapter = _adapter(cli_id)
+    declared = _declared_mcp_keys(runtime, adapter)
+    if key not in declared:
+        raise CommandError(
+            f"{key!r} is not declared in {cli_id}'s own configuration, so it cannot be granted; "
+            f"the server key(s) it declares are: {', '.join(sorted(declared)) or 'none'}. "
+            f"Add it to {cli_id}'s own configuration first, or check for a typo."
+        )
+    installed = journal_module.install_for(journal_store(runtime).load(), adapter.id)
+    if installed is None:
+        raise CommandError(f"{adapter.id} has nothing installed; run install first")
+    granted = tuple(sorted(set(installed.granted_mcp) | {key}))
+    selection, unresolved = _mcp_update_selection(installed)
+    if unresolved:
+        raise CommandError(_unresolved_bindings_message(adapter.id, unresolved))
+    report = install(cli_id, runtime, mcp=selection, granted=list(granted))
+    return {**report, "action": "grant", "key": key, "granted": list(granted), "status": "granted"}
+
+
+def mcp_revoke(cli_id: str, key: str, runtime: Runtime) -> dict[str, Any]:
+    """Remove a granted key, and reapply. Revoking one never granted is
+    success, not an error -- the same `models unset` / `upgrade`
+    "already-current" precedent: being in the desired state already is not a
+    failure.
+    """
+    adapter = _adapter(cli_id)
+    installed = journal_module.install_for(journal_store(runtime).load(), adapter.id)
+    if installed is None:
+        raise CommandError(f"{adapter.id} has nothing installed; run install first")
+    if key not in installed.granted_mcp:
+        return {"action": "revoke", "cli": cli_id, "key": key, "status": "already-revoked"}
+    granted = tuple(sorted(set(installed.granted_mcp) - {key}))
+    selection, unresolved = _mcp_update_selection(installed)
+    if unresolved:
+        raise CommandError(_unresolved_bindings_message(adapter.id, unresolved))
+    report = install(cli_id, runtime, mcp=selection, granted=list(granted))
+    return {**report, "action": "revoke", "key": key, "granted": list(granted), "status": "revoked"}
+
+
+def mcp_list(cli_id: str, runtime: Runtime) -> dict[str, Any]:
+    """What is granted now, and which of the CLI's own declared server keys
+    are not -- the choice a person or an agent still has available.
+
+    Follows `models_list`'s shape: a plain function returning the same
+    report `--json` would, callable directly without going through argparse.
+    """
+    adapter = _adapter(cli_id)
+    installed = journal_module.install_for(journal_store(runtime).load(), adapter.id)
+    granted = set(installed.granted_mcp) if installed is not None else set()
+    declared = _declared_mcp_keys(runtime, adapter)
+    return {
+        "action": "list",
+        "cli": cli_id,
+        "granted": sorted(granted),
+        "available": sorted(declared - granted),
+    }
+
+
+def _declared_mcp_keys(runtime: Runtime, adapter) -> frozenset[str]:
+    """The MCP server keys already present in the CLI's own configuration --
+    put there by the user, since this is read straight off disk rather than
+    off anything Pegasus itself journals.
+
+    Absent or unreadable answers "none" rather than raising: a CLI that was
+    never opened, or whose settings file does not parse, declares nothing
+    the same way an uninstalled CLI's model catalog reads as empty
+    (`model_catalog.declared_provider_names`'s own precedent).
+    """
+    from pegasus.core import codecs
+
+    layout = adapter.layout(runtime.environment)
+    settings_file = getattr(layout, "settings_file", None)
+    if settings_file is None or not runtime.filesystem.exists(settings_file):
+        return frozenset()
+    try:
+        document = codecs.loads(Codec.JSON, runtime.filesystem.read_bytes(settings_file).decode("utf-8"))
+    except (FileSystemError, UnicodeDecodeError, codecs.CodecError):
+        return frozenset()
+    servers = document.get("mcp") if isinstance(document, dict) else None
+    return frozenset(str(key) for key in servers.keys()) if isinstance(servers, dict) else frozenset()
+
+
 def _require_configurable_agent(agent: str) -> None:
     content = content_module.load()
     for descriptor in content.agents:
@@ -1688,6 +1895,15 @@ def _health(
             "ids": unknown_key_ids,
             "command": install_command_for(adapter.id, unknown_key_ids),
         }
+
+    # Its own key, distinct from `mcp_bound`: a granted key is not a binding.
+    # Pegasus ships no descriptor for it, grants no convention for it, and
+    # never installed or configured it -- the only thing this install did was
+    # tell every rendered agent's wildcard to include it. Conflating the two
+    # under one heading would say a server was bound (which implies a
+    # descriptor's contract travels with it) when nothing here was ever
+    # shipped for it at all.
+    health["mcp_granted"] = sorted(install.granted_mcp)
 
     if start_mcp_servers:
         health["mcp_servers"] = [
@@ -1912,6 +2128,7 @@ COMMANDS = {
     "doctor": _doctor,
     "restore": _restore,
     "models": _models,
+    "mcp": _mcp,
 }
 
 
@@ -2255,6 +2472,9 @@ def _prose(report: dict[str, Any]) -> str:
         if report.get("model_warnings"):
             lines.append("Model assignments that could not be honoured:")
             lines.extend(f"  {warning}" for warning in report["model_warnings"])
+        if report.get("grant_warnings"):
+            lines.append("Carried-forward grants dropped as redundant:")
+            lines.extend(f"  {warning}" for warning in report["grant_warnings"])
         return "\n".join(_and_retention(_and_activation(lines, report), report))
     if command == "upgrade":
         if report["status"] == "planned":
@@ -2271,6 +2491,8 @@ def _prose(report: dict[str, Any]) -> str:
         )
     if command == "models":
         return _models_prose(report)
+    if command == "mcp":
+        return _mcp_prose(report)
 
     lines = [f"{report['cli']}: removed {len(report['removed'])}."]
     if report["unaccounted"]:
@@ -2298,6 +2520,24 @@ def _models_prose(report: dict[str, Any]) -> str:
             for entry in report["assignments"]
         )
     return "models: nothing to report."
+
+
+def _mcp_prose(report: dict[str, Any]) -> str:
+    action = report.get("action")
+    if action == "grant":
+        line = f"{report['cli']}: granted {report['key']} to every agent."
+        return "\n".join(_and_activation([line], report))
+    if action == "revoke":
+        if report.get("status") == "already-revoked":
+            return f"{report['cli']}: {report['key']} was not granted; nothing to do."
+        line = f"{report['cli']}: revoked {report['key']}."
+        return "\n".join(_and_activation([line], report))
+    if action == "list":
+        lines = [f"Granted: {', '.join(report['granted']) or 'none'}."]
+        if report["available"]:
+            lines.append(f"Declared but not granted: {', '.join(report['available'])}.")
+        return "\n".join(lines)
+    return "mcp: nothing to report."
 
 
 def _and_activation(lines: list[str], report: dict[str, Any]) -> list[str]:

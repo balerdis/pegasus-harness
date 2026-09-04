@@ -51,7 +51,7 @@ def dependency_record(**overrides) -> Record:
     return Record(**fields)
 
 
-def install(*entries, cli="opencode", links=(), mcp_bindings=None) -> Install:
+def install(*entries, cli="opencode", links=(), mcp_bindings=None, granted_mcp=None) -> Install:
     return Install(
         cli=cli,
         installed_at=AT,
@@ -60,6 +60,7 @@ def install(*entries, cli="opencode", links=(), mcp_bindings=None) -> Install:
         entries=tuple(entries),
         links=tuple(links),
         mcp_bindings=dict(mcp_bindings) if mcp_bindings else {},
+        granted_mcp=tuple(granted_mcp) if granted_mcp else (),
     )
 
 
@@ -143,6 +144,28 @@ class RoundTripTest(unittest.TestCase):
         self.assertNotIn("mcp_bindings", payload["installs"][0])
         parsed = journal_module.from_dict(payload, HOME)
         self.assertEqual(parsed.installs[0].mcp_bindings, {})
+
+    def test_granted_mcp_survives_serialization(self):
+        journal = Journal(
+            pegasus_version="4.0.0",
+            installs=(install(record(), granted_mcp=("jira", "figma")),),
+        )
+        payload = journal_module.to_dict(journal)
+        self.assertEqual(journal_module.from_dict(payload, HOME), journal)
+
+    def test_an_install_with_no_granted_mcp_omits_the_key(self):
+        payload = journal_module.to_dict(self.journal)
+        self.assertNotIn("granted_mcp", payload["installs"][0])
+
+    def test_a_journal_from_before_granted_mcp_existed_still_loads(self):
+        """A journal written before `granted_mcp` existed has no such key at
+        all -- that must load exactly as cleanly as one that carries it, and
+        the resulting install must carry an empty tuple rather than raise or
+        invent a key."""
+        payload = journal_module.to_dict(self.journal)
+        self.assertNotIn("granted_mcp", payload["installs"][0])
+        parsed = journal_module.from_dict(payload, HOME)
+        self.assertEqual(parsed.installs[0].granted_mcp, ())
 
 
 class ValidationTest(unittest.TestCase):
@@ -257,6 +280,41 @@ class ValidationTest(unittest.TestCase):
         with self.assertRaises(JournalError) as raised:
             journal_module.from_dict(payload, HOME)
         self.assertIn("opencode", str(raised.exception))
+
+    def test_granted_mcp_must_be_a_list(self):
+        payload = self.payload()
+        payload["installs"][0]["granted_mcp"] = {"jira": True}
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("opencode", str(raised.exception))
+
+    def test_granted_mcp_entries_must_be_non_empty_strings(self):
+        payload = self.payload()
+        payload["installs"][0]["granted_mcp"] = ["jira", ""]
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("granted_mcp", str(raised.exception))
+
+    def test_granted_mcp_entries_shaped_like_a_wildcard_are_refused(self):
+        """The same escalation `content.grant_mcp` refuses at grant time must
+        also be refused on replay -- a hand-edited or corrupted journal must
+        not be able to smuggle a wildcard-shaped key past a CLI check that
+        only ever runs once, at the moment a person types `mcp grant`."""
+        for spelling in ["*", "a*", "**", "   ", "a/b", 'a"b', "a=b"]:
+            with self.subTest(spelling=spelling):
+                payload = self.payload()
+                payload["installs"][0]["granted_mcp"] = [spelling]
+                with self.assertRaises(JournalError) as raised:
+                    journal_module.from_dict(payload, HOME)
+                self.assertIn("opencode", str(raised.exception))
+
+    def test_granted_mcp_entries_with_a_legitimate_shape_still_load(self):
+        for spelling in ["jira", "figma-developer-mcp", "some.server_1"]:
+            with self.subTest(spelling=spelling):
+                payload = self.payload()
+                payload["installs"][0]["granted_mcp"] = [spelling]
+                parsed = journal_module.from_dict(payload, HOME)
+                self.assertEqual(parsed.installs[0].granted_mcp, (spelling,))
 
     def test_a_config_key_entry_needs_a_pointer(self):
         payload = self.payload()

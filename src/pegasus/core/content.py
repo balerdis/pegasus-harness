@@ -208,6 +208,36 @@ class Agent:
     instruction to use it can never disagree.
     """
 
+    granted_mcp: tuple[str, ...] = ()
+    """Server keys the user administers, granted through `grant_mcp` -- never
+    through `optional_mcp`, and the difference is the point of this field
+    existing at all.
+
+    `optional_mcp` means "a server Pegasus ships a descriptor and a
+    convention for, which the user chose": it is policed by
+    `_require_known_optional_mcp` (the id must name something this release
+    ships), `_require_mcp_convention_referenced` (the declared set of ids
+    must equal the set the agent's own body actually references) and the
+    reachability rule alongside them. A key in `granted_mcp` satisfies none
+    of that, by construction -- Pegasus never shipped a descriptor for it, so
+    there is no convention for any body to reference, and no id for
+    `_require_known_optional_mcp` to check against a catalog that was never
+    asked about it. Putting a user's own key into `optional_mcp` to reuse
+    that machinery would trip `_require_mcp_convention_referenced` the
+    instant no agent body mentions a server nobody described, and that
+    refusal would be *correct*: it exists to catch exactly an id that grants
+    a permission no prose ever tells an agent to use. That correctness is
+    why this is a second field rather than a widening of the first -- the two
+    invariant sets must keep reading `optional_mcp` only, forever, and this
+    field must never be added to either check's input.
+
+    `grant_mcp` is the only writer, the same way `select_mcp` is the only
+    writer of `optional_mcp`'s resolved form: applied once, before anything
+    is rendered, so every adapter renders a grant without ever knowing a
+    choice was made. It sets this field identically on every agent -- the
+    repository owner's explicit decision, made because a per-agent grant
+    would make adding one more MCP server tedious in a way nobody wants."""
+
     denied_mcp_tools: tuple[str, ...] = ()
     """Fully-qualified tool names a wildcard grant of this agent's servers
     must not reach, in `<key>_<tool>` form.
@@ -563,6 +593,103 @@ def _select_system_prompt_mcp(
         mcp_sections=tuple(
             section for section in system_prompt.mcp_sections if section.name in kept
         ),
+    )
+
+
+def grant_mcp(
+    content: Content, keys: Iterable[str], *, droppable: Iterable[str] = ()
+) -> tuple[Content, tuple[str, ...]]:
+    """Grant a fixed set of user-administered MCP server keys to every agent.
+
+    Mirrors `select_mcp`'s own reasoning, reused rather than restated: an
+    adapter renders one `Agent` at a time and never sees the whole content
+    tree, so applying this choice once, here, before anything is rendered, is
+    what lets every adapter -- and a future interactive surface -- stay
+    unaware a choice was ever made. Unlike `select_mcp`, this never touches
+    `content.mcp` or `optional_mcp`: it only sets `Agent.granted_mcp`, and it
+    sets it identically on every agent, because per-agent granting was
+    rejected as the whole point of this feature -- adding one more server a
+    person administers themselves must never mean editing more than one
+    place.
+
+    A key's *shape* is refused through `_SERVER_KEY` -- the same regex
+    `parse_mcp_choice` uses, imported rather than restated, so the two never
+    have a chance to disagree about what a safe key looks like. This is the
+    same class of bug `parse_mcp_choice`'s own docstring describes: a key is
+    spliced verbatim into a permission rule (`f"{key}*"`), and the runtime
+    reads `*`/`?` inside a rule name as a wildcard, so an unvalidated key such
+    as `*` renders `**` -- a rule that matches every action there is, beating
+    the per-agent deny baseline for everything the agent was never granted.
+    The guard has to live *here*, in `core`, rather than only at the CLI
+    layer that first collects a key from a person: `cli.mcp_grant` is one way
+    a key reaches this function, but the journal is another (`update` and
+    `mcp revoke` both replay a previous install's `granted_mcp` straight
+    through this same call), and a CLI-level check cannot protect a replay
+    that never goes through the CLI's own validation again. Whatever
+    survives to be a `keys` argument here -- typed fresh or replayed from
+    disk -- must be safe on its own, so the check belongs where every caller
+    is forced through it.
+
+    A key is refused for *collision* when it collides with a shipped mcp id
+    (`content.mcp`, already narrowed by `select_mcp` to what was actually
+    chosen) or with a key already resolved into some agent's `optional_mcp`
+    (an id or a bound key -- `select_mcp` writes the same value either way).
+    Both are servers Pegasus already grants on a *per-agent* basis,
+    deliberately: one agent may carry a server another does not, or may have
+    some of its tools withheld through `denied_mcp_tools`. Granting the same
+    key again here would apply it uniformly to every agent regardless of that
+    per-agent shape, silently undoing whatever narrowing the release or the
+    user's own `--mcp` binding put in place.
+
+    `droppable` names the subset of `keys` this call may silently drop on a
+    collision instead of raising -- the caller's way of saying "this key
+    is only carried forward from a previous install, not something the
+    person just asked for in this exact call". A grant a person carried
+    forward (a plain `install` with no `--grant` flag of its own, or `update`
+    replaying a previous install verbatim) that a fresh `--mcp` binding has
+    made redundant is dropped rather than aborting the whole operation: the
+    server stays reachable through the agents that now declare it, so
+    nothing the person wanted is lost, and failing an unrelated install over
+    a now-redundant grant is disproportionate. A key outside `droppable` --
+    something named explicitly in this same call, such as the key argument
+    to `cli.mcp_grant` -- still raises on collision, because there the
+    collision is a real contradiction in what was just asked for, not a
+    leftover. The second element of the return value is exactly the keys
+    this call dropped, so a caller can both report them and keep whatever it
+    records (a journal, a report) from claiming a grant this call did not
+    actually apply.
+    """
+    granted = tuple(keys)
+    if not granted:
+        return (
+            replace(content, agents=tuple(replace(agent, granted_mcp=()) for agent in content.agents)),
+            (),
+        )
+    malformed = sorted(key for key in set(granted) if not _SERVER_KEY.fullmatch(key))
+    if malformed:
+        raise ContentError(
+            f"cannot grant {', '.join(map(repr, malformed))}: not usable as a server key; a key may "
+            f"hold letters, digits, '.', '_' and '-', and nothing a runtime reads as a wildcard -- the "
+            f"same shape `--mcp id=key` requires, refused here because a key becomes a permission rule "
+            f"verbatim and this is the one place every granted key, typed fresh or replayed from a "
+            f"journal, is forced through"
+        )
+    shipped = {server.name for server in content.mcp}
+    bound = {name for agent in content.agents for name in agent.optional_mcp}
+    collisions = set(granted) & (shipped | bound)
+    droppable_set = frozenset(droppable)
+    raising = sorted(collisions - droppable_set)
+    if raising:
+        raise ContentError(
+            f"cannot grant {', '.join(raising)}: already granted per-agent by this "
+            f"installation (a shipped mcp server or a key already bound); re-granting it to "
+            f"every agent here would undo whatever per-agent narrowing is already in place"
+        )
+    dropped = tuple(sorted(collisions & droppable_set))
+    kept = tuple(key for key in granted if key not in collisions)
+    return (
+        replace(content, agents=tuple(replace(agent, granted_mcp=kept) for agent in content.agents)),
+        dropped,
     )
 
 

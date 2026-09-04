@@ -203,6 +203,47 @@ materializado no dispara esto: no hay nada que buscar, así que no hace falta No
 Mostrale el plan a la persona antes de aplicar. Recién con su confirmación, repetí el mismo comando sin
 `--dry-run`.
 
+## Dar acceso a un MCP que la persona administra por su cuenta
+
+Esto es distinto de todo lo anterior: `--mcp <id>` y `--mcp <id>=<clave>` son para servidores que
+Pegasus conoce, con descriptor propio. Si la persona instaló y administra un MCP que Pegasus nunca
+vio -- Jira, Figma, o cualquier otro -- ese servidor puede figurar en su `opencode.json` y seguir
+siendo invisible para todos los agentes: Pegasus renderiza cada agente con una base que niega todo, y
+un servidor no nombrado en esa base no se abre aunque exista en la configuración general de OpenCode.
+
+`pegasus mcp grant` es el único mecanismo para eso, y es deliberadamente parejo: la clave se otorga a
+todos los agentes por igual, nunca a uno solo. Antes de correrlo, confirmá con la persona la clave
+exacta bajo la que su servidor está declarado en `opencode.json` (la sección `mcp`) -- no la
+adivines, y no aceptes un nombre "parecido".
+
+```sh
+pegasus mcp grant --cli opencode <clave> --json
+```
+
+Si la clave no está declarada en la configuración de esa CLI, el comando se niega y el JSON trae en
+`error` cuáles claves sí están declaradas -- mostrale esa lista a la persona en vez de reintentar con
+una variación. Con éxito, el JSON trae `"action": "grant"`, la clave otorgada, y la lista completa de
+lo ya otorgado bajo `"granted"`, más `activation` recordando que hace falta reiniciar OpenCode.
+
+```sh
+pegasus mcp list --cli opencode --json
+pegasus mcp revoke --cli opencode <clave> --json
+```
+
+`list` muestra lo otorgado ahora (`"granted"`) y qué otras claves declaradas todavía no se otorgaron
+(`"available"`). `revoke` sobre una clave nunca otorgada no es un error: el JSON trae
+`"status": "already-revoked"` y sale en `0`. `pegasus update --cli opencode` reaplica las claves ya
+otorgadas junto con el resto de la selección, sin que haga falta repetir `mcp grant`.
+
+Si un `install` posterior liga un servidor propio de Pegasus (`--mcp id=<clave>`) bajo la misma
+cadena que una clave ya otorgada por su cuenta, esa clave otorgada queda redundante -- el servidor
+sigue siendo alcanzable a través de los agentes que ahora lo declaran -- así que `install` la
+descarta del grupo llevado de una instalación anterior en vez de abortar la instalación por eso; el
+JSON trae la advertencia en `"grant_warnings"`, nombrando la clave descartada. Esto sólo aplica a una
+clave que la persona no nombró en este mismo llamado: si en cambio corre `pegasus mcp grant` con una
+clave que choca con la selección `--mcp` de ese mismo llamado, sigue siendo un error -- ahí la
+colisión es una contradicción real entre lo que acaba de pedir, no algo que quedó de antes.
+
 ## Actualizar una instalación existente
 
 Hay dos comandos que actualizan cosas distintas. No los confundas ni los uses uno por el otro.

@@ -1555,6 +1555,146 @@ class SelectMcpTest(unittest.TestCase):
         self.assertEqual(self.system_prompt.mcp_sections, before_sections)
 
 
+class GrantMcpTest(unittest.TestCase):
+    """`grant_mcp` hands a server the user administers to every agent uniformly.
+
+    Distinct from `optional_mcp`: a granted key ships no descriptor and no
+    convention, so none of `optional_mcp`'s invariants -- known-server,
+    convention-referenced, reachability -- may ever apply to it.
+    """
+
+    def setUp(self):
+        self.context7 = content.Mcp(
+            name="context7",
+            description="Fetches library docs",
+            body="Convention body.",
+            distribution=Distribution.REMOTE,
+            endpoint="https://example.test/context7",
+            source=PurePosixPath("mcp/context7.md"),
+        )
+        self.agent_a = content.Agent(
+            name="agent-a",
+            description="Agent A",
+            body="x",
+            mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/agent-a.md"),
+            optional_mcp=("context7",),
+        )
+        self.agent_b = content.Agent(
+            name="agent-b",
+            description="Agent B",
+            body="x",
+            mode=AgentMode.SUBAGENT,
+            source=PurePosixPath("agents/agent-b.md"),
+        )
+        self.content = content.Content(agents=(self.agent_a, self.agent_b), mcp=(self.context7,))
+
+    def test_every_agent_gets_the_grant_uniformly(self):
+        granted, dropped = content.grant_mcp(self.content, ["jira"])
+        self.assertEqual(dropped, ())
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_mcp, ("jira",))
+
+    def test_multiple_keys_are_all_granted(self):
+        granted, dropped = content.grant_mcp(self.content, ["jira", "figma"])
+        self.assertEqual(dropped, ())
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_mcp, ("jira", "figma"))
+
+    def test_granting_nothing_leaves_every_agent_with_no_grant(self):
+        granted, dropped = content.grant_mcp(self.content, [])
+        self.assertEqual(dropped, ())
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_mcp, ())
+
+    def test_granted_mcp_is_distinct_from_optional_mcp(self):
+        """A grant must never be folded into `optional_mcp` -- doing so would
+        trip `_require_mcp_convention_referenced`, since a granted key has no
+        convention and no body reference to satisfy it."""
+        granted, _dropped = content.grant_mcp(self.content, ["jira"])
+        agent_a = next(a for a in granted.agents if a.name == "agent-a")
+        self.assertEqual(agent_a.optional_mcp, ("context7",))
+        self.assertEqual(agent_a.granted_mcp, ("jira",))
+
+    def test_a_key_colliding_with_a_shipped_mcp_id_is_refused(self):
+        with self.assertRaises(ContentError) as raised:
+            content.grant_mcp(self.content, ["context7"])
+        self.assertIn("context7", str(raised.exception))
+
+    def test_a_key_colliding_with_a_binding_already_in_play_is_refused(self):
+        """Re-granting a server already granted per-agent (through
+        `optional_mcp`, bound or not) could undo deliberate per-agent
+        narrowing, so it is refused rather than silently widened."""
+        selected = content.select_mcp(self.content, ["context7=jira-mcp"])
+        with self.assertRaises(ContentError) as raised:
+            content.grant_mcp(selected, ["jira-mcp"])
+        self.assertIn("jira-mcp", str(raised.exception))
+
+    def test_a_droppable_collision_is_dropped_rather_than_raised(self):
+        """A key named as `droppable` is only a carried-forward grant this
+        call did not itself ask for -- see `grant_mcp`'s own docstring."""
+        selected = content.select_mcp(self.content, ["context7=jira-mcp"])
+        granted, dropped = content.grant_mcp(selected, ["jira-mcp"], droppable=["jira-mcp"])
+        self.assertEqual(dropped, ("jira-mcp",))
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_mcp, ())
+
+    def test_a_droppable_key_that_does_not_collide_is_still_granted(self):
+        granted, dropped = content.grant_mcp(self.content, ["jira"], droppable=["jira"])
+        self.assertEqual(dropped, ())
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_mcp, ("jira",))
+
+    def test_a_non_droppable_key_still_raises_alongside_a_droppable_one(self):
+        """Naming one key explicit and one carried forward in the same call:
+        only the carried-forward one may be dropped, so the explicit
+        collision must still raise."""
+        selected = content.select_mcp(self.content, ["context7=jira-mcp"])
+        with self.assertRaises(ContentError) as raised:
+            content.grant_mcp(selected, ["jira-mcp", "context7"], droppable=["jira-mcp"])
+        self.assertIn("context7", str(raised.exception))
+        self.assertNotIn("jira-mcp", str(raised.exception))
+
+    def test_is_pure_the_input_content_is_unchanged(self):
+        before_agents = self.content.agents
+        content.grant_mcp(self.content, ["jira"])
+        self.assertEqual(self.content.agents, before_agents)
+        self.assertEqual(self.agent_a.granted_mcp, ())
+
+    def test_a_wildcard_key_is_refused(self):
+        """The exact escalation the adversarial review reproduced: an
+        unvalidated `*` renders `**`, a rule beating the per-agent deny
+        baseline for everything the agent was never granted."""
+        with self.assertRaises(ContentError) as raised:
+            content.grant_mcp(self.content, ["*"])
+        self.assertIn("*", str(raised.exception))
+
+    def test_no_wildcard_key_reaches_the_rendered_tools_or_permission_map(self):
+        """End-to-end: even if `grant_mcp` were ever bypassed at the type
+        level, a wildcard key must never survive to what the renderer
+        actually emits."""
+        with self.assertRaises(ContentError):
+            content.grant_mcp(self.content, ["*"])
+        # `grant_mcp` is pure and raised before returning, so nothing was
+        # granted at all -- no agent carries a `granted_mcp` a renderer
+        # could turn into `"**": True`.
+        for agent in self.content.agents:
+            self.assertEqual(agent.granted_mcp, ())
+
+    def test_various_malformed_keys_are_refused(self):
+        for spelling in ["*", "a*", "**", "", "   ", "a/b", 'a"b', "a=b"]:
+            with self.subTest(spelling=spelling):
+                with self.assertRaises(ContentError):
+                    content.grant_mcp(self.content, [spelling])
+
+    def test_legitimate_keys_still_work(self):
+        for spelling in ["jira", "figma-developer-mcp", "some.server_1"]:
+            with self.subTest(spelling=spelling):
+                granted, dropped = content.grant_mcp(self.content, [spelling])
+                self.assertEqual(dropped, ())
+                for agent in granted.agents:
+                    self.assertEqual(agent.granted_mcp, (spelling,))
+
 
 class BoundMcpTest(unittest.TestCase):
     """A server the user already administers: Pegasus owns the contract, not the binary.
@@ -1753,6 +1893,26 @@ def _run_select_mcp_unknown_id(root: Path) -> tuple[None, str]:
     raise AssertionError("an unknown mcp id was accepted")
 
 
+def _run_grant_mcp_malformed_key(root: Path) -> tuple[None, str]:
+    try:
+        content.grant_mcp(content.Content(), ["*"])
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("a malformed mcp key was accepted")
+
+
+def _run_grant_mcp_collision(root: Path) -> tuple[None, str]:
+    server = content.Mcp(
+        name="context7", description="d", body="b", distribution=Distribution.REMOTE,
+        endpoint="https://example.test/context7", source=PurePosixPath("mcp/context7.md"),
+    )
+    try:
+        content.grant_mcp(content.Content(mcp=(server,)), ["context7"])
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("a colliding mcp key was accepted")
+
+
 class ContentErrorSitesTest(unittest.TestCase):
     """Table test over every `raise ContentError` site in `content.py`, from
     an AST walk rather than a hand-kept list -- the `test_architecture.py`
@@ -1784,6 +1944,17 @@ class ContentErrorSitesTest(unittest.TestCase):
             _run_select_mcp_unknown_id,
             "Refuses a chosen mcp id, not a file on disk, so no path applies; the "
             "message already names the offending id and the ids that do exist.",
+        ),
+        "grant_mcp#0": (
+            _run_grant_mcp_malformed_key,
+            "Refuses a granted key shaped like a wildcard, not a file on disk, so no "
+            "path applies; the message already names the offending key.",
+        ),
+        "grant_mcp#1": (
+            _run_grant_mcp_collision,
+            "Refuses a granted key colliding with a shipped mcp id or an already-bound "
+            "key, not a file on disk, so no path applies; the message already names "
+            "the offending key.",
         ),
         "_load_skills#0": (
             _via_load({"skills/alpha/references/orphan.md": "# Orphan\n"}, "skills/alpha"), ""),

@@ -20,6 +20,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from pegasus.core.content import _SERVER_KEY
+
 SCHEMA = "pegasus-harness/journal/v4"
 KINDS = frozenset({"file", "config-key", "dependency-tree"})
 OWNED = "owned"
@@ -120,6 +122,30 @@ class Install:
     never a crash, and never confused with a mapping that legitimately holds
     nothing because this install bound no server."""
 
+    granted_mcp: tuple[str, ...] = ()
+    """The server keys this installation was told to expose to every agent.
+
+    A binding (`mcp_bindings`, above) grants one server Pegasus ships a
+    descriptor for, against a key the user already runs it under. This is a
+    different fact: a server Pegasus never heard of, that the user installed
+    and administers entirely on their own, whose only relationship to Pegasus
+    is that every rendered agent's deny-all baseline would otherwise stay
+    deny-all against it -- a runtime whose own configuration merges an
+    agent's rendered permission block last resolves nothing else in the
+    user's favour, so a server nothing in this list names is a tool no agent
+    can ever reach, no matter what the user's own configuration says. This
+    is per-installation, never a fact about the release: two installs of the
+    same Pegasus version, on two machines, administer different MCP servers
+    under different keys, and neither install has any way to know what the
+    other grants.
+
+    Additive, the same discipline `mcp_bindings` follows: a journal written
+    before this field existed carries no `granted_mcp` key at all, and that
+    must load exactly as cleanly as one that carries it, with the resulting
+    install carrying an empty tuple -- never an invented key, never a crash,
+    and never confused with a tuple that legitimately holds nothing because
+    this install grants no server of its own."""
+
 
 @dataclass(frozen=True)
 class Journal:
@@ -175,6 +201,8 @@ def _install_to_dict(install: Install) -> dict[str, Any]:
     }
     if install.mcp_bindings:
         payload["mcp_bindings"] = dict(install.mcp_bindings)
+    if install.granted_mcp:
+        payload["granted_mcp"] = list(install.granted_mcp)
     return payload
 
 
@@ -234,6 +262,7 @@ def _install_from_dict(payload: Any, home: Path) -> Install:
         entries=tuple(_record_from_dict(item, home, cli) for item in payload.get("entries", [])),
         links=tuple(_link_from_dict(item, cli) for item in payload.get("links", [])),
         mcp_bindings=_mcp_bindings_from_dict(payload.get("mcp_bindings"), cli),
+        granted_mcp=_granted_mcp_from_dict(payload.get("granted_mcp"), cli),
     )
 
 
@@ -250,6 +279,40 @@ def _mcp_bindings_from_dict(value: Any, cli: str) -> dict[str, str]:
         if not isinstance(mcp_id, str) or not mcp_id or not isinstance(key, str) or not key:
             raise JournalError(f"{cli}: mcp_bindings must map non-empty ids to non-empty server keys")
     return dict(value)
+
+
+def _granted_mcp_from_dict(value: Any, cli: str) -> tuple[str, ...]:
+    """Absent means a journal from before this field existed -- an empty
+    tuple, not an error and not a fabricated grant. Present, it must be a
+    list of keys shaped like `content._SERVER_KEY` -- the same regex
+    `content.grant_mcp` validates a key against before ever setting
+    `Agent.granted_mcp`, imported rather than restated so the two can never
+    drift apart about what a safe key looks like.
+
+    This is the same class of bug `parse_mcp_choice` and `grant_mcp` already
+    guard against: a granted key is spliced verbatim into a permission rule,
+    and a key holding `*`/`?` renders a wildcard rule that beats the
+    per-agent deny baseline for everything the agent was never granted. A
+    key that could never have come from `grant_mcp` -- because `grant_mcp`
+    would have refused it -- can only be a hand edit or a corrupted write,
+    and letting it back in here would replay the exact escalation `grant_mcp`
+    exists to stop, straight through `update` or `mcp revoke`, neither of
+    which ever asks the CLI-level checks again. A `ContentError` there cannot
+    reach a journal load at all, which is exactly why the guard is repeated
+    at this boundary rather than trusted to have already run once upstream.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise JournalError(f"{cli}: granted_mcp must be a list")
+    for key in value:
+        if not isinstance(key, str) or not _SERVER_KEY.fullmatch(key):
+            raise JournalError(
+                f"{cli}: granted_mcp must be a list of server keys holding only letters, digits, "
+                f"'.', '_' and '-' -- {key!r} is not usable as one and could never have come from "
+                f"`grant_mcp`, so the journal can only be a hand edit or corrupted"
+            )
+    return tuple(value)
 
 
 def _record_from_dict(payload: Any, home: Path, cli: str) -> Record:
