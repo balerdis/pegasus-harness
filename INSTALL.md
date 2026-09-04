@@ -7,8 +7,9 @@ curl -fsSL https://github.com/balerdis/pegasus-harness/releases/latest/download/
 ```
 
 Ese único comando detecta qué te falta, te muestra el plan completo antes de tocar nada, pide
-confirmación, instala sólo lo que hace falta, y termina dejándote en el lugar que corresponde: la
-interfaz de Pegasus si instaló algo nuevo, o `opencode` directo si tu entorno ya estaba completo. No
+confirmación, instala sólo lo que hace falta, y termina dejándote siempre en la interfaz de Pegasus:
+si instaló algo nuevo, todavía hay que elegir MCPs y confirmar dentro de OpenCode; si tu entorno ya
+estaba completo, se abre igual para avisarte si hay una versión más nueva de pegasus publicada. No
 hace falta elegir una versión ni copiar un tag a mano: siempre baja el último release publicado.
 
 El resto de esta guía explica, en orden, qué hace exactamente ese script, qué significa usar la
@@ -90,10 +91,11 @@ te muestra la línea exacta para que la agregues vos a mano, además del `export
 terminal actual. Al final igual te muestra, explícito, el comando `source` que necesitás correr en
 la terminal actual para no tener que abrir una nueva.
 
-**Qué queda corriendo al final:** si instaló algo nuevo, lanza la interfaz de Pegasus (sección 2) —
+**Qué queda corriendo al final:** siempre la interfaz de Pegasus (sección 2). Si instaló algo nuevo,
 porque todavía falta elegir qué MCPs instalar y confirmar esa instalación en OpenCode. Si no hacía
-falta instalar nada, lanza `opencode` directo — un entorno completo es, sencillamente, uno donde ya se
-puede trabajar. Bajo `--verify` o `--no-run` no lanza ninguno de los dos: dice cuál habría sido.
+falta instalar nada, porque `install.sh` no compara versiones — sólo dice si algo está o no está — y
+es la TUI, al arrancar, la que revisa si hay un release de pegasus más nuevo publicado y te ofrece
+`Upgrade`. Bajo `--verify` o `--no-run` no lanza nada: dice qué habría lanzado.
 
 ## 2. Usar la interfaz interactiva de Pegasus (la TUI)
 

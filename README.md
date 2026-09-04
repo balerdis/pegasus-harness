@@ -14,9 +14,9 @@ instala sólo eso — no hace falta elegir una versión ni copiar un tag a mano:
 curl -fsSL https://github.com/balerdis/pegasus-harness/releases/latest/download/install.sh | bash
 ```
 
-Termina dejándote en el lugar que corresponde: la interfaz de Pegasus si instaló algo nuevo (todavía
-hay que elegir MCPs y confirmar dentro de OpenCode), o `opencode` directo si tu entorno ya estaba
-completo. [INSTALL.md](INSTALL.md) explica paso a paso qué hace ese script, sus flags (`--verify`,
+Termina dejándote siempre en la interfaz de Pegasus: si instaló algo nuevo, todavía hay que elegir
+MCPs y confirmar dentro de OpenCode; si tu entorno ya estaba completo, se abre igual para avisarte si
+hay una versión más nueva de pegasus publicada. [INSTALL.md](INSTALL.md) explica paso a paso qué hace ese script, sus flags (`--verify`,
 `--yes`, `--no-run`, `--bin-dir`, ...), la interfaz interactiva de Pegasus y el uso por línea de
 comandos — incluida la instalación manual, sin el script, para quien prefiera revisar cada paso.
 

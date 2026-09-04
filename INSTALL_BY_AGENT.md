@@ -29,9 +29,9 @@ curl -fsSL https://github.com/balerdis/pegasus-harness/releases/latest/download/
 ```
 
 `--yes` salta la confirmación (necesaria: nadie va a escribir "y" en un pipe) y `--no-run` evita que
-el script lance nada al final -- ni la TUI de Pegasus ni `opencode`, ninguno de los dos es algo que un
-agente deba abrir. Repetido sin `--no-run` sí lanzaría uno de los dos según haya instalado algo o no,
-así que un agente nunca lo corre sin ese flag. Para inspeccionar qué falta sin cambiar nada -- por
+el script lance nada al final -- la TUI de Pegasus, que no es algo que un agente deba abrir. Repetido
+sin `--no-run` sí la lanzaría (siempre a la TUI, nunca directo a `opencode` -- ver INSTALL.md, sección
+1), así que un agente nunca lo corre sin ese flag. Para inspeccionar qué falta sin cambiar nada -- por
 ejemplo, para decidir si hace falta seguir con este instructivo o no --, usá `--verify`:
 
 ```sh

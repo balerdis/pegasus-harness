@@ -281,20 +281,22 @@ class NoRunActuallyInstallsTest(InstallScriptTestCase):
             f'touch "{self.marker("pegasus-launched")}"\n',
         )
 
-    def test_yes_no_run_with_everything_present_reports_nothing_missing_and_would_launch_opencode(self):
+    def test_yes_no_run_with_everything_present_still_reports_it_would_launch_pegasus(self):
         """python3, curl, node, opencode and pegasus are all stubbed present, so
-        there is nothing to install; the script must say so and must report it
-        would have launched `opencode` -- a ready environment is for working in,
-        not for reopening the Pegasus TUI to finish an installation that already
-        finished."""
+        there is nothing to install; the script must say so, but it must STILL
+        report it would launch `pegasus`, not `opencode`. Checking for a newer
+        release and offering Upgrade is the pegasus TUI's own job (see
+        cli.check_for_update / navigator.update_notice_lines) -- the only way
+        anyone ever sees that notice is if the installer always opens the TUI,
+        even when nothing needed installing."""
         self._stub_everything_present()
 
         result = self.run_install("--yes", "--no-run")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ya está todo instalado", result.stdout)
-        self.assertIn("opencode", result.stdout.lower())
-        self.assertNotIn("Se habría lanzado: pegasus", result.stdout)
+        self.assertIn("Se habría lanzado: pegasus", result.stdout)
+        self.assertIn("ya tenía todo instalado", result.stdout)
         self.assertFalse(self.marker("opencode-launched").exists())
         self.assertFalse(self.marker("pegasus-launched").exists())
 
@@ -578,22 +580,25 @@ class LaunchGetsControllingTerminalTest(InstallScriptTestCase):
         launch_idx = output.index("PEGASUS-LAUNCHED-WITH-TERMINAL")
         self.assertLess(path_idx, launch_idx, output)
 
-    def test_real_pty_run_with_nothing_missing_execs_opencode_with_a_real_terminal(self):
-        """`opencode` is a TUI too and needs exactly the same treatment. With
-        everything already present, `lanzar` execs straight into opencode
-        with no confirmation prompt in between."""
+    def test_real_pty_run_with_nothing_missing_execs_pegasus_with_a_real_terminal(self):
+        """pegasus is the one this now execs even with nothing missing -- see
+        decidir_lanzamiento: the installer always hands over to the pegasus
+        TUI, never straight to opencode, so it is the TUI (not this script)
+        that gets to report a newer release. With everything already
+        present, `lanzar` execs straight into pegasus with no confirmation
+        prompt in between."""
         self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
         self.stub("node", 'echo "v20.11.0"\n')
         self.stub(
-            "pegasus",
-            'if [ "$1" = "--version" ] || [ "$1" = "-V" ]; then echo "pegasus 5.12.1"; exit 0; fi\n',
-        )
-        marker = self.marker("opencode-stdin")
-        self.stub(
             "opencode",
-            'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n'
+            'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n',
+        )
+        marker = self.marker("pegasus-stdin")
+        self.stub(
+            "pegasus",
+            'if [ "$1" = "--version" ] || [ "$1" = "-V" ]; then echo "pegasus 5.12.1"; exit 0; fi\n'
             f'if [ -t 0 ]; then echo tty > "{marker}"; else echo notty > "{marker}"; fi\n'
-            'echo OPENCODE-LAUNCHED-WITH-TERMINAL\n',
+            'echo PEGASUS-LAUNCHED-WITH-TERMINAL\n',
         )
 
         env = {
@@ -604,7 +609,44 @@ class LaunchGetsControllingTerminalTest(InstallScriptTestCase):
         session = _InstallPtySession(env=env, args=[])
         self.addCleanup(session.close)
 
-        output = session.wait_for("OPENCODE-LAUNCHED-WITH-TERMINAL", timeout=15.0)
+        output = session.wait_for("PEGASUS-LAUNCHED-WITH-TERMINAL", timeout=15.0)
+
+        self.assertTrue(marker.exists(), output)
+        self.assertEqual(marker.read_text(encoding="utf-8").strip(), "tty")
+
+    def test_real_run_with_pegasus_present_only_via_bin_dir_still_execs_it(self):
+        """Regression coverage for the exec-side half of the gap this change
+        makes reachable: before `asegurar_path` ran unconditionally (see
+        main()), a real run with nothing missing skipped it entirely -- so
+        when pegasus was reachable only via `$BIN_DIR/pegasus`, never through
+        the PATH this process actually started with, `exec pegasus` failed
+        outright (`bash: exec: pegasus: not found`, exit 127) even though
+        the closing guidance said pegasus was about to launch."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub("opencode", 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        bin_dir = self.home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        pegasus_bin = bin_dir / "pegasus"
+        marker = self.marker("pegasus-stdin")
+        pegasus_bin.write_text(
+            '#!/bin/sh\n'
+            'if [ "$1" = "--version" ] || [ "$1" = "-V" ]; then echo "pegasus 5.12.1"; exit 0; fi\n'
+            f'if [ -t 0 ]; then echo tty > "{marker}"; else echo notty > "{marker}"; fi\n'
+            'echo PEGASUS-LAUNCHED-WITH-TERMINAL\n',
+            encoding="utf-8",
+        )
+        pegasus_bin.chmod(pegasus_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        env = {
+            "HOME": str(self.home),
+            "PATH": f"{self.stub_bin}:{SYSTEM_PATH}",
+            "TERM": "xterm",
+        }
+        session = _InstallPtySession(env=env, args=[])
+        self.addCleanup(session.close)
+
+        output = session.wait_for("PEGASUS-LAUNCHED-WITH-TERMINAL", timeout=15.0)
 
         self.assertTrue(marker.exists(), output)
         self.assertEqual(marker.read_text(encoding="utf-8").strip(), "tty")
@@ -753,6 +795,36 @@ class ClosingPathGuidanceTest(InstallScriptTestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f'export PATH="{custom_bin_dir}:$PATH"', result.stdout)
         self.assertNotIn("source ~/.profile", result.stdout)
+
+    def test_pegasus_present_only_via_bin_dir_not_on_incoming_path_still_gets_closing_guidance(self):
+        """The gap this change makes reachable: `detectar_pegasus` can set
+        `PEGASUS_PRESENTE=1` purely from `-x $BIN_DIR/pegasus`, with
+        `$BIN_DIR` nowhere on the PATH that reached this script
+        (`ORIGINAL_PATH`). Before this fix that combination made
+        `calcular_avisos_path` report nothing (`FALTA_PEGASUS` is 0 there),
+        so neither the closing PATH section nor the action-required block
+        ever printed -- and since the installer now always launches pegasus
+        (see decidir_lanzamiento), the person would exit the TUI into a
+        shell that still can't find `pegasus`, with nothing having told
+        them so."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        bin_dir = self.home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        pegasus_bin = bin_dir / "pegasus"
+        pegasus_bin.write_text(
+            '#!/bin/sh\nif [ "$1" = "--version" ] || [ "$1" = "-V" ]; then echo "pegasus 5.12.1"; exit 0; fi\n',
+            encoding="utf-8",
+        )
+        pegasus_bin.chmod(pegasus_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        result = self.run_install("--yes", "--no-run")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(str(bin_dir), result.stdout)
+        self.assertIn("=== PATH ===", result.stdout)
+        self.assertIn("ANTES DE CORRER pegasus U opencode", result.stdout)
 
     def test_verify_mode_shows_no_closing_path_guidance(self):
         """--verify never installs anything for real, so there is nothing

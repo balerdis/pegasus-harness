@@ -332,13 +332,25 @@ calcular_faltantes() {
 # propio proceso. Una sola función para que mostrar_guia_path y
 # bloque_accion_requerida (ver más abajo) nunca puedan quedar en desacuerdo
 # sobre si hay algo que avisar.
+#
+# El de pegasus dispara también cuando NO faltaba instalar nada: detectar_pegasus
+# marca PEGASUS_PRESENTE=1 tanto si lo encuentra por `command -v` (ya en el PATH,
+# por definición) como si sólo existe en $BIN_DIR/pegasus sin estar en el PATH.
+# Como el lanzamiento final SIEMPRE termina en pegasus (ver decidir_lanzamiento),
+# ese segundo caso necesita el mismo aviso que uno recién instalado -- si no, la
+# persona sale de la TUI a una terminal que sigue sin encontrar pegasus y nadie
+# se lo dijo. OpenCode no tiene este problema: detectar_opencode sólo lo marca
+# presente vía `command -v`, así que si está presente ya está en el PATH.
 AVISO_PEGASUS_DIR=0
 AVISO_OPENCODE_DIR=0
 
 calcular_avisos_path() {
   AVISO_PEGASUS_DIR=0
   AVISO_OPENCODE_DIR=0
-  ((FALTA_PEGASUS)) && ! dir_en_path "$ORIGINAL_PATH" "$BIN_DIR" && AVISO_PEGASUS_DIR=1
+  local pegasus_solo_en_bin_dir=0
+  [[ "$PEGASUS_RUTA" == "$BIN_DIR/pegasus" ]] && pegasus_solo_en_bin_dir=1
+  { ((FALTA_PEGASUS)) || ((pegasus_solo_en_bin_dir)); } \
+    && ! dir_en_path "$ORIGINAL_PATH" "$BIN_DIR" && AVISO_PEGASUS_DIR=1
   ((FALTA_OPENCODE)) && ! dir_en_path "$ORIGINAL_PATH" "$OPENCODE_BIN_DIR" && AVISO_OPENCODE_DIR=1
   return 0
 }
@@ -635,11 +647,6 @@ instalar_opencode() {
 
 instalar_pegasus() {
   titulo 'Binario de pegasus'
-  if ((PEGASUS_PRESENTE)); then
-    info "ya instalado: $PEGASUS_VERSION ($PEGASUS_RUTA)"
-    info "para reemplazarlo por el más nuevo publicado usá: pegasus upgrade"
-    return 0
-  fi
   ALGO_SE_INSTALO=1
 
   mkdir -p "$BIN_DIR" || fallar "no se pudo crear $BIN_DIR"
@@ -940,13 +947,16 @@ bloque_accion_requerida() {
 
 # --- Qué queda corriendo al final ---
 #
-# Si esta corrida instaló algo de verdad, la persona todavía tiene que elegir
-# MCPs y confirmar la instalación dentro de OpenCode: eso es lo que hace la
-# TUI de pegasus. Si no hacía falta instalar nada, el entorno ya estaba
-# listo, así que directamente se abre OpenCode para trabajar. Bajo --verify
-# nunca se llega a instalar nada, así que ahí la decisión se proyecta a
-# partir de lo que faltaría en una corrida real (FALTA_ALGO) en vez de a
-# partir de lo que se hizo.
+# SIEMPRE pegasus, nunca opencode: este script no compara versiones (ver
+# PEGASUS_PRESENTE, que sólo dice "está" o "no está"), así que la única forma
+# de que alguien se entere de un release más nuevo es que la TUI de pegasus
+# se lo diga -- eso ya lo hace sola, en su propio arranque (cli.check_for_update
+# más navigator.update_notice_lines). Si este script en cambio abriera OpenCode
+# directo cuando no hacía falta instalar nada, esa persona nunca vería ese
+# aviso. MOTIVO sí sigue variando, porque el motivo real es distinto en cada
+# caso. Bajo --verify nunca se llega a instalar nada, así que ahí la decisión
+# se proyecta a partir de lo que faltaría en una corrida real (FALTA_ALGO) en
+# vez de a partir de lo que se hizo.
 decidir_lanzamiento() {
   local se_instalo
   if [[ "$MODO" == 'verificar' ]]; then
@@ -955,12 +965,11 @@ decidir_lanzamiento() {
     se_instalo=$ALGO_SE_INSTALO
   fi
 
+  LANZAR='pegasus'
   if ((se_instalo)); then
-    LANZAR='pegasus'
     MOTIVO='se instaló algo nuevo: todavía hay que elegir MCPs y confirmar la instalación en OpenCode'
   else
-    LANZAR='opencode'
-    MOTIVO='ya estaba todo instalado: el entorno está listo para trabajar'
+    MOTIVO='tu entorno ya tenía todo instalado; abrimos pegasus para ver si hay actualizaciones'
   fi
 }
 
@@ -1043,9 +1052,22 @@ main() {
     ((FALTA_NODE)) && instalar_node
     ((FALTA_OPENCODE)) && instalar_opencode
     ((FALTA_PEGASUS)) && instalar_pegasus
-    asegurar_path
-    escribir_path_rc
   fi
+
+  # Antes esto vivía adentro del "if FALTA_ALGO" de arriba: alcanzaba,
+  # porque el lanzamiento final elegía opencode (siempre ya en el PATH por
+  # cómo lo detecta detectar_opencode) cuando no hacía falta instalar nada.
+  # Ahora que decidir_lanzamiento SIEMPRE elige pegasus, hace falta correr
+  # esto también cuando no faltaba instalar nada: pegasus puede estar
+  # presente sólo por existir en $BIN_DIR (ver calcular_avisos_path), sin
+  # que ese directorio esté en el PATH con el que arrancó este proceso -- y
+  # sin asegurar_path, el "exec pegasus" de más abajo fallaría con "not
+  # found" (bajo set -euo pipefail, un exit 127) en vez de abrir la TUI.
+  # asegurar_path y escribir_path_rc ya son idempotentes (ver sus propios
+  # comentarios), así que llamarlos de más acá no cambia nada cuando de
+  # verdad no había nada que hacer.
+  asegurar_path
+  escribir_path_rc
 
   lanzar
 }
