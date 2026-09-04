@@ -4,7 +4,7 @@ description: Exploration executor for one topic; investigates the codebase and r
 mode: subagent
 requires_tools: [read, bash, grep, glob]
 optional_tools: [write]
-optional_mcp: [cbm, context7, engram]
+optional_mcp: [cbm, context7, engram, playwright]
 model_configurable: true
 ---
 

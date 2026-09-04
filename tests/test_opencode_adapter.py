@@ -1308,6 +1308,24 @@ class ShippedContentRenderTest(unittest.TestCase):
         for name in orchestrator.may_delegate_to:
             self.assertEqual(value["permission"]["task"][name], "allow")
 
+    def test_playwright_selected_is_granted_only_to_the_intended_agents(self):
+        """`playwright*` must render `True`/`"allow"` for exactly the agents
+        that declare it once Playwright is chosen, with every other agent's
+        deny baseline left untouched.
+        """
+        selected = content_module.select_mcp(self.loaded, ["playwright"])
+        intended = {"sdd-apply", "sdd-explore", "sdd-verify"}
+        for agent in selected.agents:
+            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            self.assertIs(value["tools"]["*"], False, agent.name)
+            self.assertEqual(value["permission"]["*"], "deny", agent.name)
+            if agent.name in intended:
+                self.assertIs(value["tools"]["playwright*"], True, agent.name)
+                self.assertEqual(value["permission"]["playwright*"], "allow", agent.name)
+            else:
+                self.assertNotIn("playwright*", value["tools"], agent.name)
+                self.assertNotIn("playwright*", value["permission"], agent.name)
+
 
 class BoundMcpRenderTest(unittest.TestCase):
     """A bound server contributes its contract and nothing else.
