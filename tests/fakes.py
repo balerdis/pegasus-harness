@@ -16,6 +16,7 @@ the patch is in place before a single test method executes.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 import no_network  # noqa: F401  -- importing it is what installs the refusal
 from pegasus.infra.downloader_http import TIMEOUT_SECONDS as _DEFAULT_DOWNLOAD_TIMEOUT_SECONDS
@@ -38,19 +39,40 @@ class FakeDownloader:
     no network code in this class at all for a fallback to reach.
     """
 
-    def __init__(self, responses: dict[str, bytes] | None = None):
+    def __init__(
+        self,
+        responses: dict[str, bytes] | None = None,
+        *,
+        chunk_reports: list[tuple[int, int | None]] | None = None,
+    ):
         self.responses: dict[str, bytes] = dict(responses or {})
         self.calls: list[str] = []
         # Mirrors what `HttpDownloader` actually does with `timeout_seconds`:
         # `None` collapses to its real default, so a test can tell a caller
         # that asked for the long default apart from one that asked short.
         self.timeouts: list[float] = []
+        # `on_progress` is never called unless a test opts in here -- every
+        # test written before that param existed passes no `chunk_reports`
+        # and sees no calls at all, which is exactly the behaviour a real,
+        # instant-return fake ought to have. A test proving the wiring from
+        # `core.dependencies` up through `cli.Progress` opts in with the
+        # sequence of `(bytes_downloaded, total)` pairs it wants replayed.
+        self.chunk_reports = list(chunk_reports) if chunk_reports is not None else None
 
-    def fetch(self, url: str, *, timeout_seconds: float | None = None) -> bytes:
+    def fetch(
+        self,
+        url: str,
+        *,
+        timeout_seconds: float | None = None,
+        on_progress: Callable[[int, int | None], None] | None = None,
+    ) -> bytes:
         self.calls.append(url)
         self.timeouts.append(_DEFAULT_DOWNLOAD_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds)
         if url not in self.responses:
             raise DownloaderError(f"no fake response registered for {url}")
+        if on_progress is not None and self.chunk_reports is not None:
+            for downloaded, total in self.chunk_reports:
+                on_progress(downloaded, total)
         return self.responses[url]
 
 

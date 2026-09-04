@@ -142,6 +142,33 @@ class MaterializeTest(unittest.TestCase):
             self.materialize(item, FakeDownloader({item.endpoint: content}))
 
 
+class MaterializeProgressTest(unittest.TestCase):
+    """`materialize`'s own `on_progress` is nothing but a pass-through to
+    `downloader.fetch` -- proving that pass-through is this module's whole
+    job here, since the byte-counting itself is `HttpDownloader`'s.
+    """
+
+    def setUp(self):
+        self.filesystem = FakeFileSystem()
+
+    def test_omitting_on_progress_changes_nothing(self):
+        item, content = download_server()
+        downloader = FakeDownloader({item.endpoint: content})
+        dependencies.materialize(self.filesystem, downloader, DEPENDENCIES_DIR, item, at=AT)
+        target = dependencies.binary_path(DEPENDENCIES_DIR, item)
+        self.assertEqual(self.filesystem.files[target], content)
+
+    def test_on_progress_is_forwarded_to_the_downloader(self):
+        item, content = download_server()
+        downloader = FakeDownloader({item.endpoint: content}, chunk_reports=[(4, 10), (10, 10)])
+        observed: list[tuple[int, int | None]] = []
+        dependencies.materialize(
+            self.filesystem, downloader, DEPENDENCIES_DIR, item, at=AT,
+            on_progress=lambda done, total: observed.append((done, total)),
+        )
+        self.assertEqual(observed, [(4, 10), (10, 10)])
+
+
 def archive_server(**overrides) -> tuple[Mcp, bytes]:
     entries = overrides.pop("entries", {"probe": b"the real program bytes", "README.md": b"read me"})
     archive = make_archive(entries, symlinks=overrides.pop("symlinks", None))

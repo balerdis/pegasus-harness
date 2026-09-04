@@ -28,6 +28,7 @@ import io
 import json
 import tarfile
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
 from pegasus.core import ownership
 from pegasus.core.content import Distribution, Mcp
@@ -87,7 +88,13 @@ def npm_script_path(dependencies_dir: Path, item: Mcp) -> Path:
 
 
 def materialize(
-    filesystem: FileSystem, downloader: Downloader, dependencies_dir: Path, item: Mcp, *, at: str
+    filesystem: FileSystem,
+    downloader: Downloader,
+    dependencies_dir: Path,
+    item: Mcp,
+    *,
+    at: str,
+    on_progress: Callable[[int, int | None], None] | None = None,
 ) -> Record:
     """Fetch ``item.endpoint``, verify it against ``item.checksum``, then place it.
 
@@ -98,11 +105,18 @@ def materialize(
     the same reason: a digest proves the bytes are the ones that were
     pinned, never that placing them is safe, so verification comes first and
     extraction's own refusals come after it, not instead of it.
+
+    ``on_progress`` is passed straight through to ``downloader.fetch`` --
+    this module has no bytes of its own to count, only `HttpDownloader` does,
+    so there is nothing here to compute and everything here to forward. It
+    defaults to ``None`` for the same reason `Downloader.fetch` itself
+    documents: every caller written before it existed keeps its exact
+    current behaviour.
     """
     if item.distribution is not Distribution.DOWNLOAD:
         raise MaterializeError(f"{item.name}: not a 'download' server")
     try:
-        fetched = downloader.fetch(item.endpoint)
+        fetched = downloader.fetch(item.endpoint, on_progress=on_progress)
     except DownloaderError as error:
         raise MaterializeError(f"{item.name}: could not fetch {item.endpoint}: {error}") from error
     digest = ownership.digest_of_bytes(fetched)

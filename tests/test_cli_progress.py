@@ -159,6 +159,51 @@ class DependencyProgressTest(RealHomeTestCase):
 
 
 @patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
+class DownloadByteProgressTest(RealHomeTestCase):
+    """The bytes/total fields on `Progress` -- populated only while a
+    `download` server's fetch is actually in flight, absent everywhere else.
+    """
+
+    def test_a_download_with_a_fake_that_reports_no_progress_leaves_bytes_fields_none(self, _load):
+        """The default `FakeDownloader` behaviour -- no `chunk_reports` given
+        -- must still install cleanly with every `Progress` carrying no byte
+        fields at all, exactly like every progress test above already
+        expects. This is the regression guard for adding the fields."""
+        self.present()
+        events = []
+        cli.install(CLI, self.runtime(), mcp=["probe"], on_progress=events.append)
+        self.assertTrue(all(event.bytes_downloaded is None for event in events))
+        self.assertTrue(all(event.bytes_total is None for event in events))
+
+    def test_a_downloads_byte_progress_reaches_progress_with_the_servers_name(self, _load):
+        downloader = FakeDownloader({PROBE.endpoint: BYTES}, chunk_reports=[(4, len(BYTES)), (len(BYTES), len(BYTES))])
+        events = []
+        self.present()
+        cli.install(CLI, self.runtime(downloader=downloader), mcp=["probe"], on_progress=events.append)
+        byte_events = [event for event in events if event.bytes_downloaded is not None]
+        self.assertEqual([(event.bytes_downloaded, event.bytes_total, event.unit) for event in byte_events],
+                          [(4, len(BYTES), "probe"), (len(BYTES), len(BYTES), "probe")])
+
+    def test_byte_progress_events_do_not_advance_done(self, _load):
+        """A byte-level tick reports how far *into* the current unit the
+        fetch has gotten -- it must never be mistaken for a whole unit
+        finishing, or `done` would run ahead of what was actually placed."""
+        downloader = FakeDownloader({PROBE.endpoint: BYTES}, chunk_reports=[(4, len(BYTES)), (len(BYTES), len(BYTES))])
+        events = []
+        self.present()
+        cli.install(CLI, self.runtime(downloader=downloader), mcp=["probe"], on_progress=events.append)
+        byte_events = [event for event in events if event.bytes_downloaded is not None]
+        dependency_tick = next(event for event in events if event.phase == "dependencies" and event.bytes_downloaded is None)
+        self.assertTrue(all(event.done == dependency_tick.done - 1 for event in byte_events))
+
+    def test_a_non_download_unit_never_carries_byte_fields(self, _load):
+        self.present()
+        events = []
+        cli.install(CLI, self.runtime(), on_progress=events.append)  # no mcp: nothing to fetch
+        self.assertTrue(all(event.bytes_downloaded is None and event.bytes_total is None for event in events))
+
+
+@patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
 class RetirementProgressTest(RealHomeTestCase):
     """Dropping `--mcp probe` on a reinstall is the case that actually
     exercises the retire phase: nothing new to place, one dependency tree and

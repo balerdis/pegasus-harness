@@ -327,12 +327,26 @@ class Progress:
     (`"snapshot"`, `"journal"`) -- and `phase` is one of `"snapshot"`,
     `"dependencies"`, `"artifacts"`, `"retire"`, `"journal"`. Wording and
     layout are for whoever renders this, so nothing here formats any text.
+
+    `bytes_downloaded` and `bytes_total` are `None` for every tick except one
+    still in flight inside a `download` server's own fetch -- `done` has not
+    advanced for one of those, since the unit it names has not finished, only
+    made progress; the same `done`/`total`/`phase`/`unit` a caller ignoring
+    these two fields already reads keep meaning exactly what they meant
+    before this pair existed. `bytes_total` is further `None` on its own,
+    independent of `bytes_downloaded`, whenever the server fetching the bytes
+    never learned how many there would be -- never a guessed number standing
+    in for one. This class stays a plain value: nothing on it reads a clock
+    or formats a byte count into text, both of which belong to whoever
+    renders it, not to the value being rendered.
     """
 
     done: int
     total: int
     phase: str
     unit: str
+    bytes_downloaded: int | None = None
+    bytes_total: int | None = None
 
     @property
     def fraction(self) -> float:
@@ -490,6 +504,24 @@ def install(
         progress_done += 1
         on_progress(Progress(done=progress_done, total=total_units, phase=phase, unit=unit))
 
+    def _download_tick(name: str, bytes_downloaded: int, bytes_total: int | None) -> None:
+        # `progress_done` is read, never advanced, here: a byte-level tick is
+        # progress *inside* the unit currently being fetched, not a sibling
+        # of the whole-unit ticks `_tick` emits once that fetch finishes --
+        # advancing it here would let `done` reach `total` before the fetch,
+        # verification and placement `_tick("dependencies", name)` actually
+        # reports are done.
+        on_progress(
+            Progress(
+                done=progress_done,
+                total=total_units,
+                phase="dependencies",
+                unit=name,
+                bytes_downloaded=bytes_downloaded,
+                bytes_total=bytes_total,
+            )
+        )
+
     if on_progress is not None:
         on_progress(Progress(done=0, total=total_units, phase="snapshot", unit=""))
 
@@ -524,6 +556,7 @@ def install(
             content,
             installed,
             on_step=(lambda name: _tick("dependencies", name)) if on_progress is not None else None,
+            on_download_progress=_download_tick if on_progress is not None else None,
         )
     except dependencies_module.MaterializeError as error:
         raise CommandError(str(error)) from error
@@ -1247,6 +1280,7 @@ def _materialize_dependencies(
     content: content_module.Content,
     installed: Install | None,
     on_step: Callable[[str], None] | None = None,
+    on_download_progress: Callable[[str, int, int | None], None] | None = None,
 ) -> tuple[tuple[Record, ...], tuple[Record, ...]]:
     """Fetch and place every `download` or `npm` server this run still names.
 
@@ -1261,6 +1295,12 @@ def _materialize_dependencies(
     ``on_step``, when given, is told once per server this call actually
     fetches -- never for one already `kept`, since that one cost no work --
     named by the server's own name, the same one `--mcp` takes.
+
+    ``on_download_progress``, when given, is told the same server's name
+    alongside every byte-level tick `HttpDownloader` reports while that one
+    server's own bytes are still arriving -- named separately from ``on_step``
+    because the two fire at different granularities for the very same fetch:
+    many times while it is in flight, once when it is done.
     """
     owned = {entry.id: entry for entry in (installed.entries if installed else ())}
     node_present = shutil.which(NODE_BINARY, path=runtime.variables.get("PATH")) is not None
@@ -1274,7 +1314,7 @@ def _materialize_dependencies(
             kept.append(existing)
             continue
         try:
-            created.append(_materialize_one(runtime, layout, item, node_present))
+            created.append(_materialize_one(runtime, layout, item, node_present, on_download_progress=on_download_progress))
         except dependencies_module.MaterializeError:
             # A later server's failure must not leave an earlier one of this
             # same run half-recorded: nothing placed here has reached the
@@ -1286,10 +1326,18 @@ def _materialize_dependencies(
     return tuple(kept), tuple(created)
 
 
-def _materialize_one(runtime: Runtime, layout, item, node_present: bool) -> Record:
+def _materialize_one(
+    runtime: Runtime,
+    layout,
+    item,
+    node_present: bool,
+    *,
+    on_download_progress: Callable[[str, int, int | None], None] | None = None,
+) -> Record:
     if item.distribution is content_module.Distribution.DOWNLOAD:
+        progress = (lambda done, total: on_download_progress(item.name, done, total)) if on_download_progress is not None else None
         return dependencies_module.materialize(
-            runtime.filesystem, runtime.downloader, layout.dependencies_dir, item, at=runtime.now
+            runtime.filesystem, runtime.downloader, layout.dependencies_dir, item, at=runtime.now, on_progress=progress
         )
     return dependencies_module.materialize_npm(
         runtime.filesystem,
