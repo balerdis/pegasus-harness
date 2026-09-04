@@ -84,7 +84,7 @@ import json
 manifest = json.load(open('release-manifest.json'))
 assert manifest['schema'] == 'pegasus-harness-release/v5', manifest['schema']
 names = {a['name'] for a in manifest['assets']}
-assert names == {'pegasus'}, names
+assert names == {'pegasus', 'install.sh'}, names
 print('release-manifest.json: coincide con', manifest['tag'], manifest['commit'])
 "
 ```
