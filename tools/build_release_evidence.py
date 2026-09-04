@@ -9,12 +9,18 @@ this script through the wheel's own METADATA and the shim's tracked Git mode. Ne
 more: Pegasus has zero runtime dependencies and reads its content from inside a zip as readily as
 from a directory, so the wheel and the venv it needed are both gone, and with them the second file.
 
-v5 ships one thing: `pegasus`, a `zipapp` built by `tools/build_zipapp.py` -- a single executable
-file that is the whole command. What was missing is evidence tying that file to the commit that
-produced it, so a person can verify what they downloaded *before* running it. That evidence is this
-script's only job. It does not build the artifact -- that is `build_zipapp.py`'s job, and rebuilding
-it here would make this script a second place that has to agree about how. It runs the artifact it
-is given and reads what it reports, the same thing a person verifying a release would do by hand.
+v5 ships two things: `pegasus`, a `zipapp` built by `tools/build_zipapp.py` -- a single executable
+file that is the whole command -- and `install.sh`, the script `README.md` and `INSTALL.md`
+advertise as a one-liner served from `releases/latest/download/`. What was missing is evidence
+tying both files to the commit that produced them, so a person can verify what they downloaded
+*before* running it. That evidence is this script's only job. It does not build the artifact --
+that is `build_zipapp.py`'s job, and rebuilding it here would make this script a second place that
+has to agree about how. It runs the artifact it is given and reads what it reports, the same thing
+a person verifying a release would do by hand. `install.sh` has no runtime version to run and
+check the way the zipapp does, but it does have exact bytes a commit holds -- `tagged_file` reads
+them straight out of the commit with `git show`, and this script certifies that content, refusing
+if the commit lacks the file or if the working-tree copy the release procedure actually uploads
+does not match it (see `install_sh_evidence`).
 
 `build_zipapp.py` pins the mtime and mode of everything it stages before zipping, so the SHA-256
 this script records is not only a claim about the exact bytes someone downloaded -- it is also what
@@ -52,12 +58,25 @@ DOCTOR_TIMEOUT_SECONDS = 30
 TAG = re.compile(r"^v(?:\d+)\.(?:\d+)\.(?:\d+)(?:-rc\.[1-9][0-9]*)?$")
 
 
-def git(*args: str) -> str:
-    return subprocess.run(["git", *args], cwd=ROOT, text=True, capture_output=True, check=True).stdout.strip()
+#: The one-liner `README.md` and `INSTALL.md` advertise. `install.sh` has to exist, non-empty, at
+#: the commit this evidence describes -- and be the exact bytes GitHub Releases serves -- or this
+#: URL 404s (or serves a stale script) for every user until someone notices by hand.
+INSTALL_ONE_LINER = (
+    "curl -fsSL https://github.com/balerdis/pegasus-harness/releases/latest/download/install.sh | bash"
+)
+INSTALL_SH_NAME = "install.sh"
+
+
+def git(*args: str, root: Path = ROOT) -> str:
+    return subprocess.run(["git", *args], cwd=root, text=True, capture_output=True, check=True).stdout.strip()
 
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def digest_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def checksum_line(name: str, sha256: str) -> str:
@@ -65,13 +84,13 @@ def checksum_line(name: str, sha256: str) -> str:
     return f"{sha256}  {name}\n"
 
 
-def tagged_file(commit: str, path: str) -> bytes:
+def tagged_file(commit: str, path: str, root: Path = ROOT) -> bytes:
     return subprocess.run(
-        ["git", "show", f"{commit}:{path}"], cwd=ROOT, capture_output=True, check=True
+        ["git", "show", f"{commit}:{path}"], cwd=root, capture_output=True, check=True
     ).stdout
 
 
-def resolve_commit(tag: str | None) -> tuple[str, str | None]:
+def resolve_commit(tag: str | None, root: Path = ROOT) -> tuple[str, str | None]:
     """The commit this evidence describes, and the tag it was asked for, if any.
 
     Without `--tag` the evidence describes `HEAD`, and only when the worktree has nothing
@@ -79,19 +98,67 @@ def resolve_commit(tag: str | None) -> tuple[str, str | None]:
     back out of the repository later, which defeats the point of evidence.
     """
     if tag is None:
-        if git("status", "--porcelain"):
+        if git("status", "--porcelain", root=root):
             raise ValueError("the worktree has uncommitted changes; commit first or pass --tag")
-        return git("rev-parse", "HEAD"), None
+        return git("rev-parse", "HEAD", root=root), None
     if not TAG.fullmatch(tag):
         raise ValueError("--tag must look like vX.Y.Z or vX.Y.Z-rc.N")
-    if git("cat-file", "-t", tag) != "tag":
+    if git("cat-file", "-t", tag, root=root) != "tag":
         raise ValueError("--tag must name an annotated tag")
-    return git("rev-list", "-n", "1", tag), tag
+    return git("rev-list", "-n", "1", tag, root=root), tag
 
 
-def package_version_at(commit: str) -> str:
-    pyproject = tomllib.loads(tagged_file(commit, "pyproject.toml").decode("utf-8"))
+def package_version_at(commit: str, root: Path = ROOT) -> str:
+    pyproject = tomllib.loads(tagged_file(commit, "pyproject.toml", root=root).decode("utf-8"))
     return pyproject["project"]["version"]
+
+
+def install_sh_evidence(commit: str, root: Path = ROOT) -> dict[str, str]:
+    """Certify the exact bytes of `install.sh` the resolved commit holds.
+
+    A previous attempt at this evidence tool left `install.sh` out, reasoning it has "no runtime
+    version to check" the way the zipapp does. That missed the mechanism already available here:
+    `tagged_file` reads content straight out of the commit with `git show`, which is a real
+    verification story for a plain script -- content-addressed, and arguably stronger than a
+    version string, because it names the exact bytes that have to be uploaded.
+
+    Two things can go wrong, and both are refused rather than silently evidenced:
+
+    * The commit has no `install.sh` (or an empty one). Without it on the same release, the
+      one-liner everyone is told to run (see `INSTALL_ONE_LINER`) 404s.
+    * The working tree's `install.sh` -- the file `docs/release-distribution.md` actually has a
+      person upload -- does not match the bytes this commit holds. With `--tag` the worktree is
+      allowed to be dirty, so it is entirely possible to certify one script and upload another.
+    """
+    try:
+        committed_bytes = tagged_file(commit, INSTALL_SH_NAME, root=root)
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            f"commit {commit} has no {INSTALL_SH_NAME}; the advertised one-liner "
+            f"({INSTALL_ONE_LINER}) 404s without it on the same release"
+        ) from error
+    if not committed_bytes:
+        raise ValueError(
+            f"commit {commit} has an empty {INSTALL_SH_NAME}; the advertised one-liner "
+            f"({INSTALL_ONE_LINER}) would download nothing usable"
+        )
+    committed_sha256 = digest_bytes(committed_bytes)
+
+    worktree_path = root / INSTALL_SH_NAME
+    if not worktree_path.is_file():
+        raise ValueError(
+            f"{worktree_path} does not exist in the working tree, but {commit} has one; "
+            "upload the working-tree file that matches what this evidence certifies"
+        )
+    worktree_sha256 = digest(worktree_path)
+    if worktree_sha256 != committed_sha256:
+        raise ValueError(
+            f"working tree {INSTALL_SH_NAME} (sha256 {worktree_sha256}) does not match "
+            f"the {INSTALL_SH_NAME} committed at {commit} (sha256 {committed_sha256}); "
+            "the release procedure uploads the working-tree file, so it would not be the one "
+            "this manifest certifies"
+        )
+    return {"name": INSTALL_SH_NAME, "sha256": committed_sha256}
 
 
 def artifact_evidence(artifact: Path, expected_version: str) -> dict[str, str]:
@@ -141,6 +208,7 @@ def main() -> int:
         commit, tag = resolve_commit(args.tag)
         expected_version = package_version_at(commit)
         artifact = artifact_evidence(args.artifact, expected_version)
+        install_sh = install_sh_evidence(commit)
     except (subprocess.CalledProcessError, KeyError, ValueError, tomllib.TOMLDecodeError) as error:
         parser.error(str(error))
 
@@ -149,7 +217,7 @@ def main() -> int:
         "tag": tag,
         "commit": commit,
         "package_version": expected_version,
-        "assets": [artifact],
+        "assets": [artifact, install_sh],
         "install": {"artifact": f"install -m 755 {artifact['name']} <bin_dir>/pegasus"},
     }
 

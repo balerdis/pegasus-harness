@@ -28,20 +28,40 @@ prepara el release.
    El script no construye el artefacto — lo toma tal cual existe, lo corre (`pegasus doctor --json`)
    para confirmar que el `pegasus_version` que reporta coincide con `pyproject.toml` en ese commit, y
    sólo entonces certifica el commit y el hash (`release-manifest.json` y un `.sha256`). Sin `--tag`,
-   describe el `HEAD` limpio; con el worktree sucio, se niega.
+   describe el `HEAD` limpio; con el worktree sucio, se niega. `assets` en el manifest ahora nombra
+   dos archivos, no uno: además de `pegasus`, certifica `install.sh` leyendo sus bytes exactos del
+   commit con `git show <commit>:install.sh` (no del working tree) y comparándolos contra el
+   `install.sh` del working tree — el archivo que este mismo paso 4 sube. El script se niega si el
+   commit no tiene `install.sh`, o si el del working tree no coincide con el del commit; en cualquiera
+   de los dos casos, subir igual dejaría un release sin el asset que el one-liner de abajo necesita,
+   o con una copia distinta de la que el manifest certificó.
 4. Publicá en GitHub Releases, sobre ese mismo tag, los cuatro archivos que `INSTALL.md` nombra:
    `pegasus`, su `.sha256`, `release-manifest.json`, y `install.sh` (el archivo en la raíz del
-   repositorio, tal cual está en ese commit — no se genera, se sube directo). `install.sh` tiene que
-   publicarse en este mismo release, y no en ningún otro lugar (por ejemplo, servido crudo desde
-   `raw.githubusercontent.com`): todo lo que instala vive detrás de
-   `releases/latest/download/`, así que si el script viviera en una URL aparte podría quedar
-   apuntando a un binario de un release distinto del que lo acompaña, exactamente el tipo de
-   desincronización que este esquema existe para evitar. El checksum de `pegasus` registra sólo el
-   basename, nunca una ruta de staging, para que `sha256sum -c` funcione tal como se descargó.
+   repositorio, tal cual está en ese commit — no se genera, se sube directo, y es el mismo cuyo hash
+   quedó certificado en el paso anterior). `install.sh` tiene que publicarse en este mismo release, y
+   no en ningún otro lugar (por ejemplo, servido crudo desde `raw.githubusercontent.com`): todo lo que
+   instala vive detrás de `releases/latest/download/`, así que si el script viviera en una URL aparte
+   podría quedar apuntando a un binario de un release distinto del que lo acompaña — exactamente el
+   tipo de desincronización que este esquema existe para evitar, y la razón por la que el paso 3 ya lo
+   certifica antes de que llegues a subir nada. El checksum de `pegasus` registra sólo el basename,
+   nunca una ruta de staging, para que `sha256sum -c` funcione tal como se descargó.
 5. El release de GitHub debe ser no-draft y no-prerelease para que el contrato `latest` lo ofrezca.
-   Verificá manualmente, descargando cada uno de los cuatro assets por su ruta versionada y por
-   `.../releases/latest/download/<asset>`, que ambos coinciden en bytes (y, para `pegasus`, también en
-   el checksum publicado).
+   Corré `tools/verify_release_assets.py` contra el manifest y el tag para confirmar que lo publicado
+   coincide con lo certificado, en vez de chequearlo a mano:
+
+   ```sh
+   python3 tools/verify_release_assets.py \
+     --manifest dist/release-manifest.json \
+     --tag vX.Y.Z
+   ```
+
+   Descarga cada asset del manifest por su ruta versionada (`releases/download/vX.Y.Z/<asset>`) y
+   compara su SHA-256 contra el manifest; si además `vX.Y.Z` resulta ser el release `latest`, repite
+   la comparación contra `releases/latest/download/<asset>` — la ruta que `README.md` e
+   `INSTALL.md` realmente publicitan, y una afirmación distinta de la ruta versionada. Si el tag
+   todavía no es el `latest` (por ejemplo, publicaste un release más nuevo mientras tanto), el script
+   lo reporta y salta ese chequeo en vez de fallar por una razón que no es un defecto de este release.
+   Imprime una línea por asset y termina con código de salida distinto de cero si algo no coincide.
 
 `tools/build_release_manifest.py` sigue existiendo y sigue sin tocarse: reproduce la evidencia de los
 tags `v3.1.x` que ya se publicaron con tarball, leyendo sus fuentes con `git show <tag>:ruta` para
