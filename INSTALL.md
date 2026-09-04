@@ -78,6 +78,18 @@ en la sección 3).
 | `--opencode-ultima` | instala la última versión de OpenCode publicada (consulta la API de GitHub) |
 | `--help`, `-h` | imprime el uso |
 
+**Detecta tu shell y, si hace falta, deja el PATH resuelto para las próximas terminales.** Bajo
+bash/sh en Debian/Ubuntu, con el destino de siempre (`~/.local/bin`), no hace falta tocar nada:
+`~/.profile` ya se encarga. En cualquier otro caso — zsh, fish, o un `--bin-dir` distinto del de
+siempre — el script agrega la línea de PATH que corresponda al archivo de configuración real de tu
+shell (`~/.zshrc`, `~/.config/fish/config.fish`, etc., siguiendo el mismo criterio que usa el
+instalador oficial de OpenCode para elegir ese archivo), de forma idempotente: si esa línea, EXACTA,
+ya está en el archivo, no se agrega una copia de más. Si el archivo no se puede escribir (permisos,
+o un symlink que apunta fuera de `$HOME` o a algo que no es tuyo), no aborta la instalación: avisa y
+te muestra la línea exacta para que la agregues vos a mano, además del `export PATH=...` para la
+terminal actual. Al final igual te muestra, explícito, el comando `source` que necesitás correr en
+la terminal actual para no tener que abrir una nueva.
+
 **Qué queda corriendo al final:** si instaló algo nuevo, lanza la interfaz de Pegasus (sección 2) —
 porque todavía falta elegir qué MCPs instalar y confirmar esa instalación en OpenCode. Si no hacía
 falta instalar nada, lanza `opencode` directo — un entorno completo es, sencillamente, uno donde ya se
