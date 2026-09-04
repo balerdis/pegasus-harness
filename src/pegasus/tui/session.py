@@ -30,6 +30,10 @@ from pegasus.tui.navigator import (
     CliOption,
     Entry,
     GenerationSummary,
+    GrantMcpOption,
+    GrantMcpResultScreen,
+    GrantMcpScreen,
+    GrantMcpTarget,
     InstallPlanScreen,
     InstallResultScreen,
     InstallTarget,
@@ -293,6 +297,152 @@ def _mcp_write(
     return navigator.opened(InstallPlanScreen(cli=screen.cli, report=report, mcp=chosen))
 
 
+def _nothing_declared_note(display_name: str) -> str:
+    """What a person sees when the grant screen has nothing to offer because
+    no MCP server of their own was found declared at all. Named plainly
+    because an empty checklist otherwise reads as broken, not as "nothing to
+    do here yet": the repository owner confirmed this explanation is the
+    actual flow -- install an MCP server yourself, then come back here to
+    grant it.
+
+    Kept apart from `_everything_already_covered_note`: the two empty
+    situations are different facts and must read differently -- see that
+    function's own docstring for why conflating them was a defect in its
+    own right, not a simplification.
+
+    `display_name` is `cli_option.display_name`, not a hardcoded CLI name:
+    this module is CLI-agnostic (see `test_architecture.py`'s
+    `NoCliNamesOutsideAdaptersTest`), so the one CLI this screen is about
+    has to be named from the value the caller already carries, not from a
+    literal this module is not allowed to spell.
+    """
+    return (
+        f"No MCP server of your own was found here. This screen grants access to a server "
+        f"you install and administer yourself, outside Pegasus -- it does not install one. "
+        f"Add a server under {display_name}'s own mcp configuration the way you always would, "
+        f"then come back to this screen to grant it to every agent."
+    )
+
+
+def _everything_already_covered_note(display_name: str, covered: tuple[str, ...]) -> str:
+    """What a person sees when every MCP server their own configuration
+    declares is already reached per-agent -- `_nothing_declared_note`'s note
+    is false here: a server *was* found, and telling someone to "install
+    one" when one is already installed and already working is advice that
+    does not apply to what actually happened. This says the true thing
+    instead: nothing to do, and names which servers are already covered, so
+    a person reads "already handled" rather than "detection is broken."
+
+    `covered` is `report["already_covered"]`, named explicitly rather than
+    left implicit, since the whole point is that a declared key must never
+    simply vanish from what a person sees (see `cli.mcp_list`'s own
+    docstring).
+    """
+    return (
+        f"Every MCP server your own {display_name} configuration declares is already reached "
+        f"per-agent, so there is nothing to grant here: {', '.join(covered)}. Granting one of these "
+        f"again, uniformly to every agent, would undo whatever per-agent scoping is already in place."
+    )
+
+
+def _grant_mcp_screen(cli_option: CliOption, runtime: cli.Runtime) -> Placeholder | GrantMcpScreen:
+    """The step for granting `cli_option`'s own MCP servers, built fresh
+    every time -- the same reasoning `_mcp_selection_screen` and
+    `_models_screen` already follow for their own read-only screens.
+
+    `cli.mcp_list`'s own `granted` and `available` are already exactly this
+    screen's domain: `available` is restricted, at the source, to keys
+    `cli.mcp_grant` would actually accept for this installation -- a shipped
+    server this install chose, or a key already bound, is reported instead
+    under `already_covered`, never under `available`. This screen has
+    nothing left to filter and no shipped catalog of its own to load; doing
+    either here would be exactly the driving-adapter knowledge the seam
+    exists to keep out of the pure and impure TUI layers alike (see
+    `cli.mcp_list`'s own docstring for where that computation now lives).
+
+    `report["blocked"]` -- an unresolved binding standing between this
+    install and any grant or revoke at all (see `cli.mcp_list`'s own
+    docstring) -- takes priority over everything else: a checklist nobody
+    could actually confirm, since `cli.mcp_grant`/`cli.mcp_revoke` refuse
+    every key outright while blocked, would be worse than the generic empty
+    case, so this shows the specific blocker instead of either.
+    """
+    report = cli.mcp_list(cli_option.id, runtime)
+    if report.get("blocked"):
+        return Placeholder(f"Grant MCP servers · {cli_option.display_name}", report["blocked"])
+    domain = tuple(sorted(set(report["granted"]) | set(report["available"])))
+    if not domain:
+        note = (
+            _everything_already_covered_note(cli_option.display_name, tuple(report["already_covered"]))
+            if report["already_covered"]
+            else _nothing_declared_note(cli_option.display_name)
+        )
+        return Placeholder(f"Grant MCP servers · {cli_option.display_name}", note)
+    granted = tuple(key for key in domain if key in report["granted"])
+    return GrantMcpScreen(
+        cli=cli_option, options=tuple(GrantMcpOption(id=key) for key in domain), chosen=granted, granted=granted
+    )
+
+
+def _grant_mcp_write(
+    screen: GrantMcpScreen, navigator: Navigator, runtime: cli.Runtime, action: Action
+) -> Navigator | None:
+    """The one moment on this screen that is real engine work rather than a
+    pure toggle: reaching Continue and choosing it computes the delta
+    against `screen.granted` -- the baseline this screen opened with -- and
+    calls `cli.mcp_grant` for every key newly checked and `cli.mcp_revoke`
+    for every key newly unchecked. `Navigator` leaves this row a no-op on
+    purpose -- see `GrantMcpScreen`'s own docstring -- so this is where it
+    actually happens. Returns `None` for every other action, which tells
+    `step` to fall through to `navigator.handle`, the same as `_mcp_write`
+    and `_models_write` already do for their own pure steps.
+    """
+    if action is not Action.CHOOSE or navigator.cursor != len(screen.options):
+        return None
+    requested_grant = tuple(sorted(set(screen.chosen) - set(screen.granted)))
+    requested_revoke = tuple(sorted(set(screen.granted) - set(screen.chosen)))
+    granted: list[str] = []
+    revoked: list[str] = []
+    errors: list[str] = []
+    # Each key's own call, not the requested delta, decides what actually
+    # landed: `screen.chosen` names what was asked for at the moment Continue
+    # was pressed, but the CLI's own configuration can change between opening
+    # this screen and confirming it (the exact race `GrantMcpResultScreen`'s
+    # own docstring already anticipates for `errors`), and `cli.mcp_grant`/
+    # `cli.mcp_revoke` refuse a key that raced out from under it. A key only
+    # ever joins `granted`/`revoked` once *its own* call reports `cli.OK` --
+    # never the requested set, unfiltered, which would have this screen claim
+    # a write that never reached disk.
+    for key in requested_grant:
+        code, report = cli.safe_report("mcp", lambda key=key: cli.mcp_grant(screen.cli.id, key, runtime))
+        if code == cli.OK:
+            granted.append(key)
+        else:
+            errors.append(report.get("error", f"could not grant {key!r}"))
+    for key in requested_revoke:
+        code, report = cli.safe_report("mcp", lambda key=key: cli.mcp_revoke(screen.cli.id, key, runtime))
+        if code == cli.OK:
+            revoked.append(key)
+        else:
+            errors.append(report.get("error", f"could not revoke {key!r}"))
+    # The same wording `update` already shows for the same fact -- this CLI
+    # reads agent configuration once, at startup -- fetched directly from
+    # the adapter rather than pulled out of a report, since it holds
+    # regardless of which keys changed. Withheld on a failure: activation
+    # steps promise the write already landed, which is not true for a key
+    # that was refused.
+    activation = () if errors else tuple(available().get(screen.cli.id).activation_steps())
+    return navigator.opened(
+        GrantMcpResultScreen(
+            cli=screen.cli,
+            granted=tuple(granted),
+            revoked=tuple(revoked),
+            activation=activation,
+            errors=tuple(errors),
+        )
+    )
+
+
 def _configurable_agents() -> tuple[str, ...]:
     """Every agent this release lets a person assign a model to, in the order
     the content core ships them. The engine already refuses the rest through
@@ -512,12 +662,18 @@ def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigato
             return navigator.opened(_update_preview(target.cli, runtime))
         if isinstance(target, UpgradeTarget):
             return navigator.opened(_upgrade_preview(runtime))
+        if isinstance(target, GrantMcpTarget):
+            return navigator.opened(_grant_mcp_screen(target.cli, runtime))
     if isinstance(screen, ModelsScreen):
         stepped = _models_write(screen, navigator, runtime, action)
         if stepped is not None:
             return stepped
     if isinstance(screen, McpSelectionScreen):
         stepped = _mcp_write(screen, navigator, runtime, action)
+        if stepped is not None:
+            return stepped
+    if isinstance(screen, GrantMcpScreen):
+        stepped = _grant_mcp_write(screen, navigator, runtime, action)
         if stepped is not None:
             return stepped
     if isinstance(screen, InstallPlanScreen) and action is Action.CHOOSE:

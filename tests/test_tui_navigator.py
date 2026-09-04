@@ -84,7 +84,16 @@ class MainMenuTest(unittest.TestCase):
         labels = [entry.label for entry in navigator.current.entries]
         self.assertEqual(
             labels,
-            ["Install", "Update", "Upgrade", "Configure models", "Status and diagnostics", "Uninstall", "Exit"],
+            [
+                "Install",
+                "Update",
+                "Upgrade",
+                "Configure models",
+                "Grant MCP servers",
+                "Status and diagnostics",
+                "Uninstall",
+                "Exit",
+            ],
         )
 
     def test_the_title_names_the_running_release(self):
@@ -337,6 +346,126 @@ class McpSelectionScreenTest(unittest.TestCase):
         before = navigator
         navigator = navigator.handle(Action.TOGGLE)
         self.assertEqual(navigator, before)
+
+
+GRANT_OPTIONS = (
+    navigator_module.GrantMcpOption(id="figma"),
+    navigator_module.GrantMcpOption(id="jira"),
+)
+
+
+def _grant_mcp_screen(**overrides) -> navigator_module.GrantMcpScreen:
+    fields = {"cli": SAMPLE, "options": GRANT_OPTIONS, "chosen": (), "granted": ()}
+    fields.update(overrides)
+    return navigator_module.GrantMcpScreen(**fields)
+
+
+class GrantMcpScreenTest(unittest.TestCase):
+    """`GrantMcpScreen`'s own pure toggling -- the same checklist shape
+    `McpSelectionScreenTest` already proves for `McpSelectionScreen`, kept as
+    a separate test class because the two screens are deliberately separate
+    types (see `GrantMcpScreen`'s own docstring)."""
+
+    def test_entering_with_existing_grants_starts_them_checked(self):
+        screen = _grant_mcp_screen(chosen=("figma",), granted=("figma",))
+        self.assertEqual(screen.chosen, ("figma",))
+
+    def test_choosing_an_unchecked_server_checks_it_and_keeps_the_cursor(self):
+        navigator = Navigator.starting().opened(_grant_mcp_screen())
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.chosen, ("figma",))
+        self.assertEqual(navigator.cursor, 0)
+
+    def test_choosing_a_checked_server_again_unchecks_it(self):
+        navigator = Navigator.starting().opened(_grant_mcp_screen(chosen=("figma",), granted=("figma",)))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.chosen, ())
+        # The baseline this screen opened with is untouched by toggling --
+        # `session` needs it, at Continue, to compute the delta.
+        self.assertEqual(navigator.current.granted, ("figma",))
+
+    def test_toggling_one_server_never_touches_another(self):
+        navigator = Navigator.starting().opened(_grant_mcp_screen(chosen=("jira",))).handle(Action.MOVE_DOWN)
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.chosen, ())
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator.current.chosen, ("jira",))
+
+    def test_moving_down_past_the_last_server_reaches_continue(self):
+        navigator = Navigator.starting().opened(_grant_mcp_screen())
+        for _ in range(len(GRANT_OPTIONS)):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        self.assertEqual(navigator.cursor, len(GRANT_OPTIONS))
+
+    def test_choosing_continue_directly_does_nothing_by_itself(self):
+        """Computing the delta and calling `cli.mcp_grant`/`cli.mcp_revoke`
+        for it is real engine work only `session` can do; asking `Navigator`
+        alone must never invent the result screen it cannot fetch."""
+        navigator = Navigator.starting().opened(_grant_mcp_screen())
+        for _ in range(len(GRANT_OPTIONS)):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        before = navigator
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator, before)
+
+    def test_toggle_checks_an_unchecked_server_the_same_way_choose_does(self):
+        navigator = Navigator.starting().opened(_grant_mcp_screen())
+        navigator = navigator.handle(Action.TOGGLE)
+        self.assertEqual(navigator.current.chosen, ("figma",))
+
+    def test_toggle_on_continue_does_nothing_by_itself(self):
+        navigator = Navigator.starting().opened(_grant_mcp_screen())
+        for _ in range(len(GRANT_OPTIONS)):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        before = navigator
+        navigator = navigator.handle(Action.TOGGLE)
+        self.assertEqual(navigator, before)
+
+    def test_going_back_leaves_the_selection_screen(self):
+        navigator = Navigator.starting().opened(_grant_mcp_screen())
+        navigator = navigator.handle(Action.BACK)
+        self.assertIsInstance(navigator.current, Menu)
+
+
+class GrantMcpMenuTest(unittest.TestCase):
+    def test_nothing_installed_shows_a_placeholder_that_says_why(self):
+        menu = navigator_module.grant_mcp_menu(installed=())
+        self.assertIsInstance(menu, Placeholder)
+
+    def test_an_installed_cli_opens_a_menu_naming_it(self):
+        menu = navigator_module.grant_mcp_menu(installed=(SAMPLE,))
+        self.assertIsInstance(menu, Menu)
+        self.assertEqual(menu.entries[0].target, navigator_module.GrantMcpTarget(SAMPLE))
+
+    def test_choosing_an_installed_cli_directly_does_nothing_by_itself(self):
+        navigator = Navigator.starting(installed=(SAMPLE,))
+        index = [entry.label for entry in navigator.current.entries].index("Grant MCP servers")
+        for _ in range(index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        navigator = navigator.handle(Action.CHOOSE)
+        before = navigator
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertEqual(navigator, before)
+
+    def test_the_main_menu_is_reachable_to_the_grant_mcp_screen(self):
+        """Proves the entry actually exists on the main menu, not only that
+        `grant_mcp_menu` builds a sane `Menu` in isolation."""
+        navigator = Navigator.starting(installed=(SAMPLE,))
+        labels = [entry.label for entry in navigator.current.entries]
+        self.assertIn("Grant MCP servers", labels)
+        index = labels.index("Grant MCP servers")
+        for _ in range(index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Menu)
+        self.assertEqual(navigator.current.entries[0].target, navigator_module.GrantMcpTarget(SAMPLE))
+
+
+class GrantMcpResultScreenTest(unittest.TestCase):
+    def test_acknowledging_a_grant_result_leaves_it(self):
+        navigator = Navigator.starting().opened(navigator_module.GrantMcpResultScreen(cli=SAMPLE, granted=("jira",)))
+        navigator = navigator.handle(Action.CHOOSE)
+        self.assertIsInstance(navigator.current, Menu)
 
 
 class StatusEntryTest(unittest.TestCase):
@@ -635,11 +764,12 @@ class BusyMessageOnMenuTest(unittest.TestCase):
         self.assertIsNone(busy_message_for(self.menu, 0, Action.BACK))
 
     def test_opening_a_submenu_from_the_main_menu_says_nothing(self):
-        # Choosing "Install", "Configure models", or "Uninstall" on the main
-        # menu only opens the submenu listing detected CLIs -- pure
-        # navigation, one level above the entry that names real work.
+        # Choosing "Install", "Configure models", "Grant MCP servers", or
+        # "Uninstall" on the main menu only opens the submenu listing
+        # detected CLIs -- pure navigation, one level above the entry that
+        # names real work.
         labels = [entry.label for entry in self.menu.entries]
-        for label in ("Install", "Configure models", "Uninstall"):
+        for label in ("Install", "Configure models", "Grant MCP servers", "Uninstall"):
             self.assertIsNone(busy_message_for(self.menu, labels.index(label), Action.CHOOSE))
 
     def test_choosing_status_says_what_it_will_do(self):
@@ -689,6 +819,33 @@ class BusyMessageOnMcpSelectionTest(unittest.TestCase):
             cli=SAMPLE,
             options=(McpOption(id="one", description="d"), McpOption(id="two", description="d")),
             chosen=(),
+        )
+
+    def test_toggling_a_server_says_nothing(self):
+        self.assertIsNone(busy_message_for(self.screen, 0, Action.CHOOSE))
+        self.assertIsNone(busy_message_for(self.screen, 1, Action.CHOOSE))
+
+    def test_continue_names_the_cli(self):
+        continue_row = len(self.screen.options)
+        message = busy_message_for(self.screen, continue_row, Action.CHOOSE)
+        self.assertIn(SAMPLE.display_name, message)
+
+    def test_movement_says_nothing(self):
+        self.assertIsNone(busy_message_for(self.screen, 0, Action.MOVE_DOWN))
+
+    def test_toggle_says_nothing(self):
+        self.assertIsNone(busy_message_for(self.screen, 0, Action.TOGGLE))
+        continue_row = len(self.screen.options)
+        self.assertIsNone(busy_message_for(self.screen, continue_row, Action.TOGGLE))
+
+
+class BusyMessageOnGrantMcpTest(unittest.TestCase):
+    def setUp(self):
+        self.screen = navigator_module.GrantMcpScreen(
+            cli=SAMPLE,
+            options=(navigator_module.GrantMcpOption(id="one"), navigator_module.GrantMcpOption(id="two")),
+            chosen=(),
+            granted=(),
         )
 
     def test_toggling_a_server_says_nothing(self):
@@ -812,6 +969,9 @@ class EveryEngineTargetSaysWhatItIsDoingTest(unittest.TestCase):
             ModelsTarget: lambda: ModelsTarget(CliOption("probe", "Probe", "/probe", "full")),
             UpdateTarget: lambda: UpdateTarget(CliOption("probe", "Probe", "/probe", "full")),
             UpgradeTarget: lambda: UpgradeTarget(),
+            navigator_module.GrantMcpTarget: lambda: navigator_module.GrantMcpTarget(
+                CliOption("probe", "Probe", "/probe", "full")
+            ),
         }
         return made[kind]()
 

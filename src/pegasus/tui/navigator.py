@@ -118,6 +118,96 @@ class McpSelectionScreen:
 
 
 @dataclass(frozen=True)
+class GrantMcpOption:
+    """One mcp server the user administers themselves -- present in the
+    CLI's own configuration, but not one Pegasus ships a descriptor for.
+
+    Unlike `McpOption`, there is no `description`: that field is the
+    shipped catalog's own sentence, and Pegasus never heard of this server
+    until the user's own configuration named it, so it has nothing of its
+    own to show beyond the key itself.
+    """
+
+    id: str
+
+
+@dataclass(frozen=True)
+class GrantMcpScreen:
+    """Granting the user's own MCP servers -- ones Pegasus installs nothing
+    for and ships no descriptor about, only exposes -- to every agent.
+
+    Deliberately **not** `McpSelectionScreen`, even though both are a
+    checklist with a trailing Continue row: the two mean different things.
+    `McpSelectionScreen` chooses which servers *this release ships* to
+    install, tracked one journal entry per server; this screen instead
+    toggles membership in `granted_mcp`, the installation's own flat set of
+    keys granted to every agent regardless of who administers the server.
+    Collapsing them into one screen would re-erase exactly the distinction
+    the engine keeps in two separate fields (`Install.entries` for a shipped
+    server's own artifacts, `Install.granted_mcp` for this) -- see
+    `cli.mcp_grant`'s own docstring for why that distinction has to survive.
+
+    `chosen` starts as `granted` -- what the installation's journal already
+    records as granted, the same safe-default reasoning `McpSelectionScreen`
+    follows for its own `chosen`. `granted` is carried alongside it,
+    unchanged by toggling, so whoever confirms this screen (`session`) can
+    still compute the delta against what was true when it was opened; `chosen`
+    alone would have already lost that baseline by the time Continue is
+    reached. Toggling a row is pure, handled right here in `Navigator`, for
+    the same reason it is on `McpSelectionScreen`; reaching Continue and
+    choosing it is real engine work -- calling `cli.mcp_grant`/`cli.mcp_revoke`
+    for the delta -- left to `session`, so `Navigator` leaves that row inert.
+    """
+
+    cli: CliOption
+    options: tuple[GrantMcpOption, ...]
+    chosen: tuple[str, ...]
+    granted: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GrantMcpResultScreen:
+    """What confirming a `GrantMcpScreen` actually changed -- the keys
+    granted, the keys revoked, and the same activation wording `update`
+    already shows (`adapter.activation_steps()`, fetched once by `session`
+    since it does not depend on which keys changed). `errors` names any key
+    `cli.mcp_grant`/`cli.mcp_revoke` refused -- rare, since the screen only
+    ever offers a key `mcp_list` already reported as declared, but the
+    journal can change between opening this screen and confirming it.
+
+    `granted` and `revoked` name only the keys whose *own* call actually
+    reported success -- never the requested delta, unfiltered. A key that
+    raced out from under the screen (removed from the CLI's own
+    configuration between opening it and confirming) surfaces in `errors`
+    instead, and must never also appear in `granted`/`revoked`: a screen
+    claiming a write for a key its own error line just refused would
+    contradict itself in two adjacent lines, worse than a plain failure,
+    since a person reading it would walk away believing the grant landed
+    when it did not.
+    """
+
+    cli: CliOption
+    granted: tuple[str, ...] = ()
+    revoked: tuple[str, ...] = ()
+    activation: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GrantMcpTarget:
+    """Chosen a CLI to grant its own MCP servers for -- like `ModelsTarget`,
+    fetching `mcp_list`'s own report is real engine work, so choosing this
+    is only a request for one, not a screen of its own. `command` names
+    `mcp`, the one flag subcommand `cli.mcp_grant`/`cli.mcp_revoke` both
+    live under -- the same surface the parity test in `test_tui_contract.py`
+    checks every menu target against.
+    """
+
+    cli: CliOption
+    command: str = "mcp"
+
+
+@dataclass(frozen=True)
 class InstallPlanScreen:
     """What `pegasus install --dry-run` would report, shown before anything
     is written. `report` is the exact document the flag produces — this
@@ -431,6 +521,21 @@ def _toggled(screen: McpSelectionScreen, index: int) -> McpSelectionScreen:
     return replace(screen, chosen=chosen)
 
 
+def _toggled_grant(screen: GrantMcpScreen, index: int) -> GrantMcpScreen:
+    """`screen` with the server at `index` moved in or out of `chosen` --
+    `_toggled`'s own logic, kept as a separate function rather than shared
+    because it closes over `GrantMcpScreen`'s own type, not `McpSelectionScreen`'s;
+    `granted`, the baseline `chosen` is diffed against on confirm, is left
+    untouched by every toggle."""
+    server_id = screen.options[index].id
+    chosen = (
+        tuple(name for name in screen.chosen if name != server_id)
+        if server_id in screen.chosen
+        else screen.chosen + (server_id,)
+    )
+    return replace(screen, chosen=chosen)
+
+
 @dataclass(frozen=True)
 class Entry:
     """One line of a menu: what it says, and where choosing it leads."""
@@ -450,6 +555,7 @@ class Entry:
         ModelsTarget,
         UpdateTarget,
         UpgradeTarget,
+        GrantMcpTarget,
     ]
 
 
@@ -479,6 +585,8 @@ Screen = Union[
     Menu,
     Placeholder,
     McpSelectionScreen,
+    GrantMcpScreen,
+    GrantMcpResultScreen,
     InstallPlanScreen,
     InstallResultScreen,
     StatusScreen,
@@ -495,7 +603,7 @@ one asks for a screen, real engine work away, not open one directly."""
 #: menu, each is a no-op here; `session.step` recognizes the type and acts.
 _ENGINE_TARGETS = (
     InstallTarget, StatusRequest, UninstallTarget, UninstallConfirm, RestoreTarget, RestoreConfirm, ModelsTarget,
-    UpdateTarget, UpgradeTarget,
+    UpdateTarget, UpgradeTarget, GrantMcpTarget,
 )
 
 #: What to say before probing every adapter, the one engine call `run` makes
@@ -524,6 +632,8 @@ def busy_message_for(screen: Screen, cursor: int, action: Action) -> str | None:
         return _busy_message_for_menu(screen, cursor, action)
     if isinstance(screen, McpSelectionScreen):
         return _busy_message_for_mcp_selection(screen, cursor, action)
+    if isinstance(screen, GrantMcpScreen):
+        return _busy_message_for_grant_mcp(screen, cursor, action)
     if isinstance(screen, InstallPlanScreen):
         if action is not Action.CHOOSE:
             return None
@@ -563,12 +673,20 @@ def _busy_message_for_menu(screen: Menu, cursor: int, action: Action) -> str | N
         return f"Checking the update plan for {target.cli.display_name}…"
     if isinstance(target, UpgradeTarget):
         return "Checking for a newer release…"
+    if isinstance(target, GrantMcpTarget):
+        return f"Reading {target.cli.display_name}'s own mcp servers…"
     return None
 
 
 def _busy_message_for_mcp_selection(screen: McpSelectionScreen, cursor: int, action: Action) -> str | None:
     if action is Action.CHOOSE and cursor == len(screen.options):
         return f"Fetching the install plan for {screen.cli.display_name}…"
+    return None
+
+
+def _busy_message_for_grant_mcp(screen: GrantMcpScreen, cursor: int, action: Action) -> str | None:
+    if action is Action.CHOOSE and cursor == len(screen.options):
+        return f"Granting mcp servers for {screen.cli.display_name}…"
     return None
 
 
@@ -714,6 +832,23 @@ def models_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
     )
 
 
+def grant_mcp_menu(installed: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
+    """One entry per CLI Pegasus is recorded as installed into -- the same
+    set `update_menu` offers, for the same reason: `cli.mcp_grant` refuses a
+    CLI with nothing installed (there is no `Install.granted_mcp` to touch
+    yet), so offering a choice that can only fail is worse than not offering
+    it."""
+    if not installed:
+        return Placeholder("Grant MCP servers", "Pegasus is not recorded as installed in any CLI on this machine.")
+    return Menu(
+        title="Grant your own MCP servers to every agent, for which CLI?",
+        entries=tuple(
+            Entry(f"{option.display_name:<18} {option.config_dir:<32} {option.tier}", GrantMcpTarget(option))
+            for option in installed
+        ),
+    )
+
+
 def _parse_version(text: str | None) -> tuple[int, ...] | None:
     """`text` split on `.` into plain ints, or `None` for anything that does
     not look exactly like that -- comparing versions must never guess an
@@ -842,10 +977,10 @@ def main_menu(
 ) -> Menu:
     """Grouped by intent rather than by when each entry was added: get
     working and keep current (`Install`, `Update`, `Upgrade`), then configure
-    (`Configure models`), then inspect (`Status and diagnostics`), then
-    remove -- `Uninstall` last before `Exit` so it does not sit where
-    arrow-key navigation, moving one step at a time, can land on the
-    destructive entry by accident.
+    (`Configure models`, `Grant MCP servers`), then inspect (`Status and
+    diagnostics`), then remove -- `Uninstall` last before `Exit` so it does
+    not sit where arrow-key navigation, moving one step at a time, can land
+    on the destructive entry by accident.
 
     `restore` has no entry of its own here on purpose: a seventh entry for a
     command the doc never lists would break that parity for no reason
@@ -867,6 +1002,7 @@ def main_menu(
             Entry("Update", update_menu(installed)),
             Entry("Upgrade", UpgradeTarget()),
             Entry("Configure models", models_menu(detections)),
+            Entry("Grant MCP servers", grant_mcp_menu(installed)),
             Entry("Status and diagnostics", StatusRequest()),
             Entry("Uninstall", uninstall_menu(installed)),
             Entry("Exit", QUIT),
@@ -919,7 +1055,9 @@ class Navigator:
             return self._handle_on_models(screen, action)
         if isinstance(screen, McpSelectionScreen):
             return self._handle_on_mcp_selection(screen, action)
-        if isinstance(screen, (InstallResultScreen, UninstallResultScreen, RestoreResultScreen)):
+        if isinstance(screen, GrantMcpScreen):
+            return self._handle_on_grant_mcp(screen, action)
+        if isinstance(screen, (InstallResultScreen, UninstallResultScreen, RestoreResultScreen, GrantMcpResultScreen)):
             # A finished install, uninstall, or restore leaves whatever led to
             # it stale — each described a disk that has since changed — so
             # acknowledging the result returns all the way to the main menu
@@ -1019,6 +1157,27 @@ class Navigator:
             if self.cursor == len(screen.options):
                 return self
             return self._swapped(_toggled(screen, self.cursor))
+        return self
+
+    def _handle_on_grant_mcp(self, screen: GrantMcpScreen, action: Action) -> "Navigator":
+        count = len(screen.options) + 1  # the row after the last server is Continue.
+        if action is Action.MOVE_DOWN:
+            return self._with_cursor((self.cursor + 1) % count)
+        if action is Action.MOVE_UP:
+            return self._with_cursor((self.cursor - 1) % count)
+        if action is Action.BACK:
+            return self._pop()
+        if action is Action.CHOOSE:
+            if self.cursor == len(screen.options):
+                # Continue: computing the delta and calling `cli.mcp_grant`/
+                # `cli.mcp_revoke` for it is real engine work, left to
+                # `session` -- see the screen's own docstring.
+                return self
+            return self._swapped(_toggled_grant(screen, self.cursor))
+        if action is Action.TOGGLE:
+            if self.cursor == len(screen.options):
+                return self
+            return self._swapped(_toggled_grant(screen, self.cursor))
         return self
 
     def _swapped(self, screen: Screen) -> "Navigator":

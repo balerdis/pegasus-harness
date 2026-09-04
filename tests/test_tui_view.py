@@ -11,6 +11,9 @@ from pegasus.tui.navigator import (
     AgentRow,
     CliOption,
     Entry,
+    GrantMcpOption,
+    GrantMcpResultScreen,
+    GrantMcpScreen,
     InstallPlanScreen,
     InstallResultScreen,
     McpOption,
@@ -25,7 +28,7 @@ from pegasus.tui.navigator import (
     StatusScreen,
     UninstallResultScreen,
 )
-from pegasus.tui import wordmark
+from pegasus.tui import view, wordmark
 from pegasus.tui.view import Line, Span, Style, render, render_busy, render_progress
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
@@ -231,6 +234,89 @@ class McpSelectionRenderingTest(unittest.TestCase):
     def test_the_footer_names_both_ways_to_toggle(self):
         lines = [line.text for line in render(self.screen(), cursor=0)]
         self.assertIn("enter/space: toggle a server, or continue · esc: back", lines)
+
+
+GRANT_OPTIONS = (
+    GrantMcpOption(id="figma"),
+    GrantMcpOption(id="jira"),
+)
+
+
+class GrantMcpRenderingTest(unittest.TestCase):
+    """`GrantMcpScreen`'s own rendering: a checklist of bare keys, unlike
+    `McpSelectionScreen`'s own rows, which each carry a shipped description
+    this screen's servers never have (see `GrantMcpOption`'s docstring)."""
+
+    def screen(self, **overrides) -> GrantMcpScreen:
+        fields = {"cli": SAMPLE, "options": GRANT_OPTIONS, "chosen": (), "granted": ()}
+        fields.update(overrides)
+        return GrantMcpScreen(**fields)
+
+    def test_every_server_shows_its_own_key(self):
+        lines = [line.text for line in render(self.screen(), cursor=0)]
+        self.assertTrue(any("figma" in text for text in lines))
+        self.assertTrue(any("jira" in text for text in lines))
+
+    def test_a_granted_server_is_marked_and_an_ungranted_one_is_not(self):
+        lines = [line.text for line in render(self.screen(chosen=("figma",)), cursor=0)]
+        figma_line = next(text for text in lines if "figma" in text)
+        jira_line = next(text for text in lines if "jira" in text)
+        self.assertIn("[x]", figma_line)
+        self.assertIn("[ ]", jira_line)
+
+    def test_a_continue_row_follows_the_last_server(self):
+        lines = [line.text for line in render(self.screen(), cursor=0)]
+        self.assertTrue(any("Continue" in text for text in lines))
+
+    def test_the_continue_row_can_be_highlighted_like_any_other(self):
+        lines = render(self.screen(), cursor=len(GRANT_OPTIONS))
+        highlighted = [line.text for line in lines if line.highlighted]
+        self.assertEqual(len(highlighted), 1)
+        self.assertIn("Continue", highlighted[0])
+
+
+class GrantMcpEmptyRenderingTest(unittest.TestCase):
+    """The empty case: a placeholder that explains the actual flow rather
+    than one that reads as broken."""
+
+    def test_the_placeholder_explains_installing_it_yourself_first(self):
+        screen = Placeholder(
+            f"Grant MCP servers · {SAMPLE.display_name}",
+            "No MCP server of your own was found here. This screen grants access to a server "
+            "you install and administer yourself, outside Pegasus -- it does not install one. "
+            f"Add a server under {SAMPLE.display_name}'s own mcp configuration the way you always "
+            "would, then come back to this screen to grant it to every agent.",
+        )
+        lines = [line.text for line in render(screen, cursor=0)]
+        joined = " ".join(lines)
+        self.assertIn("install", joined.lower())
+        self.assertIn("grant", joined.lower())
+        self.assertIn(SAMPLE.display_name, joined)
+
+
+class GrantMcpResultRenderingTest(unittest.TestCase):
+    def test_it_names_what_was_granted_and_revoked(self):
+        screen = GrantMcpResultScreen(cli=SAMPLE, granted=("jira",), revoked=("figma",), activation=("Restart it.",))
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertTrue(any("jira" in text for text in lines))
+        self.assertTrue(any("figma" in text for text in lines))
+        self.assertIn("Restart it.", lines)
+
+    def test_no_change_says_so(self):
+        screen = GrantMcpResultScreen(cli=SAMPLE)
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn("Nothing changed.", lines)
+
+    def test_a_failure_uses_the_failed_banner_and_names_the_error(self):
+        screen = GrantMcpResultScreen(cli=SAMPLE, errors=("could not grant 'jira'",))
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn(view.GRANT_MCP_FAILED_BANNER, lines)
+        self.assertIn("could not grant 'jira'", lines)
+
+    def test_a_success_uses_the_success_banner(self):
+        screen = GrantMcpResultScreen(cli=SAMPLE, granted=("jira",))
+        lines = [line.text for line in render(screen, cursor=0)]
+        self.assertIn(view.GRANT_MCP_BANNER, lines)
 
 
 class InstallResultRenderingTest(unittest.TestCase):

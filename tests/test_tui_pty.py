@@ -153,7 +153,8 @@ class LiveFeedbackTest(unittest.TestCase):
 
     def test_choosing_status_shows_what_is_happening_before_the_report(self):
         self.session.output_so_far()  # let the main menu settle first.
-        self.session.press("jjjj")  # Install, Update, Upgrade, Configure models, Status and diagnostics.
+        # Install, Update, Upgrade, Configure models, Grant MCP servers, Status and diagnostics.
+        self.session.press("jjjjj")
         self.session.press("\r")
         output = self.session.output_so_far()
         self.assertIn(STATUS_BUSY_NEEDLE, output, "no frame named the diagnostics run before it finished")

@@ -14,6 +14,7 @@ from pegasus.tui.navigator import (
     Action,
     CliOption,
     GenerationSummary,
+    GrantMcpTarget,
     InstallTarget,
     McpOption,
     McpSelectionScreen,
@@ -28,6 +29,7 @@ from pegasus.tui.navigator import (
     UninstallTarget,
     UpdateTarget,
     UpgradeTarget,
+    grant_mcp_menu,
     main_menu,
     models_menu,
     restore_menu,
@@ -95,6 +97,13 @@ class TuiNamesAnExistingCommandTest(unittest.TestCase):
         target = next(entry.target for entry in main_menu().entries if entry.label == "Upgrade")
         self.assertIsInstance(target, UpgradeTarget)
         self.assertIn(target.command, cli.COMMANDS)
+
+    def test_every_grant_mcp_choice_names_a_command_the_flags_expose(self):
+        menu = grant_mcp_menu(installed=(SAMPLE,))
+        self.assertIsInstance(menu, Menu)
+        for entry in menu.entries:
+            self.assertIsInstance(entry.target, GrantMcpTarget)
+            self.assertIn(entry.target.command, cli.COMMANDS)
 
     def test_no_menu_entry_still_claims_to_be_unbuilt(self):
         menu = main_menu(detections=(SAMPLE,), installed=(SAMPLE,))
