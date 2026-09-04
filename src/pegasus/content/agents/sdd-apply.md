@@ -3,7 +3,7 @@ name: sdd-apply
 description: Implementation executor for one change; writes code following spec, design and tasks
 mode: subagent
 requires_tools: [read, write, edit, bash, grep, glob]
-optional_mcp: [cbm, context7, engram]
+optional_mcp: [cbm, context7, engram, playwright]
 model_configurable: true
 ---
 

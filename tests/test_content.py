@@ -428,6 +428,41 @@ class OptionalMcpInvariantTest(TemporaryContent):
         self.assertEqual(agent.optional_mcp, ("context7",))
 
 
+class McpReachesAnAgentInvariantTest(TemporaryContent):
+    """A shipped server has to name at least one agent that grants it.
+
+    The mirror of `OptionalMcpInvariantTest`: that one refuses an agent
+    declaring a server that does not exist. This one refuses the opposite
+    typo -- a server descriptor with no agent's `optional_mcp` ever updated to
+    name it, so `select_mcp` would filter it down to an empty set of
+    recipients under every possible `--mcp` choice. This is the exact shape
+    the shipped `playwright` server regressed to before `_require_mcp_reaches_an_agent`
+    existed: a descriptor, a README promise, and nothing that could ever use it.
+    """
+
+    def test_a_server_no_agent_declares_is_refused_naming_the_server_file(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("mcp/context7.md", message)
+        self.assertIn("context7", message)
+
+    def test_a_server_at_least_one_agent_declares_is_accepted(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\n"
+            "See {{skills_root}}/_shared/mcp/context7-convention.md.\n",
+        )
+        loaded = content.load(self.root)
+        self.assertEqual([server.name for server in loaded.mcp], ["context7"])
+
+
 class McpConventionReferenceInvariantTest(TemporaryContent):
     """A declared server and a referenced convention have to name the same set.
 
@@ -617,6 +652,13 @@ class AgentMcpSectionTest(TemporaryContent):
     def test_the_mcp_subdirectory_is_never_read_as_an_agent(self):
         write_session_start(self.root)
         write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [context7]\n---\n\n"
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
+        )
         write(self.root, "agents/mcp/context7.md", "Shared text.\n")
         names = set(self.load_agents())
         self.assertNotIn("context7", names)
@@ -844,6 +886,14 @@ class McpTest(TemporaryContent):
     def load_mcp(self, text, lockfile=NPM_LOCKFILE):
         write(self.root, "mcp/probe-mcp.md", text)
         write(self.root, f"mcp/{NPM_LOCKFILE_NAME}", lockfile)
+        write_session_start(self.root)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "optional_mcp: [probe-mcp]\n---\n\n"
+            "See {{skills_root}}/_shared/mcp/probe-mcp-convention.md.\n",
+        )
         return content.load(self.root).mcp[0]
 
     def test_reads_every_declared_field(self):
@@ -1137,6 +1187,19 @@ class ShippedContentTest(unittest.TestCase):
         self.assertEqual(
             [server.name for server in self.content.mcp], ["cbm", "context7", "engram", "playwright"]
         )
+
+    def test_playwright_is_declared_by_exactly_the_agents_that_drive_a_browser(self):
+        """Regression guard for the bug `_require_mcp_reaches_an_agent` now
+        refuses at load time: `playwright` shipped with a descriptor and a
+        README promise, but no agent declared it, so choosing it installed a
+        server nothing could ever use. This asserts over the loaded agents
+        themselves, not a hand-kept copy of the list -- the list is the thing
+        that drifted last time.
+        """
+        declares_playwright = {
+            agent.name for agent in self.content.agents if "playwright" in agent.optional_mcp
+        }
+        self.assertEqual(declares_playwright, {"sdd-apply", "sdd-explore", "sdd-verify"})
 
     def test_every_shipped_server_declares_a_mechanism_and_a_convention(self):
         """A server nothing can carry out is not installable.
@@ -1556,6 +1619,29 @@ class SelectMcpTest(unittest.TestCase):
 
 
 
+class SelectMcpShippedContentTest(unittest.TestCase):
+    """`select_mcp` conditionality proven against the real shipped tree, not a
+    fixture stand-in -- the fixture in `SelectMcpTest` proves the mechanism
+    works in general, this proves it actually gates `playwright` the way the
+    brief requires.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.loaded = content.load()
+
+    def test_playwright_not_chosen_grants_it_to_no_agent(self):
+        selected = content.select_mcp(self.loaded, ["cbm", "context7", "engram"])
+        self.assertNotIn("playwright", [server.name for server in selected.mcp])
+        for agent in selected.agents:
+            self.assertNotIn("playwright", agent.optional_mcp, agent.name)
+
+    def test_playwright_chosen_grants_it_to_exactly_the_intended_agents(self):
+        selected = content.select_mcp(self.loaded, ["playwright"])
+        granted = {agent.name for agent in selected.agents if "playwright" in agent.optional_mcp}
+        self.assertEqual(granted, {"sdd-apply", "sdd-explore", "sdd-verify"})
+
+
 class BoundMcpTest(unittest.TestCase):
     """A server the user already administers: Pegasus owns the contract, not the binary.
 
@@ -1798,6 +1884,16 @@ class ContentErrorSitesTest(unittest.TestCase):
                     "optional_mcp: [phantom]\n---\n\nx\n",
                 },
                 "agents/probe-agent.md",
+            ),
+            "",
+        ),
+        "_require_mcp_reaches_an_agent#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "mcp/context7.md": MCP.replace("probe-mcp", "context7"),
+                },
+                "mcp/context7.md",
             ),
             "",
         ),

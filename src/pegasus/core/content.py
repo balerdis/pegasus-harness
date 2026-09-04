@@ -410,6 +410,7 @@ def load(root: ContentRoot = DEFAULT_ROOT) -> Content:
     agents = _load_agents(root / "agents", PurePosixPath("agents"), mcp)
     _require_known_optional_mcp(agents, mcp)
     _require_mcp_convention_referenced(agents)
+    _require_mcp_reaches_an_agent(agents, mcp)
     system_prompt = _load_system_prompt(root / SYSTEM_PROMPT_DIR, PurePosixPath(SYSTEM_PROMPT_DIR))
     _require_known_system_prompt_mcp(system_prompt, mcp)
     return Content(
@@ -749,6 +750,45 @@ def _require_known_optional_mcp(agents: tuple[Agent, ...], servers: tuple[Mcp, .
             raise ContentError(
                 f"{agent.source}: 'optional_mcp' names {', '.join(sorted(unknown))}, "
                 f"which no mcp server declares"
+            )
+
+
+def _require_mcp_reaches_an_agent(agents: tuple[Agent, ...], servers: tuple[Mcp, ...]) -> None:
+    """A shipped server no agent declares is a permission nobody can ever grant.
+
+    The mirror of `_require_known_optional_mcp`, checked in the other
+    direction. That rule refuses an agent's `optional_mcp` naming a server
+    that does not exist -- a typo that would otherwise ship as a permission
+    the agent believes might arrive and never does. Left one-directional, the
+    opposite typo ships just as silently: a descriptor lands in `content/mcp/`
+    and no agent's `optional_mcp` is ever updated to name it.
+
+    `select_mcp` filters both `content.mcp` and every agent's `optional_mcp`
+    down to what the user chose, once, before any adapter renders. A server
+    no agent declares survives that filter with an empty set of recipients
+    for every choice a user could make -- there is no `--mcp` selection under
+    which it grants anything. Choosing it still fetches the server, writes it
+    into the user's runtime config, and turns it on: the failure is not a
+    missing file or a load error, it is a server that installs, configures,
+    and reaches nobody. This is not hypothetical -- it is exactly how the
+    Playwright MCP shipped: a descriptor, a README promise that confirming it
+    configures the server, and not one of the twelve shipped agents with
+    `playwright` in its `optional_mcp`. The one-directional version of this
+    check was live in the tree the whole time and had nothing to say about it.
+
+    A tree with no agents at all chooses between nothing and is left alone,
+    the same leniency `_require_the_session_start` grants for the same
+    reason: with no agent to grant anything to, no server can be shown to
+    reach one or fail to.
+    """
+    if not agents:
+        return
+    declared = {name for agent in agents for name in agent.optional_mcp}
+    for server in servers:
+        if server.name not in declared:
+            raise ContentError(
+                f"{server.source}: no shipped agent's 'optional_mcp' names {server.name!r}, "
+                f"so choosing it would install a server that reaches nobody"
             )
 
 
