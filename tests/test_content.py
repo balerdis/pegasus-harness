@@ -1618,6 +1618,75 @@ class SelectMcpTest(unittest.TestCase):
         self.assertEqual(self.system_prompt.mcp_sections, before_sections)
 
 
+class PerAgentMcpKeysTest(unittest.TestCase):
+    """`per_agent_mcp_keys`: the one rule `grant_mcp` refuses collisions
+    against and `cli.mcp_list` asks the identical, non-raising question of --
+    see that function's own docstring for why there must be exactly one of
+    it."""
+
+    def setUp(self):
+        self.context7 = content.Mcp(
+            name="context7",
+            description="Fetches library docs",
+            body="Convention body.",
+            distribution=Distribution.REMOTE,
+            endpoint="https://example.test/context7",
+            source=PurePosixPath("mcp/context7.md"),
+        )
+        self.agent_a = content.Agent(
+            name="agent-a",
+            description="Agent A",
+            body="x",
+            mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/agent-a.md"),
+            optional_mcp=("context7",),
+        )
+        self.agent_b = content.Agent(
+            name="agent-b",
+            description="Agent B",
+            body="x",
+            mode=AgentMode.SUBAGENT,
+            source=PurePosixPath("agents/agent-b.md"),
+        )
+        self.content = content.Content(agents=(self.agent_a, self.agent_b), mcp=(self.context7,))
+
+    def test_a_chosen_shipped_id_is_named(self):
+        self.assertIn("context7", content.per_agent_mcp_keys(self.content))
+
+    def test_a_server_not_chosen_at_all_is_not_named(self):
+        empty = content.select_mcp(self.content, [])
+        self.assertNotIn("context7", content.per_agent_mcp_keys(empty))
+
+    def test_a_bound_key_is_named_alongside_its_own_shipped_id(self):
+        """Binding `context7` to `jira-mcp` widens what is already reached
+        per-agent: both the id itself (still `content.mcp`'s own name) and
+        the key it now resolves to (`optional_mcp`'s rewritten entry) are
+        already covered, so both are refused by `grant_mcp` and both must be
+        named here."""
+        selected = content.select_mcp(self.content, ["context7=jira-mcp"])
+        keys = content.per_agent_mcp_keys(selected)
+        self.assertIn("jira-mcp", keys)
+        self.assertIn("context7", keys)
+
+    def test_a_key_the_installation_never_heard_of_is_not_named(self):
+        self.assertNotIn("jira", content.per_agent_mcp_keys(self.content))
+
+    def test_agrees_with_grant_mcp_on_every_collision(self):
+        """The property that matters: whatever this function names, `grant_mcp`
+        refuses, and whatever it does not name, `grant_mcp` accepts -- proven
+        both ways so the two can never quietly drift apart."""
+        selected = content.select_mcp(self.content, ["context7=jira-mcp"])
+        collisions = content.per_agent_mcp_keys(selected)
+        for key in collisions:
+            with self.assertRaises(ContentError):
+                content.grant_mcp(selected, [key])
+        for key in ("jira", "figma", "some.server_1"):
+            self.assertNotIn(key, collisions)
+            granted, dropped = content.grant_mcp(selected, [key])
+            self.assertEqual(dropped, ())
+            self.assertEqual(granted.agents[0].granted_mcp, (key,))
+
+
 class GrantMcpTest(unittest.TestCase):
     """`grant_mcp` hands a server the user administers to every agent uniformly.
 

@@ -1653,8 +1653,35 @@ def mcp_revoke(cli_id: str, key: str, runtime: Runtime) -> dict[str, Any]:
 
 
 def mcp_list(cli_id: str, runtime: Runtime) -> dict[str, Any]:
-    """What is granted now, and which of the CLI's own declared server keys
-    are not -- the choice a person or an agent still has available.
+    """What is granted now, which of the CLI's own declared server keys
+    would actually be accepted by a grant, and which of the rest need none
+    because Pegasus already reaches them per-agent.
+
+    `available` used to be simply `declared - granted`, which could name a
+    key `mcp_grant` would then refuse -- any key `content.per_agent_mcp_keys`
+    already covers, a shipped server this installation chose or one already
+    bound. This calls that exact same core rule, non-raising, on the content
+    this install's own recorded selection would produce (`_mcp_update_selection`
+    plus `_select_mcp`, the identical reconstruction `update` already relies
+    on), so `available` here and what `mcp_grant` would accept can never
+    drift apart -- there is one rule, `per_agent_mcp_keys`, asked the same
+    way from both places. `already_covered` names what was excluded and why,
+    rather than letting a declared key a person recognizes simply vanish
+    from the report.
+
+    An install with an *unresolved* binding (a bound server whose key was
+    never recorded -- see `_mcp_update_selection`) cannot have its selection
+    safely reconstructed at all: `mcp_grant`/`mcp_revoke` both refuse
+    outright the moment they see one, whatever key was actually asked for,
+    because reapplying anything while guessing at the missing binding would
+    retire the very binding `update` exists to preserve. Advertising
+    anything as `available` here, computed from a selection that quietly
+    dropped the unresolved id, would be exactly the promise that refusal
+    then breaks -- so in that state `available` and `already_covered` are
+    both empty, `unresolved_mcp_bindings` names the blocking id(s), and
+    `blocked` carries `_unresolved_bindings_message`'s own wording verbatim
+    -- the identical text `mcp_grant`, `mcp_revoke`, and `update` already
+    raise, never a second phrasing of the same fact.
 
     Follows `models_list`'s shape: a plain function returning the same
     report `--json` would, callable directly without going through argparse.
@@ -1663,12 +1690,51 @@ def mcp_list(cli_id: str, runtime: Runtime) -> dict[str, Any]:
     installed = journal_module.install_for(journal_store(runtime).load(), adapter.id)
     granted = set(installed.granted_mcp) if installed is not None else set()
     declared = _declared_mcp_keys(runtime, adapter)
+    ungranted = declared - granted
+    per_agent, unresolved = _per_agent_mcp_keys_for(installed)
+    if unresolved:
+        return {
+            "action": "list",
+            "cli": cli_id,
+            "granted": sorted(granted),
+            "available": [],
+            "already_covered": [],
+            "unresolved_mcp_bindings": sorted(unresolved),
+            "blocked": _unresolved_bindings_message(adapter.id, unresolved),
+        }
+    already_covered = ungranted & per_agent
     return {
         "action": "list",
         "cli": cli_id,
         "granted": sorted(granted),
-        "available": sorted(declared - granted),
+        "available": sorted(ungranted - already_covered),
+        "already_covered": sorted(already_covered),
+        "unresolved_mcp_bindings": [],
+        "blocked": None,
     }
+
+
+def _per_agent_mcp_keys_for(installed) -> tuple[frozenset[str], list[str]]:
+    """`content_module.per_agent_mcp_keys`, computed against the content this
+    installation's own recorded `--mcp` selection would produce, alongside
+    the unresolved binding ids that selection had to leave out -- `(frozenset(),
+    [])` for `None`, the same way an uninstalled CLI's own `_declared_mcp_keys`
+    reads as nothing declared.
+
+    `_mcp_update_selection` is the same reconstruction `update` already
+    trusts to rebuild an install's exact `--mcp` selection from its journal;
+    reusing it here, rather than re-deriving the selection a second way, is
+    what keeps this in step with whatever `update` (and therefore a fresh
+    `install`) would actually apply. Its second half -- the unresolved ids --
+    used to be discarded here, which let `mcp_list` compute `per_agent_mcp_keys`
+    from a selection quietly missing exactly the binding `mcp_grant`/`update`
+    would refuse over; returning it instead is what lets `mcp_list` refuse to
+    pretend a selection it cannot safely reconstruct is one it can.
+    """
+    if installed is None:
+        return frozenset(), []
+    selection, unresolved = _mcp_update_selection(installed)
+    return content_module.per_agent_mcp_keys(_select_mcp(selection)), unresolved
 
 
 def _declared_mcp_keys(runtime: Runtime, adapter) -> frozenset[str]:
@@ -2534,8 +2600,15 @@ def _mcp_prose(report: dict[str, Any]) -> str:
         return "\n".join(_and_activation([line], report))
     if action == "list":
         lines = [f"Granted: {', '.join(report['granted']) or 'none'}."]
+        if report.get("blocked"):
+            lines.append(report["blocked"])
+            return "\n".join(lines)
         if report["available"]:
             lines.append(f"Declared but not granted: {', '.join(report['available'])}.")
+        if report.get("already_covered"):
+            lines.append(
+                f"Already covered per-agent, so granting is redundant: {', '.join(report['already_covered'])}."
+            )
         return "\n".join(lines)
     return "mcp: nothing to report."
 

@@ -597,6 +597,30 @@ def _select_system_prompt_mcp(
     )
 
 
+def per_agent_mcp_keys(content: Content) -> frozenset[str]:
+    """Every mcp key this installation already reaches on a *per-agent*
+    basis: a shipped server's own id (`content.mcp`, already narrowed by
+    `select_mcp` to what this install actually chose) or a key already
+    resolved into some agent's `optional_mcp` -- an id or a bound key,
+    `select_mcp` writes the same value either way. Granting any of these
+    again, uniformly to every agent, would undo whatever per-agent shape is
+    already in place: one agent may carry a server another does not, or have
+    some of its tools withheld through `denied_mcp_tools`.
+
+    Pure and non-raising on purpose, with exactly two callers meant to agree
+    forever: `grant_mcp` below turns a collision against this same set into
+    a refusal, and `cli.mcp_list` asks the identical question to report
+    which of a CLI's own declared keys are already covered rather than
+    actually grantable -- the fact `mcp list` must never advertise as
+    available a key `mcp grant` would then refuse. Both ask this function,
+    not each other and not a second computation of their own, so the two can
+    never drift apart.
+    """
+    shipped = {server.name for server in content.mcp}
+    bound = {name for agent in content.agents for name in agent.optional_mcp}
+    return frozenset(shipped | bound)
+
+
 def grant_mcp(
     content: Content, keys: Iterable[str], *, droppable: Iterable[str] = ()
 ) -> tuple[Content, tuple[str, ...]]:
@@ -631,16 +655,15 @@ def grant_mcp(
     disk -- must be safe on its own, so the check belongs where every caller
     is forced through it.
 
-    A key is refused for *collision* when it collides with a shipped mcp id
-    (`content.mcp`, already narrowed by `select_mcp` to what was actually
-    chosen) or with a key already resolved into some agent's `optional_mcp`
-    (an id or a bound key -- `select_mcp` writes the same value either way).
-    Both are servers Pegasus already grants on a *per-agent* basis,
-    deliberately: one agent may carry a server another does not, or may have
-    some of its tools withheld through `denied_mcp_tools`. Granting the same
-    key again here would apply it uniformly to every agent regardless of that
-    per-agent shape, silently undoing whatever narrowing the release or the
-    user's own `--mcp` binding put in place.
+    A key is refused for *collision* when `per_agent_mcp_keys(content)`
+    already names it -- see that function's own docstring for exactly what
+    it covers and its other caller. Every such key is a server Pegasus
+    already grants on a *per-agent* basis, deliberately: one agent may carry
+    a server another does not, or may have some of its tools withheld
+    through `denied_mcp_tools`. Granting the same key again here would apply
+    it uniformly to every agent regardless of that per-agent shape, silently
+    undoing whatever narrowing the release or the user's own `--mcp` binding
+    put in place.
 
     `droppable` names the subset of `keys` this call may silently drop on a
     collision instead of raising -- the caller's way of saying "this key
@@ -675,9 +698,7 @@ def grant_mcp(
             f"verbatim and this is the one place every granted key, typed fresh or replayed from a "
             f"journal, is forced through"
         )
-    shipped = {server.name for server in content.mcp}
-    bound = {name for agent in content.agents for name in agent.optional_mcp}
-    collisions = set(granted) & (shipped | bound)
+    collisions = set(granted) & per_agent_mcp_keys(content)
     droppable_set = frozenset(droppable)
     raising = sorted(collisions - droppable_set)
     if raising:
