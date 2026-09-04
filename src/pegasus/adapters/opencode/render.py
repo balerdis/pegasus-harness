@@ -435,11 +435,23 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     it, yet the deny baseline still reaches it. Granting a tool is not granting
     every path it can be pointed at -- the runtime asks separately, under this
     name, the moment a target sits outside the project worktree -- and a
-    baseline that says `*` says this too. Denied is where that ends: the runtime
-    refuses before it would prompt, and a sub-agent has nobody to prompt anyway.
-    Every path Pegasus hands an agent -- a phase agent's own SKILL.md, the
-    `_shared` conventions each prompt defers its detail to -- lives under the
-    skills directory, which is outside every worktree, so the lazy-loading
+    baseline that says `*` says this too. That baseline splits by `item.mode`,
+    though, rather than reading `"deny"` for every agent: a sub-agent has
+    nobody to prompt, so `"deny"` is right for it -- the runtime refuses before
+    it would ever publish a prompt, so writing anything softer there would just
+    trade a clean refusal for a hang. A primary agent has a person on the other
+    end of the session, and even carries the `ask` tool itself, so it keeps
+    `"ask"` -- the runtime's own unmatched-rule default for this name, made
+    explicit here for the same reason the sub-agent's `"deny"` is written out
+    rather than left to the outer baseline (see below). This is also why only
+    the two of these need the split at all: a person's own approval of an
+    `ask` prompt is recorded instance-wide, not per session, so it reaches
+    every sub-agent's session too and outranks that sub-agent's own `"deny"`
+    the moment it is given -- a primary session asking once is what lets a
+    sub-agent's tighter default stay tight without ever starving a genuine
+    need. Every path Pegasus hands an agent -- a phase agent's own SKILL.md,
+    the `_shared` conventions each prompt defers its detail to -- lives under
+    the skills directory, which is outside every worktree, so the lazy-loading
     contract is unreadable by construction without this. The grant is scoped to
     that directory and not to the config directory above it, even though both
     sit outside the worktree: the settings file is the config directory's own
@@ -449,13 +461,15 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     actually ask under this name bring it, so declaring nothing keeps meaning
     nothing.
 
-    The inner `"*": "deny"` is the same shape `task` uses, and it is deliberate
-    even though the outer baseline already covers this name: the runtime
-    flattens every key of this map into one ordered rule list and keeps the last
-    rule matching both name and target, so an unlisted path outside the worktree
-    already falls to that baseline. Writing the refusal where the exception
-    lives makes the boundary a property of this entry rather than an inference
-    across two, which is what lets a test assert it directly.
+    The inner baseline is the same shape `task` uses, and writing it out is
+    deliberate even where the outer baseline already covers this name (the
+    sub-agent case: both say `"deny"`): the runtime flattens every key of this
+    map into one ordered rule list and keeps the last rule matching both name
+    and target, so an unlisted path outside the worktree already falls to
+    whichever baseline applies. Writing the refusal (or, for a primary agent,
+    the explicit `"ask"`) where the exception lives makes the boundary a
+    property of this entry rather than an inference across two, which is what
+    lets a test assert it directly.
     """
     names = (*item.requires_tools, *item.optional_tools)
     unknown = [name for name in names if name not in PERMISSION_NAME]
@@ -473,7 +487,8 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     # namespace and their own position is unaffected by it either way.
     granted.update({name: "deny" for name in item.denied_mcp_tools})
     if any(name in READS_OUTSIDE_THE_WORKTREE for name in names):
-        granted["external_directory"] = {"*": "deny", f"{layout.skills_dir.as_posix()}/*": "allow"}
+        baseline = "ask" if item.mode is AgentMode.PRIMARY else "deny"
+        granted["external_directory"] = {"*": baseline, f"{layout.skills_dir.as_posix()}/*": "allow"}
     granted["task"] = {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}
     return {"*": "deny", **granted}
 
