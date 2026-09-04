@@ -1254,9 +1254,11 @@ Lo que se retiene se decide por lo que destruye estado, no por lo que parece pel
 
 ### Leer fuera del worktree es un permiso propio
 
-El runtime pregunta por `external_directory` antes que por `read` cuando el destino queda fuera del árbol del proyecto, y los nombres de permiso se matchean por comodín — así que el `{"*": "deny"}` con el que abre cada agente lo alcanzaba y lo negaba sin preguntar. Todo el contrato de lazy-loading vive bajo el directorio de skills, que está fuera de todo worktree, así que estaba ilegible por construcción.
+El runtime pregunta por `external_directory` antes que por `read` cuando el destino queda fuera del árbol del proyecto, y los nombres de permiso se matchean por comodín — así que el `{"*": "deny"}` con el que abre cada agente lo alcanzaba. Todo el contrato de lazy-loading vive bajo el directorio de skills, que está fuera de todo worktree, así que estaba ilegible por construcción sin una excepción para ese directorio.
 
 Se concede acotado a ese directorio y no al de configuración que lo contiene: ahí vive el archivo de settings, con lo que sea que la persona haya configurado. Y se gana en vez de darse: sólo lo traen `read`, `grep` y `glob`, que son las tres que preguntan bajo ese nombre.
+
+La línea de base fuera de esa excepción no es la misma para todo agente: un sub-agente la recibe en `deny` y un agente primario (`king-pegasus`, `pegasus-orchestrator`) en `ask`. El motivo no es cosmético: si el runtime resolviera un `deny`, lo hace **antes** de publicar cualquier prompt, así que denegar no es negarse una vez sino borrar la posibilidad de preguntar — correcto para un sub-agente, que no tiene a nadie a quien preguntarle, pero no para un agente primario, que tiene una persona del otro lado de la sesión y hasta trae la herramienta `ask` consigo. Además la aprobación de una persona a un `ask` queda registrada a nivel de instancia, no de sesión, así que una vez dada alcanza también a las sesiones de sub-agentes y le gana a su propio `deny` — lo que hace que ese `deny` más estricto en el sub-agente nunca termine bloqueando una necesidad genuina: el agente primario ya preguntó una vez por todos.
 
 ### Lo que `doctor` puede y no puede afirmar
 

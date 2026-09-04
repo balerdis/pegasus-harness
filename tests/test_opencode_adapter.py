@@ -409,6 +409,19 @@ class AgentRenderTest(unittest.TestCase):
         rule = self.value(agent)["permission"]["external_directory"]
         self.assertEqual(rule, {"*": "deny", f"{CONFIG.as_posix()}/skills/*": "allow"})
 
+    def test_a_primary_readers_external_directory_baseline_is_ask_not_deny(self):
+        """A primary agent has a person present to answer a prompt, and even
+        carries the `ask` tool itself -- unlike a subagent, denying it outright
+        would refuse a request the person could have simply approved. Leaving
+        the baseline unset here would work too, since the runtime's own
+        default for this name is `ask`, but writing it explicitly keeps the
+        boundary a property of this entry, the same reason the subagent's
+        `deny` is written rather than left to the outer baseline.
+        """
+        agent = self.agent(requires_tools=("read",), mode=AgentMode.PRIMARY)
+        rule = self.value(agent)["permission"]["external_directory"]
+        self.assertEqual(rule, {"*": "ask", f"{CONFIG.as_posix()}/skills/*": "allow"})
+
     def test_the_grant_refuses_every_other_path_outside_the_worktree(self):
         """The exception carries its own refusal.
 
@@ -1166,6 +1179,39 @@ class ShippedContentRenderTest(unittest.TestCase):
             rule = value["permission"]["external_directory"]
             self.assertEqual(rule[f"{self.layout.skills_dir.as_posix()}/*"], "allow", agent.name)
             for path in (self.layout.settings_file, self.layout.config_dir / "prompts"):
+                self.assertNotIn(f"{path.as_posix()}/*", rule, agent.name)
+
+    def test_a_primary_agent_that_reads_outside_the_worktree_is_asked_not_denied(self):
+        """A primary agent has a person in the loop and even carries `ask`
+        itself, so the runtime's own default for this name -- `ask`, not
+        `deny` -- is the right one to leave standing for it. A subagent has
+        nobody to prompt, so it keeps the outright refusal.
+        """
+        readers = [
+            agent
+            for agent in self.loaded.agents
+            if set(render_module.READS_OUTSIDE_THE_WORKTREE) & {*agent.requires_tools, *agent.optional_tools}
+        ]
+        self.assertTrue(readers, "fixture drifted: no shipped agent reads outside the worktree any more")
+        primaries = [agent for agent in readers if agent.mode is AgentMode.PRIMARY]
+        subagents = [agent for agent in readers if agent.mode is AgentMode.SUBAGENT]
+        self.assertTrue(primaries, "fixture drifted: no shipped primary agent reads outside the worktree")
+        self.assertTrue(subagents, "fixture drifted: no shipped subagent reads outside the worktree")
+        for agent in primaries:
+            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            rule = value["permission"]["external_directory"]
+            self.assertEqual(rule["*"], "ask", agent.name)
+            self.assertEqual(rule[f"{self.layout.skills_dir.as_posix()}/*"], "allow", agent.name)
+        for agent in subagents:
+            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            rule = value["permission"]["external_directory"]
+            self.assertEqual(rule["*"], "deny", agent.name)
+            self.assertEqual(rule[f"{self.layout.skills_dir.as_posix()}/*"], "allow", agent.name)
+        for agent in readers:
+            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+            self.assertEqual(value["permission"]["*"], "deny", agent.name)
+            for path in (self.layout.settings_file, self.layout.config_dir / "prompts"):
+                rule = value["permission"]["external_directory"]
                 self.assertNotIn(f"{path.as_posix()}/*", rule, agent.name)
 
     def test_no_shipped_agent_that_declares_write_renders_an_orphaned_write_permission(self):
