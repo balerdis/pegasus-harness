@@ -20,16 +20,19 @@ from pathlib import Path
 import pegasus
 from pegasus import cli
 from pegasus.adapters import available
-from pegasus.core import content as content_module
+from pegasus.core import codecs, content as content_module, pointer
 from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
-from pegasus.core.types import Environment
+from pegasus.core.types import Codec, Environment
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.journal_store_file import journal_path
 from pegasus.infra.snapshot_store_file import MANIFEST_FILENAME, snapshots_root
 from pegasus.tui import session
 from pegasus.tui.navigator import (
     Action,
+    GrantMcpResultScreen,
+    GrantMcpScreen,
+    GrantMcpTarget,
     InstallPlanScreen,
     InstallResultScreen,
     McpSelectionScreen,
@@ -63,6 +66,39 @@ def _layout(home: Path):
 
 def _present(home: Path) -> None:
     _layout(home).config_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _declare_own_mcp_server(home: Path, key: str) -> None:
+    """What a user administering their own MCP server leaves behind in the
+    CLI's own configuration -- a key under `/mcp` Pegasus never wrote. Same
+    fixture `tests/test_cli_mcp.py` already uses for `cli.mcp_grant` itself,
+    reproduced here since `GrantMcpScreen` sits on the same seam."""
+    layout = _layout(home)
+    document = codecs.loads(Codec.JSON, layout.settings_file.read_text(encoding="utf-8"))
+    document = pointer.set_at(document, f"/mcp/{key}", {"type": "local", "command": ["probe-server"]})
+    layout.settings_file.write_text(codecs.dumps(Codec.JSON, document), encoding="utf-8")
+
+
+def _drop_mcp_bindings(runtime: cli.Runtime) -> None:
+    """An install predating `mcp_bindings` (or one that otherwise lost it)
+    has a bound convention with no recorded key -- the same fixture
+    `tests/test_cli_update.py` and `tests/test_cli_mcp.py` already use to
+    reproduce an unresolved binding."""
+    store = cli.journal_store(runtime)
+    journal = store.load()
+    install = journal_module.install_for(journal, CLI)
+    store.save(journal_module.with_install(journal, replace(install, mcp_bindings={})))
+
+
+def _undeclare_own_mcp_server(home: Path, key: str) -> None:
+    """The other half of `_declare_own_mcp_server`: removes a key from the
+    CLI's own `/mcp` configuration -- reproduces the race a person can win
+    against themselves between opening `GrantMcpScreen` and confirming it,
+    by editing that same file out from under the screen."""
+    layout = _layout(home)
+    document = codecs.loads(Codec.JSON, layout.settings_file.read_text(encoding="utf-8"))
+    document = pointer.unset_at(document, f"/mcp/{key}")
+    layout.settings_file.write_text(codecs.dumps(Codec.JSON, document), encoding="utf-8")
 
 
 def _sans(value, needle: str):
@@ -261,6 +297,274 @@ class McpSelectionDefaultsTest(SessionTestCase):
 
         self.assertEqual(navigator.current.report["status"], "installed")
         self.assertEqual(session._currently_chosen_mcp(CLI, runtime), ())
+
+
+class GrantMcpThroughTheTuiTest(SessionTestCase):
+    """`GrantMcpScreen`, opened and confirmed the way a person on the TUI
+    would: the same `cli.mcp_grant`/`cli.mcp_revoke` seam
+    `tests/test_cli_mcp.py` proves against the flags directly, reached here
+    through `session.step` instead."""
+
+    def to_screen(self, runtime) -> Navigator:
+        navigator = Navigator.starting(installed=session.detect_installed(runtime))
+        index = [entry.label for entry in navigator.current.entries].index("Grant MCP servers")
+        for _ in range(index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # opens the CLI choice
+        return session.step(navigator, runtime, Action.CHOOSE)  # opens the grant screen (or a placeholder)
+
+    def toggle(self, navigator: Navigator, key: str) -> Navigator:
+        index = next(i for i, option in enumerate(navigator.current.options) if option.id == key)
+        count = len(navigator.current.options) + 1  # + Continue, matching `Navigator`'s own wraparound.
+        for _ in range((index - navigator.cursor) % count):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        return navigator.handle(Action.CHOOSE)
+
+    def test_a_cli_with_nothing_declared_shows_a_placeholder_that_explains_the_flow(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        navigator = self.to_screen(runtime)
+        self.assertIsInstance(navigator.current, Placeholder)
+        self.assertIn("install", navigator.current.note.lower())
+        self.assertIn("grant", navigator.current.note.lower())
+
+    def test_a_cli_where_everything_declared_is_already_covered_says_so_plainly(self):
+        """Distinct from the "nothing declared" case above: a server WAS
+        found here, and telling a person to install one they already
+        installed and already reached per-agent is advice that does not
+        apply to what actually happened."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["context7"])
+        _declare_own_mcp_server(self.home, "context7")
+        navigator = self.to_screen(runtime)
+        self.assertIsInstance(navigator.current, Placeholder)
+        note = navigator.current.note.lower()
+        self.assertIn("context7", note)
+        self.assertNotIn("no mcp server of your own was found", note)
+
+    def test_a_cli_with_an_unresolved_binding_shows_the_specific_blocker(self):
+        """A checklist nobody could actually confirm -- `mcp_grant`/
+        `mcp_revoke` refuse every key outright while a binding is unresolved
+        -- must never be offered; nor may this fall back to the generic
+        empty-case note, which would say nothing about why."""
+        _present(self.home)
+        runtime = self.runtime()
+        code = cli.main(["install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp", "--json"], runtime=runtime)
+        self.assertEqual(code, 0)
+        _drop_mcp_bindings(runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        navigator = self.to_screen(runtime)
+        self.assertIsInstance(navigator.current, Placeholder)
+        self.assertIn("cbm", navigator.current.note)
+        self.assertEqual(navigator.current.note, cli._unresolved_bindings_message(CLI, ["cbm"]))
+
+    def test_a_shipped_server_is_never_offered_on_this_screen(self):
+        """A server Pegasus itself installed is declared in the CLI's own
+        configuration too, but it means something different here -- see
+        `GrantMcpScreen`'s own docstring -- so it must never appear as a row."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["context7"])
+        _declare_own_mcp_server(self.home, "jira")
+        navigator = self.to_screen(runtime)
+        self.assertIsInstance(navigator.current, GrantMcpScreen)
+        self.assertEqual([option.id for option in navigator.current.options], ["jira"])
+
+    def test_a_declared_server_opens_unchecked_by_default(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        navigator = self.to_screen(runtime)
+        self.assertIsInstance(navigator.current, GrantMcpScreen)
+        self.assertEqual(navigator.current.chosen, ())
+        self.assertEqual(navigator.current.granted, ())
+
+    def test_an_already_granted_server_opens_checked(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        cli.mcp_grant(CLI, "jira", runtime)
+        navigator = self.to_screen(runtime)
+        self.assertEqual(navigator.current.chosen, ("jira",))
+        self.assertEqual(navigator.current.granted, ("jira",))
+
+    def test_confirming_with_no_change_calls_neither_grant_nor_revoke(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        navigator = self.to_screen(runtime)  # jira unchecked, matching the journal
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertIsInstance(navigator.current, GrantMcpResultScreen)
+        self.assertEqual(navigator.current.granted, ())
+        self.assertEqual(navigator.current.revoked, ())
+        self.assertEqual(session._currently_chosen_mcp(CLI, runtime), ())
+        self.assertEqual(
+            journal_module.install_for(cli.journal_store(runtime).load(), CLI).granted_mcp, ()
+        )
+
+    def test_confirming_grants_a_newly_checked_server(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        navigator = self.to_screen(runtime)
+        navigator = self.toggle(navigator, "jira")
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertIsInstance(navigator.current, GrantMcpResultScreen)
+        self.assertEqual(navigator.current.granted, ("jira",))
+        self.assertEqual(navigator.current.revoked, ())
+        installed = journal_module.install_for(cli.journal_store(runtime).load(), CLI)
+        self.assertIn("jira", installed.granted_mcp)
+
+    def test_confirming_revokes_a_newly_unchecked_server(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        cli.mcp_grant(CLI, "jira", runtime)
+        navigator = self.to_screen(runtime)  # jira opens checked
+        navigator = self.toggle(navigator, "jira")  # unchecks it
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertEqual(navigator.current.granted, ())
+        self.assertEqual(navigator.current.revoked, ("jira",))
+        installed = journal_module.install_for(cli.journal_store(runtime).load(), CLI)
+        self.assertNotIn("jira", installed.granted_mcp)
+
+    def test_confirming_can_grant_one_and_revoke_another_in_the_same_confirm(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        _declare_own_mcp_server(self.home, "figma")
+        cli.mcp_grant(CLI, "figma", runtime)
+        navigator = self.to_screen(runtime)  # figma checked, jira unchecked
+        navigator = self.toggle(navigator, "jira")  # checks jira
+        navigator = self.toggle(navigator, "figma")  # unchecks figma
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertEqual(navigator.current.granted, ("jira",))
+        self.assertEqual(navigator.current.revoked, ("figma",))
+        installed = journal_module.install_for(cli.journal_store(runtime).load(), CLI)
+        self.assertEqual(set(installed.granted_mcp), {"jira"})
+
+    def test_a_key_that_raced_out_from_under_the_screen_is_not_reported_as_granted(self):
+        """The exact race `GrantMcpResultScreen`'s own docstring anticipates:
+        `figma` is checked on screen, but removed from the CLI's own
+        configuration before Continue is confirmed. The result must report
+        only what its own call actually landed -- `jira` -- never the
+        requested delta unfiltered, and the on-disk `granted_mcp` is the
+        proof, not an inference from the screen's own claim."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        _declare_own_mcp_server(self.home, "figma")
+        navigator = self.to_screen(runtime)
+        navigator = self.toggle(navigator, "jira")
+        navigator = self.toggle(navigator, "figma")
+        navigator = self.to_continue(navigator)
+        _undeclare_own_mcp_server(self.home, "figma")  # the race: gone by the time Continue runs.
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertIsInstance(navigator.current, GrantMcpResultScreen)
+        self.assertEqual(navigator.current.granted, ("jira",))
+        self.assertTrue(navigator.current.errors)
+        self.assertTrue(any("figma" in error for error in navigator.current.errors))
+        installed = journal_module.install_for(cli.journal_store(runtime).load(), CLI)
+        self.assertEqual(set(installed.granted_mcp), {"jira"})
+        # The claim on screen and the disk it claims to describe must agree.
+        self.assertEqual(set(navigator.current.granted), set(installed.granted_mcp))
+
+    def test_a_total_failure_reports_nothing_as_granted(self):
+        """Every requested key fails its own call: `granted` must be empty,
+        not the requested set."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        navigator = self.to_screen(runtime)
+        navigator = self.toggle(navigator, "jira")
+        navigator = self.to_continue(navigator)
+        _undeclare_own_mcp_server(self.home, "jira")  # the only requested key races away.
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertEqual(navigator.current.granted, ())
+        self.assertTrue(navigator.current.errors)
+        installed = journal_module.install_for(cli.journal_store(runtime).load(), CLI)
+        self.assertEqual(installed.granted_mcp, ())
+
+    def test_a_revoke_that_races_out_from_under_the_screen_is_not_reported_as_revoked(self):
+        """The revoke half of the same race: `jira` is unchecked on screen,
+        but its grant is removed from the journal (by another process, or
+        another session) before Continue confirms -- `cli.mcp_revoke` itself
+        treats revoking an already-revoked key as success (`already-revoked`,
+        not a failure), so this proves that success still lands in
+        `revoked`, and is never contradicted by an error line, when nothing
+        actually needed to change."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        cli.mcp_grant(CLI, "jira", runtime)
+        navigator = self.to_screen(runtime)
+        navigator = self.toggle(navigator, "jira")  # unchecks it
+        navigator = self.to_continue(navigator)
+        cli.mcp_revoke(CLI, "jira", runtime)  # already revoked by the time Continue runs.
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertEqual(navigator.current.revoked, ("jira",))
+        self.assertEqual(navigator.current.errors, ())
+        installed = journal_module.install_for(cli.journal_store(runtime).load(), CLI)
+        self.assertEqual(installed.granted_mcp, ())
+
+    def test_the_happy_path_still_reports_everything_requested(self):
+        """No race, nothing refused: the fix must not turn a clean confirm
+        into a partial-looking one."""
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        _declare_own_mcp_server(self.home, "figma")
+        cli.mcp_grant(CLI, "figma", runtime)
+        navigator = self.to_screen(runtime)
+        navigator = self.toggle(navigator, "jira")
+        navigator = self.toggle(navigator, "figma")
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertEqual(navigator.current.granted, ("jira",))
+        self.assertEqual(navigator.current.revoked, ("figma",))
+        self.assertEqual(navigator.current.errors, ())
+        installed = journal_module.install_for(cli.journal_store(runtime).load(), CLI)
+        self.assertEqual(set(installed.granted_mcp), {"jira"})
+
+    def test_the_result_reuses_the_same_activation_wording_update_shows(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        navigator = self.to_screen(runtime)
+        navigator = self.toggle(navigator, "jira")
+        navigator = self.to_continue(navigator)
+        navigator = session.step(navigator, runtime, Action.CHOOSE)
+        self.assertEqual(navigator.current.activation, tuple(available().get(CLI).activation_steps()))
+        self.assertTrue(navigator.current.activation)
+
+    def test_going_back_from_the_screen_touches_nothing_on_disk(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime)
+        _declare_own_mcp_server(self.home, "jira")
+        before = _tree(self.home)
+        navigator = self.to_screen(runtime)
+        navigator = self.toggle(navigator, "jira")
+        navigator = navigator.handle(Action.BACK)
+        self.assertIsInstance(navigator.current, Menu)
+        self.assertEqual(_tree(self.home), before)
 
 
 class ParityWithCliInstallTest(SessionTestCase):

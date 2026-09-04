@@ -63,6 +63,15 @@ class RealHomeTestCase(_RealHomeTestCase):
         document = pointer.set_at(document, f"/mcp/{key}", value or {"type": "local", "command": ["jira-server"]})
         layout.settings_file.write_text(codecs.dumps(Codec.JSON, document), encoding="utf-8")
 
+    def drop_mcp_bindings(self) -> None:
+        """An install predating `mcp_bindings` (or one that otherwise lost
+        it) has a bound convention with no recorded key -- the same fixture
+        `tests/test_cli_update.py` already uses to reproduce an unresolved
+        binding against `update`."""
+        journal = self.store().load()
+        install = journal_module.install_for(journal, CLI)
+        self.store().save(journal_module.with_install(journal, replace(install, mcp_bindings={})))
+
     def install(self, *extra) -> None:
         self.present()
         code, _ = self.run_cli("install", "--cli", CLI, *extra)
@@ -255,6 +264,174 @@ class ListTest(RealHomeTestCase):
         self.assertEqual(report["granted"], ["jira"])
         self.assertNotIn("jira", report["available"])
 
+    def test_json_shape_always_carries_already_covered(self):
+        self.install()
+        code, report = self.run_cli("mcp", "list", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertIn("already_covered", report)
+        self.assertEqual(report["already_covered"], [])
+
+    def test_no_overlap_with_shipped_or_bound_lists_everything_declared(self):
+        """No shipped server chosen, nothing bound: `available` is simply
+        every declared, ungranted key -- the case this report already
+        handled correctly before `already_covered` existed."""
+        self.install()
+        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("figma")
+        code, report = self.run_cli("mcp", "list", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(report["available"]), ["figma", "jira"])
+        self.assertEqual(report["already_covered"], [])
+
+    def test_a_shipped_id_this_install_chose_is_reported_as_already_covered(self):
+        """`available` must never name a key `grant` would then refuse --
+        `context7`, chosen by this install, is exactly such a key (see
+        `GrantTest.test_a_key_colliding_with_a_shipped_server_is_refused`)."""
+        self.install("--mcp", "context7")
+        self.declare_own_mcp_server("context7")
+        self.declare_own_mcp_server("jira")
+        code, report = self.run_cli("mcp", "list", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["available"], ["jira"])
+        self.assertEqual(report["already_covered"], ["context7"])
+
+    def test_a_bound_key_this_install_resolved_is_reported_as_already_covered(self):
+        """A server Pegasus only holds the contract for (`cbm=<key>`) is
+        still reached per-agent through that binding -- granting the
+        resolved key again, uniformly, would be exactly as redundant as
+        granting a shipped id directly."""
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        self.declare_own_mcp_server("codebase-memory-mcp")
+        self.declare_own_mcp_server("jira")
+        code, report = self.run_cli("mcp", "list", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["available"], ["jira"])
+        self.assertEqual(report["already_covered"], ["codebase-memory-mcp"])
+
+    def test_every_available_key_is_one_grant_actually_accepts(self):
+        """The property that matters most: `mcp list` and `mcp grant` must
+        never disagree about what a key means. Proven directly, over a
+        fixture with a shipped choice, a binding, and plain declared keys
+        all in play at once, rather than trusted to hold because both read
+        `content.per_agent_mcp_keys` -- this is the test that would catch it
+        the moment that stopped being true.
+        """
+        self.present()
+        code, _ = self.run_cli(
+            "install", "--cli", CLI, "--mcp", "context7", "--mcp", "cbm=codebase-memory-mcp"
+        )
+        self.assertEqual(code, 0)
+        for key in ("context7", "codebase-memory-mcp", "jira", "figma"):
+            self.declare_own_mcp_server(key)
+        code, report = self.run_cli("mcp", "list", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(report["available"]), ["figma", "jira"])
+        self.assertTrue(report["available"], "the fixture must offer something, or this proves nothing")
+        for key in report["available"]:
+            with self.subTest(key=key):
+                grant_code, grant_report = self.run_cli("mcp", "grant", "--cli", CLI, key)
+                self.assertEqual(grant_code, 0, f"mcp list offered {key!r} but grant refused it: {grant_report}")
+                self.run_cli("mcp", "revoke", "--cli", CLI, key)
+
+    def test_every_available_key_is_one_grant_actually_accepts_even_with_an_unresolved_binding(self):
+        """The same property proven above, but over an install carrying an
+        unresolved binding too -- the exact fixture that broke it: `jira`
+        has nothing to do with `cbm`'s dropped key, yet the old code let
+        `mcp list` offer it while `mcp grant` refused every key outright.
+        """
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        self.drop_mcp_bindings()
+        self.declare_own_mcp_server("codebase-memory-mcp")
+        self.declare_own_mcp_server("jira")
+        code, report = self.run_cli("mcp", "list", "--cli", CLI)
+        self.assertEqual(code, 0)
+        for key in report["available"]:
+            with self.subTest(key=key):
+                grant_code, grant_report = self.run_cli("mcp", "grant", "--cli", CLI, key)
+                self.assertEqual(grant_code, 0, f"mcp list offered {key!r} but grant refused it: {grant_report}")
+                self.run_cli("mcp", "revoke", "--cli", CLI, key)
+
+
+class UnresolvedBindingBlocksListTest(RealHomeTestCase):
+    """An unresolved binding blocks `mcp_grant`/`mcp_revoke` outright, for
+    every key, regardless of what was asked for (`_unresolved_bindings_message`).
+    `mcp list` must say so rather than advertise a key it cannot actually
+    honour -- the exact gap `available ⊆ grantable` broke on."""
+
+    def test_available_is_empty_while_a_binding_is_unresolved(self):
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        self.drop_mcp_bindings()
+        self.declare_own_mcp_server("jira")
+        code, report = self.run_cli("mcp", "list", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["available"], [])
+        self.assertEqual(report["already_covered"], [])
+
+    def test_the_blocking_binding_is_named_in_the_json_shape(self):
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        self.drop_mcp_bindings()
+        code, report = self.run_cli("mcp", "list", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["unresolved_mcp_bindings"], ["cbm"])
+        self.assertEqual(report["blocked"], cli._unresolved_bindings_message(CLI, ["cbm"]))
+
+    def test_the_json_shape_is_additive_with_nothing_blocked(self):
+        self.install()
+        code, report = self.run_cli("mcp", "list", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["unresolved_mcp_bindings"], [])
+        self.assertIsNone(report["blocked"])
+
+    def test_a_key_with_nothing_to_do_with_the_broken_binding_is_still_refused(self):
+        """The property `mcp list` must never violate: `jira` is unrelated
+        to `cbm`'s dropped key, yet `mcp grant` refuses it too -- so `mcp
+        list` reporting it as available would be exactly the lie this fixes."""
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        self.drop_mcp_bindings()
+        self.declare_own_mcp_server("jira")
+        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["error"], cli._unresolved_bindings_message(CLI, ["cbm"]))
+
+    def test_revoke_is_refused_the_same_way(self):
+        """`mcp_revoke` on an already-ungranted key short-circuits before it
+        ever reaches the unresolved check (see its own docstring:
+        "already-revoked" is success) -- so this proves the refusal against
+        a key that IS granted, which is the case that actually has to reach
+        `_mcp_update_selection` to reapply the revoke."""
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        self.declare_own_mcp_server("jira")
+        code, _ = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.assertEqual(code, 0)
+        self.drop_mcp_bindings()
+        code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "jira")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["error"], cli._unresolved_bindings_message(CLI, ["cbm"]))
+
+    def test_the_prose_names_the_blocker_instead_of_a_plain_available_line(self):
+        self.present()
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
+        self.assertEqual(code, 0)
+        self.drop_mcp_bindings()
+        self.declare_own_mcp_server("jira")
+        context = self.runtime()
+        cli.main(["mcp", "list", "--cli", CLI], runtime=context)
+        out = context.out.getvalue()
+        self.assertIn("cbm", out)
+        self.assertNotIn("Declared but not granted", out)
+
 
 class UpdateReappliesGrantsTest(RealHomeTestCase):
     def test_update_reapplies_the_recorded_grant_with_no_flags(self):
@@ -310,6 +487,22 @@ class ProseTest(RealHomeTestCase):
         cli.main(["mcp", "list", "--cli", CLI], runtime=context)
         out = context.out.getvalue()
         self.assertTrue(out.strip())
+
+    def test_list_prose_names_an_already_covered_key_and_why(self):
+        self.install("--mcp", "context7")
+        self.declare_own_mcp_server("context7")
+        context = self.runtime()
+        cli.main(["mcp", "list", "--cli", CLI], runtime=context)
+        out = context.out.getvalue()
+        self.assertIn("context7", out)
+        self.assertIn("Already covered", out)
+
+    def test_list_prose_says_nothing_extra_with_nothing_already_covered(self):
+        self.install()
+        self.declare_own_mcp_server("jira")
+        context = self.runtime()
+        cli.main(["mcp", "list", "--cli", CLI], runtime=context)
+        self.assertNotIn("Already covered", context.out.getvalue())
 
     def test_missing_subcommand_is_an_error(self):
         code, report = self.run_cli("mcp")

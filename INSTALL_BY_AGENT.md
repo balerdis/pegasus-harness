@@ -230,10 +230,20 @@ pegasus mcp list --cli opencode --json
 pegasus mcp revoke --cli opencode <clave> --json
 ```
 
-`list` muestra lo otorgado ahora (`"granted"`) y qué otras claves declaradas todavía no se otorgaron
-(`"available"`). `revoke` sobre una clave nunca otorgada no es un error: el JSON trae
-`"status": "already-revoked"` y sale en `0`. `pegasus update --cli opencode` reaplica las claves ya
-otorgadas junto con el resto de la selección, sin que haga falta repetir `mcp grant`.
+`list` muestra lo otorgado ahora (`"granted"`) y qué otras claves declaradas `grant` aceptaría tal
+como está esta instalación (`"available"`) -- nunca una clave que `grant` fuera a rechazar. Una clave
+declarada que Pegasus ya alcanza por agente -- un servidor propio que esta instalación eligió, o una
+clave ya ligada -- aparece en cambio en `"already_covered"`, no en `"available"`: otorgarla de nuevo
+sería redundante, no un error, así que no desaparece del reporte sin explicación. Si la instalación
+tiene una ligadura sin resolver (`--mcp id=<clave>` cuya clave nunca se registró), `grant`/`revoke` se
+niegan de entrada para cualquier clave -- no sólo la ligada -- así que en ese estado `"available"` y
+`"already_covered"` vienen vacíos, `"unresolved_mcp_bindings"` nombra el o los ids que bloquean, y
+`"blocked"` trae el mismo texto exacto que `grant`/`revoke`/`update` ya usan para rechazar, nunca una
+segunda redacción del mismo hecho -- resolvé eso primero (`pegasus install --cli opencode --mcp
+id=<clave>`) antes de esperar algo de `"available"`. `revoke` sobre una clave nunca otorgada no es un
+error: el JSON trae `"status": "already-revoked"` y sale en `0`. `pegasus update --cli opencode`
+reaplica las claves ya otorgadas junto con el resto de la selección,
+sin que haga falta repetir `mcp grant`.
 
 Si un `install` posterior liga un servidor propio de Pegasus (`--mcp id=<clave>`) bajo la misma
 cadena que una clave ya otorgada por su cuenta, esa clave otorgada queda redundante -- el servidor

@@ -14,6 +14,8 @@ from pegasus import cli
 from pegasus.tui import wordmark
 from pegasus.tui.navigator import (
     EFFORT_OPTIONS,
+    GrantMcpResultScreen,
+    GrantMcpScreen,
     InstallPlanScreen,
     InstallResultScreen,
     McpSelectionScreen,
@@ -71,6 +73,8 @@ UNINSTALLED_BANNER = "UNINSTALLED."
 UNINSTALL_FAILED_BANNER = "Uninstall didn't succeed."
 RESTORED_BANNER = "RESTORED."
 RESTORE_FAILED_BANNER = "Restore didn't succeed."
+GRANT_MCP_BANNER = "MCP GRANTS UPDATED."
+GRANT_MCP_FAILED_BANNER = "Granting MCP servers didn't succeed."
 
 
 class Style(Enum):
@@ -235,6 +239,10 @@ def render(screen: Screen, cursor: int, *, width: int = _AMPLE_WIDTH) -> tuple[L
         return _render_placeholder(screen)
     if isinstance(screen, McpSelectionScreen):
         return _render_mcp_selection(screen, cursor)
+    if isinstance(screen, GrantMcpScreen):
+        return _render_grant_mcp(screen, cursor)
+    if isinstance(screen, GrantMcpResultScreen):
+        return _render_grant_mcp_result(screen)
     if isinstance(screen, InstallPlanScreen):
         return _render_install_plan(screen)
     if isinstance(screen, InstallResultScreen):
@@ -441,6 +449,38 @@ def _render_mcp_selection(screen: McpSelectionScreen, cursor: int) -> tuple[Line
     )
     items = rows + (CONTINUE_LABEL,)
     return _render_choices(heading, items, cursor, "enter/space: toggle a server, or continue · esc: back")
+
+
+def _render_grant_mcp(screen: GrantMcpScreen, cursor: int) -> tuple[Line, ...]:
+    """The step for granting `screen.cli`'s own MCP servers: a checklist of
+    every server the user administers themselves, and a Continue row after
+    the last one that applies the grants and revokes for whatever ended up
+    checked. Deliberately not `_render_mcp_selection`'s own rendering --
+    there is no `description` to show here, only the key itself (see
+    `GrantMcpOption`'s own docstring)."""
+    heading = f"Grant MCP servers · {screen.cli.display_name} · granted to every agent"
+    rows = tuple(f"[{'x' if option.id in screen.chosen else ' '}] {option.id}" for option in screen.options)
+    items = rows + (CONTINUE_LABEL,)
+    return _render_choices(heading, items, cursor, "enter/space: toggle a grant, or continue · esc: back")
+
+
+def _render_grant_mcp_result(screen: GrantMcpResultScreen) -> tuple[Line, ...]:
+    failed = bool(screen.errors)
+    banner = GRANT_MCP_FAILED_BANNER if failed else GRANT_MCP_BANNER
+    lines = [Line(f"Grant MCP servers · {screen.cli.display_name}"), Line(""), Line(banner), Line("")]
+    if screen.granted:
+        lines.append(Line(f"Granted: {', '.join(screen.granted)}"))
+    if screen.revoked:
+        lines.append(Line(f"Revoked: {', '.join(screen.revoked)}"))
+    if not screen.granted and not screen.revoked and not failed:
+        lines.append(Line("Nothing changed."))
+    for error in screen.errors:
+        lines.append(Line(error))
+    if screen.activation:
+        lines.append(Line(""))
+        lines.extend(Line(text) for text in screen.activation)
+    lines += [Line(""), Line("enter/esc: back")]
+    return tuple(lines)
 
 
 def _render_models(screen: ModelsScreen, cursor: int) -> tuple[Line, ...]:
