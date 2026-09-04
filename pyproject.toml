@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pegasus-harness"
-version = "5.14.0"
+version = "5.15.0"
 description = "Additive harness of prompts, agents, skills and commands for AI coding CLIs"
 readme = "README.md"
 requires-python = ">=3.12"
