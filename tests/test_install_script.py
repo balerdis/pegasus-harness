@@ -766,6 +766,472 @@ class ClosingPathGuidanceTest(InstallScriptTestCase):
         self.assertEqual(result.stdout.count("=== PATH ==="), 1)
 
 
+class ShellDetectionAndPathPersistenceTest(InstallScriptTestCase):
+    """Covers `detectar_shell` and the new PATH-persistence step: unlike
+    bash/sh on Debian/Ubuntu (where `~/.profile` already wires up
+    `~/.local/bin` for new sessions), zsh and fish never pick up pegasus's
+    bin dir on their own -- these tests drive the real script end to end to
+    prove a PATH line actually lands in the shell's own rc file, exactly
+    once, only when nothing else would have handled it.
+    """
+
+    def _stub_python_node_opencode_present(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+
+    def _install_only_pegasus(self, *args: str, extra_env: dict[str, str] | None = None):
+        self._stub_python_node_opencode_present()
+        fixture_dir = Path(self.tmp.name) / "fixture"
+        base_url = _make_release_fixture(fixture_dir)
+        env = {"PEGASUS_INSTALL_BASE_URL": base_url}
+        if extra_env:
+            env.update(extra_env)
+        return self.run_install("--yes", "--no-run", *args, extra_env=env)
+
+    def test_zsh_with_existing_zshrc_gets_the_path_line_and_closing_guidance_names_it(self):
+        zshrc = self.home / ".zshrc"
+        zshrc.write_text("# pre-existing zsh config\n", encoding="utf-8")
+
+        result = self._install_only_pegasus(extra_env={"SHELL": "/usr/bin/zsh"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        bin_dir = str(self.home / ".local" / "bin")
+        content = zshrc.read_text(encoding="utf-8")
+        self.assertIn(bin_dir, content)
+        self.assertIn(f"source {zshrc}", result.stdout)
+        self.assertNotIn("source ~/.profile", result.stdout)
+
+    def test_fish_with_existing_config_gets_fish_add_path_not_export(self):
+        fish_config = self.home / ".config" / "fish" / "config.fish"
+        fish_config.parent.mkdir(parents=True)
+        fish_config.write_text("# pre-existing fish config\n", encoding="utf-8")
+
+        result = self._install_only_pegasus(extra_env={"SHELL": "/usr/bin/fish"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        bin_dir = str(self.home / ".local" / "bin")
+        content = fish_config.read_text(encoding="utf-8")
+        # Quoted as a fish single-quote literal (see PathRcShellInjectionTest
+        # for why unquoted interpolation is unsafe) -- this default bin_dir
+        # has no characters that need escaping, so the literal is the bare
+        # path wrapped in a plain pair of single quotes.
+        self.assertIn(f"fish_add_path '{bin_dir}'", content)
+        self.assertNotIn(f'export PATH="{bin_dir}:$PATH"', content)
+
+    def test_zsh_with_no_existing_rc_file_creates_the_canonical_zshrc(self):
+        self.assertFalse((self.home / ".zshrc").exists())
+
+        result = self._install_only_pegasus(extra_env={"SHELL": "/usr/bin/zsh"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        zshrc = self.home / ".zshrc"
+        self.assertTrue(zshrc.exists())
+        self.assertIn(str(self.home / ".local" / "bin"), zshrc.read_text(encoding="utf-8"))
+
+    def test_guard_skips_the_write_when_the_rc_already_has_the_exact_line_and_pegasus_is_still_missing(self):
+        """Genuinely exercises the idempotency guard in `escribir_path_rc`:
+        pegasus is missing on THIS run (so `PERSISTIR_PATH_RC` is 1 and the
+        function runs past its early return), and the rc file is pre-seeded
+        with the EXACT line this run would write. The guard must recognize
+        that exact match and not append a second copy. (Deleting the guard
+        in a scratch copy of install.sh turns this test red -- see the
+        task report for that evidence; the old version of this test, named
+        the same as the property below, did not actually exercise this
+        because on a second run pegasus was already installed and
+        `escribir_path_rc` returned before ever reaching the check.)"""
+        bin_dir = str(self.home / ".local" / "bin")
+        zshrc = self.home / ".zshrc"
+        linea = f"export PATH='{bin_dir}':\"$PATH\""
+        zshrc.write_text(f"# pre-existing\n\n# pegasus-harness\n{linea}\n", encoding="utf-8")
+
+        result = self._install_only_pegasus(extra_env={"SHELL": "/usr/bin/zsh"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        content = zshrc.read_text(encoding="utf-8")
+        self.assertEqual(content.count(linea), 1)
+
+    def test_second_run_after_pegasus_already_installed_does_not_touch_the_rc_file_again(self):
+        """A different, weaker property than the guard above: once pegasus
+        is installed by the first run, a second run installs nothing new
+        and never even calls into the write path again, because
+        `PERSISTIR_PATH_RC` itself goes back to 0 (nothing left to
+        persist) -- not because of the exact-line guard, which this test
+        does not exercise."""
+        self._install_only_pegasus(extra_env={"SHELL": "/usr/bin/zsh"})
+        zshrc = self.home / ".zshrc"
+        first_content = zshrc.read_text(encoding="utf-8")
+
+        self._install_only_pegasus(extra_env={"SHELL": "/usr/bin/zsh"})
+        second_content = zshrc.read_text(encoding="utf-8")
+
+        self.assertEqual(first_content, second_content)
+        self.assertEqual(second_content.count(str(self.home / ".local" / "bin")), 1)
+
+    def test_prefix_collision_in_the_rc_file_does_not_skip_the_write(self):
+        """A raw substring match (the old `grep -qF "$BIN_DIR"`) would treat
+        an unrelated line mentioning `<BIN_DIR>2` as if it already covered
+        `<BIN_DIR>` -- a prefix collision -- and skip writing the real line,
+        leaving PATH never persisted while still claiming success. The
+        guard must compare the exact line, not a substring."""
+        bin_dir = str(self.home / ".local" / "bin")
+        zshrc = self.home / ".zshrc"
+        colliding_line = f'export PATH="{bin_dir}2:$PATH"'
+        zshrc.write_text(f"# pre-existing\n{colliding_line}\n", encoding="utf-8")
+
+        result = self._install_only_pegasus(extra_env={"SHELL": "/usr/bin/zsh"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        content = zshrc.read_text(encoding="utf-8")
+        self.assertIn(colliding_line, content)  # untouched
+        self.assertIn(f"export PATH='{bin_dir}':\"$PATH\"", content)  # the real line was still written
+
+    def test_commented_out_mention_does_not_skip_the_write(self):
+        """Same substring-match bug, different trigger: a commented-out
+        mention of BIN_DIR (e.g. left by a person disabling it manually)
+        must not be mistaken for the live line."""
+        bin_dir = str(self.home / ".local" / "bin")
+        zshrc = self.home / ".zshrc"
+        commented_line = f'# export PATH="{bin_dir}:$PATH"'
+        zshrc.write_text(f"{commented_line}\n", encoding="utf-8")
+
+        result = self._install_only_pegasus(extra_env={"SHELL": "/usr/bin/zsh"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        content = zshrc.read_text(encoding="utf-8")
+        self.assertIn(commented_line, content)  # untouched
+        self.assertIn(f"export PATH='{bin_dir}':\"$PATH\"", content)  # the real line was still written
+
+    def test_custom_bin_dir_under_bash_now_gets_the_path_line_written(self):
+        custom_bin_dir = Path(self.tmp.name) / "custom-bin"
+
+        result = self._install_only_pegasus(
+            "--bin-dir", str(custom_bin_dir), extra_env={"SHELL": "/bin/bash"}
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        bashrc = self.home / ".bashrc"
+        self.assertTrue(bashrc.exists())
+        self.assertIn(str(custom_bin_dir), bashrc.read_text(encoding="utf-8"))
+
+    def test_bash_with_default_bin_dir_writes_nothing_anywhere(self):
+        result = self._install_only_pegasus(extra_env={"SHELL": "/bin/bash"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.home / ".bashrc").exists())
+        self.assertFalse((self.home / ".zshrc").exists())
+        self.assertFalse((self.home / ".profile").exists())
+
+    def test_verify_mode_with_zsh_touches_no_rc_file(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("curl", "exit 0\n")
+
+        result = self.run_install("--verify", extra_env={"SHELL": "/usr/bin/zsh"})
+
+        self.assertFalse((self.home / ".zshrc").exists())
+        self.assertIn("=== Chequeo de requisitos ===", result.stdout)
+
+    def test_preflight_names_the_rc_file_before_the_confirmation_prompt(self):
+        self._stub_python_node_opencode_present()
+        fixture_dir = Path(self.tmp.name) / "fixture"
+        base_url = _make_release_fixture(fixture_dir)
+
+        result = self.run_install(
+            "--no-run",
+            extra_env={"PEGASUS_INSTALL_BASE_URL": base_url, "SHELL": "/usr/bin/zsh"},
+            start_new_session=True,
+        )
+
+        zshrc = str(self.home / ".zshrc")
+        self.assertIn(zshrc, result.stdout)
+        instalara_idx = result.stdout.index("=== Se instalará ===")
+        rc_idx = result.stdout.index(zshrc)
+        self.assertLess(instalara_idx, rc_idx)
+
+    def test_shell_unset_falls_back_to_getent_and_still_exits_zero(self):
+        result = self._install_only_pegasus(extra_env={})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class BinDirNewlineRefusalTest(InstallScriptTestCase):
+    """Finding 1/2 follow-up: a newline in `--bin-dir` cannot be represented
+    safely on a single line of any shell rc file, in either quoting scheme.
+    Refused at argument-parsing time -- before anything is installed --
+    rather than discovered later at write time."""
+
+    def test_newline_in_bin_dir_is_refused_before_anything_is_installed(self):
+        result = self.run_install("--verify", "--bin-dir", "/tmp/x\ny")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--bin-dir", result.stderr)
+        self.assertIn("salto de línea", result.stderr.lower())
+
+
+class PathRcShellInjectionTest(InstallScriptTestCase):
+    """Findings 1 & 2 (CRITICAL): `$BIN_DIR` comes straight from `--bin-dir`
+    and used to be interpolated into the shell rc file with no escaping at
+    all, letting a crafted value break out of the string it was placed in
+    and run arbitrary shell code every time a new terminal starts (see the
+    reviewer's PoC in the task brief). The fix quotes `$BIN_DIR` as a
+    properly escaped single-quoted literal, per shell family, instead of
+    trusting the input to be clean.
+    """
+
+    def _stub_python_node_opencode_present(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+
+    def _run_with_malicious_bin_dir(self, bin_dir: str, shell: str):
+        self._stub_python_node_opencode_present()
+        fixture_dir = Path(self.tmp.name) / "fixture"
+        base_url = _make_release_fixture(fixture_dir)
+        return self.run_install(
+            "--yes", "--no-run", "--bin-dir", bin_dir,
+            extra_env={"PEGASUS_INSTALL_BASE_URL": base_url, "SHELL": shell},
+        )
+
+    @staticmethod
+    def _posix_single_quote_escape(value: str) -> str:
+        # The standard POSIX rule: close the quote, escape a literal quote
+        # outside of quoting, reopen.
+        return value.replace("'", "'\\''")
+
+    @staticmethod
+    def _fish_single_quote_escape(value: str) -> str:
+        # fish's rule differs from POSIX: inside '...' only \ and ' are
+        # special, and \ must be escaped first so it doesn't get reinterpreted
+        # as introducing the escape of the quote that follows it.
+        return value.replace("\\", "\\\\").replace("'", "\\'")
+
+    def _assert_posix_family_neutralized(self, shell_name: str, rc_path: Path, shell_for_run: str | None = None):
+        marker = self.marker(f"pwned-{shell_name}")
+        bin_dir = f"/tmp/pegasus-{shell_name}'\"$(id)`;touch {marker}#"
+        result = self._run_with_malicious_bin_dir(bin_dir, shell_for_run or f"/usr/bin/{shell_name}")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists(), "the injected command ran while WRITING the rc file")
+
+        content = rc_path.read_text(encoding="utf-8")
+        expected_line = f"export PATH='{self._posix_single_quote_escape(bin_dir)}':\"$PATH\""
+        self.assertIn(expected_line, content)
+
+        shell_binary = shutil.which(shell_name)
+        if shell_binary:
+            subprocess.run(
+                [shell_binary, "-c", f'. "{rc_path}"'],
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertFalse(marker.exists(), "the injected command ran while SOURCING the rc file")
+
+    def test_bash_injection_is_neutralized(self):
+        self._assert_posix_family_neutralized("bash", self.home / ".bashrc")
+
+    def test_zsh_injection_is_neutralized(self):
+        self._assert_posix_family_neutralized("zsh", self.home / ".zshrc")
+
+    def test_sh_family_injection_is_neutralized(self):
+        """SHELL_NAME `sh` (and `ash`) share the export-based branch with
+        bash/zsh -- exercised with SHELL=/bin/sh, verified against a real
+        `dash` (the common `/bin/sh` provider) if available.
+
+        `~/.profile` is pre-created so `detectar_shell`'s candidate search
+        picks it over the real machine's own `/etc/profile` (its last
+        fallback candidate for this shell family) -- this throwaway HOME
+        must never depend on, let alone write to, anything outside itself.
+        """
+        (self.home / ".profile").write_text("# pre-existing\n", encoding="utf-8")
+        self._assert_posix_family_neutralized("sh", self.home / ".profile", shell_for_run="/bin/sh")
+
+    def test_fish_injection_is_neutralized(self):
+        """fish is NOT quoted the same way as POSIX shells: it used to be
+        interpolated completely unquoted, so a semicolon alone (no closing
+        quote needed at all) was enough to inject a second statement. This
+        also verifies fish's own escaping rule, which differs from POSIX's."""
+        marker = self.marker("pwned-fish")
+        bin_dir = f"/tmp/pegasus-fish'\\;touch {marker};#"
+        result = self._run_with_malicious_bin_dir(bin_dir, "/usr/bin/fish")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists(), "the injected command ran while WRITING the rc file")
+
+        rc_path = self.home / ".config" / "fish" / "config.fish"
+        content = rc_path.read_text(encoding="utf-8")
+        expected_line = f"fish_add_path '{self._fish_single_quote_escape(bin_dir)}'"
+        self.assertIn(expected_line, content)
+
+        fish_binary = shutil.which("fish")
+        if fish_binary:
+            subprocess.run(
+                [fish_binary, "-c", f'source "{rc_path}"'],
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertFalse(marker.exists(), "the injected command ran while SOURCING the rc file under fish")
+        # else: no real fish available in this environment -- the exact
+        # literal-content assertion above (`expected_line in content`) is
+        # the fallback verification the task brief allows for that case.
+
+
+class PathRcWriteFailureTest(InstallScriptTestCase):
+    """Finding 4: a failed rc write must be a WARNING, not a fatal error --
+    the install itself already succeeded by the time `escribir_path_rc`
+    runs, and a cosmetic persistence failure must not throw that away."""
+
+    def test_unwritable_rc_file_does_not_abort_a_successful_install(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        fixture_dir = Path(self.tmp.name) / "fixture"
+        base_url = _make_release_fixture(fixture_dir)
+        zshrc = self.home / ".zshrc"
+        zshrc.write_text("# existing\n", encoding="utf-8")
+        zshrc.chmod(0o400)
+        self.addCleanup(lambda: zshrc.chmod(0o600))
+
+        result = self.run_install(
+            "--yes", "--no-run",
+            extra_env={"PEGASUS_INSTALL_BASE_URL": base_url, "SHELL": "/usr/bin/zsh"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        installed = self.home / ".local" / "bin" / "pegasus"
+        self.assertTrue(installed.is_file(), "the install itself must still succeed")
+        self.assertIn("ANTES DE CORRER pegasus U opencode", result.stdout)
+        self.assertNotIn("ya quedó agregada", result.stdout.lower())
+        bin_dir = str(self.home / ".local" / "bin")
+        self.assertIn(f'export PATH="{bin_dir}:$PATH"', result.stdout)
+
+
+class PathRcSymlinkSafetyTest(InstallScriptTestCase):
+    """Finding 5: a plain `>>` follows a symlinked rc file to whatever it
+    points at. Dotfile managers legitimately symlink `~/.zshrc` into a repo
+    -- that case must still be written to. Only a symlink resolving outside
+    `$HOME` (or to a file not owned by the current user) is refused."""
+
+    def _stub_python_node_opencode_present(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+
+    def _install_only_pegasus(self, extra_env: dict[str, str]):
+        self._stub_python_node_opencode_present()
+        fixture_dir = Path(self.tmp.name) / "fixture"
+        base_url = _make_release_fixture(fixture_dir)
+        env = {"PEGASUS_INSTALL_BASE_URL": base_url}
+        env.update(extra_env)
+        return self.run_install("--yes", "--no-run", extra_env=env)
+
+    def test_symlink_inside_home_still_gets_written(self):
+        real_target = self.home / "dotfiles" / "zshrc-real"
+        real_target.parent.mkdir(parents=True)
+        real_target.write_text("# managed by dotfiles\n", encoding="utf-8")
+        zshrc = self.home / ".zshrc"
+        zshrc.symlink_to(real_target)
+
+        result = self._install_only_pegasus({"SHELL": "/usr/bin/zsh"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(str(self.home / ".local" / "bin"), real_target.read_text(encoding="utf-8"))
+
+    def test_symlink_outside_home_is_refused_and_run_still_exits_zero(self):
+        outside_dir = Path(self.tmp.name) / "outside-home"
+        outside_dir.mkdir()
+        real_target = outside_dir / "zshrc-real"
+        real_target.write_text("# outside home\n", encoding="utf-8")
+        zshrc = self.home / ".zshrc"
+        zshrc.symlink_to(real_target)
+
+        result = self._install_only_pegasus({"SHELL": "/usr/bin/zsh"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn(str(self.home / ".local" / "bin"), real_target.read_text(encoding="utf-8"))
+        self.assertNotIn("ya quedó agregada", result.stdout.lower())
+
+
+class RequiredActionBlockTest(InstallScriptTestCase):
+    """The `=== PATH ===` section (see ClosingPathGuidanceTest) explains WHY
+    a PATH line is missing; this block is the actionable reminder that must
+    survive past the TUI covering the screen -- it is printed as the very
+    last thing before control leaves the script, in all three of `lanzar`'s
+    exits, only when something this run installed is genuinely still
+    missing from `ORIGINAL_PATH`.
+    """
+
+    def _stub_python_node_opencode_present(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub('opencode', 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+
+    def test_block_appears_after_para_terminar_and_after_launch_line_under_no_run(self):
+        self._stub_python_node_opencode_present()
+        fixture_dir = Path(self.tmp.name) / "fixture"
+        base_url = _make_release_fixture(fixture_dir)
+
+        result = self.run_install(
+            "--yes", "--no-run",
+            extra_env={"PEGASUS_INSTALL_BASE_URL": base_url, "SHELL": "/usr/bin/zsh"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ANTES DE CORRER pegasus U opencode", result.stdout)
+        end_idx = result.stdout.index("=== Para terminar ===")
+        block_idx = result.stdout.index("ANTES DE CORRER pegasus U opencode")
+        self.assertLess(end_idx, block_idx)
+
+    def test_block_absent_when_everything_already_on_path(self):
+        self._stub_python_node_opencode_present()
+        self.stub('pegasus', 'if [ "$1" = "--version" ]; then echo "pegasus 1.0.0"; exit 0; fi\n')
+
+        result = self.run_install("--yes", "--no-run", extra_env={"SHELL": "/usr/bin/zsh"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("ANTES DE CORRER pegasus U opencode", result.stdout)
+
+    def test_block_absent_under_verify(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("curl", "exit 0\n")
+
+        result = self.run_install("--verify", extra_env={"SHELL": "/usr/bin/zsh"})
+
+        self.assertNotIn("ANTES DE CORRER pegasus U opencode", result.stdout)
+
+    def test_block_names_the_detected_shells_own_source_command(self):
+        self._stub_python_node_opencode_present()
+        fixture_dir = Path(self.tmp.name) / "fixture"
+        base_url = _make_release_fixture(fixture_dir)
+        zshrc = self.home / ".zshrc"
+        zshrc.write_text("# existing\n", encoding="utf-8")
+
+        result = self.run_install(
+            "--yes", "--no-run",
+            extra_env={"PEGASUS_INSTALL_BASE_URL": base_url, "SHELL": "/usr/bin/zsh"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        block_start = result.stdout.index("ANTES DE CORRER pegasus U opencode")
+        block_tail = result.stdout[block_start:]
+        self.assertIn(f"source {zshrc}", block_tail)
+        self.assertNotIn("source ~/.profile", block_tail)
+
+    def test_rule_lines_above_and_below_the_block_are_the_same_length(self):
+        self._stub_python_node_opencode_present()
+        fixture_dir = Path(self.tmp.name) / "fixture"
+        base_url = _make_release_fixture(fixture_dir)
+
+        result = self.run_install(
+            "--yes", "--no-run",
+            extra_env={"PEGASUS_INSTALL_BASE_URL": base_url, "SHELL": "/usr/bin/zsh"},
+        )
+
+        lines = result.stdout.splitlines()
+        block_idx = next(i for i, l in enumerate(lines) if "ANTES DE CORRER pegasus U opencode" in l)
+        rule_above = lines[block_idx - 1]
+        rule_below = next(l for l in lines[block_idx + 1:] if l.strip() and set(l.strip()) <= {"─", "-"})
+        self.assertTrue(rule_above.strip(), "expected a rule line right above the heading")
+        self.assertEqual(len(rule_above), len(rule_below))
+
+
 class NvmDirectoryParentTest(InstallScriptTestCase):
     """Found by running the script for real against a genuinely empty home.
 

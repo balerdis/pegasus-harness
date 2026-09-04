@@ -74,6 +74,10 @@ BASE_URL="${PEGASUS_INSTALL_BASE_URL:-https://github.com/balerdis/pegasus-harnes
 PEGASUS_TMPDIR=''
 
 fallar() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+# A diferencia de fallar, no aborta: la usa escribir_path_rc, donde el resto
+# de la instalación ya terminó bien y una falla acá es sólo cosmética (ver
+# el comentario grande junto a esa función).
+advertir() { printf 'ADVERTENCIA: %s\n' "$*" >&2; }
 titulo() { printf '\n=== %s ===\n' "$*"; }
 ok()     { printf '  ✔ %s\n' "$*"; }
 info()   { printf '  %s\n' "$*"; }
@@ -92,7 +96,16 @@ parsear_argumentos() {
       --no-run) NO_RUN=1; shift ;;
       --bin-dir)
         (($# >= 2)) || fallar '--bin-dir necesita un directorio'
-        BIN_DIR=$2; shift 2 ;;
+        BIN_DIR=$2
+        # Un salto de línea no se puede representar de forma segura en una
+        # sola línea de ningún archivo de configuración de shell, con
+        # ninguno de los dos esquemas de comillas que usa escribir_path_rc
+        # -- se corta acá, antes de instalar nada, en vez de descubrirlo
+        # recién al escribir.
+        case "$BIN_DIR" in
+          *$'\n'*) fallar '--bin-dir no puede contener un salto de línea' ;;
+        esac
+        shift 2 ;;
       --opencode-version)
         (($# >= 2)) || fallar '--opencode-version necesita un numero'
         VERSION_OPENCODE=$2; shift 2 ;;
@@ -206,6 +219,83 @@ detectar_path() {
   dir_en_path "$PATH" "$BIN_DIR" && BIN_DIR_EN_PATH=1 || BIN_DIR_EN_PATH=0
 }
 
+# Qué shell corre esta persona y qué archivo de esa shell hay que tocar para
+# agregarle el PATH -- se resuelve UNA sola vez acá, y tanto la persistencia
+# real (ver escribir_path_rc) como el aviso de cierre (ver mostrar_guia_path)
+# usan este mismo resultado, para que nunca puedan quedar en desacuerdo sobre
+# qué archivo es "el" archivo de esta shell.
+SHELL_NAME=''
+SHELL_RC_FILE=''
+
+detectar_shell() {
+  local shell_path=''
+  if [[ -n "${SHELL:-}" ]]; then
+    shell_path="$SHELL"
+  else
+    # Sin $SHELL (pasa en algunos entornos sin login shell, o cuando algo la
+    # borró del ambiente antes de invocar este script), se busca en NSS la
+    # shell registrada para el usuario actual -- último campo de la línea de
+    # passwd. Con `set -e` de por medio, un getent que no encuentra a nadie
+    # (o que ni siquiera existe en este sistema) tiene que poder fallar sin
+    # tirar abajo el script entero.
+    local entrada_passwd=''
+    entrada_passwd=$(getent passwd "$(id -un)" 2>/dev/null) || entrada_passwd=''
+    shell_path="${entrada_passwd##*:}"
+  fi
+
+  # `${shell_path##*/}` en vez de `basename`: es el mismo resultado, pero sin
+  # depender de un ejecutable externo que un PATH reducido a propósito (como
+  # el de estos mismos tests) puede no tener.
+  SHELL_NAME="${shell_path##*/}"
+  [[ -n "$SHELL_NAME" ]] || SHELL_NAME='unknown'
+
+  # Mismas listas de candidatos que usa el instalador oficial de OpenCode
+  # (https://opencode.ai/install), a propósito: si algún día alguien corre
+  # los dos instaladores en la misma cuenta, los dos coinciden en dónde vive
+  # la línea de PATH de cada shell.
+  local candidatos=()
+  case "$SHELL_NAME" in
+    fish)
+      candidatos=("$HOME/.config/fish/config.fish")
+      ;;
+    zsh)
+      local zdotdir="${ZDOTDIR:-$HOME}"
+      local xdg_zsh="${XDG_CONFIG_HOME:-$HOME/.config}/zsh/.zshenv"
+      candidatos=("$zdotdir/.zshrc" "$zdotdir/.zshenv" "$xdg_zsh")
+      ;;
+    bash)
+      candidatos=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
+      ;;
+    sh|ash)
+      candidatos=("$HOME/.ashrc" "$HOME/.profile" "/etc/profile")
+      ;;
+    *)
+      candidatos=("$HOME/.profile")
+      ;;
+  esac
+
+  SHELL_RC_FILE=''
+  local candidato
+  for candidato in "${candidatos[@]}"; do
+    if [[ -f "$candidato" ]]; then
+      SHELL_RC_FILE="$candidato"
+      break
+    fi
+  done
+
+  # Ninguno de los candidatos existe todavía: se elige el canónico de esa
+  # shell, pero sin crearlo acá -- eso lo hace recién escribir_path_rc, en el
+  # momento en que de verdad hay algo para escribirle (ver el comentario ahí).
+  if [[ -z "$SHELL_RC_FILE" ]]; then
+    case "$SHELL_NAME" in
+      fish) SHELL_RC_FILE="$HOME/.config/fish/config.fish" ;;
+      zsh)  SHELL_RC_FILE="$HOME/.zshrc" ;;
+      bash) SHELL_RC_FILE="$HOME/.bashrc" ;;
+      *)    SHELL_RC_FILE="$HOME/.profile" ;;
+    esac
+  fi
+}
+
 detectar_todo() {
   detectar_python
   detectar_curl
@@ -213,6 +303,7 @@ detectar_todo() {
   detectar_opencode
   detectar_pegasus
   detectar_path
+  detectar_shell
 }
 
 # Qué falta instalar. Se calcula una sola vez a partir de la detección, y de
@@ -232,6 +323,66 @@ calcular_faltantes() {
     FALTA_ALGO=1
   else
     FALTA_ALGO=0
+  fi
+}
+
+# Si el directorio de pegasus y/o el de OpenCode van a faltar en el PATH de
+# la terminal real que llamó a este script -- ver ORIGINAL_PATH, arriba, y
+# por qué se compara contra ese valor y no contra el PATH ya modificado del
+# propio proceso. Una sola función para que mostrar_guia_path y
+# bloque_accion_requerida (ver más abajo) nunca puedan quedar en desacuerdo
+# sobre si hay algo que avisar.
+AVISO_PEGASUS_DIR=0
+AVISO_OPENCODE_DIR=0
+
+calcular_avisos_path() {
+  AVISO_PEGASUS_DIR=0
+  AVISO_OPENCODE_DIR=0
+  ((FALTA_PEGASUS)) && ! dir_en_path "$ORIGINAL_PATH" "$BIN_DIR" && AVISO_PEGASUS_DIR=1
+  ((FALTA_OPENCODE)) && ! dir_en_path "$ORIGINAL_PATH" "$OPENCODE_BIN_DIR" && AVISO_OPENCODE_DIR=1
+  return 0
+}
+
+# Si además de avisar hay que escribir de verdad una línea de PATH en el
+# archivo de la shell detectada. Se salta sólo en el caso en que Debian/Ubuntu
+# ya resuelve esto solo: bash (o sh/ash, que en esa familia de distros leen lo
+# mismo) con el BIN_DIR de siempre, porque ahí ~/.profile ya agrega
+# ~/.local/bin en toda sesión nueva -- escribir ahí sería redundante. En
+# cualquier otro caso (zsh, fish, shell desconocida, o un --bin-dir distinto
+# del de siempre bajo cualquier shell) no hay nada más que lo resuelva solo.
+PERSISTIR_PATH_RC=0
+# shellcheck disable=SC2088 # es texto para mostrar tal cual, no un path que este script abra
+RECOMENDACION_SOURCE='~/.profile'
+
+# Si escribir_path_rc de verdad dejó la línea en el archivo -- ya sea porque
+# la escribió esta corrida, o porque ya estaba de una corrida anterior. En 0
+# cuando PERSISTIR_PATH_RC pidió persistir pero la escritura se degradó (rc
+# file no escribible, o symlink rehusado): mostrar_guia_path y
+# bloque_accion_requerida usan este valor para no afirmar "ya quedó
+# agregada" cuando no es cierto.
+PATH_RC_ESCRITO=0
+
+# La línea que escribir_path_rc calculó para esta corrida (escrita o no):
+# la guía de cierre degradada (ver mostrar_guia_path) la necesita para
+# mostrarle a la persona el contenido exacto que tiene que agregar a mano
+# cuando la escritura real no pudo hacerse.
+LINEA_PATH_RC=''
+
+calcular_persistencia_path() {
+  local shell_ya_cubierta=0
+  case "$SHELL_NAME" in
+    bash|sh|ash)
+      [[ "$BIN_DIR" == "$HOME/.local/bin" ]] && shell_ya_cubierta=1
+      ;;
+  esac
+
+  if ((AVISO_PEGASUS_DIR)) && ! ((shell_ya_cubierta)); then
+    PERSISTIR_PATH_RC=1
+    RECOMENDACION_SOURCE="$SHELL_RC_FILE"
+  else
+    PERSISTIR_PATH_RC=0
+    # shellcheck disable=SC2088 # idem: texto para mostrar, no un path a abrir
+    RECOMENDACION_SOURCE='~/.profile'
   fi
 }
 
@@ -298,6 +449,9 @@ mostrar_preflight() {
   if ((FALTA_PEGASUS)); then
     info "el binario pegasus, en $BIN_DIR"
     algo_para_instalar=1
+  fi
+  if ((PERSISTIR_PATH_RC)); then
+    info "$BIN_DIR se agregará al PATH en $SHELL_RC_FILE"
   fi
   ((algo_para_instalar)) || info 'nada: ya está todo instalado'
 
@@ -534,6 +688,110 @@ asegurar_path() {
   export PATH="$BIN_DIR:$PATH"
 }
 
+# Deja agregada, en el archivo de la shell detectada (ver detectar_shell), la
+# línea que pone a $BIN_DIR en el PATH -- para que una terminal NUEVA lo
+# encuentre sola, sin que nadie tenga que acordarse de correr nada. Sólo se
+# llama en una corrida real (nunca bajo --verify, que nunca instala nada de
+# verdad), y sólo si calcular_persistencia_path decidió que hacía falta (ver
+# ahí el porqué: bash/sh/ash con el BIN_DIR de siempre ya lo resuelve solo
+# vía ~/.profile, y ahí escribir sería redundante).
+#
+# El archivo puede no existir todavía (candidato elegido por default, ver
+# detectar_shell): recién acá, en el momento de escribir de verdad, se crea
+# -- con su directorio padre si hace falta (~/.config/fish, por ejemplo,
+# puede no existir en una cuenta nueva).
+#
+# Idempotente a propósito: si el archivo ya tiene, LITERAL Y EXACTA, la
+# misma línea que este run escribiría, no se agrega nada de nuevo -- así
+# correr el instalador dos veces no deja la línea duplicada. A propósito NO
+# es un `grep` de substring: eso hacía "falso positivo" tanto con una
+# mención en un comentario como con un directorio que sólo comparte prefijo
+# (p.ej. BIN_DIR=".../bin" contra una línea que menciona ".../bin2"), y en
+# los dos casos el script terminaba diciendo "ya quedó agregada" sin haber
+# escrito nada de verdad.
+#
+# $BIN_DIR entra tal cual desde --bin-dir (ver parsear_argumentos): no hay
+# ninguna garantía de que venga "limpio". Por eso se cita como un literal de
+# comillas simples -- ni el shell que lea el rc file, ni el shell que corre
+# ESTE script al construir la línea, vuelven a interpretar su contenido.
+escapar_comilla_simple_posix() {
+  # Regla estándar: se cierra la comilla, se escapa una comilla simple
+  # literal por fuera de comillas, se reabre. Funciona igual para
+  # bash/zsh/sh/ash: todos comparten esta regla de citado.
+  printf '%s' "${1//\'/\'\\\'\'}"
+}
+
+escapar_comilla_simple_fish() {
+  # La regla de fish DIFIERE de la de POSIX: adentro de comillas simples
+  # sólo \ y ' son especiales (nada más lo es, a diferencia de POSIX donde
+  # nada adentro de comillas simples lo es). La barra se escapa PRIMERO,
+  # para que la barra que introduce el escape de la comilla no termine
+  # reinterpretada ella misma.
+  local valor="$1"
+  valor="${valor//\\/\\\\}"
+  valor="${valor//\'/\\\'}"
+  printf '%s' "$valor"
+}
+
+escribir_path_rc() {
+  ((PERSISTIR_PATH_RC)) || return 0
+
+  # La línea se arma UNA sola vez, en una sola variable, y esa misma
+  # variable es la que se usa tanto para el chequeo de idempotencia como
+  # para la escritura -- así las dos no pueden divergir nunca.
+  local linea
+  if [[ "$SHELL_NAME" == 'fish' ]]; then
+    linea="fish_add_path '$(escapar_comilla_simple_fish "$BIN_DIR")'"
+  else
+    # shellcheck disable=SC2016 # $PATH no debe expandir acá: es texto literal para el rc de la shell
+    linea="export PATH='$(escapar_comilla_simple_posix "$BIN_DIR")':\"\$PATH\""
+  fi
+  LINEA_PATH_RC="$linea"
+
+  # Un rc file simbólico es un caso legítimo (gestores de dotfiles suelen
+  # symlinkear ~/.zshrc adentro de un repo) y un `>>` liso lo sigue solo,
+  # escribiendo en el destino -- que es lo que se quiere. Lo que NO se
+  # quiere es seguir ciegamente un symlink hacia cualquier lado: sólo se
+  # rehúsa cuando el destino resuelto cae fuera de $HOME, o no es dueño de
+  # él el usuario actual -- ahí se avisa y se degrada, igual que una
+  # escritura fallida (ver más abajo).
+  if [[ -L "$SHELL_RC_FILE" ]]; then
+    local destino=''
+    destino=$(realpath -m -- "$SHELL_RC_FILE" 2>/dev/null) || destino=''
+    local fuera_de_home=1
+    case "$destino" in
+      "$HOME"|"$HOME"/*) fuera_de_home=0 ;;
+    esac
+    local dueno_ok=1
+    if [[ -n "$destino" && -e "$destino" ]]; then
+      [[ "$(stat -c '%u' -- "$destino" 2>/dev/null)" == "$(id -u)" ]] || dueno_ok=0
+    fi
+    if [[ -z "$destino" ]] || ((fuera_de_home)) || ! ((dueno_ok)); then
+      advertir "$SHELL_RC_FILE es un symlink hacia afuera de \$HOME (o hacia algo que no es tuyo); no se va a tocar. Agregá esta línea a mano en el rc file real de tu shell:
+$linea"
+      return 0
+    fi
+  fi
+
+  if ! mkdir -p "$(dirname "$SHELL_RC_FILE")" 2>/dev/null; then
+    advertir "no se pudo crear $(dirname "$SHELL_RC_FILE"); vas a tener que agregar el PATH a mano. Línea a agregar:
+$linea"
+    return 0
+  fi
+
+  if [[ -f "$SHELL_RC_FILE" ]] && grep -qxF "$linea" "$SHELL_RC_FILE"; then
+    PATH_RC_ESCRITO=1
+    return 0
+  fi
+
+  if { printf '\n# pegasus-harness\n%s\n' "$linea"; } >> "$SHELL_RC_FILE" 2>/dev/null; then
+    PATH_RC_ESCRITO=1
+  else
+    advertir "no se pudo escribir en $SHELL_RC_FILE; vas a tener que agregar el PATH a mano. Línea a agregar:
+$linea"
+  fi
+}
+
 # --- Guía de PATH, al cierre ---
 #
 # Reemplaza el aviso que antes daba asegurar_path a mitad de instalación.
@@ -562,45 +820,122 @@ asegurar_path() {
 # arregla las dos cosas de una sola vez en la terminal actual: si alguien
 # prueba sólo ~/.bashrc porque es lo primero que se le ocurre, opencode
 # aparece pero pegasus sigue sin estar, y todo parece un instalador roto.
-# No se ofrece como válido en todos lados: sólo cuando pegasus fue a parar
-# al `~/.local/bin` de siempre -- con `--bin-dir` apuntando a otro lado,
-# ~/.profile no tiene forma de saberlo, y el `export PATH=...` explícito es
-# la única salida correcta.
+# Ahora que detectar_shell (ver arriba) sabe qué shell corre esta persona y
+# qué archivo de esa shell hay que tocar, esa detección reemplaza lo que
+# antes era pura adivinanza: la rama de abajo distingue no ya "BIN_DIR es el
+# de siempre o no", sino "esta corrida escribió una línea en un rc de verdad
+# o no" (ver calcular_persistencia_path) -- si escribió, se nombra ESE
+# archivo; si no (el caso bash/sh/ash con el BIN_DIR de siempre, que Debian ya
+# resuelve solo), se deja el texto de siempre, palabra por palabra.
+#
+# Un límite que ninguna detección arregla: este script corre en un proceso
+# chico (el que "curl | bash" lanzó), y ningún proceso hijo puede hacer
+# `source` de un archivo adentro de la shell que lo invocó -- por más que acá
+# adentro se sepa exactamente qué archivo es. Lo único que la detección
+# compra es que el comando impreso sea el correcto para la shell real de la
+# persona, y que el archivo que se nombra sea uno que esa shell de verdad lee
+# -- no que este script pueda correrlo por ella.
+# Calculado una sola vez, en una función compartida, para que
+# mostrar_guia_path y bloque_accion_requerida (éste último en el caso
+# degradado, ver ahí) nunca puedan imprimir un "export PATH=..." distinto
+# entre sí.
+EXPORT_LINEA=''
+
+calcular_export_linea() {
+  local dirs=()
+  ((AVISO_PEGASUS_DIR)) && dirs+=("$BIN_DIR")
+  ((AVISO_OPENCODE_DIR)) && dirs+=("$OPENCODE_BIN_DIR")
+  local combinado
+  combinado=$(IFS=:; printf '%s' "${dirs[*]}")
+  EXPORT_LINEA="export PATH=\"$combinado:\$PATH\""
+}
+
 mostrar_guia_path() {
-  local falta_pegasus_dir=0 falta_opencode_dir=0
-  ((FALTA_PEGASUS)) && ! dir_en_path "$ORIGINAL_PATH" "$BIN_DIR" && falta_pegasus_dir=1
-  ((FALTA_OPENCODE)) && ! dir_en_path "$ORIGINAL_PATH" "$OPENCODE_BIN_DIR" && falta_opencode_dir=1
-  ((falta_pegasus_dir || falta_opencode_dir)) || return 0
+  calcular_avisos_path
+  ((AVISO_PEGASUS_DIR || AVISO_OPENCODE_DIR)) || return 0
+  calcular_export_linea
 
   titulo 'PATH'
-  ((falta_pegasus_dir)) && info "pegasus, en $BIN_DIR: todavía no está en el PATH de esta terminal."
-  ((falta_opencode_dir)) && info "opencode, en $OPENCODE_BIN_DIR: todavía no está en el PATH de esta terminal."
+  ((AVISO_PEGASUS_DIR)) && info "pegasus, en $BIN_DIR: todavía no está en el PATH de esta terminal."
+  ((AVISO_OPENCODE_DIR)) && info "opencode, en $OPENCODE_BIN_DIR: todavía no está en el PATH de esta terminal."
 
-  local dirs=()
-  ((falta_pegasus_dir)) && dirs+=("$BIN_DIR")
-  ((falta_opencode_dir)) && dirs+=("$OPENCODE_BIN_DIR")
-  local combinado export_linea
-  combinado=$(IFS=:; printf '%s' "${dirs[*]}")
-  export_linea="export PATH=\"$combinado:\$PATH\""
-
-  if ((falta_pegasus_dir)) && [[ "$BIN_DIR" != "$HOME/.local/bin" ]]; then
-    info "Para esta terminal: $export_linea"
+  if ((PERSISTIR_PATH_RC)) && ((PATH_RC_ESCRITO)); then
+    info "Para esta terminal: source $SHELL_RC_FILE"
+    info "$EXPORT_LINEA"
+    info 'Esa línea ya quedó agregada a ese archivo: una terminal nueva la toma'
+    info 'sola, sin que haga falta correr nada de esto a mano.'
+  elif ((PERSISTIR_PATH_RC)); then
+    # escribir_path_rc no pudo dejar la línea (rc file no escribible, o un
+    # symlink que se rehusó a seguir -- ver esa función): no hay ningún
+    # archivo del que "una terminal nueva" vaya a leer nada solo, así que
+    # acá no se afirma lo contrario. Se muestra la línea exacta para
+    # agregar a mano, más el export de siempre para esta terminal.
+    info "No se pudo dejar agregada la línea de PATH en $SHELL_RC_FILE."
+    info 'Agregala vos a mano, con este contenido exacto:'
+    info "$LINEA_PATH_RC"
+    info "Para esta terminal: $EXPORT_LINEA"
   else
     info 'Para esta terminal: source ~/.profile'
-    if ((falta_pegasus_dir && falta_opencode_dir)); then
+    if ((AVISO_PEGASUS_DIR && AVISO_OPENCODE_DIR)); then
       info '(no "source ~/.bashrc" sola: esa trae lo que instaló OpenCode, pero no'
       info 'agrega el bin de pegasus. ~/.profile hace las dos cosas: de paso vuelve'
       info 'a leer ~/.bashrc, y además agrega ~/.local/bin, que recién se creó.)'
-    elif ((falta_pegasus_dir)); then
+    elif ((AVISO_PEGASUS_DIR)); then
       info '(agrega ~/.local/bin al PATH, ahora que el directorio existe.)'
     else
       info '(vuelve a leer ~/.bashrc, donde quedó la línea que agregó el instalador'
       info 'de OpenCode.)'
     fi
-    info "Si tu shell no lee ~/.profile (zsh, fish, ...): $export_linea"
+    info "$EXPORT_LINEA"
+    info 'Una sesión nueva ya la tiene sola, sin hacer nada de esto.'
   fi
+}
 
-  info 'Una sesión nueva ya la tiene sola, sin hacer nada de esto.'
+# --- Recordatorio final, después de todo lo demás ---
+#
+# La sección "PATH" de arriba explica POR QUÉ hace falta hacer algo; este
+# bloque es el recordatorio de que hay que hacerlo, y tiene que sobrevivir a
+# que la TUI de pegasus/opencode tape la pantalla -- por eso se imprime como
+# lo ÚLTIMO antes de que el control salga del script, en cada una de las tres
+# salidas de lanzar() (exec, --no-run, y sin terminal controladora): cuando
+# la persona cierra esa TUI y la consola vuelve a mostrarse, esto es lo que
+# le queda arriba del prompt.
+#
+# Sin borde derecho a propósito: printf rellena por BYTES, no por
+# caracteres, así que un `%-60s` con acentos ("sesión", "todavía") desalinea
+# ese borde -- un recuadro cerrado se rompe visiblemente justo en el idioma
+# que habla este script. Con sólo una raya arriba y otra abajo no hay borde
+# derecho que alinear, así que no hay nada que romper.
+bloque_accion_requerida() {
+  calcular_avisos_path
+  ((AVISO_PEGASUS_DIR || AVISO_OPENCODE_DIR)) || return 0
+
+  # Sin `seq` ni ningún otro comando externo: este bloque existe justamente
+  # para rescatar un PATH que todavía no sirve, y es lo último que se imprime
+  # antes de soltar el control. Si se apoyara en coreutils, bajo
+  # `set -euo pipefail` un PATH degradado mataría el script exactamente en el
+  # aviso que iba a explicar cómo arreglar el PATH. Se rellena con espacios
+  # (un byte cada uno) y recién después se sustituyen por la raya, para no
+  # caer en el relleno por bytes que descarta la caja cerrada -- ver abajo.
+  local raya
+  printf -v raya '%*s' 62 ''
+  raya=${raya// /─}
+
+  printf '\n%s\n' "$raya"
+  printf '  ANTES DE CORRER pegasus U opencode, en esta terminal:\n\n'
+  if ((PERSISTIR_PATH_RC)) && ! ((PATH_RC_ESCRITO)); then
+    # escribir_path_rc no pudo dejar la línea (ver mostrar_guia_path):
+    # "source $SHELL_RC_FILE" no arreglaría nada, porque ese archivo no
+    # tiene la línea. Se da el export de siempre, el que sí funciona ya
+    # mismo en esta terminal.
+    calcular_export_linea
+    printf '      %s\n\n' "$EXPORT_LINEA"
+    printf '  (no se pudo agregar la línea al archivo de tu shell; agregala vos a mano.)\n'
+  else
+    printf '      source %s\n\n' "$RECOMENDACION_SOURCE"
+    printf '  Sin esto, esta terminal todavía no los encuentra.\n'
+  fi
+  printf '%s\n' "$raya"
 }
 
 # --- Qué queda corriendo al final ---
@@ -644,6 +979,7 @@ lanzar() {
   fi
   if ((NO_RUN)); then
     info "no se lanza nada por --no-run. Se habría lanzado: $LANZAR ($MOTIVO)"
+    bloque_accion_requerida
     return 0
   fi
 
@@ -654,6 +990,7 @@ lanzar() {
   # así que un "exec" liso que la heredara reproduciría exactamente eso.
   if hay_terminal_controladora; then
     info "lanzando $LANZAR ($MOTIVO)..."
+    bloque_accion_requerida
     # exec reemplaza este proceso por el de destino en vez de encadenarlo:
     # así install.sh no queda colgado en el árbol de procesos esperando a
     # que termine, y no hay nada suyo pendiente por ejecutar después de
@@ -671,6 +1008,7 @@ lanzar() {
   # lanzamiento final con uno de la instalación, que no lo tuvo.
   info "no se lanza $LANZAR: no hay una terminal para abrirlo ($MOTIVO)."
   info "Corré esto para continuar: $LANZAR"
+  bloque_accion_requerida
 }
 
 main() {
@@ -678,6 +1016,8 @@ main() {
   rechazar_root
   detectar_todo
   calcular_faltantes
+  calcular_avisos_path
+  calcular_persistencia_path
   calcular_bloqueo
   mostrar_preflight
 
@@ -704,6 +1044,7 @@ main() {
     ((FALTA_OPENCODE)) && instalar_opencode
     ((FALTA_PEGASUS)) && instalar_pegasus
     asegurar_path
+    escribir_path_rc
   fi
 
   lanzar
