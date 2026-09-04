@@ -316,5 +316,264 @@ def _owning_adapter(path: Path) -> str:
     return relative[0] if len(relative) > 1 else ""
 
 
+#: The documented flow is `tui -> cli -> {core, infra, ports, adapters}`, with `core/`
+#: allowed to see only itself and `ports/` -- the one rule the whole hexagonal split exists
+#: to keep true, because an engine that can import `infra/`, an adapter, or `cli.py` is an
+#: engine that has stopped being ignorant of the runtime around it. Every other entry below
+#: was not invented; it was read off the tree with `grep` before this rule was written, so
+#: the rule matches what the code already does rather than a stricter shape someone wished
+#: it did:
+#:
+#: - `ports/` imports `core` (for the types a port's signature is built from) and itself;
+#:   never `infra/` or an adapter, or a port would stop being an interface a driven adapter
+#:   is free to implement however it likes.
+#: - `infra/` imports `core` and `ports` -- an adapter to a port implemented in terms of the
+#:   core types it moves -- plus itself (`snapshot_store_file.py` reuses a constant from
+#:   `journal_store_file.py`). Never `adapters/`, `tui/`, or `cli.py`.
+#: - `adapters/` (the CLI adapters, e.g. `adapters/opencode/`) imports `core` and itself
+#:   only. It satisfies the `CliAdapter` protocol structurally -- Python's `Protocol` needs
+#:   no import from the implementer -- so it has never needed `ports/`, and this rule does
+#:   not grant an allowance nothing exercises.
+#: - `tui/` imports `core`, `adapters` (`tui/session.py` calls `pegasus.adapters.available()`
+#:   directly to build the registry a session runs against) and, as the one named exemption
+#:   below, `cli`.
+#: - `cli.py` imports `core`, `ports`, `infra`, `adapters` and, as the same named exemption,
+#:   `tui`.
+#:
+#: The exemption: this is not a strict DAG between `cli` and `tui`. `cli.py` imports
+#: `pegasus.tui.app` and calls `tui_app.main()` as the interactive entry point -- the
+#: installer always finishes in the TUI, never in a bare CLI prompt, which is the whole
+#: point of the "instalador abre siempre la TUI" change this rule arrived after. `tui/app.py`
+#: and `tui/session.py` import back into `cli` to reuse its argument parsing and execution
+#: rather than duplicating it. Two modules calling into each other is not layering, so this
+#: is named here rather than left implicit, and `test_the_only_named_exemption_is_the_cli_tui_entry_point`
+#: below fails the moment either side's allowance grows past exactly this pair.
+LAYER_ALLOWED_IMPORTS: dict[str, frozenset[str]] = {
+    "core": frozenset({"core", "ports"}),
+    "ports": frozenset({"ports", "core"}),
+    "infra": frozenset({"infra", "core", "ports"}),
+    "adapters": frozenset({"adapters", "core"}),
+    "tui": frozenset({"tui", "core", "adapters", "cli"}),
+    "cli": frozenset({"cli", "core", "ports", "infra", "adapters", "tui"}),
+}
+
+
+def _layer_of_path(path: Path, source: Path) -> str | None:
+    """Which policed layer `path` belongs to, or `None` for a module this rule does not
+    police (the package root `__init__.py`/`__main__.py`, or `content/`, neither of which
+    is part of the `tui -> cli -> {core, infra, ports, adapters}` direction this rule
+    enforces)."""
+    relative = path.relative_to(source).parts
+    if relative == ("cli.py",):
+        return "cli"
+    head = relative[0]
+    return head if head in LAYER_ALLOWED_IMPORTS else None
+
+
+def _module_dotted_name(path: Path, source: Path) -> str:
+    """The dotted module name Python itself would give `path`, e.g.
+    `pegasus/core/catalog.py` -> `pegasus.core.catalog`, and a package's own `__init__.py`
+    -> the package name with no trailing `.__init__`. Relative-import resolution below needs
+    this to find the package a level climbs from."""
+    relative = path.relative_to(source.parent).with_suffix("")
+    parts = list(relative.parts)
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _resolve_import_from(path: Path, node: ast.ImportFrom, source: Path) -> str:
+    """The absolute dotted module `node` names, resolving `node.level` the way Python's own
+    import machinery does. `level == 0` (`from pegasus.infra import x`) is already absolute.
+    A relative import climbs from the package *containing* `path` -- itself, if `path` is a
+    package's own `__init__.py`, otherwise its parent -- one extra level per point beyond the
+    first, exactly as `from . import x` inside a module means "this package" while
+    `from .. import x` means "the package above it". Skipping this and treating every
+    `ImportFrom` as already absolute is the gap named in the brief: a relative import that
+    crosses a forbidden boundary would silently resolve to nothing and never be judged, which
+    is exactly what `test_a_relative_import_crossing_the_boundary_is_caught` below exists to
+    catch.
+    """
+    if node.level == 0:
+        return node.module or ""
+    package_parts = _module_dotted_name(path, source).split(".")
+    if path.name != "__init__.py":
+        package_parts = package_parts[:-1]
+    if node.level > 1:
+        package_parts = package_parts[: len(package_parts) - (node.level - 1)]
+    if node.module:
+        package_parts = package_parts + node.module.split(".")
+    return ".".join(package_parts)
+
+
+def _layer_of_module(dotted: str, root_package: str) -> str | None:
+    """Which policed layer an absolute dotted module name (e.g. `pegasus.infra.fs_posix`)
+    lives in, or `None` for a bare `import pegasus` (carries no layer -- `pegasus/__init__.py`
+    is a version constant, not a dependency) or a name outside `root_package` entirely (a
+    third-party or stdlib import, which this rule has no opinion about)."""
+    if dotted == root_package:
+        return None
+    prefix = root_package + "."
+    if not dotted.startswith(prefix):
+        return None
+    head = dotted[len(prefix):].split(".", 1)[0]
+    return head if head in LAYER_ALLOWED_IMPORTS else None
+
+
+def _all_modules(source: Path) -> list[Path]:
+    return sorted(path for path in source.rglob("*.py") if "__pycache__" not in path.parts)
+
+
+def _modules_by_layer(source: Path) -> dict[str, list[Path]]:
+    layered: dict[str, list[Path]] = {name: [] for name in LAYER_ALLOWED_IMPORTS}
+    for path in _all_modules(source):
+        layer = _layer_of_path(path, source)
+        if layer is not None:
+            layered[layer].append(path)
+    return layered
+
+
+def _import_direction_violations(source: Path) -> list[str]:
+    """Every import, anywhere under `source`, whose target layer is not in the importing
+    module's own `LAYER_ALLOWED_IMPORTS` entry -- the one scan this whole rule exists to
+    run."""
+    root_package = source.name
+    offenders: list[str] = []
+    for path in _all_modules(source):
+        layer = _layer_of_path(path, source)
+        if layer is None:
+            continue
+        allowed = LAYER_ALLOWED_IMPORTS[layer]
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    target = _layer_of_module(alias.name, root_package)
+                    if target is not None and target not in allowed:
+                        offenders.append(
+                            f"{path.relative_to(source)}:{node.lineno} {layer}/ imports "
+                            f"{target}/ via 'import {alias.name}'"
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                resolved = _resolve_import_from(path, node, source)
+                target = _layer_of_module(resolved, root_package)
+                if target is not None and target not in allowed:
+                    spelled = "from " + "." * node.level + (node.module or "") + " import ..."
+                    offenders.append(
+                        f"{path.relative_to(source)}:{node.lineno} {layer}/ imports "
+                        f"{target}/ via {spelled!r}"
+                    )
+    return sorted(offenders)
+
+
+def _write_scratch_pegasus(test: unittest.TestCase, files: dict[str, str]) -> Path:
+    """A throwaway `pegasus/` tree under a temp directory, holding only the files a
+    self-test needs. Named `pegasus` (not the real package's name by coincidence, but
+    because `_layer_of_module` keys off `source.name`) so the same resolution code this
+    rule runs against `src/pegasus` also runs, unmodified, against a tree small enough to
+    hold one deliberate violation."""
+    directory = tempfile.TemporaryDirectory()
+    test.addCleanup(directory.cleanup)
+    root = Path(directory.name) / "pegasus"
+    for relative_path, content in files.items():
+        full_path = root / relative_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content, encoding="utf-8")
+    return root
+
+
+class ImportDirectionTest(unittest.TestCase):
+    """The rule `NoCliNamesOutsideAdaptersTest` and `AdapterIsolationTest` both assume but
+    never check: that dependencies only ever point the one documented way,
+    `tui -> cli -> {core, infra, ports, adapters}`, with `core/` importing only `core` and
+    `ports`. Everything else those two tests catch is a *symptom* of an engine that already
+    knows too much; this is the rule that keeps the cause from happening at all. `core/`
+    importing `infra/` would not mention a CLI by name and would slip straight past
+    `NoCliNamesOutsideAdaptersTest`, yet it is the more fundamental break: the engine would
+    now depend on a runtime -- a filesystem, a subprocess, an HTTP client -- it exists
+    specifically to stay ignorant of, and every one of `core/`'s claims to be provable by a
+    table of canned answers (see `NoClockReadsInDeterministicModulesTest`) would stop being
+    true the moment that import could reach an adapter's side effects.
+
+    The allowed table is `LAYER_ALLOWED_IMPORTS` above, together with the one named
+    exemption in its own comment. It was read off the tree, not designed in the abstract:
+    at the time this test was written, the real `src/pegasus` tree already obeyed it in
+    full.
+    """
+
+    def test_every_policed_layer_has_modules_to_scan(self):
+        """Without this, a typo in `LAYER_ALLOWED_IMPORTS` or `_layer_of_path` that made a
+        layer scan nothing would leave `test_no_import_crosses_a_forbidden_layer_boundary`
+        passing vacuously, the same failure mode `test_agnostic_packages_are_scanned` and
+        `test_deterministic_packages_are_scanned` already guard elsewhere in this file."""
+        layered = _modules_by_layer(SOURCE)
+        for layer in LAYER_ALLOWED_IMPORTS:
+            self.assertTrue(layered[layer], f"no modules found under {layer}/ -- this rule would pass vacuously")
+
+    def test_no_import_crosses_a_forbidden_layer_boundary(self):
+        offenders = _import_direction_violations(SOURCE)
+        self.assertEqual(
+            offenders,
+            [],
+            "an import crossed a forbidden hexagonal-layer boundary:\n" + "\n".join(offenders),
+        )
+
+    def test_the_only_named_exemption_is_the_cli_tui_entry_point(self):
+        """Guards the one exemption this rule grants the way `test_app_py_is_not_scanned_at_all`
+        guards the clock-read rule's exemption: if either side of the `cli`/`tui` pair grows a
+        new allowance beyond exactly its partner, this fails and forces whoever widened it to
+        say why in writing, here, rather than let the direction rule quietly get looser."""
+        self.assertEqual(LAYER_ALLOWED_IMPORTS["cli"] - {"cli", "core", "ports", "infra", "adapters"}, {"tui"})
+        self.assertEqual(LAYER_ALLOWED_IMPORTS["tui"] - {"tui", "core", "adapters"}, {"cli"})
+
+    def test_core_importing_infra_is_caught(self):
+        root = _write_scratch_pegasus(self, {"core/probe.py": "from pegasus.infra import fs_posix\n"})
+        offenders = _import_direction_violations(root)
+        self.assertEqual(
+            offenders,
+            ["core/probe.py:1 core/ imports infra/ via 'from pegasus.infra import ...'"],
+        )
+
+    def test_core_importing_an_adapter_is_caught(self):
+        root = _write_scratch_pegasus(self, {"core/probe.py": "import pegasus.adapters.opencode\n"})
+        offenders = _import_direction_violations(root)
+        self.assertEqual(
+            offenders,
+            ["core/probe.py:1 core/ imports adapters/ via 'import pegasus.adapters.opencode'"],
+        )
+
+    def test_core_importing_cli_is_caught(self):
+        root = _write_scratch_pegasus(self, {"core/probe.py": "from pegasus.cli import main\n"})
+        offenders = _import_direction_violations(root)
+        self.assertEqual(
+            offenders,
+            ["core/probe.py:1 core/ imports cli/ via 'from pegasus.cli import ...'"],
+        )
+
+    def test_a_relative_import_crossing_the_boundary_is_caught(self):
+        """The case named in the brief: `from ..infra import ...` never spells `pegasus.infra`
+        anywhere in the source text, so a resolver that judged the raw `node.module` string
+        instead of resolving `node.level` first would let this straight through."""
+        root = _write_scratch_pegasus(self, {"core/probe.py": "from ..infra import fs_posix\n"})
+        offenders = _import_direction_violations(root)
+        self.assertEqual(
+            offenders,
+            ["core/probe.py:1 core/ imports infra/ via 'from ..infra import ...'"],
+        )
+
+    def test_a_permitted_import_is_not_flagged(self):
+        """The rule must stay quiet on exactly what the real tree already does, or it is too
+        strict to ship: `infra/` reusing a constant from a sibling `infra/` module, and
+        `core/` importing `ports/`."""
+        root = _write_scratch_pegasus(
+            self,
+            {
+                "infra/probe.py": "from pegasus.infra import journal_store_file\n",
+                "core/probe.py": "from pegasus.ports import filesystem\n",
+            },
+        )
+        self.assertEqual(_import_direction_violations(root), [])
+
+
 if __name__ == "__main__":
     unittest.main()
