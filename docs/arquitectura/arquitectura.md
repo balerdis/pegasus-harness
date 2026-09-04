@@ -1246,6 +1246,14 @@ Cada agente resuelve sus secciones desde su propio `optional_mcp`, que es exacta
 
 La clave se valida donde todavía es algo que alguien tipeó. Se empalma textual en reglas de permiso de los dos lados del grant, y el runtime lee `*` y `?` dentro del nombre de una regla como patrón: una clave con comodín renderiza una regla que le gana al deny baseline para todo. Una regla no se distingue de una que alguien quiso una vez que está en el mapa.
 
+### Un servidor que la persona administra, sin descriptor ni convención, se concede a todos los agentes por igual
+
+`--mcp ID=CLAVE` es para un servidor que Pegasus conoce: tiene descriptor, y por lo tanto convención y referencia fuerte. Falta el caso de uno que Pegasus nunca vio -- Jira, Figma, cualquier MCP que la persona instaló y administra por su cuenta. Para ese caso no hay `optional_mcp` que declarar: exigiría un descriptor y una convención que no existen, y forzarlo a esa forma haría que `_require_mcp_convention_referenced` se niegue con razón, porque ningún cuerpo de agente referencia jamás un servidor del que nadie escribió una línea.
+
+`Install.granted_mcp` y `Agent.granted_mcp` son el campo aparte que resuelve esto: `pegasus mcp grant --cli <id> <clave>` la agrega, y `content.grant_mcp` la aplica **igual a todos los agentes**, nunca por agente -- la decisión explícita fue que agregar un MCP más no debía volverse una tarea tediosa de tocar archivo por archivo. El render escribe `<clave>*` en `tools` y `permission`, exactamente como el comodín de un servidor propio, pero después del comodín de `optional_mcp` y antes de `denied_mcp_tools`: si un servidor propio de Pegasus ya negó una herramienta puntual a un agente, un grant del usuario nunca puede reabrirla.
+
+Se rechaza una clave que coincide con un id que Pegasus ya embarca, o con una que ya está atada: conceder ahí de nuevo, a todos los agentes por igual, borraría el recorte por agente que esa atadura ya tenía. `mcp grant` además se niega a otorgar una clave que la configuración propia de la CLI no declara -- la misma lógica de `_require_mcp_convention_referenced`, aplicada donde no hay convención que verificar: un error de tipeo no debe traducirse en un permiso que nadie nota que falta.
+
 ### El comodín de un servidor no alcanza lo que destruye
 
 Conceder las herramientas de un servidor se hace con `<clave>*`, y esa granularidad es correcta: un descriptor no debería enumerar todo lo que un servidor expone. `withheld_tools` nombra, **por excepción**, lo que ese comodín no debe alcanzar, y el render lo escribe después del grant, que es lo único que lo hace ganar.
@@ -1265,6 +1273,8 @@ La línea de base fuera de esa excepción no es la misma para todo agente: un su
 `--start-mcp-servers` es la única forma en que `doctor` deja de ser de sólo lectura: lanza cada servidor que el journal reclama y clasifica su handshake. Un servidor **atado** no tiene entrada de configuración que lanzar, así que se reporta con estado `bound` — antes no se reportaba, y una instalación con todos sus servidores atados decía «No MCP servers configured», que no era un hueco sino una afirmación falsa.
 
 Lo que no se afirma es más de lo que el journal sabe, y son dos cosas: a qué clave se lo ató, que nunca se registró; y que sea con certeza una atadura, porque `retire` recorre los tipos en orden alfabético y un uninstall interrumpido deja la misma forma.
+
+`mcp_granted` es una clave propia, distinta de `mcp_bound`: una clave otorgada no es una atadura -- Pegasus no le embarca descriptor, no le concede convención, y no la instaló. Confundir las dos bajo un mismo encabezado diría que algo se ató (lo que implica que un contrato viaja con eso) cuando acá nunca se embarcó nada en absoluto.
 
 ### El journal alcanza al disco sin escribir
 

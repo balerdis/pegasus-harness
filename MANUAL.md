@@ -31,6 +31,24 @@ Si el plan encuentra una clave o un archivo tuyo en el destino, lo informa y lo 
 
 Instalá solo lo que el equipo vaya a usar: un servidor no pedido con `--mcp` no deja config ni dependencia huérfana.
 
+## Dar acceso a un MCP que vos mismo administrás
+
+Pegasus renderiza cada agente con una base que niega todo (`{"*": false}`) más una lista de los servidores que él mismo instala. Un MCP que instalaste y administrás por tu cuenta (Jira, Figma, o cualquier otro) queda fuera de esa lista aunque figure en tu `opencode.json`: OpenCode combina el bloque de permisos propio del agente al final, así que si Pegasus no le abre la puerta a esa clave, ningún agente puede usarla, sin importar qué diga tu configuración general.
+
+`pegasus mcp` es la palanca para eso. A diferencia de los MCPs que Pegasus instala, acá no hay elección por agente: la clave se otorga a todos los agentes por igual, porque hacerlo agente por agente volvería tediosa la tarea de sumar un MCP más.
+
+```sh
+pegasus mcp grant --cli opencode jira-mcp
+pegasus mcp list --cli opencode
+pegasus mcp revoke --cli opencode jira-mcp
+```
+
+`grant` rechaza una clave que tu propia configuración de OpenCode no declara bajo `mcp` — nombra ahí mismo cuáles sí declara, para que un error de tipeo no termine en un permiso que nadie nota que falta. `revoke` sobre una clave que nunca otorgaste no es un error: informa que ya estaba en ese estado y sale en `0`. `list` muestra dos cosas: lo que está otorgado ahora, y qué otras claves declara tu configuración que todavía no fueron otorgadas.
+
+Los tres reaplican la configuración renderizada al terminar — igual que `pegasus install` — así que el cambio ya queda escrito en `opencode.json`. Como con cualquier cambio a los agentes, hace falta reiniciar OpenCode para que lo lea: sigue leyendo la configuración de agentes una sola vez, al arrancar. `pegasus update --cli opencode` reaplica las claves otorgadas junto con el resto de la selección, sin flags.
+
+Si más adelante un `install` liga un servidor propio de Pegasus (`--mcp id=<clave>`) bajo la misma cadena que una clave que ya habías otorgado, esa clave otorgada queda redundante y el `install` la descarta en vez de fallar — el servidor sigue siendo alcanzable a través de los agentes que ahora lo declaran. El comando avisa qué clave descartó; si no era lo que querías, volvé a otorgarla con `pegasus mcp grant`.
+
 ## Usarlo todos los días
 
 1. Abrí OpenCode dentro del repositorio en el que vas a trabajar.

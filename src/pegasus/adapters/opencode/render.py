@@ -398,6 +398,16 @@ def _tools(item: Agent) -> dict[str, bool]:
     # id IS the server key OpenCode matches tools against, and `f"{id}*"` is that
     # same key with the wildcard OpenCode uses to grant every tool under it.
     granted.update({f"{mcp_id}*": True for mcp_id in item.optional_mcp})
+    # `granted_mcp` writes the same shape of wildcard, for a server the user
+    # administers rather than one Pegasus ships -- see `content.grant_mcp`'s
+    # docstring for why it is a separate field. Written after the shipped
+    # `optional_mcp` wildcards above (nothing to order against there: the two
+    # sets never share a key, `grant_mcp` refuses that collision) and before
+    # `denied_mcp_tools` below for the same resolution-order reason as
+    # everything else here: a user's own server carries no `denied_mcp_tools`
+    # of its own, but a shipped server's already-denied tool must still win
+    # over this wildcard if the two ever named the same qualified tool.
+    granted.update({f"{key}*": True for key in item.granted_mcp})
     # `denied_mcp_tools` is already the fully-qualified names `select_mcp`
     # resolved for this agent (`content.py`), so nothing here needs to know
     # which server a name belongs to or which key it was granted under.
@@ -480,6 +490,11 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     # matches its tool-call actions against, and the wildcard grants every
     # tool that server exposes.
     granted.update({f"{mcp_id}*": "allow" for mcp_id in item.optional_mcp})
+    # Same fact, same ordering reason as `_tools` above: a user-administered
+    # server's wildcard, written after the shipped `optional_mcp` grants and
+    # before `denied_mcp_tools` below, so a shipped server's withheld tool
+    # keeps winning even if it ever shared a qualified name with this grant.
+    granted.update({f"{key}*": "allow" for key in item.granted_mcp})
     # Same fact, same ordering reason as `_tools` above: a name already
     # qualified by `select_mcp`, written after the wildcard it narrows so the
     # runtime's last-match resolution lands on the deny, and before `task` and
