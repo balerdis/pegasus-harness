@@ -149,7 +149,52 @@ def _bar_line(fraction: float, width: int) -> Line:
     return Line((Span(f"{bar}{suffix}", Style.ACCENT),))
 
 
-def render_progress(message: str, progress: "cli.Progress", frame: int, *, width: int = _AMPLE_WIDTH) -> tuple[Line, ...]:
+#: The units `_format_bytes` climbs through -- 1024-based, matching how a
+#: person already reads "6.9 MB" for a ~7.2-million-byte file (see this
+#: feature's own background: GitHub reports that archive as 7,236,400 bytes,
+#: which is 6.9 MiB, not 7.2 of the decimal-million kind), even though the
+#: label stays the everyday "MB" rather than "MiB".
+_BYTE_UNITS = ("B", "KB", "MB", "GB", "TB")
+
+
+def _format_bytes(count: int) -> str:
+    """A byte count as a person reads it -- `"4.2 MB"`, never `"4404019 bytes"`."""
+    value = float(count)
+    for unit in _BYTE_UNITS[:-1]:
+        if value < 1024:
+            return f"{int(value)} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} {_BYTE_UNITS[-1]}"
+
+
+def _download_progress_text(progress: "cli.Progress", rate_bytes_per_second: float | None) -> str:
+    """The unit line for a `download` server's fetch, degrading honestly at
+    each step: no total shown when the server never sent a `Content-Length`,
+    no rate shown until `app`'s own rate tracker has enough of a time window
+    to trust. Everything handed in here is already a finished number --
+    computing any of it is `HttpDownloader`'s job (the byte counts) or
+    `app`'s (the rate), never this rendering function's.
+    """
+    downloaded = _format_bytes(progress.bytes_downloaded)
+    amount = (
+        f"{downloaded} / {_format_bytes(progress.bytes_total)}"
+        if progress.bytes_total is not None
+        else f"{downloaded} downloaded"
+    )
+    text = f"{progress.unit}  {amount}"
+    if rate_bytes_per_second is not None:
+        text = f"{text} · {_format_bytes(int(rate_bytes_per_second))}/s"
+    return text
+
+
+def render_progress(
+    message: str,
+    progress: "cli.Progress",
+    frame: int,
+    *,
+    width: int = _AMPLE_WIDTH,
+    rate_bytes_per_second: float | None = None,
+) -> tuple[Line, ...]:
     """The busy frame shown while a real install runs: `message` (what
     `navigator.busy_message_for` already says) beside a spinner glyph driven
     by `frame` -- proof of life while the bar itself sits still through a
@@ -157,10 +202,18 @@ def render_progress(message: str, progress: "cli.Progress", frame: int, *, width
     Neither the clock nor the engine call are this function's concern: `app`
     samples `time.monotonic()` into a frame count, and `session` reads the
     engine's own `Progress`; this only lays out what it is handed.
+
+    `rate_bytes_per_second` is likewise handed in already computed -- `app`
+    is the one place with both a real clock and the successive byte counts
+    to compute it from, and passing `None` (the default, matching every
+    caller that predates this parameter) simply omits the rate from the
+    line, the same honest omission a rate not yet trustworthy gets.
     """
     spinner = _SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]
     lines = [Line(f"{message} {spinner}"), _bar_line(_progress_fraction(progress), width)]
-    if progress.unit:
+    if progress.bytes_downloaded is not None:
+        lines.append(Line((Span(_download_progress_text(progress, rate_bytes_per_second), Style.DIM),)))
+    elif progress.unit:
         lines.append(Line((Span(progress.unit, Style.DIM),)))
     return tuple(lines)
 

@@ -687,6 +687,62 @@ class ProgressRenderingTest(unittest.TestCase):
             self.assertLessEqual(len(line.text), 20)
 
 
+class DownloadProgressRenderingTest(unittest.TestCase):
+    """The byte/rate line under the bar for a `download` server's fetch --
+    degrading honestly when the total or the rate is not yet known, and
+    changing nothing at all for a unit that carries no byte fields."""
+
+    def test_a_non_download_unit_renders_exactly_as_before(self):
+        """The regression guard: a unit with no byte fields must render the
+        same bare, dimmed unit line this already drew before bytes existed."""
+        progress = cli.Progress(done=5, total=10, phase="artifacts", unit="a.md")
+        lines = render_progress("Installing…", progress, frame=0, width=80)
+        unit_line = next(line for line in lines if "a.md" in line.text)
+        self.assertEqual(unit_line.text, "a.md")
+        self.assertTrue(all(span.style is Style.DIM for span in unit_line.spans))
+
+    def test_a_known_total_shows_downloaded_over_total(self):
+        progress = cli.Progress(
+            done=2, total=10, phase="dependencies", unit="engram", bytes_downloaded=4404019, bytes_total=7236400
+        )
+        lines = render_progress("Installing…", progress, frame=0, width=80)
+        unit_line = next(line for line in lines if "engram" in line.text)
+        self.assertIn("4.2 MB / 6.9 MB", unit_line.text)
+
+    def test_an_unknown_total_never_shows_a_fake_one(self):
+        progress = cli.Progress(
+            done=2, total=10, phase="dependencies", unit="engram", bytes_downloaded=4404019, bytes_total=None
+        )
+        lines = render_progress("Installing…", progress, frame=0, width=80)
+        unit_line = next(line for line in lines if "engram" in line.text)
+        self.assertIn("4.2 MB", unit_line.text)
+        self.assertNotIn("/", unit_line.text)
+
+    def test_no_rate_yet_omits_the_rate_entirely(self):
+        progress = cli.Progress(
+            done=2, total=10, phase="dependencies", unit="engram", bytes_downloaded=4404019, bytes_total=7236400
+        )
+        lines = render_progress("Installing…", progress, frame=0, width=80)
+        unit_line = next(line for line in lines if "engram" in line.text)
+        self.assertNotIn("/s", unit_line.text)
+
+    def test_a_known_rate_is_shown_beside_the_amount(self):
+        progress = cli.Progress(
+            done=2, total=10, phase="dependencies", unit="engram", bytes_downloaded=4404019, bytes_total=7236400
+        )
+        lines = render_progress("Installing…", progress, frame=0, width=80, rate_bytes_per_second=1153433.6)
+        unit_line = next(line for line in lines if "engram" in line.text)
+        self.assertIn("4.2 MB / 6.9 MB · 1.1 MB/s", unit_line.text)
+
+    def test_the_download_line_is_dimmed_like_every_other_unit_line(self):
+        progress = cli.Progress(
+            done=2, total=10, phase="dependencies", unit="engram", bytes_downloaded=4404019, bytes_total=7236400
+        )
+        lines = render_progress("Installing…", progress, frame=0, width=80, rate_bytes_per_second=1153433.6)
+        unit_line = next(line for line in lines if "engram" in line.text)
+        self.assertTrue(all(span.style is Style.DIM for span in unit_line.spans))
+
+
 class RenderWidthDefaultTest(unittest.TestCase):
     def test_render_without_a_width_still_works_for_ordinary_screens(self):
         lines = render(Menu(title="t", entries=(Entry("a", QUIT),)), cursor=0)

@@ -24,6 +24,7 @@ import io
 import threading
 import time
 from dataclasses import replace
+from typing import Callable
 
 from pegasus import cli
 from pegasus.tui import session
@@ -175,6 +176,84 @@ class _ProgressHolder:
             return self._progress
 
 
+class _DownloadRateTracker:
+    """Turns successive `Progress.bytes_downloaded` observations, arriving
+    live off the worker thread as real wall-clock time passes, into a
+    bytes/second rate for `view.render_progress` to show.
+
+    This is the one correct home for that arithmetic, and it is worth being
+    explicit about why, because nothing but convention stops a later change
+    from moving it somewhere that looks just as reasonable and is not:
+
+    - Not `core/` or `cli.py`. Both are the deterministic engine every other
+      consumer of `Progress` -- `--json`, a dry run, `test_cli_progress.py`
+      itself -- reads from too, and none of those replay time the way a
+      live animation loop does. A rate computed in there would make the
+      engine's own report depend on how much real time happened to elapse
+      while *this* caller was watching, which is a fact about the render
+      loop, not about the install.
+    - Not `view.py`, `navigator.py`, or `wordmark.py`. Every one of them
+      promises the same thing this whole TUI is proven against: the same
+      input always renders the same output, no clock, no thread, no
+      terminal required to check it. A clock read inside `render_progress`
+      would break that promise for exactly this one code path while leaving
+      every test claiming otherwise.
+    - `app.py`, on the other hand, already owns a real clock for its
+      animation frame loop just above (`time.monotonic()` driving
+      `PROGRESS_TICK_MS`), and it is the only layer that ever observes a
+      `Progress` *live*, off the worker thread through `_ProgressHolder`,
+      rather than replaying one from a finished report. So this is where
+      the one clock read this feature needs belongs, and `tests/test_architecture.py`
+      (`NoClockReadsInDeterministicModulesTest`) enforces that nothing above
+      it in `core/`, `cli.py`, or the pure `tui` trio can grow one instead.
+
+    The clock is injected (`now=time.monotonic` by default) so the arithmetic
+    itself is provable without ever sleeping a real test.
+    """
+
+    #: Below this many seconds between two observations, the arithmetic is
+    #: measuring rounding error more than a transfer rate -- two ticks a
+    #: fraction of a second apart can differ by a whole chunk's worth of
+    #: bytes for reasons that have nothing to do with how fast the network
+    #: actually is. Comfortably above `PROGRESS_TICK_MS` (80ms) so an
+    #: ordinary animation frame is not, by itself, "too soon".
+    _MIN_INTERVAL_SECONDS = 0.25
+
+    def __init__(self, *, now: Callable[[], float] = time.monotonic) -> None:
+        self._now = now
+        self._unit: str | None = None
+        self._baseline: tuple[float, int] | None = None
+        self._rate: float | None = None
+
+    def observe(self, progress: cli.Progress) -> float | None:
+        """The rate as of this observation, or `None` when there is not yet
+        one worth trusting -- either nothing has been observed for this unit
+        long enough to measure, or `progress` names a different fetch (or no
+        fetch at all) than the one this tracker was already timing.
+        """
+        if progress.bytes_downloaded is None:
+            self._reset()
+            return None
+        if progress.unit != self._unit:
+            self._unit = progress.unit
+            self._baseline = (self._now(), progress.bytes_downloaded)
+            self._rate = None
+            return None
+        moment = self._now()
+        baseline_time, baseline_bytes = self._baseline
+        elapsed = moment - baseline_time
+        if elapsed < self._MIN_INTERVAL_SECONDS:
+            return self._rate
+        self._rate = (progress.bytes_downloaded - baseline_bytes) / elapsed
+        self._baseline = (moment, progress.bytes_downloaded)
+        return self._rate
+
+    def _reset(self) -> None:
+        self._unit = None
+        self._baseline = None
+        self._rate = None
+
+
 def _run_install(window, navigator: Navigator, runtime: cli.Runtime, accent_attr: int) -> Navigator:
     """Run the confirmed `InstallPlanScreen` for real, animating a frame
     every `PROGRESS_TICK_MS` instead of blocking on `cli.install` the way a
@@ -211,11 +290,18 @@ def _run_install(window, navigator: Navigator, runtime: cli.Runtime, accent_attr
 
     window.timeout(PROGRESS_TICK_MS)
     started = time.monotonic()
+    rate_tracker = _DownloadRateTracker()
     try:
         while thread.is_alive():
             frame = int((time.monotonic() - started) * 1000 / PROGRESS_TICK_MS)
             _, width = window.getmaxyx()
-            draw(window, render_progress(message, holder.snapshot(), frame, width=width), accent_attr=accent_attr)
+            progress = holder.snapshot()
+            rate = rate_tracker.observe(progress)
+            draw(
+                window,
+                render_progress(message, progress, frame, width=width, rate_bytes_per_second=rate),
+                accent_attr=accent_attr,
+            )
             window.getch()  # -1 on timeout; either way, just a tick of the clock.
     except KeyboardInterrupt:
         # An install has no cancellation token, so this cannot abandon the

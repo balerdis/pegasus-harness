@@ -16,6 +16,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from pegasus import cli
 from pegasus.tui import app as app_module
 from pegasus.tui.app import accent_choice, action_for, draw
 from pegasus.tui.navigator import Action, BehindInstall, CliOption, InstallPlanScreen, Navigator, UpdateNotice
@@ -309,6 +310,75 @@ class RunInstallTest(unittest.TestCase):
         self.assertEqual(result, "install-result")
         self.assertIn(-1, window.timeouts)
         flushinp.assert_called_once()
+
+
+def _fake_clock(*ticks: float):
+    """An injectable `now=` that hands out `ticks` one at a time, in order --
+    driven explicitly by the test rather than by real elapsed time, per this
+    module's own constraint that a rate computed from a clock must be
+    provable without ever sleeping."""
+    values = iter(ticks)
+    return lambda: next(values)
+
+
+def _progress(bytes_downloaded, unit="engram"):
+    return cli.Progress(done=1, total=5, phase="dependencies", unit=unit, bytes_downloaded=bytes_downloaded, bytes_total=100)
+
+
+class DownloadRateTrackerTest(unittest.TestCase):
+    """Turning successive `(bytes, wall-clock-time)` observations into a
+    bytes/second rate -- the one piece of arithmetic this feature needs a
+    real clock for, and the reason it lives in `app.py` and nowhere else
+    (see `_DownloadRateTracker`'s own docstring for the full argument).
+    """
+
+    def test_the_first_observation_has_no_rate_yet(self):
+        tracker = app_module._DownloadRateTracker(now=_fake_clock(0.0))
+        self.assertIsNone(tracker.observe(_progress(1000)))
+
+    def test_a_second_observation_too_soon_still_has_no_rate(self):
+        """Below the minimum interval, two observations are too close
+        together to trust the arithmetic -- reporting a rate anyway would be
+        reporting noise, not a slow or fast download."""
+        tracker = app_module._DownloadRateTracker(now=_fake_clock(0.0, 0.05))
+        tracker.observe(_progress(1000))
+        self.assertIsNone(tracker.observe(_progress(2000)))
+
+    def test_a_rate_appears_once_enough_time_has_passed(self):
+        tracker = app_module._DownloadRateTracker(now=_fake_clock(0.0, 1.0))
+        tracker.observe(_progress(1000))
+        rate = tracker.observe(_progress(2024))
+        self.assertAlmostEqual(rate, 1024.0)
+
+    def test_a_stale_rate_keeps_reading_until_the_next_window_closes(self):
+        """A tick that arrives before the next window has closed must not
+        report `None` and erase a rate that was already trustworthy --
+        `view.py`'s honest-degradation rule is for *no rate ever computed*,
+        not for *no new rate this particular tick*."""
+        tracker = app_module._DownloadRateTracker(now=_fake_clock(0.0, 1.0, 1.05))
+        tracker.observe(_progress(1000))
+        first_rate = tracker.observe(_progress(2024))
+        second_rate = tracker.observe(_progress(2100))
+        self.assertEqual(first_rate, second_rate)
+
+    def test_a_new_download_starting_resets_the_tracker(self):
+        """A different unit name is a different fetch entirely -- carrying a
+        stale rate over from whatever downloaded before it would be exactly
+        the wrong number on screen."""
+        tracker = app_module._DownloadRateTracker(now=_fake_clock(0.0, 1.0, 1.0))
+        tracker.observe(_progress(1000, unit="first-server"))
+        tracker.observe(_progress(2024, unit="first-server"))
+        self.assertIsNone(tracker.observe(_progress(10, unit="second-server")))
+
+    def test_a_non_download_progress_value_resets_the_tracker_too(self):
+        tracker = app_module._DownloadRateTracker(now=_fake_clock(0.0, 1.0))
+        tracker.observe(_progress(1000))
+        no_bytes = cli.Progress(done=2, total=5, phase="artifacts", unit="a.md")
+        self.assertIsNone(tracker.observe(no_bytes))
+
+    def test_the_real_clock_is_the_default(self):
+        tracker = app_module._DownloadRateTracker()
+        self.assertIs(tracker._now, time.monotonic)
 
 
 class UpdateCheckHolderTest(unittest.TestCase):
