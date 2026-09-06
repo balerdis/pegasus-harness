@@ -106,7 +106,9 @@ def _referenced_mcp_ids(body: str) -> set[str]:
     """
     return set(_MCP_REFERENCE_PATTERN.findall(body))
 
-SESSION_STARTS_IN = "pegasus-orchestrator"
+SESSION_STARTS_IN = (_package_files("pegasus") / "content" / "session-start.txt").read_text(
+    encoding="utf-8"
+).strip()
 """The agent a session opens in.
 
 Which agent that is, is a fact about the set of agents rather than about any one
@@ -115,6 +117,12 @@ could not hold it, because no file can see whether another already claimed it --
 two claims and no claim at all are both writable, and neither is refusable
 without a validator that reads the whole directory back. Naming it once, here,
 makes both unrepresentable.
+
+Read from packaged content, not written as a literal here, for the same reason
+a distribution's own name never is: a distribution that renames its
+orchestrator agent must be free to say so in data, without a change to
+`core/`, which never learns any agent's name is special except by reading this
+file back.
 """
 
 

@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import zipfile
 from collections.abc import Callable
+from importlib.resources import files as _package_files
 from pathlib import Path, PurePosixPath
 
 from pegasus.core import content
@@ -791,6 +792,17 @@ class SessionStartTest(TemporaryContent):
         message = str(raised.exception)
         self.assertIn(f"agents/{content.SESSION_STARTS_IN}.md", message)
         self.assertIn(AgentMode.PRIMARY.value, message)
+
+    def test_session_starts_in_is_sourced_from_packaged_content_not_a_core_literal(self):
+        """`core/content.py` must not itself name which agent a session opens
+        in -- that is exactly the leak `NoProductIdentityOutsideCompositionRootTest`
+        exists to catch for a distribution's own name, and the same discipline
+        applies here: a distribution that renames its orchestrator agent must
+        be able to change this without touching a line of `core/`."""
+        packaged = (_package_files("pegasus") / "content" / "session-start.txt").read_text(
+            encoding="utf-8"
+        ).strip()
+        self.assertEqual(content.SESSION_STARTS_IN, packaged)
 
     def test_the_named_agent_is_the_only_one_a_session_starts_in(self):
         self.agent(content.SESSION_STARTS_IN)
