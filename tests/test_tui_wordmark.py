@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import unittest
 
+from pegasus.core import identity
 from pegasus.tui import wordmark
 
 
@@ -23,30 +24,60 @@ class WordRowsTest(unittest.TestCase):
         self.assertEqual(rows[0], f"{p_row} {e_row}")
 
 
-class WidthTest(unittest.TestCase):
-    def test_pegasus_alone_is_thirty_four_columns(self):
-        self.assertEqual(wordmark.PEGASUS_WIDTH, 34)
-        self.assertTrue(all(len(row) == 34 for row in wordmark.pegasus_rows()))
+class GlyphCoverageMirrorTest(unittest.TestCase):
+    """The single most important test in this module: `core.identity`'s
+    `ALLOWED_CHARACTERS` names every character a wordmark word may contain,
+    and this module's `GLYPHS` names every character it can actually draw.
+    If those two sets ever disagree, a valid `identity.json` can name a word
+    with a character this renderer has no glyph for -- a build-time-approved
+    name that crashes or draws garbage the first time the menu opens. This
+    test is the one thing standing between the two staying provably in sync
+    and drifting apart silently, the exact shape of bug this project has
+    been bitten by before when an invariant was only enforced in one
+    direction.
+    """
 
-    def test_the_full_mark_is_seventy_columns(self):
-        self.assertEqual(wordmark.WORDMARK_WIDTH, 70)
-        self.assertTrue(all(len(row) == 70 for row in wordmark.wordmark_rows()))
+    def test_the_glyph_table_covers_exactly_what_identity_allows(self):
+        self.assertEqual(set(wordmark.GLYPHS), identity.ALLOWED_CHARACTERS)
+
+    def test_every_glyph_is_three_rows_of_four_columns(self):
+        for letter, rows in wordmark.GLYPHS.items():
+            self.assertEqual(len(rows), 3, msg=f"{letter!r} is not three rows")
+            for row in rows:
+                self.assertEqual(len(row), 4, msg=f"{letter!r} row {row!r} is not four columns")
+
+    def test_the_longest_allowed_word_renders_at_the_documented_width(self):
+        """`identity.MAX_WORD_LENGTH` is a stated, documented decision (12
+        characters), not a bare magic number: a solo mark of that length is
+        59 columns, which still fits an 80-column terminal. This proves the
+        two modules agree on that arithmetic, not just on the character set.
+        """
+        longest = "A" * identity.MAX_WORD_LENGTH
+        self.assertEqual(wordmark.word_width(longest), 59)
 
 
-class WordmarkRowsTest(unittest.TestCase):
-    def test_the_full_mark_starts_with_pegasus_alone(self):
-        full = wordmark.wordmark_rows()
-        solo = wordmark.pegasus_rows()
-        for full_row, solo_row in zip(full, solo):
-            self.assertTrue(full_row.startswith(solo_row))
+class MarkWidthTest(unittest.TestCase):
+    """`mark_width`/`solo_width` are computed from whatever words they are
+    given -- no policy branch on how many there are, per the spec's
+    "Wordmark Words Are Rendered, Not Chosen" requirement."""
 
-    def test_the_two_words_are_separated_by_two_spaces(self):
-        full = wordmark.wordmark_rows()
-        solo = wordmark.pegasus_rows()
-        for full_row, solo_row in zip(full, solo):
-            rest = full_row[len(solo_row):]
-            self.assertTrue(rest.startswith("  "))
-            self.assertFalse(rest.startswith("   "))
+    def test_solo_width_of_one_word_is_its_own_width(self):
+        self.assertEqual(wordmark.solo_width(("DARQ",)), wordmark.word_width("DARQ"))
+
+    def test_mark_width_of_one_word_equals_its_solo_width(self):
+        self.assertEqual(wordmark.mark_width(("DARQ",)), wordmark.solo_width(("DARQ",)))
+
+    def test_solo_width_of_two_words_is_only_the_first(self):
+        self.assertEqual(wordmark.solo_width(("PEGASUS", "HARNESS")), wordmark.word_width("PEGASUS"))
+
+    def test_mark_width_of_two_words_adds_a_two_space_gap(self):
+        words = ("PEGASUS", "HARNESS")
+        expected = wordmark.word_width("PEGASUS") + 2 + wordmark.word_width("HARNESS")
+        self.assertEqual(wordmark.mark_width(words), expected)
+
+    def test_empty_words_is_zero_width(self):
+        self.assertEqual(wordmark.mark_width(()), 0)
+        self.assertEqual(wordmark.solo_width(()), 0)
 
 
 if __name__ == "__main__":
