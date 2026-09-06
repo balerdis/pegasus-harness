@@ -129,6 +129,25 @@ class ParseRejectsAMalformedDocumentTest(unittest.TestCase):
         with self.assertRaises(IdentityError):
             module.parse(json.dumps(payload).encode("utf-8"))
 
+    def test_a_product_id_with_a_path_separator_is_rejected(self):
+        """`product_id` is joined directly onto a filesystem path in
+        `PosixFileSystem.data_dir()` -- the same class of risk
+        `release.binary_asset` already guards against."""
+        with self.assertRaises(IdentityError):
+            module.parse(document(product_id="a/b"))
+
+    def test_a_product_id_with_a_backslash_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(product_id="a\\b"))
+
+    def test_a_product_id_with_parent_directory_traversal_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(product_id="../../etc"))
+
+    def test_a_bare_parent_directory_product_id_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(product_id=".."))
+
     def test_invalid_utf8_is_rejected(self):
         with self.assertRaises(IdentityError):
             module.parse(b"\xff\xfe not utf-8")

@@ -132,6 +132,8 @@ def parse(document: bytes) -> Identity:
     if not isinstance(payload, dict):
         raise IdentityError("identity.json must be a JSON object")
     product_id = _text(payload, "product_id", "identity")
+    if "/" in product_id or "\\" in product_id or ".." in product_id:
+        raise IdentityError(f"identity.product_id must be a bare name: {product_id!r}")
     display_name = _text(payload, "display_name", "identity")
     program_name = _text(payload, "program_name", "identity")
     wordmark_words = _wordmark_words(payload)
