@@ -335,6 +335,12 @@ PRODUCT_IDENTITY_ALLOWLIST = frozenset(
         # A probe home nothing on disk can ever equal, used only to prove a
         # registry answers "not found" -- never resolved against a real path.
         "/nonexistent/pegasus-registry-probe",
+        # The `clientInfo.name` this engine sends every third-party MCP server
+        # during the `initialize` handshake -- engine plumbing, not product
+        # identity, the same treatment already given to `pegasus_version` and
+        # `PEGASUS_SKILL_REGISTRY_BIN`: it never varies with which
+        # distribution runs.
+        "pegasus-doctor",
     }
 )
 

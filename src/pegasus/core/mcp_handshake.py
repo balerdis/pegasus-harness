@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pegasus.ports.mcp_process import MCPExchange, MCPProcess
 
 PROTOCOL_VERSION = "2024-11-05"
-CLIENT_NAME = "engine-doctor"
+CLIENT_NAME = "pegasus-doctor"
 CLIENT_VERSION = "1"
 REQUEST_ID = 1
 
