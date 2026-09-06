@@ -1116,7 +1116,7 @@ def _running_binary_path(runtime: Runtime) -> Path | None:
 
 def _manual_upgrade_command(destination: Path, release: upgrade_module.ReleaseSource) -> str:
     return (
-        f"download the newest release from {upgrade_module.release_page_url(release)}, "
+        f"download the newest release from {release.release_page_url}, "
         f"verify it against its published {release.binary_asset}.sha256, then place it over "
         f"{destination} yourself (as whichever user can write there -- root or sudo, if that is "
         f"what installed it)"

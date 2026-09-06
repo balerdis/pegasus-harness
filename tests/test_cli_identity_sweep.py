@@ -51,6 +51,7 @@ ACME_IDENTITY = Identity(
         asset_url_template="https://github.com/acme-corp/acme-widget/releases/download/{tag}/{asset}",
         binary_asset="acme-widget",
         latest_release_api_url="https://api.github.com/repos/acme-corp/acme-widget/releases/latest",
+        release_page_url="https://github.com/acme-corp/acme-widget/releases",
     ),
 )
 

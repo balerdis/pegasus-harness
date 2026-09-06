@@ -6,6 +6,7 @@
   "release": {
     "asset_url_template": "https://github.com/balerdis/pegasus-harness/releases/download/{tag}/{asset}",
     "binary_asset": "pegasus",
-    "latest_release_api_url": "https://api.github.com/repos/balerdis/pegasus-harness/releases/latest"
+    "latest_release_api_url": "https://api.github.com/repos/balerdis/pegasus-harness/releases/latest",
+    "release_page_url": "https://github.com/balerdis/pegasus-harness/releases"
   }
 }

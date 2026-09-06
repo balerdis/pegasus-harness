@@ -22,6 +22,7 @@ PEGASUS_RELEASE = ReleaseSource(
     asset_url_template="https://github.com/balerdis/pegasus-harness/releases/download/{tag}/{asset}",
     binary_asset="pegasus",
     latest_release_api_url="https://api.github.com/repos/balerdis/pegasus-harness/releases/latest",
+    release_page_url="https://github.com/balerdis/pegasus-harness/releases",
 )
 
 #: A distribution's own release source -- deliberately a *different* host and
@@ -31,6 +32,7 @@ DISTRIBUTION_RELEASE = ReleaseSource(
     asset_url_template="https://github.com/acme/darq/releases/download/{tag}/{asset}",
     binary_asset="darq",
     latest_release_api_url="https://api.github.com/repos/acme/darq/releases/latest",
+    release_page_url="https://github.com/acme/darq/releases",
 )
 
 
@@ -50,6 +52,21 @@ class NoDefaultReleaseSourceTest(unittest.TestCase):
 
 
 class UrlsTest(unittest.TestCase):
+    def test_a_version_with_a_path_separator_is_rejected(self):
+        """`version` reaches here straight from the remote release API's own
+        `tag_name` JSON field (see `cli._fetch_latest_version`), never
+        validated on the way -- unlike `binary_asset`, which `identity.parse`
+        already confines to a bare filename. Left unchecked, a malicious or
+        compromised release endpoint could fill `{tag}` with a path that
+        escapes the intended `download/{tag}/{asset}` segment on the same
+        host, e.g. `v1.0.0/../../../admin/secret`."""
+        with self.assertRaises(upgrade.UpgradeError):
+            upgrade.binary_url("1.0.0/../../../admin/secret", DISTRIBUTION_RELEASE)
+
+    def test_a_checksum_url_with_a_path_separator_in_version_is_rejected(self):
+        with self.assertRaises(upgrade.UpgradeError):
+            upgrade.checksum_url("1.0.0/../../../admin/secret", DISTRIBUTION_RELEASE)
+
     def test_binary_url_names_the_tag_and_the_releases_own_asset(self):
         self.assertEqual(
             upgrade.binary_url(VERSION, DISTRIBUTION_RELEASE),
@@ -66,14 +83,6 @@ class UrlsTest(unittest.TestCase):
         self.assertEqual(
             upgrade.binary_url(VERSION, PEGASUS_RELEASE),
             f"https://github.com/balerdis/pegasus-harness/releases/download/v{VERSION}/pegasus",
-        )
-
-
-class ReleasePageUrlTest(unittest.TestCase):
-    def test_the_releases_listing_page_is_derived_from_the_asset_template(self):
-        self.assertEqual(
-            upgrade.release_page_url(DISTRIBUTION_RELEASE),
-            "https://github.com/acme/darq/releases",
         )
 
 

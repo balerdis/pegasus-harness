@@ -15,6 +15,7 @@ import json
 import string
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 ALLOWED_CHARACTERS = frozenset(string.ascii_uppercase + string.digits)
 """Every character a wordmark word may use. `tui/wordmark.py`'s `GLYPHS` must
@@ -38,12 +39,21 @@ class ReleaseSource:
     `{asset}` -- the two placeholders `core.upgrade` fills in to name one
     published file. `binary_asset` names the asset itself, and must be a bare
     filename: no path separator, no `..`, so it can never be coerced into
-    reading or writing outside the one URL it names.
+    reading or writing outside the one URL it names. `release_page_url` is the
+    human-facing releases listing page, declared here rather than derived by
+    splitting `asset_url_template` on a magic substring -- not every release
+    host shapes its download URL the way GitHub does.
+
+    Every URL field is checked against its parsed authority, not merely its
+    prefix: a `https://` prefix match alone would still accept
+    `https://github.com@evil.example.com/...`, whose real host --
+    `urlsplit(...).hostname` -- is `evil.example.com`, not `github.com`.
     """
 
     asset_url_template: str
     binary_asset: str
     latest_release_api_url: str
+    release_page_url: str
 
 
 @dataclass(frozen=True)
@@ -90,12 +100,27 @@ def _wordmark_words(payload: dict[str, Any]) -> tuple[str, ...]:
     return tuple(_word(word, "wordmark_words entry") for word in value)
 
 
+def _https_url(value: str, what: str) -> str:
+    """Reject anything a naive `str.startswith("https://")` prefix check
+    would still accept: a scheme other than `https`, userinfo before the
+    host (`user@host`, the exact shape that lets `https://github.com@evil.
+    example.com/...` read as GitHub at a glance while `urlsplit(...)
+    .hostname` names `evil.example.com`), or no host at all."""
+    parts = urlsplit(value)
+    if parts.scheme != "https":
+        raise IdentityError(f"{what} must be https: {value!r}")
+    if "@" in parts.netloc:
+        raise IdentityError(f"{what} must not carry userinfo before the host: {value!r}")
+    if not parts.hostname:
+        raise IdentityError(f"{what} must name a host: {value!r}")
+    return value
+
+
 def _release_source(payload: Any) -> ReleaseSource:
     if not isinstance(payload, dict):
         raise IdentityError("identity needs a 'release' object")
     template = _text(payload, "asset_url_template", "release")
-    if not template.startswith("https://"):
-        raise IdentityError(f"release.asset_url_template must be https: {template!r}")
+    _https_url(template, "release.asset_url_template")
     if "{tag}" not in template or "{asset}" not in template:
         raise IdentityError(
             f"release.asset_url_template must contain both {{tag}} and {{asset}}: {template!r}"
@@ -104,12 +129,14 @@ def _release_source(payload: Any) -> ReleaseSource:
     if "/" in binary_asset or "\\" in binary_asset or ".." in binary_asset:
         raise IdentityError(f"release.binary_asset must be a bare filename: {binary_asset!r}")
     api_url = _text(payload, "latest_release_api_url", "release")
-    if not api_url.startswith("https://"):
-        raise IdentityError(f"release.latest_release_api_url must be https: {api_url!r}")
+    _https_url(api_url, "release.latest_release_api_url")
+    page_url = _text(payload, "release_page_url", "release")
+    _https_url(page_url, "release.release_page_url")
     return ReleaseSource(
         asset_url_template=template,
         binary_asset=binary_asset,
         latest_release_api_url=api_url,
+        release_page_url=page_url,
     )
 
 

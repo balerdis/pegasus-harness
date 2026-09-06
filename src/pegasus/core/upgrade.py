@@ -25,6 +25,7 @@ there is no signature and no pinned key involved anywhere in this module.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from pegasus.core import ownership
@@ -45,7 +46,19 @@ class UpgradeError(Exception):
     """A newly published binary could not be safely fetched, verified, or placed."""
 
 
+#: `version` arrives here straight from the remote release API's own
+#: `tag_name` field (see `cli._fetch_latest_version`) with no validation on
+#: the way -- unlike `binary_asset`, which `identity.parse` already confines
+#: to a bare filename. Restricting it to this charset is what keeps a
+#: malicious or compromised release endpoint from filling `{tag}` with a
+#: path that escapes the intended `download/{tag}/{asset}` segment on the
+#: same host (a version can never legitimately need `/`, `\`, or whitespace).
+_SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
+
+
 def _tag(version: str) -> str:
+    if not _SAFE_VERSION.match(version):
+        raise UpgradeError(f"refusing to build a release URL from an unsafe version string: {version!r}")
     return f"v{version}"
 
 
@@ -55,18 +68,6 @@ def binary_url(version: str, release: ReleaseSource) -> str:
 
 def checksum_url(version: str, release: ReleaseSource) -> str:
     return release.asset_url_template.format(tag=_tag(version), asset=f"{release.binary_asset}.sha256")
-
-
-def release_page_url(release: ReleaseSource) -> str:
-    """The human-facing releases listing page for ``release`` -- the same
-    host and repository the asset URLs above name, minus the
-    `/download/{tag}/{asset}` suffix that only ever names one file.
-
-    Used only to build a plain-text instruction for a person doing a manual
-    upgrade (see `pegasus.cli._manual_upgrade_command`); never fetched or
-    parsed by this module itself.
-    """
-    return release.asset_url_template.split("/download/")[0]
 
 
 def _expected_digest(checksum_document: bytes) -> str:
