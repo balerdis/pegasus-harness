@@ -51,11 +51,12 @@ def sha256sum_line(content: bytes) -> bytes:
 def upgrade_downloader(*, version: str = NEWER_VERSION, content: bytes = b"new pegasus bytes") -> FakeDownloader:
     from pegasus.core import upgrade as upgrade_module
 
+    release = cli.default_identity().release
     return FakeDownloader(
         {
-            cli.UPDATE_CHECK_URL: release_body(f"v{version}"),
-            upgrade_module.checksum_url(version): sha256sum_line(content),
-            upgrade_module.binary_url(version): content,
+            release.latest_release_api_url: release_body(f"v{version}"),
+            upgrade_module.checksum_url(version, release): sha256sum_line(content),
+            upgrade_module.binary_url(version, release): content,
         }
     )
 

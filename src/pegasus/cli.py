@@ -27,6 +27,7 @@ import sys
 import zipfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from importlib.resources import files as _package_files
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
@@ -35,10 +36,12 @@ from pegasus.adapters import available
 from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
 from pegasus.core import dependencies as dependencies_module
+from pegasus.core import identity as identity_module
 from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core import ownership, planner, pointer
 from pegasus.core import upgrade as upgrade_module
+from pegasus.core.identity import Identity
 from pegasus.core.journal import KINDS, Install, Record
 from pegasus.core import mcp_handshake
 from pegasus.core.types import Capability, Codec, Environment, ModelAssignment
@@ -88,6 +91,14 @@ class Runtime:
     now: str
     out: TextIO
     variables: dict[str, str] = field(default_factory=dict)
+    #: Resolved once, from `identity.json`, and threaded down as a plain
+    #: value from here on -- never re-read or re-branched on inside `core`,
+    #: `ports`, `infra`, or `tui`. Defaulted to the packaged identity so
+    #: every existing caller that builds a `Runtime` without naming one --
+    #: this repo's own tests included -- still gets Pegasus's own identity,
+    #: exactly as `default_runtime` would; a caller building a distribution's
+    #: own `Runtime` overrides this explicitly instead.
+    identity: Identity = field(default_factory=lambda: default_identity())
     downloader: Downloader = field(default_factory=HttpDownloader)
     npm_installer: NpmInstaller = field(default_factory=SubprocessNpmInstaller)
     mcp_process: MCPProcess = field(default_factory=SubprocessMCPProcess)
@@ -114,21 +125,30 @@ class Runtime:
         )
 
 
+def default_identity() -> Identity:
+    """Parse the identity this exact binary was built with -- `identity.json`,
+    read the same way `core.content` reads `content/`: through
+    `importlib.resources`, so it resolves identically from a source checkout
+    and from inside a zipapp. Fails loudly (`IdentityError`, a `ValueError`)
+    on anything missing or malformed -- there is no default identity to fall
+    back to, by design (see `pegasus.core.identity`'s own docstring).
+    """
+    document = _package_files("pegasus").joinpath("identity.json").read_bytes()
+    return identity_module.parse(document)
+
+
 def default_runtime(out: TextIO) -> Runtime:
     import os
 
     variables = dict(os.environ)
+    identity = default_identity()
     return Runtime(
-        # "pegasus-harness" is Pegasus's own `product_id`, threaded through
-        # explicitly here rather than defaulted inside `PosixFileSystem` --
-        # see that class's own docstring. `identity.parse()` takes over this
-        # literal in a later change; until then this is the one place it is
-        # allowed to be one.
-        filesystem=PosixFileSystem(variables, product_id="pegasus-harness"),
+        filesystem=PosixFileSystem(variables, product_id=identity.product_id),
         home=Path.home(),
         now=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         out=out,
         variables=variables,
+        identity=identity,
         downloader=HttpDownloader(),
         npm_installer=SubprocessNpmInstaller(),
         mcp_process=SubprocessMCPProcess(),
@@ -152,7 +172,7 @@ def model_assignment_store(runtime: Runtime) -> FileModelAssignmentStore:
 
 def main(argv: list[str] | None = None, *, runtime: Runtime | None = None) -> int:
     runtime = runtime or default_runtime(sys.stdout)
-    parser = _parser()
+    parser = _parser(runtime.identity)
     arguments = parser.parse_args(argv)
     if arguments.command is None:
         # Asking for nothing in particular, at a terminal, is asking for the
@@ -204,8 +224,11 @@ def safe_report(command: str, call: Callable[[], dict[str, Any]]) -> tuple[int, 
     return code, {"schema": SCHEMA, "command": command, **report}
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="pegasus", description=__doc__.splitlines()[0])
+def _parser(identity: Identity) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=identity.program_name,
+        description=f"The flags: everything {identity.display_name} can do without a person watching.",
+    )
     # Accepted on either side of the subcommand. The subparsers suppress their
     # default so an absent flag there cannot overwrite one given here.
     parser.add_argument("--json", action="store_true", help="report as a machine-readable document")
@@ -228,7 +251,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command")
 
-    install = commands.add_parser("install", help="place Pegasus into one CLI's configuration")
+    install = commands.add_parser(
+        "install", help=f"place {identity.display_name} into one CLI's configuration"
+    )
     install.add_argument("--cli", required=True)
     install.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     install.add_argument("--dry-run", action="store_true", help="report the plan without writing anything")
@@ -255,14 +280,14 @@ def _parser() -> argparse.ArgumentParser:
     # installation into a CLI's configuration -- see `upgrade`'s own
     # docstring for why that is a different concern from `update`.
     upgrade = commands.add_parser(
-        "upgrade", help="replace the running pegasus binary with the newest published one"
+        "upgrade", help=f"replace the running {identity.program_name} binary with the newest published one"
     )
     upgrade.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     upgrade.add_argument(
         "--dry-run", action="store_true", help="report what would be replaced and with what version"
     )
 
-    uninstall = commands.add_parser("uninstall", help="take Pegasus back out of one CLI")
+    uninstall = commands.add_parser("uninstall", help=f"take {identity.display_name} back out of one CLI")
     uninstall.add_argument("--cli", required=True)
     uninstall.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
@@ -890,12 +915,16 @@ def _unresolved_bindings_message(cli_id: str, ids: list[str]) -> str:
 # one published", so the TUI can say so. Fetching and replacing the running
 # executable is a separate concern this module does not implement.
 
-#: The one remote fact this whole check exists to learn: the tag of the
-#: newest published GitHub release. Unauthenticated, which is what makes the
-#: TTL below matter -- GitHub rate-limits anonymous callers per source IP,
-#: not per install, so a check run on every launch would be shared across
-#: however many machines sit behind the same address.
-UPDATE_CHECK_URL = "https://api.github.com/repos/balerdis/pegasus-harness/releases/latest"
+# The one remote fact this whole check exists to learn -- the tag of the
+# newest published release -- used to live here as a module-level constant,
+# always Pegasus's own address. It is gone, not defaulted: every reader below
+# now reads `runtime.identity.release.latest_release_api_url` instead, the
+# same `ReleaseSource` `upgrade` itself fetches from (see D4 in this change's
+# design), so there is no shared literal a distribution's check could ever
+# fall back to. Unauthenticated, which is what makes the TTL below matter --
+# GitHub rate-limits anonymous callers per source IP, not per install, so a
+# check run on every launch would be shared across however many machines sit
+# behind the same address.
 
 #: This lookup runs in the background on every TUI launch, unlike an MCP
 #: archive download the user is actively waiting on -- `Downloader`'s own
@@ -1022,7 +1051,9 @@ def check_for_update(runtime: Runtime) -> str | None:
     ):
         return cache.get("latest_version")
     try:
-        payload = runtime.downloader.fetch(UPDATE_CHECK_URL, timeout_seconds=UPDATE_CHECK_TIMEOUT_SECONDS)
+        payload = runtime.downloader.fetch(
+            runtime.identity.release.latest_release_api_url, timeout_seconds=UPDATE_CHECK_TIMEOUT_SECONDS
+        )
         document = json.loads(payload.decode("utf-8"))
         tag = document["tag_name"]
         if not isinstance(tag, str) or not tag:
@@ -1077,11 +1108,12 @@ def _running_binary_path(runtime: Runtime) -> Path | None:
     return Path(os.path.realpath(candidate))
 
 
-def _manual_upgrade_command(destination: Path) -> str:
+def _manual_upgrade_command(destination: Path, release: upgrade_module.ReleaseSource) -> str:
     return (
-        f"download the newest release from https://github.com/balerdis/pegasus-harness/releases, "
-        f"verify it against its published pegasus.sha256, then place it over {destination} yourself "
-        f"(as whichever user can write there -- root or sudo, if that is what installed it)"
+        f"download the newest release from {upgrade_module.release_page_url(release)}, "
+        f"verify it against its published {release.binary_asset}.sha256, then place it over "
+        f"{destination} yourself (as whichever user can write there -- root or sudo, if that is "
+        f"what installed it)"
     )
 
 
@@ -1097,7 +1129,9 @@ def _fetch_latest_version(runtime: Runtime) -> str:
     current" -- reporting that would be worse than reporting nothing.
     """
     try:
-        payload = runtime.downloader.fetch(UPDATE_CHECK_URL, timeout_seconds=UPDATE_CHECK_TIMEOUT_SECONDS)
+        payload = runtime.downloader.fetch(
+            runtime.identity.release.latest_release_api_url, timeout_seconds=UPDATE_CHECK_TIMEOUT_SECONDS
+        )
         document = json.loads(payload.decode("utf-8"))
         tag = document["tag_name"]
         if not isinstance(tag, str) or not tag:
@@ -1141,13 +1175,14 @@ def upgrade(
     destination = _running_binary_path(runtime)
     if destination is None:
         raise CommandError(
-            "pegasus is not running from an installed executable -- this looks like a source checkout, "
-            "not the zipapp the release ships, so there is no binary here for upgrade to replace"
+            f"{runtime.identity.program_name} is not running from an installed executable -- this looks "
+            f"like a source checkout, not the zipapp the release ships, so there is no binary here for "
+            f"upgrade to replace"
         )
     if not runtime.filesystem.is_writable(destination):
         raise CommandError(
             f"{destination} is not writable by this process; upgrade refuses to download anything it "
-            f"could not then install. Instead, {_manual_upgrade_command(destination)}."
+            f"could not then install. Instead, {_manual_upgrade_command(destination, runtime.identity.release)}."
         )
     # `is_writable` only ever asks whether the containing directory would
     # accept the rename (see its own docstring) -- it says nothing about who
@@ -1157,8 +1192,9 @@ def upgrade(
     # be, handing its ownership to whoever happened to run this upgrade.
     if not runtime.filesystem.owned_by_current_user(destination):
         raise CommandError(
-            f"{destination} is not owned by the user running this upgrade; pegasus refuses to silently "
-            f"take over someone else's file. Instead, {_manual_upgrade_command(destination)}."
+            f"{destination} is not owned by the user running this upgrade; {runtime.identity.program_name} "
+            f"refuses to silently take over someone else's file. Instead, "
+            f"{_manual_upgrade_command(destination, runtime.identity.release)}."
         )
     current_version = pegasus.__version__
     latest_version = _fetch_latest_version(runtime)
@@ -1182,7 +1218,7 @@ def upgrade(
     if on_progress is not None:
         on_progress(Progress(done=0, total=3, phase="checksum", unit=""))
     try:
-        content = upgrade_module.fetch_and_verify(runtime.downloader, latest_version)
+        content = upgrade_module.fetch_and_verify(runtime.downloader, latest_version, runtime.identity.release)
     except upgrade_module.UpgradeError as error:
         raise CommandError(str(error)) from error
     if on_progress is not None:
@@ -1199,6 +1235,7 @@ def upgrade(
         "new_version": latest_version,
         "destination": str(destination),
         "restart_required": True,
+        "program_name": runtime.identity.program_name,
     }
 
 
@@ -2562,8 +2599,8 @@ def _prose(report: dict[str, Any]) -> str:
             return f"Already running the newest published version ({report['version']}) -- nothing to do."
         return (
             f"Replaced {report['destination']}: {report['old_version']} -> {report['new_version']}. "
-            f"Restart pegasus to run the new version -- this process is still running "
-            f"{report['old_version']}."
+            f"Restart {report['program_name']} to run the new version -- this process is still "
+            f"running {report['old_version']}."
         )
     if command == "models":
         return _models_prose(report)

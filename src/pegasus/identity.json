@@ -1,0 +1,11 @@
+{
+  "product_id": "pegasus-harness",
+  "display_name": "Pegasus",
+  "program_name": "pegasus",
+  "wordmark_words": ["PEGASUS", "HARNESS"],
+  "release": {
+    "asset_url_template": "https://github.com/balerdis/pegasus-harness/releases/download/{tag}/{asset}",
+    "binary_asset": "pegasus",
+    "latest_release_api_url": "https://api.github.com/repos/balerdis/pegasus-harness/releases/latest"
+  }
+}
