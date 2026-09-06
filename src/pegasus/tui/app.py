@@ -263,7 +263,9 @@ def _run_install(window, navigator: Navigator, runtime: cli.Runtime, accent_attr
     function owns starting it, timing the repaint, and reading progress back
     off it through a lock.
     """
-    message = busy_message_for(navigator.current, navigator.cursor, Action.CHOOSE)
+    message = busy_message_for(
+        navigator.current, navigator.cursor, Action.CHOOSE, display_name=runtime.identity.display_name
+    )
     task = session.plan_task(navigator, runtime, navigator.current)
     holder = _ProgressHolder()
     outcome: list[Navigator] = []
@@ -440,7 +442,9 @@ def _main_loop(
             navigator = _run_install(window, navigator, runtime, accent_attr)
             draw(window, _render_current(window, navigator), accent_attr=accent_attr)
             continue
-        message = busy_message_for(navigator.current, navigator.cursor, action)
+        message = busy_message_for(
+            navigator.current, navigator.cursor, action, display_name=runtime.identity.display_name
+        )
         if message is not None:
             draw(window, render_busy(message), accent_attr=accent_attr)
         navigator = session.step(navigator, runtime, action)
@@ -488,7 +492,13 @@ def run(window, runtime: cli.Runtime) -> None:
     # already known at this point, straight off the journal -- so it rides
     # in the very first `Navigator` rather than waiting for anything.
     notice = session.local_update_notice(runtime, installed)
-    navigator = Navigator.starting(session.detect_clis(runtime), installed, notice=notice)
+    navigator = Navigator.starting(
+        session.detect_clis(runtime),
+        installed,
+        notice=notice,
+        display_name=runtime.identity.display_name,
+        wordmark_words=runtime.identity.wordmark_words,
+    )
     draw(window, _render_current(window, navigator), accent_attr=accent_attr)
 
     # The remote half does need the network, so it runs on a worker thread

@@ -24,7 +24,6 @@ from pegasus.core import model_assignments as model_assignments_module
 from pegasus.tui.navigator import (
     CANCEL,
     EFFORT_OPTIONS,
-    PEGASUS_PROGRAM,
     Action,
     AgentRow,
     CliOption,
@@ -58,6 +57,7 @@ from pegasus.tui.navigator import (
     UpdateTarget,
     UpgradeTarget,
     BehindInstall,
+    program_option,
     readable_timestamp,
     restore_menu,
 )
@@ -297,7 +297,7 @@ def _mcp_write(
     return navigator.opened(InstallPlanScreen(cli=screen.cli, report=report, mcp=chosen))
 
 
-def _nothing_declared_note(display_name: str) -> str:
+def _nothing_declared_note(cli_display_name: str, product_display_name: str) -> str:
     """What a person sees when the grant screen has nothing to offer because
     no MCP server of their own was found declared at all. Named plainly
     because an empty checklist otherwise reads as broken, not as "nothing to
@@ -310,16 +310,19 @@ def _nothing_declared_note(display_name: str) -> str:
     function's own docstring for why conflating them was a defect in its
     own right, not a simplification.
 
-    `display_name` is `cli_option.display_name`, not a hardcoded CLI name:
-    this module is CLI-agnostic (see `test_architecture.py`'s
+    `cli_display_name` is `cli_option.display_name`, not a hardcoded CLI
+    name: this module is CLI-agnostic (see `test_architecture.py`'s
     `NoCliNamesOutsideAdaptersTest`), so the one CLI this screen is about
     has to be named from the value the caller already carries, not from a
-    literal this module is not allowed to spell.
+    literal this module is not allowed to spell. `product_display_name` is
+    `runtime.identity.display_name`, for the same reason this module names
+    no product either (see `test_architecture.py`'s
+    `NoProductIdentityOutsideCompositionRootTest`).
     """
     return (
         f"No MCP server of your own was found here. This screen grants access to a server "
-        f"you install and administer yourself, outside Pegasus -- it does not install one. "
-        f"Add a server under {display_name}'s own mcp configuration the way you always would, "
+        f"you install and administer yourself, outside {product_display_name} -- it does not install one. "
+        f"Add a server under {cli_display_name}'s own mcp configuration the way you always would, "
         f"then come back to this screen to grant it to every agent."
     )
 
@@ -375,7 +378,7 @@ def _grant_mcp_screen(cli_option: CliOption, runtime: cli.Runtime) -> Placeholde
         note = (
             _everything_already_covered_note(cli_option.display_name, tuple(report["already_covered"]))
             if report["already_covered"]
-            else _nothing_declared_note(cli_option.display_name)
+            else _nothing_declared_note(cli_option.display_name, runtime.identity.display_name)
         )
         return Placeholder(f"Grant MCP servers · {cli_option.display_name}", note)
     granted = tuple(key for key in domain if key in report["granted"])
@@ -538,7 +541,9 @@ def install_task(
         _, report = cli.safe_report(
             "install", lambda: cli.install(screen.cli.id, runtime, mcp=list(screen.mcp), on_progress=sink)
         )
-        return navigator.opened(InstallResultScreen(cli=screen.cli, report=report))
+        return navigator.opened(
+            InstallResultScreen(cli=screen.cli, report=report, wordmark_words=runtime.identity.wordmark_words)
+        )
 
     return run
 
@@ -557,7 +562,11 @@ def update_task(
 
     def run(sink: Callable[[cli.Progress], None]) -> Navigator:
         _, report = cli.safe_report("update", lambda: cli.update(screen.cli.id, runtime, on_progress=sink))
-        return navigator.opened(InstallResultScreen(cli=screen.cli, report=report, command="update"))
+        return navigator.opened(
+            InstallResultScreen(
+                cli=screen.cli, report=report, command="update", wordmark_words=runtime.identity.wordmark_words
+            )
+        )
 
     return run
 
@@ -567,15 +576,19 @@ def upgrade_task(
 ) -> Callable[[Callable[[cli.Progress], None]], Navigator]:
     """`install_task`'s twin for the Upgrade flow: the same worker-thread
     seam, running `cli.upgrade` instead of `cli.install`. `screen.cli` is
-    `PEGASUS_PROGRAM`, never read by `cli.upgrade` itself (which takes no
-    CLI id at all) -- it is carried only so the result screen this returns
-    still has something to render a heading from, same as the plan screen
-    it confirms.
+    `_upgrade_preview`'s own `navigator.program_option(...)`, never read by
+    `cli.upgrade` itself (which takes no CLI id at all) -- it is carried
+    only so the result screen this returns still has something to render a
+    heading from, same as the plan screen it confirms.
     """
 
     def run(sink: Callable[[cli.Progress], None]) -> Navigator:
         _, report = cli.safe_report("upgrade", lambda: cli.upgrade(runtime, on_progress=sink))
-        return navigator.opened(InstallResultScreen(cli=screen.cli, report=report, command="upgrade"))
+        return navigator.opened(
+            InstallResultScreen(
+                cli=screen.cli, report=report, command="upgrade", wordmark_words=runtime.identity.wordmark_words
+            )
+        )
 
     return run
 
@@ -608,27 +621,31 @@ def _update_preview(cli_option: CliOption, runtime: cli.Runtime) -> InstallPlanS
     """
     code, report = cli.safe_report("update", lambda: cli.update(cli_option.id, runtime, dry_run=True))
     if code != cli.OK:
-        return InstallResultScreen(cli=cli_option, report=report, command="update")
+        return InstallResultScreen(
+            cli=cli_option, report=report, command="update", wordmark_words=runtime.identity.wordmark_words
+        )
     return InstallPlanScreen(cli=cli_option, report=report, command="update")
 
 
 def _upgrade_preview(runtime: cli.Runtime) -> InstallPlanScreen | InstallResultScreen:
     """What choosing `UpgradeTarget()` opens: a preview of what `pegasus
     upgrade` would replace, fetched through `cli.upgrade(..., dry_run=True)`
-    -- the same call `--dry-run` itself runs. `PEGASUS_PROGRAM` stands in
-    for the `CliOption` every other flow's plan and result screen carry,
-    since `upgrade` has none of its own. Like `_update_preview`, this can
-    already fail here -- not running from an installed executable, an
-    unwritable destination, or no network -- and a refusal has nothing left
-    to preview or confirm, so it opens straight onto a result screen instead
-    of a plan with nothing real to show. Being already current is not a
-    refusal, but it belongs on the same result screen for the same reason:
-    there is no plan to preview when there is nothing to do.
+    -- the same call `--dry-run` itself runs. `navigator.program_option(...)`,
+    built here from `runtime.identity`, stands in for the `CliOption` every
+    other flow's plan and result screen carry, since `upgrade` has none of
+    its own. Like `_update_preview`, this can already fail here -- not
+    running from an installed executable, an unwritable destination, or no
+    network -- and a refusal has nothing left to preview or confirm, so it
+    opens straight onto a result screen instead of a plan with nothing real
+    to show. Being already current is not a refusal, but it belongs on the
+    same result screen for the same reason: there is no plan to preview when
+    there is nothing to do.
     """
+    program = program_option(program_name=runtime.identity.program_name, display_name=runtime.identity.display_name)
     code, report = cli.safe_report("upgrade", lambda: cli.upgrade(runtime, dry_run=True))
     if code != cli.OK or report.get("status") == "already-current":
-        return InstallResultScreen(cli=PEGASUS_PROGRAM, report=report, command="upgrade")
-    return InstallPlanScreen(cli=PEGASUS_PROGRAM, report=report, command="upgrade")
+        return InstallResultScreen(cli=program, report=report, command="upgrade", wordmark_words=runtime.identity.wordmark_words)
+    return InstallPlanScreen(cli=program, report=report, command="upgrade")
 
 
 def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigator:
@@ -685,10 +702,16 @@ def step(navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigato
             _, report = cli.safe_report(
                 "install", lambda: cli.install(screen.cli.id, runtime, mcp=list(screen.mcp))
             )
-        return navigator.opened(InstallResultScreen(cli=screen.cli, report=report, command=screen.command))
+        return navigator.opened(
+            InstallResultScreen(
+                cli=screen.cli, report=report, command=screen.command, wordmark_words=runtime.identity.wordmark_words
+            )
+        )
     if isinstance(screen, StatusScreen) and action is Action.CHOOSE:
         summaries, skipped = _generation_summaries(runtime)
-        return navigator.opened(restore_menu(summaries, skipped=skipped))
+        return navigator.opened(
+            restore_menu(summaries, skipped=skipped, display_name=runtime.identity.display_name)
+        )
     return navigator.handle(action)
 
 

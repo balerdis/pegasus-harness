@@ -238,11 +238,19 @@ class InstallResultScreen:
 
     `command` carries the same distinction `InstallPlanScreen.command` does,
     for the same reason -- an update's result is not an install's, even
-    though both are `cli.safe_report`'s document for whichever one ran."""
+    though both are `cli.safe_report`'s document for whichever one ran.
+
+    `wordmark_words` is `identity.wordmark_words`, threaded the same way
+    `Menu`'s own field is -- a successful, non-`upgrade` result screen draws
+    the wordmark above its banner, and `view` needs the words to draw it
+    from rather than a name of its own to import. Empty by default, so a
+    screen built before this field existed still renders exactly as it
+    always did (no wordmark, same as an empty `Menu.wordmark_words`)."""
 
     cli: CliOption
     report: dict
     command: str = "install"
+    wordmark_words: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -285,15 +293,18 @@ class UpgradeTarget:
     command: str = "upgrade"
 
 
-#: The `CliOption` `UpgradeTarget`'s own preview and result screens carry as
-#: their `cli` field -- `InstallPlanScreen` and `InstallResultScreen` are
-#: shared across every flow that previews-then-confirms a real engine call,
-#: and both need one to render a "<Verb> · <name>" heading and to feed
-#: `busy_message_for`. `Upgrade` has no CLI of its own to name, so this
-#: stands in for "the program itself" -- its `id` is never read by anything
-#: `upgrade` calls (`cli.upgrade` takes no CLI id at all), only its
-#: `display_name`, by `view` and by `busy_message_for`.
-PEGASUS_PROGRAM = CliOption(id="pegasus", display_name="Pegasus", config_dir="", tier="full")
+def program_option(*, program_name: str, display_name: str) -> CliOption:
+    """The `CliOption` `UpgradeTarget`'s own preview and result screens carry
+    as their `cli` field -- `InstallPlanScreen` and `InstallResultScreen` are
+    shared across every flow that previews-then-confirms a real engine call,
+    and both need one to render a "<Verb> · <name>" heading and to feed
+    `busy_message_for`. `Upgrade` has no CLI of its own to name, so this
+    stands in for "the program itself" -- neither field is read by anything
+    `upgrade` calls (`cli.upgrade` takes no CLI id at all), only `display_name`,
+    by `view` and by `busy_message_for`. Built by `session` from
+    `runtime.identity`, never a module constant here: this module knows no
+    product's name (see the module docstring)."""
+    return CliOption(id=program_name, display_name=display_name, config_dir="", tier="full")
 
 
 @dataclass(frozen=True)
@@ -566,12 +577,21 @@ class Menu:
     empty by default, so a menu that predates it renders exactly as before.
 
     `installed` and `version` exist for exactly one screen, the main menu:
-    whether Pegasus is recorded as installed in at least one CLI is already
-    known at the boundary that builds this (`session.detect_installed`), and
-    handing it over as data here is what lets `view` choose the wordmark
-    over the plain title without ever probing the filesystem itself to find
-    that fact out. `False` and `""` by default, so a menu that predates
-    either field keeps rendering exactly as it always did.
+    whether the product is recorded as installed in at least one CLI is
+    already known at the boundary that builds this
+    (`session.detect_installed`), and handing it over as data here is what
+    lets `view` choose the wordmark over the plain title without ever
+    probing the filesystem itself to find that fact out. `False` and `""`
+    by default, so a menu that predates either field keeps rendering exactly
+    as it always did.
+
+    `wordmark_words` is `identity.wordmark_words` -- one or two words --
+    threaded in from whoever built this menu (`session`, ultimately from
+    `runtime.identity`), never imported here: this module knows no product's
+    name (see the module docstring). Empty by default, the same as
+    `installed`/`version`, so a menu that predates this field renders
+    exactly as it always did -- `view` treats no words the same as `False`
+    for `installed`, and falls back to the plain title.
     """
 
     title: str
@@ -579,6 +599,7 @@ class Menu:
     preface: tuple[str, ...] = ()
     installed: bool = False
     version: str = ""
+    wordmark_words: tuple[str, ...] = ()
 
 
 Screen = Union[
@@ -612,8 +633,19 @@ _ENGINE_TARGETS = (
 #: than left for `app` to invent on its own.
 STARTUP_MESSAGE = "Detecting installed CLIs…"
 
+#: The fallback name for every function below that mentions the product by
+#: name in a sentence, used only when a caller does not thread a real one
+#: through. Production code always supplies `runtime.identity.display_name`
+#: (via `session`); this exists so a test exercising one of these functions
+#: for a reason that has nothing to do with wording does not also have to
+#: invent a name. Deliberately generic: this module knows no product's own
+#: name (see the module docstring), so the fallback can never be one either.
+_UNNAMED_PRODUCT = "this program"
 
-def busy_message_for(screen: Screen, cursor: int, action: Action) -> str | None:
+
+def busy_message_for(
+    screen: Screen, cursor: int, action: Action, *, display_name: str = _UNNAMED_PRODUCT
+) -> str | None:
     """What to show before `action`, taken on `screen` at `cursor`, runs a
     real engine call — or `None` when it is ordinary navigation that costs
     nothing to show nothing extra for.
@@ -629,7 +661,7 @@ def busy_message_for(screen: Screen, cursor: int, action: Action) -> str | None:
     idle or freeze without a word, which is the defect this exists to close.
     """
     if isinstance(screen, Menu):
-        return _busy_message_for_menu(screen, cursor, action)
+        return _busy_message_for_menu(screen, cursor, action, display_name=display_name)
     if isinstance(screen, McpSelectionScreen):
         return _busy_message_for_mcp_selection(screen, cursor, action)
     if isinstance(screen, GrantMcpScreen):
@@ -651,7 +683,9 @@ def busy_message_for(screen: Screen, cursor: int, action: Action) -> str | None:
     return None
 
 
-def _busy_message_for_menu(screen: Menu, cursor: int, action: Action) -> str | None:
+def _busy_message_for_menu(
+    screen: Menu, cursor: int, action: Action, *, display_name: str = _UNNAMED_PRODUCT
+) -> str | None:
     if action is not Action.CHOOSE:
         return None
     target = screen.entries[cursor].target
@@ -662,7 +696,7 @@ def _busy_message_for_menu(screen: Menu, cursor: int, action: Action) -> str | N
     if isinstance(target, UninstallTarget):
         return f"Reading what {target.cli.display_name} has installed…"
     if isinstance(target, UninstallConfirm):
-        return f"Removing Pegasus from {target.cli.display_name}…"
+        return f"Removing {display_name} from {target.cli.display_name}…"
     if isinstance(target, RestoreTarget):
         return f"Reading generation {target.generation}…"
     if isinstance(target, RestoreConfirm):
@@ -704,7 +738,9 @@ def _busy_message_for_models(screen: ModelsScreen, cursor: int, action: Action) 
     return None
 
 
-def install_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
+def install_menu(
+    detections: tuple[CliOption, ...], *, display_name: str = _UNNAMED_PRODUCT
+) -> Union[Menu, Placeholder]:
     """The doc's `¿Dónde instalar Pegasus?` screen: one entry per detected
     CLI, selection of one. A machine with none detected gets the same
     placeholder shape every other unbuilt entry gets, worded for the actual
@@ -712,7 +748,7 @@ def install_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
     if not detections:
         return Placeholder("Install", "No supported CLI was detected on this machine.")
     return Menu(
-        title="Where would you like to install Pegasus?",
+        title=f"Where would you like to install {display_name}?",
         entries=tuple(
             Entry(f"{option.display_name:<18} {option.config_dir:<32} {option.tier}", InstallTarget(option))
             for option in detections
@@ -720,13 +756,16 @@ def install_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
     )
 
 
-def uninstall_menu(installed: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
-    """One entry per CLI Pegasus is recorded as installed into, regardless of
-    whether it is still detected present — uninstalling never needs that."""
+def uninstall_menu(
+    installed: tuple[CliOption, ...], *, display_name: str = _UNNAMED_PRODUCT
+) -> Union[Menu, Placeholder]:
+    """One entry per CLI the product is recorded as installed into,
+    regardless of whether it is still detected present — uninstalling never
+    needs that."""
     if not installed:
-        return Placeholder("Uninstall", "Pegasus is not recorded as installed in any CLI on this machine.")
+        return Placeholder("Uninstall", f"{display_name} is not recorded as installed in any CLI on this machine.")
     return Menu(
-        title="Take Pegasus back out of which CLI?",
+        title=f"Take {display_name} back out of which CLI?",
         entries=tuple(
             Entry(f"{option.display_name:<18} {option.config_dir:<32} {option.tier}", UninstallTarget(option))
             for option in installed
@@ -734,14 +773,15 @@ def uninstall_menu(installed: tuple[CliOption, ...]) -> Union[Menu, Placeholder]
     )
 
 
-#: The restore screen's own explanation of what it is choosing between --
-#: shown above every menu it builds, since the screen exists precisely
-#: because a bare "Generation 4" answers "which folder" and not "which one do
-#: I want" (see `GenerationSummary`).
-_RESTORE_PREFACE = (
-    "A generation is the state of the files Pegasus owns, saved just before "
-    "a write overwrote them. Restoring puts that state back.",
-)
+def _restore_preface(display_name: str) -> tuple[str, ...]:
+    """The restore screen's own explanation of what it is choosing between --
+    shown above every menu it builds, since the screen exists precisely
+    because a bare "Generation 4" answers "which folder" and not "which one
+    do I want" (see `GenerationSummary`)."""
+    return (
+        f"A generation is the state of the files {display_name} owns, saved just before "
+        "a write overwrote them. Restoring puts that state back.",
+    )
 
 
 def _skipped_note(skipped: tuple[int, ...]) -> str:
@@ -762,7 +802,12 @@ def _skipped_note(skipped: tuple[int, ...]) -> str:
     return f"Generations {listed} could not be read and are left off this list."
 
 
-def restore_menu(summaries: tuple[GenerationSummary, ...], *, skipped: tuple[int, ...] = ()) -> Union[Menu, Placeholder]:
+def restore_menu(
+    summaries: tuple[GenerationSummary, ...],
+    *,
+    skipped: tuple[int, ...] = (),
+    display_name: str = _UNNAMED_PRODUCT,
+) -> Union[Menu, Placeholder]:
     """One entry per generation `restore` could still read, most recent
     first, labelled with when it was taken and what it would touch rather
     than the bare ordinal `RestoreTarget` still carries underneath --
@@ -787,7 +832,7 @@ def restore_menu(summaries: tuple[GenerationSummary, ...], *, skipped: tuple[int
     """
     if not summaries:
         return Placeholder("Restore", "There is no snapshot generation to restore.")
-    preface = _RESTORE_PREFACE + ((_skipped_note(skipped),) if skipped else ())
+    preface = _restore_preface(display_name) + ((_skipped_note(skipped),) if skipped else ())
     newest_is_readable = not any(generation > summaries[0].generation for generation in skipped)
     return Menu(
         title="Restore which generation?",
@@ -802,15 +847,17 @@ def restore_menu(summaries: tuple[GenerationSummary, ...], *, skipped: tuple[int
     )
 
 
-def update_menu(installed: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
-    """One entry per CLI Pegasus is recorded as installed into -- the same
-    set `uninstall_menu` offers, for the same reason: `update` refuses a CLI
-    with nothing installed exactly the way `uninstall` does, and offering a
-    choice that can only fail is worse than not offering it."""
+def update_menu(
+    installed: tuple[CliOption, ...], *, display_name: str = _UNNAMED_PRODUCT
+) -> Union[Menu, Placeholder]:
+    """One entry per CLI the product is recorded as installed into -- the
+    same set `uninstall_menu` offers, for the same reason: `update` refuses
+    a CLI with nothing installed exactly the way `uninstall` does, and
+    offering a choice that can only fail is worse than not offering it."""
     if not installed:
-        return Placeholder("Update", "Pegasus is not recorded as installed in any CLI on this machine.")
+        return Placeholder("Update", f"{display_name} is not recorded as installed in any CLI on this machine.")
     return Menu(
-        title="Reapply Pegasus's recorded selection into which CLI?",
+        title=f"Reapply {display_name}'s recorded selection into which CLI?",
         entries=tuple(
             Entry(f"{option.display_name:<18} {option.config_dir:<32} {option.tier}", UpdateTarget(option))
             for option in installed
@@ -832,14 +879,18 @@ def models_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
     )
 
 
-def grant_mcp_menu(installed: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
-    """One entry per CLI Pegasus is recorded as installed into -- the same
-    set `update_menu` offers, for the same reason: `cli.mcp_grant` refuses a
-    CLI with nothing installed (there is no `Install.granted_mcp` to touch
-    yet), so offering a choice that can only fail is worse than not offering
-    it."""
+def grant_mcp_menu(
+    installed: tuple[CliOption, ...], *, display_name: str = _UNNAMED_PRODUCT
+) -> Union[Menu, Placeholder]:
+    """One entry per CLI the product is recorded as installed into -- the
+    same set `update_menu` offers, for the same reason: `cli.mcp_grant`
+    refuses a CLI with nothing installed (there is no `Install.granted_mcp`
+    to touch yet), so offering a choice that can only fail is worse than not
+    offering it."""
     if not installed:
-        return Placeholder("Grant MCP servers", "Pegasus is not recorded as installed in any CLI on this machine.")
+        return Placeholder(
+            "Grant MCP servers", f"{display_name} is not recorded as installed in any CLI on this machine."
+        )
     return Menu(
         title="Grant your own MCP servers to every agent, for which CLI?",
         entries=tuple(
@@ -931,7 +982,7 @@ class UpdateNotice:
     remote_latest: str | None = None
 
 
-def update_notice_lines(notice: UpdateNotice) -> tuple[str, ...]:
+def update_notice_lines(notice: UpdateNotice, *, display_name: str = _UNNAMED_PRODUCT) -> tuple[str, ...]:
     """The main menu's preface: one line per installed CLI actually behind
     the running binary, plus up to one more for a newer published release --
     each naming its own remedy and never the other's.
@@ -953,13 +1004,13 @@ def update_notice_lines(notice: UpdateNotice) -> tuple[str, ...]:
             continue
         if behind.remedy_command is not None:
             lines.append(
-                f"{behind.display_name} was installed with Pegasus {behind.recorded}; the running binary is "
+                f"{behind.display_name} was installed with {display_name} {behind.recorded}; the running binary is "
                 f"{notice.running}, but Update cannot reapply its bound mcp server key(s) without guessing -- "
                 f"run this once instead: {behind.remedy_command}"
             )
         else:
             lines.append(
-                f"{behind.display_name} was installed with Pegasus {behind.recorded}; the running binary is "
+                f"{behind.display_name} was installed with {display_name} {behind.recorded}; the running binary is "
                 f"{notice.running} -- choose Update to bring it current."
             )
     if _is_older(notice.running, notice.remote_latest):
@@ -974,6 +1025,9 @@ def main_menu(
     detections: tuple[CliOption, ...] = (),
     installed: tuple[CliOption, ...] = (),
     notice: UpdateNotice | None = None,
+    *,
+    display_name: str = _UNNAMED_PRODUCT,
+    wordmark_words: tuple[str, ...] = (),
 ) -> Menu:
     """Grouped by intent rather than by when each entry was added: get
     working and keep current (`Install`, `Update`, `Upgrade`), then configure
@@ -996,20 +1050,21 @@ def main_menu(
     decided yet", not "checked and found nothing to say".
     """
     return Menu(
-        title=f"Pegasus Harness {pegasus.__version__}",
+        title=f"{display_name} {pegasus.__version__}",
         entries=(
-            Entry("Install", install_menu(detections)),
-            Entry("Update", update_menu(installed)),
+            Entry("Install", install_menu(detections, display_name=display_name)),
+            Entry("Update", update_menu(installed, display_name=display_name)),
             Entry("Upgrade", UpgradeTarget()),
             Entry("Configure models", models_menu(detections)),
-            Entry("Grant MCP servers", grant_mcp_menu(installed)),
+            Entry("Grant MCP servers", grant_mcp_menu(installed, display_name=display_name)),
             Entry("Status and diagnostics", StatusRequest()),
-            Entry("Uninstall", uninstall_menu(installed)),
+            Entry("Uninstall", uninstall_menu(installed, display_name=display_name)),
             Entry("Exit", QUIT),
         ),
-        preface=update_notice_lines(notice) if notice is not None else (),
+        preface=update_notice_lines(notice, display_name=display_name) if notice is not None else (),
         installed=bool(installed),
         version=pegasus.__version__,
+        wordmark_words=wordmark_words,
     )
 
 
@@ -1026,14 +1081,24 @@ class Navigator:
     _stack: tuple[Screen, ...]
     _cursors: tuple[int, ...]
     quit: bool = False
+    #: Carried alongside the stack, not read from it, because `with_notice`
+    #: has to rebuild the main menu's preface from scratch at the bottom of
+    #: the stack (see its own docstring) long after `starting` built it --
+    #: without this, that rebuild would have nothing to reapply the
+    #: product's own name from.
+    display_name: str = _UNNAMED_PRODUCT
 
     @staticmethod
     def starting(
         detections: tuple[CliOption, ...] = (),
         installed: tuple[CliOption, ...] = (),
         notice: UpdateNotice | None = None,
+        *,
+        display_name: str = _UNNAMED_PRODUCT,
+        wordmark_words: tuple[str, ...] = (),
     ) -> "Navigator":
-        return Navigator(_stack=(main_menu(detections, installed, notice),), _cursors=(0,))
+        menu = main_menu(detections, installed, notice, display_name=display_name, wordmark_words=wordmark_words)
+        return Navigator(_stack=(menu,), _cursors=(0,), display_name=display_name)
 
     @property
     def current(self) -> Screen:
@@ -1213,7 +1278,7 @@ class Navigator:
         regardless of where they are now, so this rewrites exactly that
         entry, cursor and everything else on the stack left untouched.
         """
-        main = replace(self._stack[0], preface=update_notice_lines(notice))
+        main = replace(self._stack[0], preface=update_notice_lines(notice, display_name=self.display_name))
         return replace(self, _stack=(main,) + self._stack[1:])
 
     def _handle_on_placeholder(self, action: Action) -> "Navigator":

@@ -1,9 +1,9 @@
 """`Upgrade`, through `session`: the same menu-plan-confirm shape as `Update`
 and `Install`, but with no `CliOption` of its own -- `pegasus upgrade` takes
 no `--cli`, so `session._upgrade_preview` and `session.upgrade_task` build
-and confirm the plan with `PEGASUS_PROGRAM` standing in for "the program
-itself" wherever `InstallPlanScreen`/`InstallResultScreen` need a `CliOption`
-to render.
+and confirm the plan with `navigator.program_option(...)`, built from the
+running identity, standing in for "the program itself" wherever
+`InstallPlanScreen`/`InstallResultScreen` need a `CliOption` to render.
 
 Every test here drives `cli.upgrade` through `FakeDownloader` and
 `FakeFileSystem` -- see `test_cli_upgrade.py`'s own docstring for why a real,
@@ -24,19 +24,25 @@ from pegasus import cli
 from pegasus.core import ownership
 from pegasus.tui import session
 from pegasus.tui.navigator import (
-    PEGASUS_PROGRAM,
     Action,
     InstallPlanScreen,
     InstallResultScreen,
     Menu,
     Navigator,
     UpgradeTarget,
+    program_option,
 )
 
 AT = "2026-08-14T00:00:00+00:00"
 HOME = Path("/home/person")
 CURRENT_VERSION = pegasus.__version__
 NEWER_VERSION = "99.0.0"
+#: What `session._upgrade_preview` builds from the running identity -- every
+#: test here uses the real `default_identity()` (no override), so this
+#: matches it exactly.
+SAMPLE_PROGRAM = program_option(
+    program_name=cli.default_identity().program_name, display_name=cli.default_identity().display_name
+)
 
 
 def release_body(tag: str) -> bytes:
@@ -96,7 +102,7 @@ class ChoosingUpgradeFromTheMenuTest(UpgradeSessionTestCase):
         navigator = session.step(navigator, runtime, Action.CHOOSE)
         self.assertIsInstance(navigator.current, InstallPlanScreen)
         self.assertEqual(navigator.current.command, "upgrade")
-        self.assertEqual(navigator.current.cli, PEGASUS_PROGRAM)
+        self.assertEqual(navigator.current.cli, SAMPLE_PROGRAM)
         self.assertEqual(navigator.current.report["status"], "planned")
         self.assertEqual(navigator.current.report["new_version"], NEWER_VERSION)
 
