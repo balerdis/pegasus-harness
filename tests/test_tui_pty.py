@@ -193,7 +193,7 @@ class WordmarkRenderingTest(unittest.TestCase):
         layout = available().get(cli_id).layout(Environment(home=self.home))
         layout.config_dir.mkdir(parents=True, exist_ok=True)
         runtime = cli.Runtime(
-            filesystem=PosixFileSystem(),
+            filesystem=PosixFileSystem(product_id="pegasus-harness"),
             home=self.home,
             now="2026-08-14T00:00:00+00:00",
             out=io.StringIO(),
@@ -233,7 +233,7 @@ class LocalUpdateNoticeTest(unittest.TestCase):
         cli_id = available().ids()[0]
         layout = available().get(cli_id).layout(Environment(home=self.home))
         layout.config_dir.mkdir(parents=True, exist_ok=True)
-        filesystem = PosixFileSystem()
+        filesystem = PosixFileSystem(product_id="pegasus-harness")
         runtime = cli.Runtime(
             filesystem=filesystem,
             home=self.home,

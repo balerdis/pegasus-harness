@@ -20,7 +20,7 @@ class RecordingFileSystem:
     """Delegates every port call to a real filesystem and records write/removal order."""
 
     def __init__(self, filesystem: PosixFileSystem | None = None):
-        self._filesystem = filesystem or PosixFileSystem()
+        self._filesystem = filesystem or PosixFileSystem(product_id="pegasus-harness")
         self.writes: list[Path] = []
         self.removals: list[Path] = []
 

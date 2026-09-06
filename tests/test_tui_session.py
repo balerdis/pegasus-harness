@@ -140,7 +140,7 @@ def _journal_shape(home: Path) -> dict:
     to hash the same is not, and comparing it as raw bytes elsewhere would
     fail the way `test_a_tui_install_matches...` did before this existed.
     """
-    document = json.loads(journal_path(PosixFileSystem(), home).read_text())
+    document = json.loads(journal_path(PosixFileSystem(product_id="pegasus-harness"), home).read_text())
     return _drop_digests(_sans(document, str(home)))
 
 
@@ -177,7 +177,7 @@ class SessionTestCase(RealHomeTestCase):
 
     def runtime(self, home: Path | None = None) -> cli.Runtime:
         return cli.Runtime(
-            filesystem=PosixFileSystem(), home=home or self.home, now=AT, out=io.StringIO(), variables=NO_BINARY
+            filesystem=PosixFileSystem(product_id="pegasus-harness"), home=home or self.home, now=AT, out=io.StringIO(), variables=NO_BINARY
         )
 
     def to_continue(self, navigator: Navigator) -> Navigator:
@@ -591,7 +591,7 @@ class ParityWithCliInstallTest(SessionTestCase):
             self.assertEqual(
                 _sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home))
             )
-            journal_relative = str(journal_path(PosixFileSystem(), self.home).relative_to(self.home))
+            journal_relative = str(journal_path(PosixFileSystem(product_id="pegasus-harness"), self.home).relative_to(self.home))
             self.assertEqual(
                 _tree(self.home, skip=frozenset({journal_relative})),
                 _tree(other_home, skip=frozenset({journal_relative})),
@@ -633,7 +633,7 @@ class ParityWithCliInstallMcpTest(SessionTestCase):
             self.assertEqual(
                 _sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home))
             )
-            journal_relative = str(journal_path(PosixFileSystem(), self.home).relative_to(self.home))
+            journal_relative = str(journal_path(PosixFileSystem(product_id="pegasus-harness"), self.home).relative_to(self.home))
             self.assertEqual(
                 _tree(self.home, skip=frozenset({journal_relative})),
                 _tree(other_home, skip=frozenset({journal_relative})),
