@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from pegasus.infra import fs_posix
 from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 from platform_conditions import make_unwritable
@@ -163,6 +164,15 @@ class PosixFileSystemTest(unittest.TestCase):
 
         self.assertEqual(target.read_bytes(), b"first")
         self.assertEqual(self.leftovers(self.root), [])
+
+    def test_an_orphaned_temporary_file_is_identifiable_as_pegasus(self):
+        """An orphaned `.{TEMPORARY_PREFIX}*` temp file from a half-finished
+        atomic write must stay identifiable by name, the same reasoning
+        `test_the_client_name_sent_to_third_party_servers_is_pegasus_doctor`
+        pins for the MCP handshake's wire identifier: engine plumbing, not
+        product identity, keeps the engine's own name regardless of which
+        distribution runs."""
+        self.assertEqual(fs_posix.TEMPORARY_PREFIX, ".pegasus-")
 
     def test_writing_over_a_directory_raises_the_port_error(self):
         target = self.root / "occupied"

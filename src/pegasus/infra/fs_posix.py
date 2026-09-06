@@ -25,7 +25,7 @@ from pathlib import Path
 
 from pegasus.ports.filesystem import FileSystemError
 
-TEMPORARY_PREFIX = ".pfs-"
+TEMPORARY_PREFIX = ".pegasus-"
 TEMPORARY_SUFFIX = ".partial"
 
 #: `stat.S_IXUSR`, spelled as the plain `chmod` digit it already is -- not

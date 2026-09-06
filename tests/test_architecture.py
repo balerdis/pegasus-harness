@@ -341,6 +341,11 @@ PRODUCT_IDENTITY_ALLOWLIST = frozenset(
         # `PEGASUS_SKILL_REGISTRY_BIN`: it never varies with which
         # distribution runs.
         "pegasus-doctor",
+        # The prefix an orphaned half-finished atomic write's temp file is
+        # named with -- same reasoning as `"pegasus-doctor"` just above: an
+        # operator identifying a stray `.pegasus-*` file needs this name
+        # stable, never parameterized on which distribution wrote it.
+        ".pegasus-",
     }
 )
 
