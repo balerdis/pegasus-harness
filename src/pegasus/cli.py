@@ -1,4 +1,5 @@
-"""The flags: everything Pegasus can do without a person watching.
+"""The flags: everything a binary built from this engine can do without a
+person watching.
 
 The architecture sets one rule here — the TUI must not be able to do anything
 these flags cannot. That is what makes an agent-driven installation possible,
