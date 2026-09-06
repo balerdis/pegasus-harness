@@ -95,7 +95,7 @@ UPGRADE_PLANNED_REPORT = {
 UPGRADED_REPORT = {
     "schema": cli.SCHEMA, "command": "upgrade", "status": "upgraded",
     "old_version": "5.10.0", "new_version": "5.11.0", "destination": "/opt/pegasus/pegasus",
-    "restart_required": True,
+    "restart_required": True, "program_name": "pegasus",
 }
 UPGRADE_FAILED_REPORT = {
     "schema": cli.SCHEMA, "command": "upgrade", "status": "failed", "error": "5.10.0 is not writable",

@@ -23,6 +23,7 @@ def document(**overrides) -> bytes:
             "asset_url_template": "https://github.com/balerdis/pegasus-harness/releases/download/{tag}/{asset}",
             "binary_asset": "pegasus",
             "latest_release_api_url": "https://api.github.com/repos/balerdis/pegasus-harness/releases/latest",
+            "release_page_url": "https://github.com/balerdis/pegasus-harness/releases",
         },
     }
     payload.update(overrides)
@@ -43,6 +44,7 @@ class ParseAcceptsAValidDocumentTest(unittest.TestCase):
                     asset_url_template="https://github.com/balerdis/pegasus-harness/releases/download/{tag}/{asset}",
                     binary_asset="pegasus",
                     latest_release_api_url="https://api.github.com/repos/balerdis/pegasus-harness/releases/latest",
+                    release_page_url="https://github.com/balerdis/pegasus-harness/releases",
                 ),
             ),
         )
@@ -102,6 +104,41 @@ class ParseRejectsAMalformedDocumentTest(unittest.TestCase):
     def test_a_file_uri_release_template_is_rejected(self):
         payload = json.loads(document())
         payload["release"]["asset_url_template"] = "file:///etc/passwd/{tag}/{asset}"
+        with self.assertRaises(IdentityError):
+            module.parse(json.dumps(payload).encode("utf-8"))
+
+    def test_a_release_template_with_userinfo_spoofing_the_host_is_rejected(self):
+        """The exact attack the reviewer confirmed: a prefix/substring check
+        alone lets `github.com` sit before the `@` as bogus userinfo while
+        `evil.example.com` is the real host `urlsplit(...).hostname` names."""
+        payload = json.loads(document())
+        payload["release"]["asset_url_template"] = (
+            "https://github.com@evil.example.com/releases/download/{tag}/{asset}"
+        )
+        with self.assertRaises(IdentityError):
+            module.parse(json.dumps(payload).encode("utf-8"))
+
+    def test_a_release_template_with_no_hostname_is_rejected(self):
+        payload = json.loads(document())
+        payload["release"]["asset_url_template"] = "https:///releases/download/{tag}/{asset}"
+        with self.assertRaises(IdentityError):
+            module.parse(json.dumps(payload).encode("utf-8"))
+
+    def test_a_release_api_url_with_userinfo_spoofing_the_host_is_rejected(self):
+        payload = json.loads(document())
+        payload["release"]["latest_release_api_url"] = "https://api.github.com@evil.example.com/x"
+        with self.assertRaises(IdentityError):
+            module.parse(json.dumps(payload).encode("utf-8"))
+
+    def test_a_release_page_url_with_userinfo_spoofing_the_host_is_rejected(self):
+        payload = json.loads(document())
+        payload["release"]["release_page_url"] = "https://github.com@evil.example.com/releases"
+        with self.assertRaises(IdentityError):
+            module.parse(json.dumps(payload).encode("utf-8"))
+
+    def test_missing_release_page_url_is_rejected(self):
+        payload = json.loads(document())
+        del payload["release"]["release_page_url"]
         with self.assertRaises(IdentityError):
             module.parse(json.dumps(payload).encode("utf-8"))
 

@@ -46,11 +46,12 @@ def sha256sum_line(content: bytes) -> bytes:
 
 
 def upgrade_downloader(*, version: str = NEWER_VERSION, content: bytes = b"new pegasus bytes") -> FakeDownloader:
+    release = cli.default_identity().release
     return FakeDownloader(
         {
-            cli.UPDATE_CHECK_URL: release_body(f"v{version}"),
-            upgrade_module.checksum_url(version): sha256sum_line(content),
-            upgrade_module.binary_url(version): content,
+            release.latest_release_api_url: release_body(f"v{version}"),
+            upgrade_module.checksum_url(version, release): sha256sum_line(content),
+            upgrade_module.binary_url(version, release): content,
         }
     )
 
@@ -291,11 +292,12 @@ class SuccessfulUpgradeTest(UpgradeTestCase):
 
 class DigestMismatchTest(UpgradeTestCase):
     def test_aborts_and_leaves_the_original_byte_for_byte_intact(self):
+        release = cli.default_identity().release
         downloader = FakeDownloader(
             {
-                cli.UPDATE_CHECK_URL: release_body(f"v{NEWER_VERSION}"),
-                upgrade_module.checksum_url(NEWER_VERSION): sha256sum_line(b"not what arrives"),
-                upgrade_module.binary_url(NEWER_VERSION): b"the actual download",
+                release.latest_release_api_url: release_body(f"v{NEWER_VERSION}"),
+                upgrade_module.checksum_url(NEWER_VERSION, release): sha256sum_line(b"not what arrives"),
+                upgrade_module.binary_url(NEWER_VERSION, release): b"the actual download",
             }
         )
         filesystem = self.make_filesystem()
@@ -324,8 +326,9 @@ class DryRunTest(UpgradeTestCase):
         downloader = upgrade_downloader()
         runtime = self.runtime(downloader=downloader)
         cli.upgrade(runtime, dry_run=True)
-        self.assertNotIn(upgrade_module.checksum_url(NEWER_VERSION), downloader.calls)
-        self.assertNotIn(upgrade_module.binary_url(NEWER_VERSION), downloader.calls)
+        release = cli.default_identity().release
+        self.assertNotIn(upgrade_module.checksum_url(NEWER_VERSION, release), downloader.calls)
+        self.assertNotIn(upgrade_module.binary_url(NEWER_VERSION, release), downloader.calls)
 
 
 class CliWiringTest(UpgradeTestCase):

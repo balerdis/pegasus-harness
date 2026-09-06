@@ -12,10 +12,28 @@ from pathlib import Path
 from fakes import EXECUTABLE_MODE, FakeDownloader, FakeFileSystem
 
 from pegasus.core import ownership, upgrade
+from pegasus.core.identity import ReleaseSource
 from pegasus.ports.downloader import DownloaderError
 
 DESTINATION = Path("/home/probe/.local/bin/pegasus")
 VERSION = "5.11.0"
+
+PEGASUS_RELEASE = ReleaseSource(
+    asset_url_template="https://github.com/balerdis/pegasus-harness/releases/download/{tag}/{asset}",
+    binary_asset="pegasus",
+    latest_release_api_url="https://api.github.com/repos/balerdis/pegasus-harness/releases/latest",
+    release_page_url="https://github.com/balerdis/pegasus-harness/releases",
+)
+
+#: A distribution's own release source -- deliberately a *different* host and
+#: asset name than Pegasus's own, so any test asserting a URL was built from
+#: this value catches a fallback to Pegasus's own release, not only a typo.
+DISTRIBUTION_RELEASE = ReleaseSource(
+    asset_url_template="https://github.com/acme/darq/releases/download/{tag}/{asset}",
+    binary_asset="darq",
+    latest_release_api_url="https://api.github.com/repos/acme/darq/releases/latest",
+    release_page_url="https://github.com/acme/darq/releases",
+)
 
 
 def sha256sum_line(content: bytes, filename: str = "pegasus") -> bytes:
@@ -24,58 +42,107 @@ def sha256sum_line(content: bytes, filename: str = "pegasus") -> bytes:
     return f"{digest}  {filename}\n".encode("utf-8")
 
 
+class NoDefaultReleaseSourceTest(unittest.TestCase):
+    """A silent fallback to Pegasus's own release must be *unrepresentable*,
+    not merely unlikely -- so the module-level constant it would fall back to
+    must not exist at all."""
+
+    def test_release_asset_url_no_longer_exists(self):
+        self.assertFalse(hasattr(upgrade, "RELEASE_ASSET_URL"))
+
+
 class UrlsTest(unittest.TestCase):
-    def test_binary_url_names_the_tag_and_asset(self):
+    def test_a_version_with_a_path_separator_is_rejected(self):
+        """`version` reaches here straight from the remote release API's own
+        `tag_name` JSON field (see `cli._fetch_latest_version`), never
+        validated on the way -- unlike `binary_asset`, which `identity.parse`
+        already confines to a bare filename. Left unchecked, a malicious or
+        compromised release endpoint could fill `{tag}` with a path that
+        escapes the intended `download/{tag}/{asset}` segment on the same
+        host, e.g. `v1.0.0/../../../admin/secret`."""
+        with self.assertRaises(upgrade.UpgradeError):
+            upgrade.binary_url("1.0.0/../../../admin/secret", DISTRIBUTION_RELEASE)
+
+    def test_a_checksum_url_with_a_path_separator_in_version_is_rejected(self):
+        with self.assertRaises(upgrade.UpgradeError):
+            upgrade.checksum_url("1.0.0/../../../admin/secret", DISTRIBUTION_RELEASE)
+
+    def test_binary_url_names_the_tag_and_the_releases_own_asset(self):
         self.assertEqual(
-            upgrade.binary_url(VERSION),
-            f"https://github.com/balerdis/pegasus-harness/releases/download/v{VERSION}/pegasus",
+            upgrade.binary_url(VERSION, DISTRIBUTION_RELEASE),
+            f"https://github.com/acme/darq/releases/download/v{VERSION}/darq",
         )
 
-    def test_checksum_url_names_the_tag_and_asset(self):
+    def test_checksum_url_names_the_tag_and_the_releases_own_asset(self):
         self.assertEqual(
-            upgrade.checksum_url(VERSION),
-            f"https://github.com/balerdis/pegasus-harness/releases/download/v{VERSION}/pegasus.sha256",
+            upgrade.checksum_url(VERSION, DISTRIBUTION_RELEASE),
+            f"https://github.com/acme/darq/releases/download/v{VERSION}/darq.sha256",
+        )
+
+    def test_pegasus_own_release_still_builds_its_own_urls(self):
+        self.assertEqual(
+            upgrade.binary_url(VERSION, PEGASUS_RELEASE),
+            f"https://github.com/balerdis/pegasus-harness/releases/download/v{VERSION}/pegasus",
         )
 
 
 class FetchAndVerifyTest(unittest.TestCase):
     def test_a_matching_checksum_returns_the_fetched_bytes(self):
-        content = b"the new pegasus binary"
+        content = b"the new darq binary"
         downloader = FakeDownloader(
             {
-                upgrade.checksum_url(VERSION): sha256sum_line(content),
-                upgrade.binary_url(VERSION): content,
+                upgrade.checksum_url(VERSION, DISTRIBUTION_RELEASE): sha256sum_line(content, "darq"),
+                upgrade.binary_url(VERSION, DISTRIBUTION_RELEASE): content,
             }
         )
-        self.assertEqual(upgrade.fetch_and_verify(downloader, VERSION), content)
+        self.assertEqual(upgrade.fetch_and_verify(downloader, VERSION, DISTRIBUTION_RELEASE), content)
+
+    def test_a_distribution_source_never_yields_a_pegasus_url(self):
+        """The whole point of D4: a distribution's own `ReleaseSource` can
+        never be coerced into fetching from Pegasus's own repository -- there
+        is no shared default either could fall back to."""
+        content = b"the new darq binary"
+        downloader = FakeDownloader(
+            {
+                upgrade.checksum_url(VERSION, DISTRIBUTION_RELEASE): sha256sum_line(content, "darq"),
+                upgrade.binary_url(VERSION, DISTRIBUTION_RELEASE): content,
+            }
+        )
+        upgrade.fetch_and_verify(downloader, VERSION, DISTRIBUTION_RELEASE)
+        for url in downloader.calls:
+            self.assertNotIn("balerdis", url)
+            self.assertNotIn("pegasus-harness", url)
 
     def test_a_mismatched_checksum_raises_and_names_expected_and_actual(self):
         content = b"the new pegasus binary"
         wrong = sha256sum_line(b"something else entirely")
         downloader = FakeDownloader(
             {
-                upgrade.checksum_url(VERSION): wrong,
-                upgrade.binary_url(VERSION): content,
+                upgrade.checksum_url(VERSION, PEGASUS_RELEASE): wrong,
+                upgrade.binary_url(VERSION, PEGASUS_RELEASE): content,
             }
         )
         with self.assertRaises(upgrade.UpgradeError) as caught:
-            upgrade.fetch_and_verify(downloader, VERSION)
+            upgrade.fetch_and_verify(downloader, VERSION, PEGASUS_RELEASE)
         message = str(caught.exception)
         expected_digest = wrong.split()[0].decode("ascii")
         actual_digest = ownership.digest_of_bytes(content).removeprefix(ownership.PREFIX)
         self.assertIn(expected_digest, message)
         self.assertIn(actual_digest, message)
+        self.assertIn("pegasus", message)
 
     def test_a_checksum_fetch_failure_raises_before_ever_fetching_the_binary(self):
-        downloader = FakeDownloader({upgrade.binary_url(VERSION): b"never reached"})
+        downloader = FakeDownloader({upgrade.binary_url(VERSION, PEGASUS_RELEASE): b"never reached"})
         with self.assertRaises(upgrade.UpgradeError):
-            upgrade.fetch_and_verify(downloader, VERSION)
-        self.assertNotIn(upgrade.binary_url(VERSION), downloader.calls)
+            upgrade.fetch_and_verify(downloader, VERSION, PEGASUS_RELEASE)
+        self.assertNotIn(upgrade.binary_url(VERSION, PEGASUS_RELEASE), downloader.calls)
 
     def test_a_binary_fetch_failure_raises(self):
-        downloader = FakeDownloader({upgrade.checksum_url(VERSION): sha256sum_line(b"whatever")})
+        downloader = FakeDownloader(
+            {upgrade.checksum_url(VERSION, PEGASUS_RELEASE): sha256sum_line(b"whatever")}
+        )
         with self.assertRaises(upgrade.UpgradeError):
-            upgrade.fetch_and_verify(downloader, VERSION)
+            upgrade.fetch_and_verify(downloader, VERSION, PEGASUS_RELEASE)
 
     def test_a_non_utf8_checksum_body_raises_a_clean_upgrade_error(self):
         """A malformed checksum asset must refuse cleanly, exactly like an
@@ -83,10 +150,10 @@ class FetchAndVerifyTest(unittest.TestCase):
         unhandled traceback. Nothing is written at this point either way:
         the checksum is fetched before the binary, so a decode failure here
         never reaches `replace_binary` at all."""
-        downloader = FakeDownloader({upgrade.checksum_url(VERSION): b"\xff\xfe not valid utf-8"})
+        downloader = FakeDownloader({upgrade.checksum_url(VERSION, PEGASUS_RELEASE): b"\xff\xfe not valid utf-8"})
         with self.assertRaises(upgrade.UpgradeError):
-            upgrade.fetch_and_verify(downloader, VERSION)
-        self.assertNotIn(upgrade.binary_url(VERSION), downloader.calls)
+            upgrade.fetch_and_verify(downloader, VERSION, PEGASUS_RELEASE)
+        self.assertNotIn(upgrade.binary_url(VERSION, PEGASUS_RELEASE), downloader.calls)
 
 
 class ReplaceBinaryTest(unittest.TestCase):
