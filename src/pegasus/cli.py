@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None, *, runtime: Runtime | None = None) -> in
     if arguments.json:
         runtime.out.write(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     else:
-        runtime.out.write(_prose(report) + "\n")
+        runtime.out.write(_prose(report, identity=runtime.identity) + "\n")
     return code
 
 
@@ -509,7 +509,7 @@ def install(
         f"{key!r} was already granted per-agent (a shipped mcp server or a key now bound by "
         f"this install's own --mcp selection); the carried-forward grant to every agent is "
         f"redundant and was dropped -- the server is still reachable through the agents that "
-        f"declare it, and `pegasus mcp grant --cli {adapter.id} {key}` re-adds it explicitly "
+        f"declare it, and `{runtime.identity.program_name} mcp grant --cli {adapter.id} {key}` re-adds it explicitly "
         f"if that is not what you wanted"
         for key in dropped_grants
     ]
@@ -829,7 +829,9 @@ def update(
         )
     selection, unresolved = _mcp_update_selection(installed)
     if unresolved:
-        raise CommandError(_unresolved_bindings_message(adapter.id, unresolved))
+        raise CommandError(
+            _unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
+        )
     return install(
         cli_id, runtime, dry_run=dry_run, mcp=selection, granted=list(installed.granted_mcp), on_progress=on_progress
     )
@@ -869,7 +871,7 @@ def update_unresolved_bindings(install: Install) -> list[str]:
     return unresolved
 
 
-def install_command_for(cli_id: str, ids: list[str]) -> str:
+def install_command_for(cli_id: str, ids: list[str], *, program_name: str | None = None) -> str:
     """The exact `install` invocation that would (re)record a key for each
     of ``ids``, one placeholder per id, built from the ids actually
     affected rather than from a hardcoded example.
@@ -877,10 +879,14 @@ def install_command_for(cli_id: str, ids: list[str]) -> str:
     Public rather than the `_install_command_for` it used to be: `session`
     (the TUI's engine bridge) reuses it to build the same remedy command the
     local update notice names, so that notice and this module's own refusal
-    can never disagree about what the fix is.
+    can never disagree about what the fix is. `program_name` defaults to the
+    packaged identity's own -- `session` calls this with no `Runtime` in
+    reach at all, so a distribution's own build still names its own program
+    here without that caller having to change.
     """
     flags = " ".join(f"--mcp {name}=<key>" for name in ids)
-    return f"pegasus install --cli {cli_id} {flags}"
+    program = program_name if program_name is not None else default_identity().program_name
+    return f"{program} install --cli {cli_id} {flags}"
 
 
 def mcp_placeholder_instruction() -> str:
@@ -897,8 +903,8 @@ def mcp_placeholder_instruction() -> str:
     return "replacing each <key> placeholder below with that server's actual key, which lives in the CLI's own configuration"
 
 
-def _unresolved_bindings_message(cli_id: str, ids: list[str]) -> str:
-    command = install_command_for(cli_id, ids)
+def _unresolved_bindings_message(cli_id: str, ids: list[str], *, program_name: str | None = None) -> str:
+    command = install_command_for(cli_id, ids, program_name=program_name)
     return (
         f"{cli_id} has bound mcp server(s) {', '.join(ids)} whose server key was never recorded "
         f"(an install made before this was tracked); update cannot reapply them without guessing, "
@@ -1525,7 +1531,10 @@ def uninstall(cli_id: str, runtime: Runtime) -> dict[str, Any]:
     activation = list(adapter.activation_steps())
     install = journal_module.install_for(journal, adapter.id)
     if install is None:
-        raise CommandError(f"Pegasus is not recorded as installed in {adapter.id!r}; there is nothing to take back")
+        raise CommandError(
+            f"{runtime.identity.display_name} is not recorded as installed in {adapter.id!r}; "
+            f"there is nothing to take back"
+        )
 
     # Same reasoning as install, in reverse: retiring overwrites what the
     # journal claims without asking, and the journal itself is captured
@@ -1589,7 +1598,7 @@ def models_set(
         "agent": agent,
         "model": assignment.full_id,
         "effort": assignment.effort,
-        "activation": (_NOT_INSTALLED_YET.format(cli=cli_id),),
+        "activation": (_NOT_INSTALLED_YET.format(cli=cli_id, program=runtime.identity.program_name),),
     }
 
 
@@ -1606,13 +1615,13 @@ def models_unset(cli_id: str, agent: str, runtime: Runtime) -> dict[str, Any]:
         "cli": cli_id,
         "agent": agent,
         "status": "unset",
-        "activation": (_NOT_INSTALLED_YET.format(cli=cli_id),),
+        "activation": (_NOT_INSTALLED_YET.format(cli=cli_id, program=runtime.identity.program_name),),
     }
 
 
 _NOT_INSTALLED_YET = (
     "The current installation at {cli} does not carry this yet; reinstall "
-    "(`pegasus install --cli {cli}`) to write it into the rendered configuration."
+    "(`{program} install --cli {cli}`) to write it into the rendered configuration."
 )
 
 
@@ -1674,7 +1683,9 @@ def mcp_grant(cli_id: str, key: str, runtime: Runtime) -> dict[str, Any]:
     granted = tuple(sorted(set(installed.granted_mcp) | {key}))
     selection, unresolved = _mcp_update_selection(installed)
     if unresolved:
-        raise CommandError(_unresolved_bindings_message(adapter.id, unresolved))
+        raise CommandError(
+            _unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
+        )
     report = install(cli_id, runtime, mcp=selection, granted=list(granted))
     return {**report, "action": "grant", "key": key, "granted": list(granted), "status": "granted"}
 
@@ -1694,7 +1705,9 @@ def mcp_revoke(cli_id: str, key: str, runtime: Runtime) -> dict[str, Any]:
     granted = tuple(sorted(set(installed.granted_mcp) - {key}))
     selection, unresolved = _mcp_update_selection(installed)
     if unresolved:
-        raise CommandError(_unresolved_bindings_message(adapter.id, unresolved))
+        raise CommandError(
+            _unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
+        )
     report = install(cli_id, runtime, mcp=selection, granted=list(granted))
     return {**report, "action": "revoke", "key": key, "granted": list(granted), "status": "revoked"}
 
@@ -1747,7 +1760,9 @@ def mcp_list(cli_id: str, runtime: Runtime) -> dict[str, Any]:
             "available": [],
             "already_covered": [],
             "unresolved_mcp_bindings": sorted(unresolved),
-            "blocked": _unresolved_bindings_message(adapter.id, unresolved),
+            "blocked": _unresolved_bindings_message(
+                adapter.id, unresolved, program_name=runtime.identity.program_name
+            ),
         }
     already_covered = ungranted & per_agent
     return {
@@ -1991,7 +2006,7 @@ def _health(
     # everybody types. Its own key, rather than joining `mcp_servers`: that one
     # is documented as the result of launching things, and would otherwise hold
     # entries nothing launched.
-    bound_checks = _bound_checks(install)
+    bound_checks = _bound_checks(install, display_name=runtime.identity.display_name)
     health["mcp_bound"] = [
         {"id": check.id, "status": check.status, "detail": check.detail, "key": install.mcp_bindings.get(check.id)}
         for check in bound_checks
@@ -2006,7 +2021,7 @@ def _health(
     if unknown_key_ids:
         health["mcp_bound_unknown_keys"] = {
             "ids": unknown_key_ids,
-            "command": install_command_for(adapter.id, unknown_key_ids),
+            "command": install_command_for(adapter.id, unknown_key_ids, program_name=runtime.identity.program_name),
         }
 
     # Its own key, distinct from `mcp_bound`: a granted key is not a binding.
@@ -2047,7 +2062,7 @@ def _mcp_checks(runtime: Runtime, install) -> list[mcp_handshake.ServerCheck]:
     return [_mcp_checks_one(runtime, entry, name) for entry, name in _mcp_entries(install)]
 
 
-def _bound_checks(install) -> list[mcp_handshake.ServerCheck]:
+def _bound_checks(install, *, display_name: str | None = None) -> list[mcp_handshake.ServerCheck]:
     """The servers this install granted without ever configuring them.
 
     A bound server writes no `/mcp/<id>` key — only its convention — so
@@ -2071,6 +2086,7 @@ def _bound_checks(install) -> list[mcp_handshake.ServerCheck]:
     reach either way: bound or half-uninstalled, there is no configuration
     here to start it from.
     """
+    name_of_engine = display_name if display_name is not None else default_identity().display_name
     configured = {name for _, name in _mcp_entries(install)}
     checks = []
     for entry in install.entries:
@@ -2083,13 +2099,13 @@ def _bound_checks(install) -> list[mcp_handshake.ServerCheck]:
         if key is not None:
             detail = (
                 f"no configuration of its own in this install: bound to {key!r}, a server you "
-                f"administer, whose tools Pegasus grants and whose convention it ships without "
+                f"administer, whose tools {name_of_engine} grants and whose convention it ships without "
                 f"installing or starting it"
             )
         else:
             detail = (
                 "no configuration of its own in this install: either bound to a server you "
-                "administer, whose tools Pegasus grants and whose convention it ships without "
+                f"administer, whose tools {name_of_engine} grants and whose convention it ships without "
                 "installing or starting it, or a convention left behind by an uninstall that "
                 "did not finish"
             )
@@ -2535,8 +2551,16 @@ def _left(step: planner.Step) -> dict[str, Any]:
     return {"id": step.artifact.id, "target": str(step.artifact.path), "reason": step.reason}
 
 
-def _prose(report: dict[str, Any]) -> str:
-    """The same facts, for a person. Never a subset of them."""
+def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
+    """The same facts, for a person. Never a subset of them.
+
+    `identity` defaults to the packaged one: `prose_for` (this function's
+    public alias) is called from `tui/view.py` with no `Runtime` in reach at
+    all, so a distribution's own build still names its own product here
+    without that caller needing to change; `main`, which does have a
+    `Runtime`, passes `runtime.identity` explicitly instead of relying on it.
+    """
+    identity = identity if identity is not None else default_identity()
     if report.get("status") == "failed":
         if report.get("rolled_back"):
             return f"The installation was undone. {report['error']}"
@@ -2550,7 +2574,7 @@ def _prose(report: dict[str, Any]) -> str:
 
     command = report["command"]
     if command == "doctor":
-        return "\n".join(_cli_prose(entry) for entry in report["clis"])
+        return "\n".join(_cli_prose(entry, identity=identity) for entry in report["clis"])
     if command == "restore":
         lines = [
             f"generation {report['generation']}: wrote back {len(report['written'])}, "
@@ -2566,9 +2590,9 @@ def _prose(report: dict[str, Any]) -> str:
         ]
         if report.get("overwritten"):
             lines.append(
-                "Overwritten, because Pegasus owns these and you had changed them:"
+                f"Overwritten, because {identity.display_name} owns these and you had changed them:"
                 if not planned
-                else "Would be overwritten, because Pegasus owns these and you had changed them:"
+                else f"Would be overwritten, because {identity.display_name} owns these and you had changed them:"
             )
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["overwritten"])
         if report["skipped"]:
@@ -2691,11 +2715,12 @@ def _and_retention(lines: list[str], report: dict[str, Any]) -> list[str]:
 prose_for = _prose
 
 
-def _cli_prose(entry: dict[str, Any]) -> str:
+def _cli_prose(entry: dict[str, Any], *, identity: Identity | None = None) -> str:
+    identity = identity if identity is not None else default_identity()
     if not entry["detected"]:
         return f"{entry['display_name']}: not found on this machine."
     if not entry["pegasus_installed"]:
-        return f"{entry['display_name']}: present at {entry['config_dir']}, Pegasus not installed."
+        return f"{entry['display_name']}: present at {entry['config_dir']}, {identity.display_name} not installed."
     line = f"{entry['display_name']}: {entry['artifacts']} artifacts installed at {entry['config_dir']}."
     for label, key in (
         ("changed by hand", "drifted"),
@@ -2712,10 +2737,10 @@ def _cli_prose(entry: dict[str, Any]) -> str:
     # telling them again every time would turn the notice into noise.
     steps = entry.get("activation") or []
     if steps:
-        line += "\n  If it was already running when Pegasus was installed:"
+        line += f"\n  If it was already running when {identity.display_name} was installed:"
         line += "".join(f"\n    {step}" for step in steps)
     if entry.get("mcp_bound"):
-        line += "\n  MCP servers you administer, granted but not installed by Pegasus:"
+        line += f"\n  MCP servers you administer, granted but not installed by {identity.display_name}:"
         line += "".join(
             f"\n    {check['id']} (bound to {check['key']!r})" if check.get("key") else f"\n    {check['id']}"
             for check in entry["mcp_bound"]
