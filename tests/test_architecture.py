@@ -318,11 +318,6 @@ class NoClockReadsInDeterministicModulesTest(unittest.TestCase):
 #: these, so no partial-match rule is needed to tell the two apart.
 PRODUCT_IDENTITY_ALLOWLIST = frozenset(
     {
-        # The archive's own root directory name (`build_zipapp.py:stage` always
-        # names it "pegasus"), and the import package name every module in this
-        # tree already imports through -- neither is a brand, both are the one
-        # name Python's own import system is told to resolve.
-        "pegasus",
         "pegasus/capability-manifest/v1",
         "pegasus/model-assignment/v1",
         "pegasus/artifact-catalog/v4",
@@ -368,9 +363,27 @@ def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
         and isinstance(node.value, ast.Constant)
         and isinstance(node.value.value, str)
     }
+    # The one legitimate use of the bare literal "pegasus": the argument to a
+    # packaging resource lookup (`_package_files("pegasus")` in `core/content.py`,
+    # or the `importlib.resources.files("pegasus")` spelling it wraps) -- never a
+    # bare exact-match string anywhere else. Narrower than a blanket allowlist
+    # entry, which would also exempt the same literal used as, say, an asset name.
+    package_lookup_args = {
+        id(arg)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "_package_files")
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "files")
+        )
+        for arg in node.args
+        if isinstance(arg, ast.Constant) and arg.value == "pegasus"
+    }
     found = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str) or id(node) in prose:
+            continue
+        if id(node) in package_lookup_args:
             continue
         if node.value in PRODUCT_IDENTITY_ALLOWLIST:
             continue
@@ -431,6 +444,23 @@ class NoProductIdentityOutsideCompositionRootTest(unittest.TestCase):
     def test_an_allowlisted_wire_literal_is_not_flagged(self):
         probe = _write_probe(self, 'SCHEMA = "pegasus/artifact-catalog/v4"\n')
         self.assertEqual(_product_identity_offenders(probe), [])
+
+    def test_bare_pegasus_as_a_package_files_argument_is_not_flagged(self):
+        """The one legitimate use of the bare literal `"pegasus"`: a packaging
+        resource lookup, e.g. `_package_files("pegasus")` in `core/content.py`."""
+        probe = _write_probe(self, 'root = _package_files("pegasus")\n')
+        self.assertEqual(_product_identity_offenders(probe), [])
+
+    def test_bare_pegasus_as_an_importlib_resources_files_argument_is_not_flagged(self):
+        probe = _write_probe(self, 'root = importlib.resources.files("pegasus")\n')
+        self.assertEqual(_product_identity_offenders(probe), [])
+
+    def test_bare_pegasus_elsewhere_is_flagged(self):
+        """Outside a package-resource lookup, the bare literal `"pegasus"` is a
+        real offender -- this is the narrowing that must catch `core/upgrade.py`'s
+        `asset="pegasus"`, no longer blanket-exempted."""
+        probe = _write_probe(self, 'asset = "pegasus"\n')
+        self.assertEqual([text for _, text in _product_identity_offenders(probe)], ["pegasus"])
 
 
 def _owning_adapter(path: Path) -> str:
