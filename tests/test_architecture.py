@@ -339,6 +339,22 @@ PRODUCT_IDENTITY_ALLOWLIST = frozenset(
 )
 
 
+def _fold_string_concat(node: ast.AST) -> str | None:
+    """The compile-time value of `node` if it is a string literal, or a `+`
+    chain of string literals, else `None`. Mirrors what Python's own constant
+    folding does at runtime for `"a" + "b"`, so the offender scan can match
+    against the same value a reader of the running program would see -- not
+    against the two halves the source happens to spell it with."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _fold_string_concat(node.left)
+        right = _fold_string_concat(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
 def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
     """Every non-prose string constant in `path` that names a distribution,
     outside `PRODUCT_IDENTITY_ALLOWLIST`.
@@ -380,8 +396,29 @@ def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
         if isinstance(arg, ast.Constant) and arg.value == "pegasus"
     }
     found = []
+    # Adjacent literal concatenation, f-strings, dict values, class attributes
+    # and `__all__` are already caught above -- each is still a single
+    # `ast.Constant`. The one shape that is not is `+`-joined string literals
+    # (`"pegas" + "us"`): each side is judged independently by the loop below
+    # unless folded into one value first, here, before the BinOp's own
+    # children are ever reached by `ast.walk` -- which visits a node before
+    # its descendants, so marking them consumed here is always in time.
+    consumed: set[int] = set()
     for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and id(node) not in consumed:
+            folded = _fold_string_concat(node)
+            if folded is not None:
+                for descendant in ast.walk(node):
+                    if descendant is not node:
+                        consumed.add(id(descendant))
+                if folded not in PRODUCT_IDENTITY_ALLOWLIST and any(
+                    name in folded.lower() for name in ("pegasus", "harness", "balerdis")
+                ):
+                    found.append((node.lineno, folded))
+                continue
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str) or id(node) in prose:
+            continue
+        if id(node) in consumed:
             continue
         if id(node) in package_lookup_args:
             continue
@@ -454,6 +491,17 @@ class NoProductIdentityOutsideCompositionRootTest(unittest.TestCase):
     def test_bare_pegasus_as_an_importlib_resources_files_argument_is_not_flagged(self):
         probe = _write_probe(self, 'root = importlib.resources.files("pegasus")\n')
         self.assertEqual(_product_identity_offenders(probe), [])
+
+    def test_string_concatenation_of_a_product_identity_is_flagged(self):
+        """`"pegas" + "us"` names the same distribution `"pegasus"` does, split
+        across an `ast.BinOp` string `+` so that neither individual `ast.Constant`
+        matches on its own. Adjacent literal concatenation, f-strings, dict
+        values, class attributes and `__all__` are already caught because each
+        is still a single `ast.Constant`; only `+`-joined literals fold two
+        constants into one at runtime without ever being one `ast.Constant` node
+        -- this is the one shape the offender scan must fold before matching."""
+        probe = _write_probe(self, 'asset = "pegas" + "us"\n')
+        self.assertEqual([text for _, text in _product_identity_offenders(probe)], ["pegasus"])
 
     def test_bare_pegasus_elsewhere_is_flagged(self):
         """Outside a package-resource lookup, the bare literal `"pegasus"` is a
