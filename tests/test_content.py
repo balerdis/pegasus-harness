@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -798,11 +802,38 @@ class SessionStartTest(TemporaryContent):
         in -- that is exactly the leak `NoProductIdentityOutsideCompositionRootTest`
         exists to catch for a distribution's own name, and the same discipline
         applies here: a distribution that renames its orchestrator agent must
-        be able to change this without touching a line of `core/`."""
-        packaged = (_package_files("pegasus") / "content" / "session-start.txt").read_text(
-            encoding="utf-8"
-        ).strip()
-        self.assertEqual(content.SESSION_STARTS_IN, packaged)
+        be able to change this without touching a line of `core/`.
+
+        Comparing `content.SESSION_STARTS_IN` against a second read of the
+        exact same packaged file it draws from would still pass if
+        `core/content.py` hardcoded a literal instead -- both sides would just
+        diverge from the packaged file in the same way, proving nothing about
+        which one the module attribute actually tracks. So this substitutes a
+        *different* packaged value in an isolated copy of the `pegasus`
+        package and asserts the constant follows the substitution, in a fresh
+        subprocess -- the only way to observe the module-level constant
+        re-evaluate its import-time read against a distinct value without
+        reloading (and thereby corrupting) the real `pegasus.core.content`
+        module every other test in this process shares."""
+        real_pegasus_root = Path(content.__file__).resolve().parent.parent
+        fake_src = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, fake_src, ignore_errors=True)
+        shutil.copytree(
+            real_pegasus_root,
+            fake_src / "pegasus",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        (fake_src / "pegasus" / "content" / "session-start.txt").write_text(
+            "substituted-orchestrator\n", encoding="utf-8"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", "from pegasus.core import content; print(content.SESSION_STARTS_IN)"],
+            env={**os.environ, "PYTHONPATH": str(fake_src)},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "substituted-orchestrator")
 
     def test_the_named_agent_is_the_only_one_a_session_starts_in(self):
         self.agent(content.SESSION_STARTS_IN)
