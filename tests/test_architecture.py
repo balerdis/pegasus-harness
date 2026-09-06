@@ -310,6 +310,129 @@ class NoClockReadsInDeterministicModulesTest(unittest.TestCase):
         self.assertNotIn(SOURCE / "tui" / "app.py", deterministic_modules())
 
 
+#: Every string this rule already knows may say `pegasus`/`harness`/`balerdis`
+#: without naming a distribution -- because it is a wire-format identifier an
+#: external reader parses (a schema string, a canonical-frame path segment, a
+#: dict key mirroring a dataclass field name), never a brand a person reads.
+#: Exact match only: a real offender's full string is never equal to one of
+#: these, so no partial-match rule is needed to tell the two apart.
+PRODUCT_IDENTITY_ALLOWLIST = frozenset(
+    {
+        # The archive's own root directory name (`build_zipapp.py:stage` always
+        # names it "pegasus"), and the import package name every module in this
+        # tree already imports through -- neither is a brand, both are the one
+        # name Python's own import system is told to resolve.
+        "pegasus",
+        "pegasus/capability-manifest/v1",
+        "pegasus/model-assignment/v1",
+        "pegasus/artifact-catalog/v4",
+        "pegasus-harness/journal/v4",
+        # The JSON key that mirrors the `pegasus_version` dataclass field --
+        # renaming either would break every journal already on disk for zero
+        # user-visible benefit.
+        "pegasus_version",
+        "the journal needs a pegasus_version",
+        # The fictional canonical frame a catalog is built against so its
+        # digests are portable across machines -- changing either changes every
+        # artifact digest ever published, not just what a person reads.
+        "/pegasus/catalog-build",
+        ".pegasus-data",
+        # A probe home nothing on disk can ever equal, used only to prove a
+        # registry answers "not found" -- never resolved against a real path.
+        "/nonexistent/pegasus-registry-probe",
+    }
+)
+
+
+def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
+    """Every non-prose string constant in `path` that names a distribution,
+    outside `PRODUCT_IDENTITY_ALLOWLIST`.
+
+    "Prose" is anything written as a bare statement -- a module, class, or
+    function docstring, or the same convention applied to a module-level or
+    class-level constant (`NAME = ...` followed by its own string literal,
+    used throughout this tree in place of a comment). Both shapes are an
+    `ast.Expr` whose value is a `Constant`; neither is ever *used* as a value,
+    which is the one thing every real offender has in common: assigned,
+    passed as an argument, or interpolated into an f-string that is raised or
+    returned. An import statement, a dotted module name, and an attribute
+    read (`pegasus.__version__`) are not scanned at all -- structurally, they
+    are never `ast.Constant` string nodes in the first place.
+    """
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    prose = {
+        id(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str) or id(node) in prose:
+            continue
+        if node.value in PRODUCT_IDENTITY_ALLOWLIST:
+            continue
+        lowered = node.value.lower()
+        if any(name in lowered for name in ("pegasus", "harness", "balerdis")):
+            found.append((node.lineno, node.value))
+    return sorted(found)
+
+
+class NoProductIdentityOutsideCompositionRootTest(unittest.TestCase):
+    """The engine must not know which *distribution* it is, the same way
+    `NoCliNamesOutsideAdaptersTest` already keeps it from knowing which CLI it
+    runs under. `cli.py` is the composition root and is deliberately outside
+    `agnostic_modules()` -- it is the one place identity is allowed to be a
+    literal, until `identity.parse()` reads it from data instead.
+    """
+
+    def test_agnostic_packages_are_scanned(self):
+        self.assertTrue(agnostic_modules(), "no modules found in the CLI-agnostic packages")
+
+    def test_no_agnostic_module_names_a_product_identity(self):
+        offenders = [
+            f"{path.relative_to(SOURCE)}:{number} {text!r}"
+            for path in agnostic_modules()
+            for number, text in _product_identity_offenders(path)
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            "a distribution's identity leaked into core/ports/infra/tui:\n" + "\n".join(offenders),
+        )
+
+    def test_a_literal_product_name_is_flagged(self):
+        probe = _write_probe(self, 'name = "Pegasus Harness"\n')
+        offenders = _product_identity_offenders(probe)
+        self.assertEqual([text for _, text in offenders], ["Pegasus Harness"])
+
+    def test_importing_the_package_is_not_flagged(self):
+        probe = _write_probe(self, "import pegasus\nfrom pegasus.core import identity\n")
+        self.assertEqual(_product_identity_offenders(probe), [])
+
+    def test_reading_the_version_attribute_is_not_flagged(self):
+        probe = _write_probe(self, "import pegasus\nversion = pegasus.__version__\n")
+        self.assertEqual(_product_identity_offenders(probe), [])
+
+    def test_a_docstring_mentioning_the_product_is_not_flagged(self):
+        probe = _write_probe(self, '"""Pegasus itself, mentioned in prose only."""\nx = 1\n')
+        self.assertEqual(_product_identity_offenders(probe), [])
+
+    def test_an_attribute_doc_string_mentioning_the_product_is_not_flagged(self):
+        """The same convention `TEMPORARY_PREFIX`/`ALLOWED_CHARACTERS` use
+        throughout this tree: a bare string statement documenting the constant
+        above it, never assigned to anything, never a docstring by ast's own
+        definition of the term."""
+        probe = _write_probe(self, 'NAME = "x"\n"""Pegasus reads this constant."""\n')
+        self.assertEqual(_product_identity_offenders(probe), [])
+
+    def test_an_allowlisted_wire_literal_is_not_flagged(self):
+        probe = _write_probe(self, 'SCHEMA = "pegasus/artifact-catalog/v4"\n')
+        self.assertEqual(_product_identity_offenders(probe), [])
+
+
 def _owning_adapter(path: Path) -> str:
     """The adapter a file belongs to, or empty for the composition root itself."""
     relative = path.relative_to(ADAPTERS).parts

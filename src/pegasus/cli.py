@@ -119,7 +119,12 @@ def default_runtime(out: TextIO) -> Runtime:
 
     variables = dict(os.environ)
     return Runtime(
-        filesystem=PosixFileSystem(variables),
+        # "pegasus-harness" is Pegasus's own `product_id`, threaded through
+        # explicitly here rather than defaulted inside `PosixFileSystem` --
+        # see that class's own docstring. `identity.parse()` takes over this
+        # literal in a later change; until then this is the one place it is
+        # allowed to be one.
+        filesystem=PosixFileSystem(variables, product_id="pegasus-harness"),
         home=Path.home(),
         now=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         out=out,
@@ -1000,6 +1005,11 @@ def check_for_update(runtime: Runtime) -> str | None:
     other engine function reads the environment through, never `os.environ`
     directly.
     """
+    # A stable wire identifier, like `PEGASUS_SKILL_REGISTRY_BIN`/
+    # `PEGASUS_SKILL_ROOTS` (`adapters/opencode/adapter.py`) -- an operator
+    # who already has this set in their shell must not lose the off switch
+    # the moment a build's identity changes, so this name is never
+    # parameterized on `identity.product_id`.
     if runtime.variables.get("PEGASUS_NO_UPDATE_CHECK"):
         return None
     cache = _read_update_cache(runtime)

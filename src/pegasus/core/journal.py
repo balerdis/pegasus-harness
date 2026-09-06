@@ -394,7 +394,7 @@ def _link_from_dict(payload: Any, cli: str) -> Link:
     if not isinstance(payload, dict):
         raise JournalError(f"{cli}: each link must be an object")
     if payload.get("ownership", NON_OWNING_LINK) != NON_OWNING_LINK:
-        raise JournalError(f"{cli}: a link must stay {NON_OWNING_LINK!r}; Pegasus never removes one")
+        raise JournalError(f"{cli}: a link must stay {NON_OWNING_LINK!r}; it is never removed automatically")
     return Link(
         id=_text(payload, "id", f"{cli} link"),
         target=_text(payload, "target", f"{cli} link"),
