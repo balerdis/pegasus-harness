@@ -25,7 +25,7 @@ from pathlib import Path
 
 from pegasus.ports.filesystem import FileSystemError
 
-TEMPORARY_PREFIX = ".pegasus-"
+TEMPORARY_PREFIX = ".pfs-"
 TEMPORARY_SUFFIX = ".partial"
 
 #: `stat.S_IXUSR`, spelled as the plain `chmod` digit it already is -- not
@@ -42,10 +42,19 @@ class PosixFileSystem:
     `data_dir` from outside whatever home it was asked about, and a test
     would write into the machine running it instead of into the throwaway
     home it built. Constructed without them, it answers from the home alone.
+
+    ``product_id`` names the directory segment `data_dir` answers under --
+    the one piece of a distribution's identity this port needs, handed in by
+    the composition root rather than read from a package data file here, the
+    same way `variables` already is. It is required, not defaulted: a caller
+    that forgot to pass it gets a `TypeError` before it ever asks for a path,
+    never a directory silently named after whichever product happened to be
+    built last.
     """
 
-    def __init__(self, variables: dict[str, str] | None = None):
+    def __init__(self, variables: dict[str, str] | None = None, *, product_id: str):
         self._variables = dict(variables or {})
+        self._product_id = product_id
 
     # --- Reading ---
 
@@ -104,8 +113,8 @@ class PosixFileSystem:
         # directory whose meaning depends on where the process was started.
         configured = self._variables.get("XDG_DATA_HOME", "").strip()
         if configured and Path(configured).is_absolute():
-            return Path(configured) / "pegasus-harness"
-        return home / ".local" / "share" / "pegasus-harness"
+            return Path(configured) / self._product_id
+        return home / ".local" / "share" / self._product_id
 
     def bin_dir(self, home: Path) -> Path:
         # `XDG_BIN_HOME` is not part of the base directory specification the

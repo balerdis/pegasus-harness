@@ -26,7 +26,7 @@ class PlatformConditionsTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
-        self.fs = PosixFileSystem()
+        self.fs = PosixFileSystem(product_id="pegasus-harness")
         self.pristine_replace = os.replace
 
     def test_make_unreadable_blocks_reading_a_file(self):

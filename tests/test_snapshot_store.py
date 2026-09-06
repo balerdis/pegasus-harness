@@ -472,7 +472,7 @@ class FileSnapshotStoreOnRealDiskTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.home = Path(self.directory.name)
-        self.filesystem = PosixFileSystem()
+        self.filesystem = PosixFileSystem(product_id="pegasus-harness")
         self.store = FileSnapshotStore(self.filesystem, home=self.home)
 
     def test_every_directory_level_is_private_even_when_created_from_scratch(self):

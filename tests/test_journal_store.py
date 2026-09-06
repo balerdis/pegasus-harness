@@ -224,7 +224,7 @@ class FileJournalStoreOnRealDiskTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.home = Path(self.directory.name)
-        self.filesystem = PosixFileSystem()
+        self.filesystem = PosixFileSystem(product_id="pegasus-harness")
         self.store = FileJournalStore(self.filesystem, home=self.home, pegasus_version=VERSION)
 
     def real_install(self) -> Install:

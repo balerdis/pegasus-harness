@@ -31,7 +31,7 @@ class RealHomeTestCase(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(dir=_scratch_root())
         self.addCleanup(self.directory.cleanup)
         self.home = Path(self.directory.name)
-        self.filesystem = PosixFileSystem()
+        self.filesystem = PosixFileSystem(product_id="pegasus-harness")
 
 
 def _scratch_root() -> str | None:
