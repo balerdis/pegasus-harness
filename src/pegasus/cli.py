@@ -828,7 +828,7 @@ def update(
         raise CommandError(
             f"{adapter.id} has nothing installed to update; run install instead"
         )
-    selection, unresolved = _mcp_update_selection(installed)
+    selection, unresolved = _mcp_update_selection(installed, display_name=runtime.identity.display_name)
     if unresolved:
         raise CommandError(
             _unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
@@ -838,18 +838,23 @@ def update(
     )
 
 
-def _mcp_update_selection(install: Install) -> tuple[list[str], list[str]]:
+def _mcp_update_selection(install: Install, *, display_name: str) -> tuple[list[str], list[str]]:
     """The `--mcp` selection this install already embodies, and the ids
     `update` cannot safely reapply because their key was never recorded.
 
     Reuses `_mcp_entries` and `_bound_checks` -- the same classification
     `doctor` already draws between a server this install configured on its
     own and one it was only granted against a key it does not administer --
-    rather than deriving it a third time.
+    rather than deriving it a third time. `display_name` only reaches
+    `_bound_checks`'s own `ServerCheck.detail`, which this function never
+    reads back (only `check.id` does) -- but every caller here already has a
+    `Runtime` in reach, so there is no reason left to default it and risk a
+    future reader of `.detail` seeing the packaged identity's own name
+    instead of the caller's.
     """
     selection = [name for _, name in _mcp_entries(install)]
     unresolved = []
-    for check in _bound_checks(install):
+    for check in _bound_checks(install, display_name=display_name):
         key = install.mcp_bindings.get(check.id)
         if key is None:
             unresolved.append(check.id)
@@ -858,7 +863,7 @@ def _mcp_update_selection(install: Install) -> tuple[list[str], list[str]]:
     return selection, sorted(unresolved)
 
 
-def update_unresolved_bindings(install: Install) -> list[str]:
+def update_unresolved_bindings(install: Install, *, display_name: str) -> list[str]:
     """The mcp ids `update(cli_id, ...)` would refuse this install over,
     without actually calling `update` -- the same classification
     `_mcp_update_selection` already draws, reused rather than duplicated.
@@ -866,13 +871,16 @@ def update_unresolved_bindings(install: Install) -> list[str]:
     Built for `session` (the TUI's engine bridge), which has to decide
     whether to recommend `Update` at all *before* letting someone choose it,
     so the local update notice and this module's own refusal can never
-    disagree about whether `update` would succeed.
+    disagree about whether `update` would succeed. `display_name` is
+    `runtime.identity.display_name` -- `session` always has a `Runtime` in
+    reach here, so this asks for it explicitly rather than defaulting to
+    the packaged identity's own.
     """
-    _, unresolved = _mcp_update_selection(install)
+    _, unresolved = _mcp_update_selection(install, display_name=display_name)
     return unresolved
 
 
-def install_command_for(cli_id: str, ids: list[str], *, program_name: str | None = None) -> str:
+def install_command_for(cli_id: str, ids: list[str], *, program_name: str) -> str:
     """The exact `install` invocation that would (re)record a key for each
     of ``ids``, one placeholder per id, built from the ids actually
     affected rather than from a hardcoded example.
@@ -880,14 +888,16 @@ def install_command_for(cli_id: str, ids: list[str], *, program_name: str | None
     Public rather than the `_install_command_for` it used to be: `session`
     (the TUI's engine bridge) reuses it to build the same remedy command the
     local update notice names, so that notice and this module's own refusal
-    can never disagree about what the fix is. `program_name` defaults to the
-    packaged identity's own -- `session` calls this with no `Runtime` in
-    reach at all, so a distribution's own build still names its own program
-    here without that caller having to change.
+    can never disagree about what the fix is. `program_name` has no default:
+    `session` used to be called with no `Runtime` in reach at all, which is
+    why this once fell back to the packaged identity's own program, but
+    `session` now always has `runtime.identity` in reach and passes
+    `runtime.identity.program_name` explicitly -- a caller that forgets to
+    thread it through now fails at the call site instead of silently naming
+    the wrong product in a distribution's remedy command.
     """
     flags = " ".join(f"--mcp {name}=<key>" for name in ids)
-    program = program_name if program_name is not None else default_identity().program_name
-    return f"{program} install --cli {cli_id} {flags}"
+    return f"{program_name} install --cli {cli_id} {flags}"
 
 
 def mcp_placeholder_instruction() -> str:
@@ -904,7 +914,7 @@ def mcp_placeholder_instruction() -> str:
     return "replacing each <key> placeholder below with that server's actual key, which lives in the CLI's own configuration"
 
 
-def _unresolved_bindings_message(cli_id: str, ids: list[str], *, program_name: str | None = None) -> str:
+def _unresolved_bindings_message(cli_id: str, ids: list[str], *, program_name: str) -> str:
     command = install_command_for(cli_id, ids, program_name=program_name)
     return (
         f"{cli_id} has bound mcp server(s) {', '.join(ids)} whose server key was never recorded "
@@ -1682,7 +1692,7 @@ def mcp_grant(cli_id: str, key: str, runtime: Runtime) -> dict[str, Any]:
     if installed is None:
         raise CommandError(f"{adapter.id} has nothing installed; run install first")
     granted = tuple(sorted(set(installed.granted_mcp) | {key}))
-    selection, unresolved = _mcp_update_selection(installed)
+    selection, unresolved = _mcp_update_selection(installed, display_name=runtime.identity.display_name)
     if unresolved:
         raise CommandError(
             _unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
@@ -1704,7 +1714,7 @@ def mcp_revoke(cli_id: str, key: str, runtime: Runtime) -> dict[str, Any]:
     if key not in installed.granted_mcp:
         return {"action": "revoke", "cli": cli_id, "key": key, "status": "already-revoked"}
     granted = tuple(sorted(set(installed.granted_mcp) - {key}))
-    selection, unresolved = _mcp_update_selection(installed)
+    selection, unresolved = _mcp_update_selection(installed, display_name=runtime.identity.display_name)
     if unresolved:
         raise CommandError(
             _unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
@@ -1752,7 +1762,7 @@ def mcp_list(cli_id: str, runtime: Runtime) -> dict[str, Any]:
     granted = set(installed.granted_mcp) if installed is not None else set()
     declared = _declared_mcp_keys(runtime, adapter)
     ungranted = declared - granted
-    per_agent, unresolved = _per_agent_mcp_keys_for(installed)
+    per_agent, unresolved = _per_agent_mcp_keys_for(installed, display_name=runtime.identity.display_name)
     if unresolved:
         return {
             "action": "list",
@@ -1777,7 +1787,7 @@ def mcp_list(cli_id: str, runtime: Runtime) -> dict[str, Any]:
     }
 
 
-def _per_agent_mcp_keys_for(installed) -> tuple[frozenset[str], list[str]]:
+def _per_agent_mcp_keys_for(installed, *, display_name: str) -> tuple[frozenset[str], list[str]]:
     """`content_module.per_agent_mcp_keys`, computed against the content this
     installation's own recorded `--mcp` selection would produce, alongside
     the unresolved binding ids that selection had to leave out -- `(frozenset(),
@@ -1796,7 +1806,7 @@ def _per_agent_mcp_keys_for(installed) -> tuple[frozenset[str], list[str]]:
     """
     if installed is None:
         return frozenset(), []
-    selection, unresolved = _mcp_update_selection(installed)
+    selection, unresolved = _mcp_update_selection(installed, display_name=display_name)
     return content_module.per_agent_mcp_keys(_select_mcp(selection)), unresolved
 
 
@@ -2063,7 +2073,7 @@ def _mcp_checks(runtime: Runtime, install) -> list[mcp_handshake.ServerCheck]:
     return [_mcp_checks_one(runtime, entry, name) for entry, name in _mcp_entries(install)]
 
 
-def _bound_checks(install, *, display_name: str | None = None) -> list[mcp_handshake.ServerCheck]:
+def _bound_checks(install, *, display_name: str) -> list[mcp_handshake.ServerCheck]:
     """The servers this install granted without ever configuring them.
 
     A bound server writes no `/mcp/<id>` key — only its convention — so
@@ -2087,7 +2097,6 @@ def _bound_checks(install, *, display_name: str | None = None) -> list[mcp_hands
     reach either way: bound or half-uninstalled, there is no configuration
     here to start it from.
     """
-    name_of_engine = display_name if display_name is not None else default_identity().display_name
     configured = {name for _, name in _mcp_entries(install)}
     checks = []
     for entry in install.entries:
@@ -2100,13 +2109,13 @@ def _bound_checks(install, *, display_name: str | None = None) -> list[mcp_hands
         if key is not None:
             detail = (
                 f"no configuration of its own in this install: bound to {key!r}, a server you "
-                f"administer, whose tools {name_of_engine} grants and whose convention it ships without "
+                f"administer, whose tools {display_name} grants and whose convention it ships without "
                 f"installing or starting it"
             )
         else:
             detail = (
                 "no configuration of its own in this install: either bound to a server you "
-                f"administer, whose tools {name_of_engine} grants and whose convention it ships without "
+                f"administer, whose tools {display_name} grants and whose convention it ships without "
                 "installing or starting it, or a convention left behind by an uninstall that "
                 "did not finish"
             )

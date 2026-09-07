@@ -381,7 +381,10 @@ class UnresolvedBindingBlocksListTest(RealHomeTestCase):
         code, report = self.run_cli("mcp", "list", "--cli", CLI)
         self.assertEqual(code, 0)
         self.assertEqual(report["unresolved_mcp_bindings"], ["cbm"])
-        self.assertEqual(report["blocked"], cli._unresolved_bindings_message(CLI, ["cbm"]))
+        self.assertEqual(
+            report["blocked"],
+            cli._unresolved_bindings_message(CLI, ["cbm"], program_name=cli.default_identity().program_name),
+        )
 
     def test_the_json_shape_is_additive_with_nothing_blocked(self):
         self.install()
@@ -401,7 +404,10 @@ class UnresolvedBindingBlocksListTest(RealHomeTestCase):
         self.declare_own_mcp_server("jira")
         code, report = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
         self.assertNotEqual(code, 0)
-        self.assertEqual(report["error"], cli._unresolved_bindings_message(CLI, ["cbm"]))
+        self.assertEqual(
+            report["error"],
+            cli._unresolved_bindings_message(CLI, ["cbm"], program_name=cli.default_identity().program_name),
+        )
 
     def test_revoke_is_refused_the_same_way(self):
         """`mcp_revoke` on an already-ungranted key short-circuits before it
@@ -418,7 +424,10 @@ class UnresolvedBindingBlocksListTest(RealHomeTestCase):
         self.drop_mcp_bindings()
         code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "jira")
         self.assertNotEqual(code, 0)
-        self.assertEqual(report["error"], cli._unresolved_bindings_message(CLI, ["cbm"]))
+        self.assertEqual(
+            report["error"],
+            cli._unresolved_bindings_message(CLI, ["cbm"], program_name=cli.default_identity().program_name),
+        )
 
     def test_the_prose_names_the_blocker_instead_of_a_plain_available_line(self):
         self.present()

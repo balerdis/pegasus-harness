@@ -144,10 +144,10 @@ class LiveFeedbackTest(unittest.TestCase):
     def test_a_startup_message_appears_before_the_first_menu(self):
         output = self.session.output_so_far()
         self.assertIn(STARTUP_NEEDLE, output)
-        self.assertIn("Pegasus Harness", output)
+        self.assertIn("Pegasus", output)
         self.assertLess(
             output.index(STARTUP_NEEDLE),
-            output.index("Pegasus Harness"),
+            output.index("Pegasus"),
             "the startup message must be drawn before the main menu it precedes",
         )
 
@@ -207,13 +207,13 @@ class WordmarkRenderingTest(unittest.TestCase):
         """The two halves of the mark are drawn as separate spans -- a dim
         `PEGASUS` and a plain `HARNESS` -- so a real terminal writes an
         attribute-reset escape between them, and the row no longer appears
-        as one contiguous string the way `wordmark.wordmark_rows` builds it.
+        as one contiguous string the way `view._wordmark_lines` builds it.
         Each half's own text, still contiguous within its own span, is what
         proves the real loop drew the art rather than only the pure layer.
         """
         output = self.session.output_so_far()
-        pegasus_rows = wordmark.word_rows(wordmark.PEGASUS)
-        harness_rows = wordmark.word_rows(wordmark.HARNESS)
+        pegasus_rows = wordmark.word_rows("PEGASUS")
+        harness_rows = wordmark.word_rows("HARNESS")
         self.assertIn(pegasus_rows[0], output)
         self.assertIn(harness_rows[0], output)
 
@@ -259,8 +259,8 @@ class LocalUpdateNoticeTest(unittest.TestCase):
         self.assertIn("0.0.1", output)
         self.assertIn("Update", output)
         # An install is recorded, so the main menu draws the wordmark rather
-        # than the plain "Pegasus Harness" title -- this is what proves the
-        # menu itself still rendered around the notice, not just the notice.
+        # than the plain title -- this is what proves the menu itself still
+        # rendered around the notice, not just the notice.
         self.assertIn("Install", output)
         self.assertIn("Exit", output)
 
