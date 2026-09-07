@@ -18,6 +18,15 @@
 #
 set -euo pipefail
 
+# Red de seguridad para cualquier falla que este archivo no haya previsto: sin
+# esto, un script que llega por "curl | bash" puede abortar bajo "set -e" sin
+# imprimir una sola línea -- exactamente lo que pasaba con el bug de SIGPIPE
+# que este mismo archivo tuvo (ver detectar_node), antes de que se supiera de
+# qué se trataba. Nombra la línea y el comando que fallaron para que, ante un
+# caso futuro no previsto, quien lo vea tenga un punto de partida en vez de
+# una terminal muda.
+trap 'echo "ERROR interno del instalador: falló \"$BASH_COMMAND\" en la línea $LINENO." >&2' ERR
+
 # ============================================================================
 # Identidad: la raíz de composición de este instalador.
 #
@@ -206,7 +215,18 @@ NODE_VERSION=''
 detectar_node() {
   if command -v node >/dev/null 2>&1; then
     NODE_PRESENTE=1
-    NODE_VERSION=$(node --version 2>&1 | head -1)
+    # No "node --version 2>&1 | head -1": bajo "set -euo pipefail", si la
+    # salida tiene más de una línea (un banner, por ejemplo) "head -1" cierra
+    # su lado de la tubería apenas lee la primera, y si el productor todavía
+    # tiene algo más para escribir recibe SIGPIPE -- eso vuelve no-cero el
+    # estado de la tubería entera y "set -e" aborta TODO el script ahí mismo,
+    # sin imprimir nada, con el críptico código de salida 141. Se captura la
+    # salida completa en una variable (nada que puedan cerrar antes de
+    # tiempo) y recién ahí se recorta a la primera línea con expansión de
+    # parámetros, que no ejecuta ningún proceso ni abre ninguna tubería.
+    local salida_completa
+    salida_completa=$(node --version 2>&1)
+    NODE_VERSION=${salida_completa%%$'\n'*}
   else
     NODE_PRESENTE=0
     NODE_VERSION=''
@@ -219,7 +239,10 @@ OPENCODE_VERSION=''
 detectar_opencode() {
   if command -v opencode >/dev/null 2>&1; then
     OPENCODE_PRESENTE=1
-    OPENCODE_VERSION=$(opencode --version 2>&1 | head -1)
+    # Ver el comentario en detectar_node sobre por qué no "| head -1".
+    local salida_completa
+    salida_completa=$(opencode --version 2>&1)
+    OPENCODE_VERSION=${salida_completa%%$'\n'*}
   else
     OPENCODE_PRESENTE=0
     OPENCODE_VERSION=''
@@ -231,14 +254,18 @@ PRODUCTO_VERSION=''
 PRODUCTO_RUTA=''
 
 detectar_producto() {
+  # Ver el comentario en detectar_node sobre por qué no "| head -1".
+  local salida_completa
   if command -v "$PRODUCT_PROGRAM_NAME" >/dev/null 2>&1; then
     PRODUCTO_PRESENTE=1
     PRODUCTO_RUTA=$(command -v "$PRODUCT_PROGRAM_NAME")
-    PRODUCTO_VERSION=$("$PRODUCT_PROGRAM_NAME" --version 2>&1 | head -1)
+    salida_completa=$("$PRODUCT_PROGRAM_NAME" --version 2>&1)
+    PRODUCTO_VERSION=${salida_completa%%$'\n'*}
   elif [[ -x "$BIN_DIR/$PRODUCT_PROGRAM_NAME" ]]; then
     PRODUCTO_PRESENTE=1
     PRODUCTO_RUTA="$BIN_DIR/$PRODUCT_PROGRAM_NAME"
-    PRODUCTO_VERSION=$("$BIN_DIR/$PRODUCT_PROGRAM_NAME" --version 2>&1 | head -1)
+    salida_completa=$("$BIN_DIR/$PRODUCT_PROGRAM_NAME" --version 2>&1)
+    PRODUCTO_VERSION=${salida_completa%%$'\n'*}
   else
     PRODUCTO_PRESENTE=0
     PRODUCTO_VERSION=''
@@ -689,7 +716,10 @@ instalar_opencode() {
   export PATH="$OPENCODE_BIN_DIR:$PATH"
   command -v opencode >/dev/null 2>&1 \
     || fallar 'OpenCode se instaló pero no quedó en el PATH; revisá ~/.bashrc'
-  ok "instalado: $(opencode --version 2>&1 | head -1)"
+  # Ver el comentario en detectar_node sobre por qué no "| head -1".
+  local salida_completa
+  salida_completa=$(opencode --version 2>&1)
+  ok "instalado: ${salida_completa%%$'\n'*}"
 }
 
 instalar_producto() {

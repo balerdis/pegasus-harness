@@ -214,6 +214,105 @@ class HelpTest(InstallScriptTestCase):
             self.assertNotIn(fragment.lower(), lowered, f"--help output mentions build-mechanism detail {fragment!r}")
 
 
+class MultilineVersionOutputDoesNotAbortTest(InstallScriptTestCase):
+    """CRITICAL bug regression: every `... --version 2>&1 | head -1` pipeline in
+    `install.sh` runs under `set -euo pipefail`. `head -1` exits as soon as it has
+    read one line, closing its end of the pipe -- if the producer then writes any
+    more output, it gets `SIGPIPE`, the pipeline's exit status becomes non-zero
+    under `pipefail`, and `set -e` aborts the *entire script* immediately, with
+    zero bytes of output and exit code 141. A real-world `--version` that prints a
+    multi-line banner (common; opencode's does) hits this on every ordinary
+    re-run of the installer once that tool is already present.
+
+    Each stub below writes its version line first, then sleeps briefly before
+    writing further lines: `head -1` has already read its one line and exited
+    (closing the pipe) well before the sleep elapses, so the producer's later
+    `printf` reliably lands on a pipe with no reader and raises real `SIGPIPE` --
+    this is not a flaky race, `sleep` guarantees the ordering. Every one of the
+    four vulnerable detection sites (node, opencode, and the product binary
+    found both via `command -v` and via `$BIN_DIR`) gets its own test, so a
+    future probe written with the old `| head -1` idiom is caught here too.
+    """
+
+    _MULTILINE_VERSION = (
+        'sleep 0.2\n'
+        'printf "banner line 2\\nbanner line 3\\nbanner line 4\\n"\n'
+    )
+
+    def _stub_python_and_curl_present(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("curl", "exit 0\n")
+
+    def test_multiline_node_version_does_not_abort_verify(self):
+        self._stub_python_and_curl_present()
+        self.stub("opencode", 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        self.stub("node", 'printf "v20.11.0\\n"\n' + self._MULTILINE_VERSION)
+
+        result = self.run_install("--verify")
+
+        self.assertEqual(result.returncode, 0, f"stdout={result.stdout!r} stderr={result.stderr!r}")
+        self.assertIn("v20.11.0", result.stdout)
+        self.assertNotIn("banner line", result.stdout)
+
+    def test_multiline_opencode_version_does_not_abort_verify(self):
+        self._stub_python_and_curl_present()
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub(
+            "opencode",
+            'if [ "$1" = "--version" ]; then printf "opencode 1.18.25\\n"\n' + self._MULTILINE_VERSION + "fi\n",
+        )
+
+        result = self.run_install("--verify")
+
+        self.assertEqual(result.returncode, 0, f"stdout={result.stdout!r} stderr={result.stderr!r}")
+        self.assertIn("opencode 1.18.25", result.stdout)
+        self.assertNotIn("banner line", result.stdout)
+
+    def test_multiline_pegasus_version_via_path_does_not_abort_verify(self):
+        """`command -v pegasus` branch of `detectar_producto` (the binary is on
+        PATH, not merely present at `$BIN_DIR`)."""
+        self._stub_python_and_curl_present()
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub("opencode", 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        self.stub(
+            "pegasus",
+            'if [ "$1" = "--version" ] || [ "$1" = "-V" ]; then printf "pegasus 5.12.1\\n"\n'
+            + self._MULTILINE_VERSION
+            + "fi\n",
+        )
+
+        result = self.run_install("--verify")
+
+        self.assertEqual(result.returncode, 0, f"stdout={result.stdout!r} stderr={result.stderr!r}")
+        self.assertIn("pegasus 5.12.1", result.stdout)
+        self.assertNotIn("banner line", result.stdout)
+
+    def test_multiline_pegasus_version_via_bin_dir_does_not_abort_verify(self):
+        """`$BIN_DIR/pegasus` branch of `detectar_producto`: present only at
+        `$BIN_DIR`, never on the incoming PATH -- a distinct pipeline from the
+        `command -v` case above (install.sh:241 vs install.sh:237)."""
+        self._stub_python_and_curl_present()
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub("opencode", 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        bin_dir = self.home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        pegasus_bin = bin_dir / "pegasus"
+        pegasus_bin.write_text(
+            '#!/bin/sh\n'
+            'if [ "$1" = "--version" ] || [ "$1" = "-V" ]; then printf "pegasus 5.12.1\\n"\n'
+            + self._MULTILINE_VERSION
+            + "fi\n",
+            encoding="utf-8",
+        )
+        pegasus_bin.chmod(pegasus_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        result = self.run_install("--verify")
+
+        self.assertEqual(result.returncode, 0, f"stdout={result.stdout!r} stderr={result.stderr!r}")
+        self.assertIn("pegasus 5.12.1", result.stdout)
+        self.assertNotIn("banner line", result.stdout)
+
+
 class VerifyWithOnlyOptionalToolsMissingTest(InstallScriptTestCase):
     def test_reports_optional_tools_absent_and_touches_nothing(self):
         """python3 and curl -- the two things install.sh refuses to guess at
