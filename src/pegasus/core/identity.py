@@ -78,6 +78,19 @@ class ReleaseSource:
     splitting `asset_url_template` on a magic substring -- not every release
     host shapes its download URL the way GitHub does.
 
+    `install_base_url_default` is the same story again, and required for the
+    same reason: it is `install.sh`'s fallback base URL for the "whatever is
+    newest" download (`PRODUCT_RELEASE_BASE_URL_DEFAULT`), and it is
+    genuinely not derivable from either of the other two URLs. It is not
+    `asset_url_template`, whose `{tag}`/`{asset}` placeholders name one
+    versioned asset rather than a "latest" redirect. And it is not
+    `release_page_url` plus GitHub's own `/latest/download` convention
+    tacked on: even for GitHub itself,
+    `releases/latest/download/<asset>` and `releases/download/latest/<asset>`
+    are different paths, so no split-and-append rule can produce the former
+    from the latter's page URL, and a non-GitHub release host may not shape
+    its "latest" download this way at all.
+
     Every URL field is checked against its parsed authority, not merely its
     prefix: a `https://` prefix match alone would still accept
     `https://github.com@evil.example.com/...`, whose real host --
@@ -88,6 +101,7 @@ class ReleaseSource:
     binary_asset: str
     latest_release_api_url: str
     release_page_url: str
+    install_base_url_default: str
 
 
 @dataclass(frozen=True)
@@ -196,11 +210,14 @@ def _release_source(payload: Any) -> ReleaseSource:
     _https_url(api_url, "release.latest_release_api_url")
     page_url = _text(payload, "release_page_url", "release")
     _https_url(page_url, "release.release_page_url")
+    install_base_url_default = _text(payload, "install_base_url_default", "release")
+    _https_url(install_base_url_default, "release.install_base_url_default")
     return ReleaseSource(
         asset_url_template=template,
         binary_asset=binary_asset,
         latest_release_api_url=api_url,
         release_page_url=page_url,
+        install_base_url_default=install_base_url_default,
     )
 
 

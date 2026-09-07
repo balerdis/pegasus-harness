@@ -119,6 +119,7 @@ _DISTRIBUTION_IDENTITY = identity_module.parse(
                 "binary_asset": "darq",
                 "latest_release_api_url": "https://example.invalid/darq/api/releases/latest",
                 "release_page_url": "https://example.invalid/darq/releases",
+                "install_base_url_default": "https://example.invalid/darq/releases/latest/download",
             },
         }
     ).encode("utf-8")

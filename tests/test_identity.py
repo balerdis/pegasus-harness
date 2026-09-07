@@ -25,6 +25,7 @@ def document(**overrides) -> bytes:
             "binary_asset": "pegasus",
             "latest_release_api_url": "https://api.github.com/repos/balerdis/pegasus-harness/releases/latest",
             "release_page_url": "https://github.com/balerdis/pegasus-harness/releases",
+            "install_base_url_default": "https://github.com/balerdis/pegasus-harness/releases/latest/download",
         },
     }
     payload.update(overrides)
@@ -47,6 +48,7 @@ class ParseAcceptsAValidDocumentTest(unittest.TestCase):
                     binary_asset="pegasus",
                     latest_release_api_url="https://api.github.com/repos/balerdis/pegasus-harness/releases/latest",
                     release_page_url="https://github.com/balerdis/pegasus-harness/releases",
+                    install_base_url_default="https://github.com/balerdis/pegasus-harness/releases/latest/download",
                 ),
             ),
         )
@@ -145,6 +147,32 @@ class ParseRejectsAMalformedDocumentTest(unittest.TestCase):
     def test_missing_release_page_url_is_rejected(self):
         payload = json.loads(document())
         del payload["release"]["release_page_url"]
+        with self.assertRaises(IdentityError):
+            module.parse(json.dumps(payload).encode("utf-8"))
+
+    def test_missing_install_base_url_default_is_rejected(self):
+        """`install_base_url_default` must be declared explicitly, never
+        derived by splitting `release_page_url` -- see that field's own
+        docstring on `ReleaseSource`, which already warns against exactly
+        this pattern: not every release host shapes its download URL the
+        way GitHub does, and for GitHub itself
+        `releases/latest/download/<asset>` and
+        `releases/download/latest/<asset>` are different paths, so
+        `asset_url_template` cannot produce it either."""
+        payload = json.loads(document())
+        payload["release"].pop("install_base_url_default", None)
+        with self.assertRaises(IdentityError):
+            module.parse(json.dumps(payload).encode("utf-8"))
+
+    def test_a_non_https_install_base_url_default_is_rejected(self):
+        payload = json.loads(document())
+        payload["release"]["install_base_url_default"] = "http://example.com/latest/download"
+        with self.assertRaises(IdentityError):
+            module.parse(json.dumps(payload).encode("utf-8"))
+
+    def test_an_install_base_url_default_with_userinfo_spoofing_the_host_is_rejected(self):
+        payload = json.loads(document())
+        payload["release"]["install_base_url_default"] = "https://github.com@evil.example.com/x"
         with self.assertRaises(IdentityError):
             module.parse(json.dumps(payload).encode("utf-8"))
 

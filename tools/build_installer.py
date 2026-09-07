@@ -116,18 +116,19 @@ def render(template_text: str, identity: object) -> str:
     """Replace the four identity header assignments in `template_text`, leaving every other
     character of the template untouched.
 
-    `PRODUCT_RELEASE_BASE_URL_DEFAULT` is derived from `identity.release.release_page_url` plus
-    GitHub's own `/latest/download` convenience path -- not `asset_url_template`, whose
-    `{tag}`/`{asset}` placeholders name a single versioned asset rather than the "whatever is
-    newest" redirect this default exists to reach. This is exactly the shape Pegasus's own
-    `release_page_url` (`.../releases`) already produces today.
+    `PRODUCT_RELEASE_BASE_URL_DEFAULT` comes straight from
+    `identity.release.install_base_url_default` -- not derived by splitting `release_page_url` or
+    `asset_url_template`. `core/identity.py`'s own `ReleaseSource` docstring explains why that
+    field is required rather than derived: not every release host shapes its "latest" download URL
+    the way GitHub does, and even for GitHub itself `releases/latest/download/<asset>` and
+    `releases/download/latest/<asset>` are different paths, so `asset_url_template` could not
+    produce it either way.
     """
-    base_url_default = identity.release.release_page_url.rstrip("/") + "/latest/download"
     values = {
         "PRODUCT_ID": identity.product_id,
         "PRODUCT_DISPLAY_NAME": identity.display_name,
         "PRODUCT_PROGRAM_NAME": identity.program_name,
-        "PRODUCT_RELEASE_BASE_URL_DEFAULT": base_url_default,
+        "PRODUCT_RELEASE_BASE_URL_DEFAULT": identity.release.install_base_url_default,
     }
 
     banners = template_text.count(HEADER_BANNER)

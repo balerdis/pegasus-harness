@@ -7,6 +7,7 @@
     "asset_url_template": "https://example.invalid/releases/download/{tag}/{asset}",
     "binary_asset": "fixture",
     "latest_release_api_url": "https://example.invalid/api/releases/latest",
-    "release_page_url": "https://example.invalid/releases"
+    "release_page_url": "https://example.invalid/releases",
+    "install_base_url_default": "https://example.invalid/releases/latest/download"
   }
 }

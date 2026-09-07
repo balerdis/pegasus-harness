@@ -24,6 +24,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from brand_fragments import BANNED_FRAGMENTS
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "install.sh"
 BUILD_INSTALLER = ROOT / "tools" / "build_installer.py"
@@ -34,10 +36,9 @@ REAL_IDENTITY = ROOT / "src" / "pegasus" / "identity.json"
 #: before the second.
 HEADER_BANNER = "# " + "=" * 76
 
-#: Case-insensitive brand fragments that must never survive outside the identity
-#: header block -- the same list `tests/test_architecture.py` scans Python source
-#: for, applied here to the shell installer.
-BANNED_FRAGMENTS = ("pegasus", "harness", "balerdis")
+# BANNED_FRAGMENTS (imported above, from tests/brand_fragments.py): case-insensitive
+# brand fragments that must never survive outside the identity header block -- the
+# same shared list `tests/test_architecture.py` scans Python source for.
 
 #: An obviously fictional distribution -- never a real organization -- so this
 #: test cannot be mistaken for targeting or endorsing one. Mirrors the payload
