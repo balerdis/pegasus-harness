@@ -46,6 +46,7 @@ ACME_IDENTITY = Identity(
     product_id="acme-widget",
     display_name="Acme",
     program_name="acme",
+    version="1.0.0",
     wordmark_words=("ACME",),
     release=ReleaseSource(
         asset_url_template="https://github.com/acme-corp/acme-widget/releases/download/{tag}/{asset}",

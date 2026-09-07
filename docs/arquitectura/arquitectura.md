@@ -1306,6 +1306,18 @@ real (contra `urlsplit`, no un prefijo, para que `https://github.com@evil.exampl
 default: si `identity.json` falta o no valida, el arranque falla con `IdentityError` antes de que
 cualquier comando corra.
 
+**La versión también es un dato de identidad, obligatorio, nunca la del motor.** `identity.json`
+declara su propio `version`, validado en `parse()` con el mismo charset (`SAFE_VERSION`) que
+`core/upgrade.py` ya usaba para sanear el `tag_name` de un release remoto antes de construir la URL
+de descarga — una sola regla, no dos que puedan divergir. No hay default a `pegasus.__version__`:
+una distribución fija este motor en una versión y publica sus propios releases con una numeración
+completamente distinta, así que `--version`, la comparación de `upgrade` (`already-current`) y el
+valor de `pegasus_version` en `doctor --json` leen todos `identity.version`, nunca la constante del
+motor — de lo contrario `--version` muestra la versión equivocada y `upgrade` nunca puede detectar
+que ya está actualizado. Para el propio `identity.json` de Pegasus, un test de versión mantiene
+`pyproject.toml`, `pegasus.__version__` e `identity.version` iguales entre sí; esa igualdad de tres
+vías es una propiedad sólo de la distribución propia de Pegasus, nunca una regla general.
+
 **La raíz de composición es `cli.py`.** `default_identity()` lee el `identity.json` empaquetado
 (vía `importlib.resources`, igual que `core/content.py` lee `content/`) y arma el único `Identity`
 congelado de la corrida; `default_runtime` lo cuelga de `Runtime.identity` y lo cablea a `argparse`

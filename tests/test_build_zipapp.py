@@ -123,6 +123,7 @@ class ValidateIdentityTest(unittest.TestCase):
                     "product_id": "acme",
                     "display_name": "ACME",
                     "program_name": "acme",
+                    "version": "1.0.0",
                     "wordmark_words": ["MI-EQUIPO"],
                     "release": {
                         "asset_url_template": "https://example.invalid/releases/download/{tag}/{asset}",
@@ -256,6 +257,7 @@ class MainRequiresIdentityTest(unittest.TestCase):
                     "product_id": "acme",
                     "display_name": "ACME",
                     "program_name": "acme",
+                    "version": "1.0.0",
                     "wordmark_words": ["MI-EQUIPO"],
                     "release": {
                         "asset_url_template": "https://example.invalid/releases/download/{tag}/{asset}",

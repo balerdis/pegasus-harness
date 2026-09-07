@@ -176,9 +176,11 @@ class SessionTestCase(RealHomeTestCase):
 
         self.addCleanup(restore)
 
-    def runtime(self, home: Path | None = None) -> cli.Runtime:
+    def runtime(self, home: Path | None = None, *, identity=None) -> cli.Runtime:
+        kwargs = {} if identity is None else {"identity": identity}
         return cli.Runtime(
-            filesystem=PosixFileSystem(product_id="pegasus-harness"), home=home or self.home, now=AT, out=io.StringIO(), variables=NO_BINARY
+            filesystem=PosixFileSystem(product_id="pegasus-harness"), home=home or self.home, now=AT, out=io.StringIO(), variables=NO_BINARY,
+            **kwargs,
         )
 
     def to_continue(self, navigator: Navigator) -> Navigator:
@@ -746,6 +748,16 @@ class LocalUpdateNoticeTest(SessionTestCase):
         notice = session.local_update_notice(self.runtime(), installed=())
         self.assertEqual(notice.local_behind, ())
         self.assertEqual(notice.running, pegasus.__version__)
+
+    def test_a_distributions_notice_reports_its_own_running_version(self):
+        """Regression: `UpdateNotice.running` used to be `pegasus.__version__`
+        unconditionally, so a distribution's own notice compared its own
+        recorded install version (now the product's own, per the fix this
+        accompanies) against the pinned engine's version instead of its own
+        -- the same class of always-mismatched comparison `cli.upgrade` had."""
+        self.assertNotEqual(ACME_IDENTITY.version, pegasus.__version__)
+        notice = session.local_update_notice(self.runtime(identity=ACME_IDENTITY), installed=())
+        self.assertEqual(notice.running, ACME_IDENTITY.version)
 
     def test_an_install_made_with_an_older_release_is_named(self):
         _present(self.home)

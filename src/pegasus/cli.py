@@ -157,7 +157,7 @@ def default_runtime(out: TextIO) -> Runtime:
 
 
 def journal_store(runtime: Runtime) -> FileJournalStore:
-    return FileJournalStore(runtime.filesystem, home=runtime.home, pegasus_version=pegasus.__version__)
+    return FileJournalStore(runtime.filesystem, home=runtime.home, pegasus_version=runtime.identity.version)
 
 
 def snapshot_store(runtime: Runtime) -> FileSnapshotStore:
@@ -247,7 +247,7 @@ def _parser(identity: Identity) -> argparse.ArgumentParser:
     # printing a number instead of installing would be a surprising way to not
     # install something.
     parser.add_argument(
-        "-V", "--version", action="version", version=f"%(prog)s {pegasus.__version__}",
+        "-V", "--version", action="version", version=f"%(prog)s {identity.version}",
         help="report the version of this binary and exit",
     )
     commands = parser.add_subparsers(dest="command")
@@ -737,6 +737,7 @@ def install(
         runtime.now,
         content,
         granted_keys,
+        runtime.identity.version,
     )
     try:
         store.save(journal_module.with_install(journal, merged))
@@ -1213,7 +1214,7 @@ def upgrade(
             f"refuses to silently take over someone else's file. Instead, "
             f"{_manual_upgrade_command(destination, runtime.identity.release)}."
         )
-    current_version = pegasus.__version__
+    current_version = runtime.identity.version
     latest_version = _fetch_latest_version(runtime)
     if latest_version == current_version:
         # Being current already is not a refusal -- it is exactly what asking
@@ -1276,7 +1277,16 @@ def _resolve_model_overrides(
 
 
 def _merged(
-    journal, adapter, environment, catalog, records, retired_ids, now: str, content, granted_mcp: tuple[str, ...]
+    journal,
+    adapter,
+    environment,
+    catalog,
+    records,
+    retired_ids,
+    now: str,
+    content,
+    granted_mcp: tuple[str, ...],
+    version: str,
 ) -> Install:
     """Add what this run placed to what earlier runs already owned.
 
@@ -1306,6 +1316,11 @@ def _merged(
     run did not ask for must not linger just because an earlier run recorded
     it.
 
+    ``version`` is `runtime.identity.version` -- this distribution's own
+    release version, threaded in by the caller rather than read here off
+    `pegasus.__version__`, which names the pinned engine, never the product a
+    person actually installed.
+
     ``granted_mcp`` is threaded in from the caller rather than read off
     ``content`` for the same reason ``retired_ids`` is threaded in rather
     than recomputed: by the time this function runs, `install()` has already
@@ -1325,7 +1340,7 @@ def _merged(
         # The date Pegasus first landed here, not the date it was topped up.
         installed_at=previous.installed_at if previous is not None else now,
         config_dir=adapter.layout(environment).config_dir,
-        release={"version": pegasus.__version__, "catalog_digest": catalog.digest},
+        release={"version": version, "catalog_digest": catalog.digest},
         entries=entries,
         links=previous.links if previous is not None else (),
         mcp_bindings={server.name: server.bound_to for server in content.mcp if server.is_bound},
@@ -1952,7 +1967,7 @@ def doctor(runtime: Runtime, *, start_mcp_servers: bool = False) -> dict[str, An
     registry = available()
     journal = journal_store(runtime).load()
     return {
-        "pegasus_version": pegasus.__version__,
+        "pegasus_version": runtime.identity.version,
         "clis": [
             _health(registry.get(cli_id), environment, journal, runtime, start_mcp_servers=start_mcp_servers)
             for cli_id in registry.ids()

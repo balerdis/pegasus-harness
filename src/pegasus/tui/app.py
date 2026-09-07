@@ -497,6 +497,7 @@ def run(window, runtime: cli.Runtime) -> None:
         installed,
         notice=notice,
         display_name=runtime.identity.display_name,
+        version=runtime.identity.version,
         wordmark_words=runtime.identity.wordmark_words,
     )
     draw(window, _render_current(window, navigator), accent_attr=accent_attr)

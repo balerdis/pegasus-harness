@@ -25,11 +25,10 @@ there is no signature and no pinned key involved anywhere in this module.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from pegasus.core import ownership
-from pegasus.core.identity import ReleaseSource
+from pegasus.core.identity import SAFE_VERSION, ReleaseSource
 from pegasus.ports.downloader import Downloader, DownloaderError
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 
@@ -46,18 +45,19 @@ class UpgradeError(Exception):
     """A newly published binary could not be safely fetched, verified, or placed."""
 
 
-#: `version` arrives here straight from the remote release API's own
-#: `tag_name` field (see `cli._fetch_latest_version`) with no validation on
-#: the way -- unlike `binary_asset`, which `identity.parse` already confines
-#: to a bare filename. Restricting it to this charset is what keeps a
-#: malicious or compromised release endpoint from filling `{tag}` with a
-#: path that escapes the intended `download/{tag}/{asset}` segment on the
-#: same host (a version can never legitimately need `/`, `\`, or whitespace).
-_SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
-
-
 def _tag(version: str) -> str:
-    if not _SAFE_VERSION.match(version):
+    """`version` arrives here from one of two places: the remote release
+    API's own `tag_name` field (see `cli._fetch_latest_version`), with no
+    validation on the way in -- unlike `binary_asset`, which `identity.parse`
+    already confines to a bare filename -- or this binary's own
+    `identity.version`, already validated against this exact same
+    `SAFE_VERSION` charset at parse time (see `pegasus.core.identity`).
+    Checking it again here, right before it is used, is what keeps a
+    malicious or compromised release endpoint from filling `{tag}` with a
+    path that escapes the intended `download/{tag}/{asset}` segment on the
+    same host (a version can never legitimately need `/`, `\\`, or
+    whitespace)."""
+    if not SAFE_VERSION.match(version):
         raise UpgradeError(f"refusing to build a release URL from an unsafe version string: {version!r}")
     return f"v{version}"
 

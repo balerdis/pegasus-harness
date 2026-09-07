@@ -12,6 +12,7 @@ than `https`.
 from __future__ import annotations
 
 import json
+import re
 import string
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +25,29 @@ cover exactly this set -- see that module's own test."""
 MAX_WORD_LENGTH = 12
 """A solo wordmark of the longest allowed word is `12 * 5 - 1 = 59` columns,
 which still fits an 80-column terminal. Chosen, not derived."""
+
+SAFE_VERSION = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9.+-]*\Z")
+r"""The one charset a version string may use anywhere it reaches a release
+URL -- shared, not duplicated, with `core.upgrade._tag`, which applies this
+exact same rule to a remote release's own `tag_name` before building
+`f"v{version}"` into `asset_url_template`. `identity.version` reaches that
+same `_tag` call every time this binary checks or performs its own upgrade,
+so a version string this loose would let a malformed or malicious
+`identity.json` build a path that escapes the intended
+`download/{tag}/{asset}` segment on the release host -- the same class of
+risk `_https_url` and `release.binary_asset` already guard against. Defined
+here, in `core.identity`, rather than in `core.upgrade`, because `upgrade`
+already depends on `identity` (`ReleaseSource`) and a validation rule this
+module needs at parse time cannot depend back on a module that imports it.
+
+Anchored with `\A`/`\Z`, never `^`/`$`: Python's `$` also matches immediately
+before a final newline, so `^...$` applied with `match()` accepts `"1.0.0\n"` --
+passing a rule whose whole purpose is to refuse whitespace, and sending a raw
+newline into the release URL. `urlopen` then raises `http.client.InvalidURL`,
+which subclasses neither `OSError` nor `ValueError`, so the downloader does not
+catch it and the traceback escapes `upgrade` instead of becoming a clean refusal.
+`\Z` matches only at the true end of the string, whatever flags or match method
+a later caller reaches for."""
 
 
 class IdentityError(ValueError):
@@ -60,6 +84,16 @@ class ReleaseSource:
 class Identity:
     """Everything a binary needs to know about its own name.
 
+    `version` is this distribution's own release version -- required, never
+    defaulted to the pinned engine's own `pegasus.__version__`. The two are
+    independent facts: a distribution pins one engine build and then
+    publishes its own releases on its own numbering, so `pegasus.__version__`
+    staying fixed across every one of those releases is correct, not a bug --
+    it is `version` that must change with each one, and only `identity.json`
+    can say what it currently is. `--version`, the upgrade comparison, and
+    `doctor`'s `pegasus_version` value all read this field, never the engine
+    constant, so each reports the product a person is actually running.
+
     `wordmark_words` is one or two entries; the renderer draws whatever list
     it is given with no policy branch on count (see `tui/wordmark.py`).
     """
@@ -67,6 +101,7 @@ class Identity:
     product_id: str
     display_name: str
     program_name: str
+    version: str
     wordmark_words: tuple[str, ...]
     release: ReleaseSource
 
@@ -89,6 +124,15 @@ def _word(value: Any, what: str) -> str:
         raise IdentityError(
             f"{what} {value!r} must use only letters A-Z and digits 0-9 -- "
             f"no accents, no hyphens, no spaces"
+        )
+    return value
+
+
+def _version(payload: dict[str, Any]) -> str:
+    value = _text(payload, "version", "identity")
+    if not SAFE_VERSION.match(value):
+        raise IdentityError(
+            f"identity.version must match {SAFE_VERSION.pattern!r}: {value!r}"
         )
     return value
 
@@ -163,12 +207,14 @@ def parse(document: bytes) -> Identity:
         raise IdentityError(f"identity.product_id must be a bare name: {product_id!r}")
     display_name = _text(payload, "display_name", "identity")
     program_name = _text(payload, "program_name", "identity")
+    version = _version(payload)
     wordmark_words = _wordmark_words(payload)
     release = _release_source(payload.get("release"))
     return Identity(
         product_id=product_id,
         display_name=display_name,
         program_name=program_name,
+        version=version,
         wordmark_words=wordmark_words,
         release=release,
     )

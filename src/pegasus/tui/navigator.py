@@ -14,8 +14,6 @@ from datetime import datetime
 from enum import Enum, auto
 from typing import Union
 
-import pegasus
-
 
 class Action(Enum):
     """Every thing a key can mean, independent of which key spelled it."""
@@ -964,8 +962,11 @@ class UpdateNotice:
     installation is -- plain version strings, so this stays provable without
     a clock, a socket, or the filesystem anywhere near it.
 
-    `running` is `pegasus.__version__`, the binary actually executing right
-    now. `local_behind` is every installed CLI's own recorded version, one
+    `running` is `runtime.identity.version` -- this distribution's own
+    version, threaded in by `session`, never `pegasus.__version__`: the
+    pinned engine's own build version, which stays fixed across every
+    release a distribution publishes under its own numbering. `local_behind`
+    is every installed CLI's own recorded version, one
     :class:`BehindInstall` each, in the order `session` found them -- empty
     when nothing is installed. Naming each one, rather than collapsing them
     to a single oldest version the way an earlier version of this notice
@@ -1027,6 +1028,7 @@ def main_menu(
     notice: UpdateNotice | None = None,
     *,
     display_name: str = _UNNAMED_PRODUCT,
+    version: str = "",
     wordmark_words: tuple[str, ...] = (),
 ) -> Menu:
     """Grouped by intent rather than by when each entry was added: get
@@ -1048,9 +1050,15 @@ def main_menu(
     whoever built it (`session` for the local half, `app` for the remote
     half once its background check resolves); `None` here means "nothing
     decided yet", not "checked and found nothing to say".
+
+    `version` is `identity.version` -- this distribution's own version,
+    threaded in the same way `display_name`/`wordmark_words` are, never read
+    off `pegasus.__version__` here: this module knows no product's own name
+    or version (see the module docstring), and a distribution's own version
+    is no different a fact than its own name.
     """
     return Menu(
-        title=f"{display_name} {pegasus.__version__}",
+        title=f"{display_name} {version}",
         entries=(
             Entry("Install", install_menu(detections, display_name=display_name)),
             Entry("Update", update_menu(installed, display_name=display_name)),
@@ -1063,7 +1071,7 @@ def main_menu(
         ),
         preface=update_notice_lines(notice, display_name=display_name) if notice is not None else (),
         installed=bool(installed),
-        version=pegasus.__version__,
+        version=version,
         wordmark_words=wordmark_words,
     )
 
@@ -1095,9 +1103,12 @@ class Navigator:
         notice: UpdateNotice | None = None,
         *,
         display_name: str = _UNNAMED_PRODUCT,
+        version: str = "",
         wordmark_words: tuple[str, ...] = (),
     ) -> "Navigator":
-        menu = main_menu(detections, installed, notice, display_name=display_name, wordmark_words=wordmark_words)
+        menu = main_menu(
+            detections, installed, notice, display_name=display_name, version=version, wordmark_words=wordmark_words
+        )
         return Navigator(_stack=(menu,), _cursors=(0,), display_name=display_name)
 
     @property
