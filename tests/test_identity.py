@@ -18,6 +18,7 @@ def document(**overrides) -> bytes:
         "product_id": "pegasus-harness",
         "display_name": "Pegasus",
         "program_name": "pegasus",
+        "version": "1.0.0",
         "wordmark_words": ["PEGASUS", "HARNESS"],
         "release": {
             "asset_url_template": "https://github.com/balerdis/pegasus-harness/releases/download/{tag}/{asset}",
@@ -39,6 +40,7 @@ class ParseAcceptsAValidDocumentTest(unittest.TestCase):
                 product_id="pegasus-harness",
                 display_name="Pegasus",
                 program_name="pegasus",
+                version="1.0.0",
                 wordmark_words=("PEGASUS", "HARNESS"),
                 release=ReleaseSource(
                     asset_url_template="https://github.com/balerdis/pegasus-harness/releases/download/{tag}/{asset}",
@@ -56,6 +58,10 @@ class ParseAcceptsAValidDocumentTest(unittest.TestCase):
     def test_a_name_with_digits_is_valid(self):
         parsed = module.parse(document(wordmark_words=["DARQ2"]))
         self.assertEqual(parsed.wordmark_words, ("DARQ2",))
+
+    def test_a_version_with_a_pre_release_suffix_is_valid(self):
+        parsed = module.parse(document(version="1.0.0-rc.1"))
+        self.assertEqual(parsed.version, "1.0.0-rc.1")
 
 
 class ParseRejectsAMalformedDocumentTest(unittest.TestCase):
@@ -188,6 +194,37 @@ class ParseRejectsAMalformedDocumentTest(unittest.TestCase):
     def test_invalid_utf8_is_rejected(self):
         with self.assertRaises(IdentityError):
             module.parse(b"\xff\xfe not utf-8")
+
+    def test_missing_version_is_rejected(self):
+        """`version` is required, never defaulted to the engine's own
+        `pegasus.__version__` -- a distribution's version is a fact about
+        that distribution, not the pinned engine it happens to be built
+        from, and a silent fallback here is exactly the dead-default shape
+        this codebase already refuses everywhere else identity is involved."""
+        payload = json.loads(document())
+        del payload["version"]
+        with self.assertRaises(IdentityError):
+            module.parse(json.dumps(payload).encode("utf-8"))
+
+    def test_an_empty_version_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(version=""))
+
+    def test_a_version_with_a_path_separator_is_rejected(self):
+        """`version` flows into a release URL path (`core.upgrade._tag`) --
+        the same charset `_SAFE_VERSION` already confines a remote release's
+        own `tag_name` to, reused here rather than re-declared, so the two
+        can never drift apart."""
+        with self.assertRaises(IdentityError):
+            module.parse(document(version="1.0.0/../etc"))
+
+    def test_a_version_with_whitespace_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(version="1.0.0 "))
+
+    def test_a_version_starting_with_a_symbol_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(version="-1.0.0"))
 
 
 if __name__ == "__main__":
