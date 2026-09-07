@@ -53,7 +53,9 @@ explícitamente, igual que cualquier otra distribución pasaría el suyo.
    script se niega si el commit no tiene alguno de los tres archivos, o si el del working tree no
    coincide con el del commit; en cualquiera de esos casos, subir igual dejaría un release sin un
    asset que otro paso necesita, o con una copia distinta de la que el manifest certificó.
-4. Publicá en GitHub Releases, sobre ese mismo tag, los seis archivos que `INSTALL.md` nombra:
+4. Publicá en GitHub Releases, sobre ese mismo tag, estos seis archivos -- `release-manifest.json`
+   mismo, los tres que certifica su lista `assets`, y el `.sha256` de cada uno de los dos que lo
+   necesita, tal como los escribe el paso anterior:
    `pegasus`, su `.sha256`, `release-manifest.json`, `install.sh` (el archivo en la raíz del
    repositorio, tal cual está en ese commit — no se genera, se sube directo, y es el mismo cuyo hash
    quedó certificado en el paso anterior), y `build_zipapp.py` con su propio `.sha256` (el archivo en
