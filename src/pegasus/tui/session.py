@@ -15,7 +15,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable
 
-import pegasus
 from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import content as content_module
@@ -144,7 +143,7 @@ def local_update_notice(runtime: cli.Runtime, installed: tuple[CliOption, ...]) 
         behind.append(
             BehindInstall(display_name=option.display_name, recorded=install.release.get("version"), remedy_command=remedy)
         )
-    return UpdateNotice(running=pegasus.__version__, local_behind=tuple(behind))
+    return UpdateNotice(running=runtime.identity.version, local_behind=tuple(behind))
 
 
 def _uninstall_preview(cli_option: CliOption, runtime: cli.Runtime) -> Menu:

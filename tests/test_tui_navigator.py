@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import unittest
 
-import pegasus
 from pegasus.tui import navigator as navigator_module
 from pegasus.tui.navigator import (
     CANCEL,
@@ -101,8 +100,12 @@ class MainMenuTest(unittest.TestCase):
         )
 
     def test_the_title_names_the_running_release(self):
-        navigator = Navigator.starting(display_name="Demo Product")
-        self.assertEqual(navigator.current.title, f"Demo Product {pegasus.__version__}")
+        """`version` is threaded in explicitly, the same as `display_name` --
+        never read off `pegasus.__version__` here, since a distribution's own
+        version can differ from the pinned engine's (see
+        `test_cli_identity_sweep.py`'s own coverage of that fact)."""
+        navigator = Navigator.starting(display_name="Demo Product", version="1.2.3")
+        self.assertEqual(navigator.current.title, "Demo Product 1.2.3")
 
     def test_the_title_falls_back_to_a_generic_name_when_none_is_given(self):
         """`Navigator.starting`'s own `display_name` default is a plain
