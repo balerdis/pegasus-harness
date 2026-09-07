@@ -1319,6 +1319,17 @@ que no sea docstring cuenta como ofensor, con una lista explícita de excepcione
 identificadores de wire format que nunca cambian entre distribuciones (`cli.SCHEMA`,
 `journal-v4.json`, las claves `pegasus_version`/`pegasus_installed`, etc. — ver más abajo).
 
+**El nombre del orquestador también es un dato de contenido, no del motor.** `content/session-start.txt`
+declara qué agente abre la sesión (`core/content.py: SESSION_STARTS_IN`), así que una distribución
+que renombra su orquestador lo hace en `content/`, sin tocar `core/`. Hasta la versión 5.19.0 el
+adapter de OpenCode (`adapters/opencode/render.py`) tenía ese mismo nombre repetido como literal en
+`AGENT_FOR_ROLE`, una segunda fuente de verdad que una distribución renombrada nunca veía: sus
+comandos renderizados seguían apuntando a `pegasus-orchestrator`. La corrección hace que `render.command`
+reciba el nombre del orquestador como parámetro obligatorio, leído del `Content` cargado, y el scan de
+`NoProductIdentityOutsideCompositionRootTest` ahora también recorre `adapters/` (en un tuple propio,
+separado del que usa `NoCliNamesOutsideAdaptersTest`, porque ese paquete legítimamente sí conoce qué
+CLI es, sólo no qué distribución es).
+
 **El wordmark se dibuja, no se elige.** `tui/wordmark.py` cubre el mismo alfabeto que
 `core.identity.ALLOWED_CHARACTERS` (`A-Z` y `0-9`), verificado por un test que compara los dos
 conjuntos en las dos direcciones; el renderer dibuja la cantidad de palabras que `identity` le da

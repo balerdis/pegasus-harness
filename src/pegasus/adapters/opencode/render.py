@@ -25,11 +25,14 @@ from pegasus.core.content import (
 from pegasus.core.dependencies import npm_script_path, program_path
 from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout, ModelAssignment
 
+#: `RunsAs.ORCHESTRATOR` is deliberately absent here: which agent that role
+#: names is content-declared data (the agent whose name the loaded content
+#: marks as where a session starts), never an engine constant, so `command`
+#: takes it as a required parameter instead of looking it up in this table.
 AGENT_FOR_ROLE: dict[RunsAs, str | None] = {
-    RunsAs.ORCHESTRATOR: "pegasus-orchestrator",
-    RunsAs.PLANNER: "plan",       # nativo de OpenCode
-    RunsAs.BUILDER: "build",      # nativo de OpenCode
-    RunsAs.DEFAULT: None,         # se omite la clave y decide el CLI
+    RunsAs.PLANNER: "plan",       # native to OpenCode
+    RunsAs.BUILDER: "build",      # native to OpenCode
+    RunsAs.DEFAULT: None,         # key omitted; the CLI decides
 }
 
 MODE_NAME: dict[AgentMode, str] = {
@@ -165,10 +168,17 @@ def agent(
     return artifacts
 
 
-def command(layout: Layout, item: Command) -> list[Artifact]:
-    """A markdown file whose frontmatter is rebuilt in OpenCode's own vocabulary."""
+def command(layout: Layout, item: Command, orchestrator_name: str) -> list[Artifact]:
+    """A markdown file whose frontmatter is rebuilt in OpenCode's own vocabulary.
+
+    `orchestrator_name` is required, with no default: it is the name the
+    loaded content itself declares for the agent a session starts in (see
+    `pegasus.core.content.SESSION_STARTS_IN`), and it names the `agent:` field
+    for `RunsAs.ORCHESTRATOR`. A default here would be exactly the kind of
+    silently-substitutable wrong identity this parameter exists to rule out.
+    """
     fields: dict[str, Any] = {"description": item.description}
-    executor = AGENT_FOR_ROLE[item.runs_as]
+    executor = orchestrator_name if item.runs_as is RunsAs.ORCHESTRATOR else AGENT_FOR_ROLE[item.runs_as]
     if executor:
         fields["agent"] = executor
     if item.execution is Execution.ISOLATED:

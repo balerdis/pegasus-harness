@@ -589,7 +589,7 @@ class CommandRenderTest(unittest.TestCase):
             source=PurePosixPath("commands/sdd-apply.md"),
         )
         fields.update(overrides)
-        return self.adapter.render_command(self.layout, Command(**fields))[0].content.decode()
+        return self.adapter.render_command(self.layout, Command(**fields), "pegasus-orchestrator")[0].content.decode()
 
     def test_lands_in_the_commands_directory(self):
         artifact = self.adapter.render_command(
@@ -602,11 +602,32 @@ class CommandRenderTest(unittest.TestCase):
                 execution=Execution.INLINE,
                 source=PurePosixPath("commands/sdd-apply.md"),
             ),
+            "pegasus-orchestrator",
         )[0]
         self.assertEqual(artifact.path, CONFIG / "commands/sdd-apply.md")
 
     def test_the_orchestrator_role_becomes_the_pegasus_agent(self):
         self.assertIn("agent: \"pegasus-orchestrator\"", self.rendered())
+
+    def test_the_orchestrator_role_names_the_content_declared_orchestrator(self):
+        """The `agent:` field for `RunsAs.ORCHESTRATOR` must come from whatever
+        name the loaded content declares as its own orchestrator, not from a
+        literal baked into this module -- proven in-process by substituting a
+        different name and observing it come out the other end, unlike
+        `SESSION_STARTS_IN`, which is fixed at import time and only varies
+        across a subprocess with a copied package tree.
+        """
+        item = Command(
+            name="sdd-apply",
+            description="Implement SDD tasks",
+            body="Do the work.\n",
+            runs_as=RunsAs.ORCHESTRATOR,
+            execution=Execution.ISOLATED,
+            source=PurePosixPath("commands/sdd-apply.md"),
+        )
+        content = render_module.command(self.layout, item, "king-pegasus-two")[0].content.decode()
+        self.assertIn('agent: "king-pegasus-two"', content)
+        self.assertNotIn("pegasus-orchestrator", content)
 
     def test_planner_and_builder_become_opencode_native_agents(self):
         self.assertIn('agent: "plan"', self.rendered(runs_as=RunsAs.PLANNER))
@@ -1183,11 +1204,16 @@ class ShippedContentRenderTest(unittest.TestCase):
     def setUpClass(cls):
         adapter, cls.layout = Adapter(), Adapter().layout(ENVIRONMENT)
         loaded = cls.loaded = content_module.load()
+        orchestrator_name = next(agent.name for agent in loaded.agents if agent.default)
         cls.artifacts = [
             *(item for skill in loaded.skills for item in adapter.render_skill(cls.layout, skill)),
             *(item for agent in loaded.agents for item in adapter.render_agent(cls.layout, agent)),
             *(item for agent in loaded.agents for item in adapter.render_prompt(cls.layout, agent)),
-            *(item for command in loaded.commands for item in adapter.render_command(cls.layout, command)),
+            *(
+                item
+                for command in loaded.commands
+                for item in adapter.render_command(cls.layout, command, orchestrator_name)
+            ),
             *(item for mcp in loaded.mcp for item in adapter.render_mcp(cls.layout, mcp)),
             *adapter.render_system_prompt(cls.layout, loaded.system_prompt),
             *adapter.own_artifacts(cls.layout),
@@ -1486,7 +1512,7 @@ class PlaceholderRenderTest(unittest.TestCase):
             execution=Execution.ISOLATED,
             source=PurePosixPath("commands/sdd-apply.md"),
         )
-        content = self.adapter.render_command(self.layout, item)[0].content.decode("utf-8")
+        content = self.adapter.render_command(self.layout, item, "pegasus-orchestrator")[0].content.decode("utf-8")
         self.assertIn(self.skills, content)
 
     def test_a_system_prompt_body_gets_it(self):

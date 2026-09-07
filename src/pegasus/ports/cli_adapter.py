@@ -69,7 +69,10 @@ class CliAdapter(Protocol):
         vocabulary (its ``variant``, say) is this adapter's job, not the
         engine's."""
 
-    def render_command(self, layout: Layout, command: Any) -> list[Artifact]: ...
+    def render_command(self, layout: Layout, command: Any, orchestrator_name: str) -> list[Artifact]:
+        """`orchestrator_name` is the content-declared name of the agent a
+        session starts in (never a literal this adapter picks), and is what
+        `RunsAs.ORCHESTRATOR` must render as."""
 
     def render_prompt(self, layout: Layout, prompt: Any) -> list[Artifact]: ...
 
