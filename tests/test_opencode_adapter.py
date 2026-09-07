@@ -608,6 +608,26 @@ class CommandRenderTest(unittest.TestCase):
     def test_the_orchestrator_role_becomes_the_pegasus_agent(self):
         self.assertIn("agent: \"pegasus-orchestrator\"", self.rendered())
 
+    def test_the_orchestrator_role_names_the_content_declared_orchestrator(self):
+        """The `agent:` field for `RunsAs.ORCHESTRATOR` must come from whatever
+        name the loaded content declares as its own orchestrator, not from a
+        literal baked into this module -- proven in-process by substituting a
+        different name and observing it come out the other end, unlike
+        `SESSION_STARTS_IN`, which is fixed at import time and only varies
+        across a subprocess with a copied package tree.
+        """
+        item = Command(
+            name="sdd-apply",
+            description="Implement SDD tasks",
+            body="Do the work.\n",
+            runs_as=RunsAs.ORCHESTRATOR,
+            execution=Execution.ISOLATED,
+            source=PurePosixPath("commands/sdd-apply.md"),
+        )
+        content = render_module.command(self.layout, item, "king-pegasus-two")[0].content.decode()
+        self.assertIn('agent: "king-pegasus-two"', content)
+        self.assertNotIn("pegasus-orchestrator", content)
+
     def test_planner_and_builder_become_opencode_native_agents(self):
         self.assertIn('agent: "plan"', self.rendered(runs_as=RunsAs.PLANNER))
         self.assertIn('agent: "build"', self.rendered(runs_as=RunsAs.BUILDER))
