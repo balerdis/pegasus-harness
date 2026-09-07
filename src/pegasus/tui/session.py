@@ -135,8 +135,12 @@ def local_update_notice(runtime: cli.Runtime, installed: tuple[CliOption, ...]) 
         install = journal_module.install_for(journal, option.id)
         if install is None:
             continue
-        unresolved = cli.update_unresolved_bindings(install)
-        remedy = cli.install_command_for(option.id, unresolved) if unresolved else None
+        unresolved = cli.update_unresolved_bindings(install, display_name=runtime.identity.display_name)
+        remedy = (
+            cli.install_command_for(option.id, unresolved, program_name=runtime.identity.program_name)
+            if unresolved
+            else None
+        )
         behind.append(
             BehindInstall(display_name=option.display_name, recorded=install.release.get("version"), remedy_command=remedy)
         )
