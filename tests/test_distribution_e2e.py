@@ -15,12 +15,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+
+from pegasus.adapters.opencode import render as render_module
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_ZIPAPP = ROOT / "tools" / "build_zipapp.py"
@@ -168,6 +172,116 @@ class DistributionBuildRecipeTest(unittest.TestCase):
             control, "install", "--cli", "opencode", "--dry-run", home=control_home
         )
         self.assertEqual(control_result.returncode, 0, msg=control_result.stderr)
+
+
+_AGENT_FRONTMATTER_FIELD = re.compile(r'^agent:\s*"([^"]+)"\s*$', re.MULTILINE)
+
+
+class DistributionOrchestratorRenameTest(unittest.TestCase):
+    """Regression test for the bug this locks in: `AGENT_FOR_ROLE` used to
+    hardcode `"pegasus-orchestrator"` as the `agent:` field for every command
+    with `runs_as: orchestrator`, independently of `SESSION_STARTS_IN` --
+    content's own declared name for the agent a session starts in. A
+    distribution that renamed its orchestrator in content still got that
+    literal written into every rendered command, naming an agent absent from
+    its own installed agent set.
+
+    Uses `ACME` throughout -- an obviously fictional distribution, never a
+    real organization's. Everything lives inside a scratch directory and a
+    throwaway `$HOME`, following `DistributionBuildRecipeTest`'s own pattern.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.root = Path(self._directory.name)
+
+    def _run_binary(self, binary: Path, *args: str, home: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [str(binary), *args],
+            env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def test_no_installed_command_names_an_agent_absent_from_the_installed_set(self):
+        # 1. A private copy of the real source, renaming its orchestrator in
+        # content only -- never a change to any engine module.
+        renamed_source = self.root / "renamed-source" / "pegasus"
+        shutil.copytree(REAL_SOURCE, renamed_source)
+        session_start = renamed_source / "content" / "session-start.txt"
+        self.assertEqual(session_start.read_text(encoding="utf-8").strip(), "pegasus-orchestrator")
+        session_start.write_text("acme-orchestrator\n", encoding="utf-8")
+
+        orchestrator_agent = renamed_source / "content" / "agents" / "pegasus-orchestrator.md"
+        original = orchestrator_agent.read_text(encoding="utf-8")
+        self.assertIn("name: pegasus-orchestrator\n", original)
+        renamed_agent = renamed_source / "content" / "agents" / "acme-orchestrator.md"
+        orchestrator_agent.unlink()
+        renamed_agent.write_text(
+            original.replace("name: pegasus-orchestrator\n", "name: acme-orchestrator\n", 1), encoding="utf-8"
+        )
+
+        # An agent-specific MCP override section is keyed by agent name in its
+        # own filename (`<id>@<agent>.md`) -- it has to move with the rename
+        # too, or the loader rejects it as an override for an agent that no
+        # longer ships.
+        override = renamed_source / "content" / "agents" / "mcp" / "cbm@pegasus-orchestrator.md"
+        override.rename(renamed_source / "content" / "agents" / "mcp" / "cbm@acme-orchestrator.md")
+
+        # 2. Build ACME from that renamed source.
+        acme_identity = self.root / "acme-identity.json"
+        acme_identity.write_text(json.dumps(ACME_IDENTITY_PAYLOAD), encoding="utf-8")
+        acme = self.root / "acme" / "ACME"
+        result = _build(renamed_source, acme, acme_identity)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+        # 3. Install it for real.
+        home = self.root / "home"
+        (home / ".config" / "opencode").mkdir(parents=True)
+        result = self._run_binary(acme, "install", "--cli", "opencode", home=home)
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+
+        settings = json.loads((home / ".config" / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+        installed_agents = set(settings.get("agent", {}))
+        self.assertIn("acme-orchestrator", installed_agents)
+        self.assertNotIn("pegasus-orchestrator", installed_agents)
+
+        # 4. The assertion that would have caught the original bug: no
+        # rendered command's `agent:` field may name an agent absent from the
+        # installed agent set -- except OpenCode's own native agents, which
+        # the runtime provides regardless of what this install placed (`plan`
+        # and `build`; read off `AGENT_FOR_ROLE` itself so this stays in step
+        # with whatever this adapter maps `RunsAs.PLANNER`/`RunsAs.BUILDER` to).
+        native_agents = {value for value in render_module.AGENT_FOR_ROLE.values() if value}
+        commands_dir = home / ".config" / "opencode" / "commands"
+        command_files = sorted(commands_dir.glob("*.md"))
+        self.assertTrue(command_files, "fixture drifted: no commands were installed")
+        checked_any = False
+        for command_file in command_files:
+            match = _AGENT_FRONTMATTER_FIELD.search(command_file.read_text(encoding="utf-8"))
+            if match is None:
+                continue
+            checked_any = True
+            agent_name = match.group(1)
+            if agent_name in native_agents:
+                continue
+            self.assertIn(
+                agent_name,
+                installed_agents,
+                f"{command_file.name}: agent {agent_name!r} is not among the installed "
+                f"agents {sorted(installed_agents)}",
+            )
+        self.assertTrue(checked_any, "fixture drifted: no installed command declares an agent field")
+
+        # 5. A command that runs as the orchestrator names ACME's own agent in
+        # its rendered `agent:` field -- never Pegasus's. (The command body's
+        # own prose still says "pegasus-orchestrator" here: that is
+        # content-authoring debt in the shipped command bodies, orthogonal to
+        # this bug, which is only about the rendered frontmatter field.)
+        sdd_apply = (commands_dir / "sdd-apply.md").read_text(encoding="utf-8")
+        match = _AGENT_FRONTMATTER_FIELD.search(sdd_apply)
+        self.assertIsNotNone(match, "sdd-apply.md has no agent: frontmatter field")
+        self.assertEqual(match.group(1), "acme-orchestrator")
 
 
 if __name__ == "__main__":
