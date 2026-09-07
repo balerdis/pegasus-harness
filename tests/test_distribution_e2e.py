@@ -14,6 +14,7 @@ a throwaway `$HOME` -- never the real environment this suite runs under.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 import shutil
@@ -24,7 +25,11 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import pegasus
+from fakes import EXECUTABLE_MODE, FakeDownloader, FakeFileSystem
+from pegasus import cli
 from pegasus.adapters.opencode import render as render_module
+from pegasus.core import identity as identity_module
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_ZIPAPP = ROOT / "tools" / "build_zipapp.py"
@@ -37,6 +42,7 @@ ACME_IDENTITY_PAYLOAD = {
     "product_id": "acme-widget",
     "display_name": "Acme",
     "program_name": "acme",
+    "version": "1.0.0",
     "wordmark_words": ["ACME"],
     "release": {
         "asset_url_template": "https://example.invalid/acme/releases/download/{tag}/{asset}",
@@ -117,9 +123,12 @@ class DistributionBuildRecipeTest(unittest.TestCase):
         result = _build(extracted_package, acme, acme_identity)
         self.assertEqual(result.returncode, 0, msg=result.stderr)
 
-        # 5. The rebuilt binary runs. `pegasus_version`/`schema` are deliberately identical wire
-        # identifiers across every distribution (see the spec's wire-format requirement) -- what
-        # must differ, checked below, is the displayed name, data directory and release source.
+        # 5. The rebuilt binary runs. `schema` is deliberately an identical wire identifier across
+        # every distribution (see the spec's wire-format requirement). `pegasus_version` is
+        # different: only the KEY is a stable wire identifier -- an existing journal's dataclass
+        # field, never renamed -- while the VALUE it reports is each distribution's own version,
+        # never the pinned engine's (see `DistributionVersionIdentityTest`, below). What must
+        # differ here too is the displayed name, data directory and release source.
         acme_home = self.root / "acme-home"
         acme_home.mkdir()
         # A CLI adapter's own config directory has to look "detected", or `install` (not
@@ -172,6 +181,84 @@ class DistributionBuildRecipeTest(unittest.TestCase):
             control, "install", "--cli", "opencode", "--dry-run", home=control_home
         )
         self.assertEqual(control_result.returncode, 0, msg=control_result.stderr)
+
+
+class DistributionVersionIdentityTest(unittest.TestCase):
+    """Regression for the defect a real distribution hit: a real distribution
+    (pinning this engine at one version, releasing its own product under a
+    completely different tag) found `--version` printing the pinned engine's
+    own baked-in version instead of its own, and `upgrade` unable to ever
+    reach `already-current` against its own releases because the comparison
+    was against the engine's version, not the product's own.
+
+    Mirrors that scenario with ACME (the same fictional distribution
+    `DistributionBuildRecipeTest` already builds): the engine here is
+    whatever `pegasus.__version__` currently is, ACME's own identity
+    declares a deliberately different version, and both halves of the bug
+    are proven fixed -- `--version` on the actual built binary, and
+    `upgrade` reaching `already-current` through the actual `cli.upgrade`
+    code path the real bug lived in.
+    """
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.root = Path(self._directory.name)
+        self.assertNotEqual(
+            ACME_IDENTITY_PAYLOAD["version"], pegasus.__version__,
+            "fixture drifted: ACME's own version must differ from the pinned engine's to mean anything",
+        )
+
+    def test_the_built_binary_reports_its_own_version_not_the_engines(self):
+        acme_identity = self.root / "acme-identity.json"
+        acme_identity.write_text(json.dumps(ACME_IDENTITY_PAYLOAD), encoding="utf-8")
+        acme = self.root / "acme" / "ACME"
+        result = _build(REAL_SOURCE, acme, acme_identity)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+        home = self.root / "home"
+        home.mkdir()
+        result = subprocess.run(
+            [str(acme), "--version"],
+            env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn(ACME_IDENTITY_PAYLOAD["version"], result.stdout)
+        self.assertNotIn(pegasus.__version__, result.stdout)
+
+    def test_upgrade_reports_already_current_against_the_products_own_release(self):
+        """Drives the real `cli.upgrade` -- the exact function the real bug
+        lived in -- with ACME's own identity and a faked release source
+        offering exactly ACME's own version. A subprocess cannot have its
+        network faked, so this exercises the same production code in
+        process instead, the way `test_cli_upgrade.py` already does for
+        every other `upgrade` scenario."""
+        acme_identity = identity_module.parse(json.dumps(ACME_IDENTITY_PAYLOAD).encode("utf-8"))
+
+        destination = self.root / "acme-binary"
+        with zipfile.ZipFile(destination, "w") as archive:
+            archive.writestr("__main__.py", "pass\n")
+        filesystem = FakeFileSystem(files={destination: b"old acme bytes"}, modes={destination: EXECUTABLE_MODE})
+        release = acme_identity.release
+        downloader = FakeDownloader(
+            {release.latest_release_api_url: json.dumps({"tag_name": f"v{acme_identity.version}"}).encode("utf-8")}
+        )
+        runtime = cli.Runtime(
+            filesystem=filesystem,
+            home=self.root / "acme-home",
+            now="2026-09-07T00:00:00+00:00",
+            out=io.StringIO(),
+            variables={},
+            downloader=downloader,
+            sys_path0=str(destination),
+            identity=acme_identity,
+        )
+
+        report = cli.upgrade(runtime)
+
+        self.assertEqual(report["status"], "already-current")
+        self.assertEqual(report["version"], acme_identity.version)
 
 
 _AGENT_FRONTMATTER_FIELD = re.compile(r'^agent:\s*"([^"]+)"\s*$', re.MULTILINE)
