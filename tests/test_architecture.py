@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from brand_fragments import BANNED_FRAGMENTS
+
 SOURCE = Path(__file__).resolve().parents[1] / "src" / "pegasus"
 ADAPTERS = SOURCE / "adapters"
 CLI_AGNOSTIC_PACKAGES = ("core", "ports", "infra", "tui")
@@ -456,7 +458,7 @@ def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
                     if descendant is not node:
                         consumed.add(id(descendant))
                 if folded not in PRODUCT_IDENTITY_ALLOWLIST and any(
-                    name in folded.lower() for name in ("pegasus", "harness", "balerdis")
+                    name in folded.lower() for name in BANNED_FRAGMENTS
                 ):
                     found.append((node.lineno, folded))
                 continue
@@ -469,7 +471,7 @@ def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
         if node.value in PRODUCT_IDENTITY_ALLOWLIST:
             continue
         lowered = node.value.lower()
-        if any(name in lowered for name in ("pegasus", "harness", "balerdis")):
+        if any(name in lowered for name in BANNED_FRAGMENTS):
             found.append((node.lineno, node.value))
     return sorted(found)
 

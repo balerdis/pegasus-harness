@@ -23,6 +23,7 @@ PEGASUS_RELEASE = ReleaseSource(
     binary_asset="pegasus",
     latest_release_api_url="https://api.github.com/repos/balerdis/pegasus-harness/releases/latest",
     release_page_url="https://github.com/balerdis/pegasus-harness/releases",
+    install_base_url_default="https://github.com/balerdis/pegasus-harness/releases/latest/download",
 )
 
 #: A distribution's own release source -- deliberately a *different* host and
@@ -33,6 +34,7 @@ DISTRIBUTION_RELEASE = ReleaseSource(
     binary_asset="darq",
     latest_release_api_url="https://api.github.com/repos/acme/darq/releases/latest",
     release_page_url="https://github.com/acme/darq/releases",
+    install_base_url_default="https://github.com/acme/darq/releases/latest/download",
 )
 
 

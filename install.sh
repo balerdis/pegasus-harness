@@ -1,22 +1,52 @@
 #!/usr/bin/env bash
-# Instala Pegasus en una cuenta Linux limpia: nvm + Node LTS, OpenCode y el
-# binario de pegasus, en ese orden, y deja el resultado listo para trabajar.
+# Instala este producto en una cuenta Linux limpia: nvm + Node LTS, OpenCode y
+# su propio binario, en ese orden, y deja el resultado listo para trabajar.
+# Qué producto es exactamente lo dice el bloque de identidad, más abajo: este
+# archivo es la plantilla que tools/build_installer.py llena con los datos de
+# un identity.json -- ver el comentario junto a ese bloque.
 #
 # Pensado para correrse así, como asset de un release (bash lee la tubería de
 # a poco, por eso todo el script vive adentro de funciones — ver el comentario
 # junto a la última línea):
 #
-#   curl -fsSL https://github.com/balerdis/pegasus-harness/releases/latest/download/install.sh | bash
+#   curl -fsSL <url de la página de releases>/latest/download/install.sh | bash
 #
 #   ./install.sh                     detecta, muestra el preflight, pide confirmación e instala
 #   ./install.sh --verify            informa el estado, no cambia nada
 #   ./install.sh --yes               salta la confirmación
 #   ./install.sh --no-run            instala lo que falte, pero no lanza nada al final; dice qué habría lanzado
-#   ./install.sh --bin-dir DIR       instala el binario de pegasus en DIR en vez de ~/.local/bin
+#   ./install.sh --bin-dir DIR       instala el binario del producto en DIR en vez de ~/.local/bin
 #   ./install.sh --opencode-version X   fija la versión de OpenCode a instalar
 #   ./install.sh --opencode-ultima      instala la última versión de OpenCode publicada
 #
 set -euo pipefail
+
+# ============================================================================
+# Identidad: la raíz de composición de este instalador.
+#
+# Único bloque de todo el archivo donde puede vivir un literal de marca --
+# el equivalente, del lado shell, de lo que `cli.py` es del lado Python (ver
+# `core/identity.py` y `docs/arquitectura/arquitectura.md`). Todo lo que
+# sigue debajo de este bloque referencia una de estas cuatro variables, nunca
+# un nombre fijo, así este mismo archivo sirve de plantilla para cualquier
+# distribución construida sobre el mismo motor.
+#
+# `tools/build_installer.py` genera el instalador de una distribución
+# distinta reemplazando exactamente las cuatro líneas de abajo por los
+# valores del `identity.json` que se le da -- nunca bifurcando ni tocando una
+# sola línea del resto del archivo, que queda carácter por carácter igual.
+#
+#   PRODUCT_ID                          identity.json: product_id
+#   PRODUCT_DISPLAY_NAME                identity.json: display_name
+#   PRODUCT_PROGRAM_NAME                identity.json: program_name
+#   PRODUCT_RELEASE_BASE_URL_DEFAULT    la ruta "latest" de identity.release,
+#                                        usada cuando nadie fija la variable
+#                                        de entorno derivada (ver BASE_URL)
+PRODUCT_ID='pegasus-harness'
+PRODUCT_DISPLAY_NAME='Pegasus'
+PRODUCT_PROGRAM_NAME='pegasus'
+PRODUCT_RELEASE_BASE_URL_DEFAULT='https://github.com/balerdis/pegasus-harness/releases/latest/download'
+# ============================================================================
 
 # --- Valores por defecto, ajustables por flag ---
 
@@ -59,19 +89,23 @@ NVM_VERSION='v0.40.7'
 # api.github.com, así que no cuenta contra ningún límite de tasa. Es la razón
 # entera por la que no se resuelve un tag acá adentro.
 #
-# PEGASUS_INSTALL_BASE_URL es una costura para poder probar la descarga real
-# (con verificación de checksum incluida) contra un directorio local, sin
-# tocar la red — no es una opción pensada para que la use una persona, así
-# que no se documenta en INSTALL.md. Sin esa variable, cae en la URL de
-# siempre.
-BASE_URL="${PEGASUS_INSTALL_BASE_URL:-https://github.com/balerdis/pegasus-harness/releases/latest/download}"
+# El nombre de la variable de entorno se deriva de PRODUCT_PROGRAM_NAME (ver
+# el bloque de identidad, arriba): en mayúsculas, con el sufijo
+# "_INSTALL_BASE_URL" (ver NOMBRE_VARIABLE_BASE_URL, abajo). Es una costura
+# para poder probar la descarga real (con verificación de checksum incluida)
+# contra un directorio local, sin tocar la red — no es una opción pensada
+# para que la use una persona, así que no se documenta en INSTALL.md. Sin
+# esa variable, cae en PRODUCT_RELEASE_BASE_URL_DEFAULT.
+NOMBRE_VARIABLE_BASE_URL="${PRODUCT_PROGRAM_NAME^^}"
+NOMBRE_VARIABLE_BASE_URL="${NOMBRE_VARIABLE_BASE_URL//[^A-Z0-9_]/_}_INSTALL_BASE_URL"
+BASE_URL="${!NOMBRE_VARIABLE_BASE_URL:-$PRODUCT_RELEASE_BASE_URL_DEFAULT}"
 
-# Directorio temporal de la descarga de pegasus. Global a propósito, no
-# `local` a la función que lo crea: el `trap ... EXIT` que lo limpia se
-# ejecuta después de que esa función ya retornó, y bajo "set -u" una variable
-# `local` fuera de su función es una variable inexistente, no vacía — el
-# trap fallaría con "unbound variable" en vez de limpiar.
-PEGASUS_TMPDIR=''
+# Directorio temporal de la descarga del binario del producto. Global a
+# propósito, no `local` a la función que lo crea: el `trap ... EXIT` que lo
+# limpia se ejecuta después de que esa función ya retornó, y bajo "set -u"
+# una variable `local` fuera de su función es una variable inexistente, no
+# vacía — el trap fallaría con "unbound variable" en vez de limpiar.
+PRODUCTO_TMPDIR=''
 
 fallar() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 # A diferencia de fallar, no aborta: la usa escribir_path_rc, donde el resto
@@ -83,7 +117,14 @@ ok()     { printf '  ✔ %s\n' "$*"; }
 info()   { printf '  %s\n' "$*"; }
 
 uso() {
-  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+  # Derivado por estructura, no por un rango de líneas fijo: imprime el
+  # bloque de comentario que arranca en la línea 2 (la 1 es el shebang) y
+  # sigue mientras cada línea empiece con "#", cortando en la primera que no
+  # lo haga -- así un comentario que crece o se achica más arriba nunca
+  # puede volver a desincronizar este texto del bloque real de uso (pasó una
+  # vez con un rango fijo: un comentario de identidad agregado más arriba
+  # corrió el bloque de uso y --help empezó a mostrar un texto incompleto).
+  awk 'NR==1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
 }
 
 # --- Argumentos ---
@@ -181,23 +222,23 @@ detectar_opencode() {
   fi
 }
 
-PEGASUS_PRESENTE=0
-PEGASUS_VERSION=''
-PEGASUS_RUTA=''
+PRODUCTO_PRESENTE=0
+PRODUCTO_VERSION=''
+PRODUCTO_RUTA=''
 
-detectar_pegasus() {
-  if command -v pegasus >/dev/null 2>&1; then
-    PEGASUS_PRESENTE=1
-    PEGASUS_RUTA=$(command -v pegasus)
-    PEGASUS_VERSION=$(pegasus --version 2>&1 | head -1)
-  elif [[ -x "$BIN_DIR/pegasus" ]]; then
-    PEGASUS_PRESENTE=1
-    PEGASUS_RUTA="$BIN_DIR/pegasus"
-    PEGASUS_VERSION=$("$BIN_DIR/pegasus" --version 2>&1 | head -1)
+detectar_producto() {
+  if command -v "$PRODUCT_PROGRAM_NAME" >/dev/null 2>&1; then
+    PRODUCTO_PRESENTE=1
+    PRODUCTO_RUTA=$(command -v "$PRODUCT_PROGRAM_NAME")
+    PRODUCTO_VERSION=$("$PRODUCT_PROGRAM_NAME" --version 2>&1 | head -1)
+  elif [[ -x "$BIN_DIR/$PRODUCT_PROGRAM_NAME" ]]; then
+    PRODUCTO_PRESENTE=1
+    PRODUCTO_RUTA="$BIN_DIR/$PRODUCT_PROGRAM_NAME"
+    PRODUCTO_VERSION=$("$BIN_DIR/$PRODUCT_PROGRAM_NAME" --version 2>&1 | head -1)
   else
-    PEGASUS_PRESENTE=0
-    PEGASUS_VERSION=''
-    PEGASUS_RUTA=''
+    PRODUCTO_PRESENTE=0
+    PRODUCTO_VERSION=''
+    PRODUCTO_RUTA=''
   fi
 }
 
@@ -301,7 +342,7 @@ detectar_todo() {
   detectar_curl
   detectar_node
   detectar_opencode
-  detectar_pegasus
+  detectar_producto
   detectar_path
   detectar_shell
 }
@@ -312,45 +353,47 @@ detectar_todo() {
 # ALGO_SE_INSTALO más abajo), porque bajo --no-run sí se instala de verdad.
 FALTA_NODE=0
 FALTA_OPENCODE=0
-FALTA_PEGASUS=0
+FALTA_PRODUCTO=0
 FALTA_ALGO=0
 
 calcular_faltantes() {
   ((NODE_PRESENTE)) && FALTA_NODE=0 || FALTA_NODE=1
   ((OPENCODE_PRESENTE)) && FALTA_OPENCODE=0 || FALTA_OPENCODE=1
-  ((PEGASUS_PRESENTE)) && FALTA_PEGASUS=0 || FALTA_PEGASUS=1
-  if ((FALTA_NODE || FALTA_OPENCODE || FALTA_PEGASUS)); then
+  ((PRODUCTO_PRESENTE)) && FALTA_PRODUCTO=0 || FALTA_PRODUCTO=1
+  if ((FALTA_NODE || FALTA_OPENCODE || FALTA_PRODUCTO)); then
     FALTA_ALGO=1
   else
     FALTA_ALGO=0
   fi
 }
 
-# Si el directorio de pegasus y/o el de OpenCode van a faltar en el PATH de
-# la terminal real que llamó a este script -- ver ORIGINAL_PATH, arriba, y
-# por qué se compara contra ese valor y no contra el PATH ya modificado del
-# propio proceso. Una sola función para que mostrar_guia_path y
-# bloque_accion_requerida (ver más abajo) nunca puedan quedar en desacuerdo
-# sobre si hay algo que avisar.
+# Si el directorio del binario del producto y/o el de OpenCode van a faltar
+# en el PATH de la terminal real que llamó a este script -- ver
+# ORIGINAL_PATH, arriba, y por qué se compara contra ese valor y no contra el
+# PATH ya modificado del propio proceso. Una sola función para que
+# mostrar_guia_path y bloque_accion_requerida (ver más abajo) nunca puedan
+# quedar en desacuerdo sobre si hay algo que avisar.
 #
-# El de pegasus dispara también cuando NO faltaba instalar nada: detectar_pegasus
-# marca PEGASUS_PRESENTE=1 tanto si lo encuentra por `command -v` (ya en el PATH,
-# por definición) como si sólo existe en $BIN_DIR/pegasus sin estar en el PATH.
-# Como el lanzamiento final SIEMPRE termina en pegasus (ver decidir_lanzamiento),
-# ese segundo caso necesita el mismo aviso que uno recién instalado -- si no, la
-# persona sale de la TUI a una terminal que sigue sin encontrar pegasus y nadie
-# se lo dijo. OpenCode no tiene este problema: detectar_opencode sólo lo marca
-# presente vía `command -v`, así que si está presente ya está en el PATH.
-AVISO_PEGASUS_DIR=0
+# El del producto dispara también cuando NO faltaba instalar nada:
+# detectar_producto marca PRODUCTO_PRESENTE=1 tanto si lo encuentra por
+# `command -v` (ya en el PATH, por definición) como si sólo existe en
+# $BIN_DIR/$PRODUCT_PROGRAM_NAME sin estar en el PATH. Como el lanzamiento
+# final SIEMPRE termina en el binario del producto (ver decidir_lanzamiento),
+# ese segundo caso necesita el mismo aviso que uno recién instalado -- si no,
+# la persona sale de la TUI a una terminal que sigue sin encontrarlo y nadie
+# se lo dijo. OpenCode no tiene este problema: detectar_opencode sólo lo
+# marca presente vía `command -v`, así que si está presente ya está en el
+# PATH.
+AVISO_PRODUCTO_DIR=0
 AVISO_OPENCODE_DIR=0
 
 calcular_avisos_path() {
-  AVISO_PEGASUS_DIR=0
+  AVISO_PRODUCTO_DIR=0
   AVISO_OPENCODE_DIR=0
-  local pegasus_solo_en_bin_dir=0
-  [[ "$PEGASUS_RUTA" == "$BIN_DIR/pegasus" ]] && pegasus_solo_en_bin_dir=1
-  { ((FALTA_PEGASUS)) || ((pegasus_solo_en_bin_dir)); } \
-    && ! dir_en_path "$ORIGINAL_PATH" "$BIN_DIR" && AVISO_PEGASUS_DIR=1
+  local producto_solo_en_bin_dir=0
+  [[ "$PRODUCTO_RUTA" == "$BIN_DIR/$PRODUCT_PROGRAM_NAME" ]] && producto_solo_en_bin_dir=1
+  { ((FALTA_PRODUCTO)) || ((producto_solo_en_bin_dir)); } \
+    && ! dir_en_path "$ORIGINAL_PATH" "$BIN_DIR" && AVISO_PRODUCTO_DIR=1
   ((FALTA_OPENCODE)) && ! dir_en_path "$ORIGINAL_PATH" "$OPENCODE_BIN_DIR" && AVISO_OPENCODE_DIR=1
   return 0
 }
@@ -388,7 +431,7 @@ calcular_persistencia_path() {
       ;;
   esac
 
-  if ((AVISO_PEGASUS_DIR)) && ! ((shell_ya_cubierta)); then
+  if ((AVISO_PRODUCTO_DIR)) && ! ((shell_ya_cubierta)); then
     PERSISTIR_PATH_RC=1
     RECOMENDACION_SOURCE="$SHELL_RC_FILE"
   else
@@ -422,7 +465,7 @@ mostrar_preflight() {
     if ((PY_OK)); then
       ok "python3 $PY_VERSION"
     else
-      info "python3 $PY_VERSION encontrado, pero Pegasus necesita 3.12 o superior"
+      info "python3 $PY_VERSION encontrado, pero $PRODUCT_DISPLAY_NAME necesita 3.12 o superior"
     fi
   else
     info 'python3: no encontrado'
@@ -458,8 +501,8 @@ mostrar_preflight() {
     fi
     algo_para_instalar=1
   fi
-  if ((FALTA_PEGASUS)); then
-    info "el binario pegasus, en $BIN_DIR"
+  if ((FALTA_PRODUCTO)); then
+    info "el binario $PRODUCT_PROGRAM_NAME, en $BIN_DIR"
     algo_para_instalar=1
   fi
   if ((PERSISTIR_PATH_RC)); then
@@ -471,7 +514,7 @@ mostrar_preflight() {
   local algo_presente=0
   ((NODE_PRESENTE)) && { ok "node $NODE_VERSION"; algo_presente=1; }
   ((OPENCODE_PRESENTE)) && { ok "opencode $OPENCODE_VERSION"; algo_presente=1; }
-  ((PEGASUS_PRESENTE)) && { ok "pegasus $PEGASUS_VERSION ($PEGASUS_RUTA)"; algo_presente=1; }
+  ((PRODUCTO_PRESENTE)) && { ok "$PRODUCT_PROGRAM_NAME $PRODUCTO_VERSION ($PRODUCTO_RUTA)"; algo_presente=1; }
   ((algo_presente)) || info 'nada todavía'
 
   titulo 'PATH'
@@ -489,7 +532,7 @@ mostrar_preflight() {
 # mal, se rompe algo que este instalador no puede arreglar.
 fallar_por_requisitos_bloqueantes() {
   if ((PY_PRESENTE)) && ! ((PY_OK)); then
-    fallar "Pegasus necesita Python 3.12 o superior (lo exige pyproject.toml); se encontró python3 $PY_VERSION.
+    fallar "$PRODUCT_DISPLAY_NAME necesita Python 3.12 o superior (lo exige pyproject.toml); se encontró python3 $PY_VERSION.
 Este script no instala ni actualiza Python: es específico de cada distribución y una elección
 equivocada puede romper el sistema. Pistas (no ejecutadas por este script):
   Debian/Ubuntu: sudo apt install python3
@@ -497,7 +540,7 @@ equivocada puede romper el sistema. Pistas (no ejecutadas por este script):
   fi
 
   if ! ((PY_PRESENTE)); then
-    fallar "Pegasus necesita Python 3.12 o superior (lo exige pyproject.toml); no se encontró python3.
+    fallar "$PRODUCT_DISPLAY_NAME necesita Python 3.12 o superior (lo exige pyproject.toml); no se encontró python3.
 Este script no instala Python. Pistas (no ejecutadas por este script):
   Debian/Ubuntu: sudo apt install python3
   Fedora/RHEL:   sudo dnf install python3"
@@ -509,13 +552,13 @@ Este script no instala Python. Pistas (no ejecutadas por este script):
 # --- Terminal controladora ---
 #
 # La usan tanto `confirmar` (para saber si hay a quién preguntarle) como
-# `lanzar` (para saber si el programa final -- pegasus u opencode, los dos
-# TUIs -- va a tener una terminal real, o si más vale no exec'earlo). Una
-# sola función para que las dos nunca puedan quedar en desacuerdo: la
-# razón para extraerla es exactamente la misma que ya se documentó abajo,
-# en el comentario grande de `confirmar`, un escalón más adentro -- el bug
-# original ("exec \"$LANZAR\"" hereda un stdin muerto) es el mismo bug que
-# ya se había resuelto acá, sólo que sin generalizar.
+# `lanzar` (para saber si el programa final -- el binario del producto u
+# opencode, los dos TUIs -- va a tener una terminal real, o si más vale no
+# exec'earlo). Una sola función para que las dos nunca puedan quedar en
+# desacuerdo: la razón para extraerla es exactamente la misma que ya se
+# documentó abajo, en el comentario grande de `confirmar`, un escalón más
+# adentro -- el bug original ("exec \"$LANZAR\"" hereda un stdin muerto) es
+# el mismo bug que ya se había resuelto acá, sólo que sin generalizar.
 #
 # El chequeo tiene que ABRIR /dev/tty de verdad, no sólo mirar sus bits de
 # permiso: `[[ -r /dev/tty ]]` da "legible" igual aunque no haya ninguna
@@ -645,50 +688,50 @@ instalar_opencode() {
   ok "instalado: $(opencode --version 2>&1 | head -1)"
 }
 
-instalar_pegasus() {
-  titulo 'Binario de pegasus'
+instalar_producto() {
+  titulo "Binario de $PRODUCT_PROGRAM_NAME"
   ALGO_SE_INSTALO=1
 
   mkdir -p "$BIN_DIR" || fallar "no se pudo crear $BIN_DIR"
 
-  PEGASUS_TMPDIR=$(mktemp -d) || fallar 'no se pudo crear un directorio temporal'
+  PRODUCTO_TMPDIR=$(mktemp -d) || fallar 'no se pudo crear un directorio temporal'
   # Red de seguridad para los caminos de error de abajo (falla la descarga,
   # falla el checksum): "fallar" hace "exit", y ahí sí corren los traps
   # pendientes. En el camino feliz este trap NO alcanza a limpiar nada solo
   # -- "lanzar" termina con "exec", que reemplaza esta imagen de proceso sin
   # correr traps pendientes -- por eso además se limpia a mano, explícito,
   # apenas el directorio ya cumplió su propósito (ver más abajo).
-  trap 'rm -rf "$PEGASUS_TMPDIR"' EXIT
+  trap 'rm -rf "$PRODUCTO_TMPDIR"' EXIT
 
-  info 'descargando pegasus y su checksum...'
-  curl -fL -o "$PEGASUS_TMPDIR/pegasus" "$BASE_URL/pegasus" \
-    || fallar 'no se pudo descargar pegasus'
-  curl -fL -o "$PEGASUS_TMPDIR/pegasus.sha256" "$BASE_URL/pegasus.sha256" \
-    || fallar 'no se pudo descargar pegasus.sha256'
+  info "descargando $PRODUCT_PROGRAM_NAME y su checksum..."
+  curl -fL -o "$PRODUCTO_TMPDIR/$PRODUCT_PROGRAM_NAME" "$BASE_URL/$PRODUCT_PROGRAM_NAME" \
+    || fallar "no se pudo descargar $PRODUCT_PROGRAM_NAME"
+  curl -fL -o "$PRODUCTO_TMPDIR/$PRODUCT_PROGRAM_NAME.sha256" "$BASE_URL/$PRODUCT_PROGRAM_NAME.sha256" \
+    || fallar "no se pudo descargar $PRODUCT_PROGRAM_NAME.sha256"
 
   # sha256sum -c lee el basename adentro del archivo de checksum, por eso se
   # verifica parado en el mismo directorio donde cayeron los dos archivos.
-  if ! (cd "$PEGASUS_TMPDIR" && sha256sum -c pegasus.sha256); then
-    fallar 'el checksum de pegasus no coincide: los bytes descargados no son los que el release publica. Esto también puede pasar si se publicó un release nuevo entre las dos descargas; lo primero que hay que probar es volver a correr este script.'
+  if ! (cd "$PRODUCTO_TMPDIR" && sha256sum -c "$PRODUCT_PROGRAM_NAME.sha256"); then
+    fallar "el checksum de $PRODUCT_PROGRAM_NAME no coincide: los bytes descargados no son los que el release publica. Esto también puede pasar si se publicó un release nuevo entre las dos descargas; lo primero que hay que probar es volver a correr este script."
   fi
 
-  install -m 755 "$PEGASUS_TMPDIR/pegasus" "$BIN_DIR/pegasus" \
+  install -m 755 "$PRODUCTO_TMPDIR/$PRODUCT_PROGRAM_NAME" "$BIN_DIR/$PRODUCT_PROGRAM_NAME" \
     || fallar 'no se pudo instalar el binario en su destino final'
-  ok "pegasus instalado en $BIN_DIR/pegasus"
+  ok "$PRODUCT_PROGRAM_NAME instalado en $BIN_DIR/$PRODUCT_PROGRAM_NAME"
 
   # Limpieza explícita apenas el directorio ya cumplió su propósito -- ver el
   # comentario junto al trap, arriba: sin esto, cada corrida real (la que
-  # termina en "exec pegasus" u "exec opencode") dejaba el directorio de la
-  # descarga tirado en $TMPDIR para siempre.
-  rm -rf "$PEGASUS_TMPDIR"
+  # termina en "exec" del binario del producto o de opencode) dejaba el
+  # directorio de la descarga tirado en $TMPDIR para siempre.
+  rm -rf "$PRODUCTO_TMPDIR"
 }
 
 # Sólo ajusta el PATH de ESTE proceso -- para que, si esta misma corrida
-# termina en "exec pegasus" más abajo, ese exec encuentre el binario recién
-# instalado. No imprime nada: lo que la persona necesita leer sobre su PATH
-# real (el de la terminal del otro lado del pipe, que este export no toca)
-# lo imprime mostrar_guia_path, al final, no acá en el medio de la
-# instalación.
+# termina en "exec" del binario del producto más abajo, ese exec encuentre
+# el binario recién instalado. No imprime nada: lo que la persona necesita
+# leer sobre su PATH real (el de la terminal del otro lado del pipe, que
+# este export no toca) lo imprime mostrar_guia_path, al final, no acá en el
+# medio de la instalación.
 asegurar_path() {
   detectar_path
   ((BIN_DIR_EN_PATH)) && return 0
@@ -791,7 +834,7 @@ $linea"
     return 0
   fi
 
-  if { printf '\n# pegasus-harness\n%s\n' "$linea"; } >> "$SHELL_RC_FILE" 2>/dev/null; then
+  if { printf '\n# %s\n%s\n' "$PRODUCT_ID" "$linea"; } >> "$SHELL_RC_FILE" 2>/dev/null; then
     PATH_RC_ESCRITO=1
   else
     advertir "no se pudo escribir en $SHELL_RC_FILE; vas a tener que agregar el PATH a mano. Línea a agregar:
@@ -803,8 +846,8 @@ $linea"
 #
 # Reemplaza el aviso que antes daba asegurar_path a mitad de instalación.
 # Dos programas pueden haber quedado fuera del PATH de la terminal real
-# (la que sigue viva del otro lado de un "curl ... | bash"): el binario de
-# pegasus, en $BIN_DIR, y el de OpenCode, en $OPENCODE_BIN_DIR -- éste
+# (la que sigue viva del otro lado de un "curl ... | bash"): el binario del
+# producto, en $BIN_DIR, y el de OpenCode, en $OPENCODE_BIN_DIR -- éste
 # último lo instala el mecanismo oficial de OpenCode, que sólo agrega la
 # línea a ~/.bashrc, igual que nvm hace con el suyo.
 #
@@ -826,14 +869,15 @@ $linea"
 # Por eso "source ~/.profile" (no "source ~/.bashrc" a secas) es lo que
 # arregla las dos cosas de una sola vez en la terminal actual: si alguien
 # prueba sólo ~/.bashrc porque es lo primero que se le ocurre, opencode
-# aparece pero pegasus sigue sin estar, y todo parece un instalador roto.
-# Ahora que detectar_shell (ver arriba) sabe qué shell corre esta persona y
-# qué archivo de esa shell hay que tocar, esa detección reemplaza lo que
-# antes era pura adivinanza: la rama de abajo distingue no ya "BIN_DIR es el
-# de siempre o no", sino "esta corrida escribió una línea en un rc de verdad
-# o no" (ver calcular_persistencia_path) -- si escribió, se nombra ESE
-# archivo; si no (el caso bash/sh/ash con el BIN_DIR de siempre, que Debian ya
-# resuelve solo), se deja el texto de siempre, palabra por palabra.
+# aparece pero el binario del producto sigue sin estar, y todo parece un
+# instalador roto. Ahora que detectar_shell (ver arriba) sabe qué shell
+# corre esta persona y qué archivo de esa shell hay que tocar, esa detección
+# reemplaza lo que antes era pura adivinanza: la rama de abajo distingue no
+# ya "BIN_DIR es el de siempre o no", sino "esta corrida escribió una línea
+# en un rc de verdad o no" (ver calcular_persistencia_path) -- si escribió,
+# se nombra ESE archivo; si no (el caso bash/sh/ash con el BIN_DIR de
+# siempre, que Debian ya resuelve solo), se deja el texto de siempre,
+# palabra por palabra.
 #
 # Un límite que ninguna detección arregla: este script corre en un proceso
 # chico (el que "curl | bash" lanzó), y ningún proceso hijo puede hacer
@@ -850,7 +894,7 @@ EXPORT_LINEA=''
 
 calcular_export_linea() {
   local dirs=()
-  ((AVISO_PEGASUS_DIR)) && dirs+=("$BIN_DIR")
+  ((AVISO_PRODUCTO_DIR)) && dirs+=("$BIN_DIR")
   ((AVISO_OPENCODE_DIR)) && dirs+=("$OPENCODE_BIN_DIR")
   local combinado
   combinado=$(IFS=:; printf '%s' "${dirs[*]}")
@@ -859,11 +903,11 @@ calcular_export_linea() {
 
 mostrar_guia_path() {
   calcular_avisos_path
-  ((AVISO_PEGASUS_DIR || AVISO_OPENCODE_DIR)) || return 0
+  ((AVISO_PRODUCTO_DIR || AVISO_OPENCODE_DIR)) || return 0
   calcular_export_linea
 
   titulo 'PATH'
-  ((AVISO_PEGASUS_DIR)) && info "pegasus, en $BIN_DIR: todavía no está en el PATH de esta terminal."
+  ((AVISO_PRODUCTO_DIR)) && info "$PRODUCT_PROGRAM_NAME, en $BIN_DIR: todavía no está en el PATH de esta terminal."
   ((AVISO_OPENCODE_DIR)) && info "opencode, en $OPENCODE_BIN_DIR: todavía no está en el PATH de esta terminal."
 
   if ((PERSISTIR_PATH_RC)) && ((PATH_RC_ESCRITO)); then
@@ -883,11 +927,11 @@ mostrar_guia_path() {
     info "Para esta terminal: $EXPORT_LINEA"
   else
     info 'Para esta terminal: source ~/.profile'
-    if ((AVISO_PEGASUS_DIR && AVISO_OPENCODE_DIR)); then
+    if ((AVISO_PRODUCTO_DIR && AVISO_OPENCODE_DIR)); then
       info '(no "source ~/.bashrc" sola: esa trae lo que instaló OpenCode, pero no'
-      info 'agrega el bin de pegasus. ~/.profile hace las dos cosas: de paso vuelve'
+      info 'agrega el bin del producto. ~/.profile hace las dos cosas: de paso vuelve'
       info 'a leer ~/.bashrc, y además agrega ~/.local/bin, que recién se creó.)'
-    elif ((AVISO_PEGASUS_DIR)); then
+    elif ((AVISO_PRODUCTO_DIR)); then
       info '(agrega ~/.local/bin al PATH, ahora que el directorio existe.)'
     else
       info '(vuelve a leer ~/.bashrc, donde quedó la línea que agregó el instalador'
@@ -902,11 +946,11 @@ mostrar_guia_path() {
 #
 # La sección "PATH" de arriba explica POR QUÉ hace falta hacer algo; este
 # bloque es el recordatorio de que hay que hacerlo, y tiene que sobrevivir a
-# que la TUI de pegasus/opencode tape la pantalla -- por eso se imprime como
-# lo ÚLTIMO antes de que el control salga del script, en cada una de las tres
-# salidas de lanzar() (exec, --no-run, y sin terminal controladora): cuando
-# la persona cierra esa TUI y la consola vuelve a mostrarse, esto es lo que
-# le queda arriba del prompt.
+# que la TUI del producto o de opencode tape la pantalla -- por eso se
+# imprime como lo ÚLTIMO antes de que el control salga del script, en cada
+# una de las tres salidas de lanzar() (exec, --no-run, y sin terminal
+# controladora): cuando la persona cierra esa TUI y la consola vuelve a
+# mostrarse, esto es lo que le queda arriba del prompt.
 #
 # Sin borde derecho a propósito: printf rellena por BYTES, no por
 # caracteres, así que un `%-60s` con acentos ("sesión", "todavía") desalinea
@@ -915,7 +959,7 @@ mostrar_guia_path() {
 # derecho que alinear, así que no hay nada que romper.
 bloque_accion_requerida() {
   calcular_avisos_path
-  ((AVISO_PEGASUS_DIR || AVISO_OPENCODE_DIR)) || return 0
+  ((AVISO_PRODUCTO_DIR || AVISO_OPENCODE_DIR)) || return 0
 
   # Sin `seq` ni ningún otro comando externo: este bloque existe justamente
   # para rescatar un PATH que todavía no sirve, y es lo último que se imprime
@@ -929,7 +973,7 @@ bloque_accion_requerida() {
   raya=${raya// /─}
 
   printf '\n%s\n' "$raya"
-  printf '  ANTES DE CORRER pegasus U opencode, en esta terminal:\n\n'
+  printf '  ANTES DE CORRER %s U opencode, en esta terminal:\n\n' "$PRODUCT_PROGRAM_NAME"
   if ((PERSISTIR_PATH_RC)) && ! ((PATH_RC_ESCRITO)); then
     # escribir_path_rc no pudo dejar la línea (ver mostrar_guia_path):
     # "source $SHELL_RC_FILE" no arreglaría nada, porque ese archivo no
@@ -947,16 +991,17 @@ bloque_accion_requerida() {
 
 # --- Qué queda corriendo al final ---
 #
-# SIEMPRE pegasus, nunca opencode: este script no compara versiones (ver
-# PEGASUS_PRESENTE, que sólo dice "está" o "no está"), así que la única forma
-# de que alguien se entere de un release más nuevo es que la TUI de pegasus
-# se lo diga -- eso ya lo hace sola, en su propio arranque (cli.check_for_update
-# más navigator.update_notice_lines). Si este script en cambio abriera OpenCode
-# directo cuando no hacía falta instalar nada, esa persona nunca vería ese
-# aviso. MOTIVO sí sigue variando, porque el motivo real es distinto en cada
-# caso. Bajo --verify nunca se llega a instalar nada, así que ahí la decisión
-# se proyecta a partir de lo que faltaría en una corrida real (FALTA_ALGO) en
-# vez de a partir de lo que se hizo.
+# SIEMPRE el binario del producto, nunca opencode: este script no compara
+# versiones (ver PRODUCTO_PRESENTE, que sólo dice "está" o "no está"), así
+# que la única forma de que alguien se entere de un release más nuevo es que
+# la propia TUI del producto se lo diga -- eso ya lo hace sola, en su propio
+# arranque (cli.check_for_update más navigator.update_notice_lines). Si este
+# script en cambio abriera OpenCode directo cuando no hacía falta instalar
+# nada, esa persona nunca vería ese aviso. MOTIVO sí sigue variando, porque
+# el motivo real es distinto en cada caso. Bajo --verify nunca se llega a
+# instalar nada, así que ahí la decisión se proyecta a partir de lo que
+# faltaría en una corrida real (FALTA_ALGO) en vez de a partir de lo que se
+# hizo.
 decidir_lanzamiento() {
   local se_instalo
   if [[ "$MODO" == 'verificar' ]]; then
@@ -965,11 +1010,11 @@ decidir_lanzamiento() {
     se_instalo=$ALGO_SE_INSTALO
   fi
 
-  LANZAR='pegasus'
+  LANZAR="$PRODUCT_PROGRAM_NAME"
   if ((se_instalo)); then
     MOTIVO='se instaló algo nuevo: todavía hay que elegir MCPs y confirmar la instalación en OpenCode'
   else
-    MOTIVO='tu entorno ya tenía todo instalado; abrimos pegasus para ver si hay actualizaciones'
+    MOTIVO='tu entorno ya tenía todo instalado; lo abrimos para ver si hay actualizaciones'
   fi
 }
 
@@ -992,21 +1037,22 @@ lanzar() {
     return 0
   fi
 
-  # $LANZAR (pegasus u opencode) es una TUI: sin una terminal real en su
-  # stdin, abre, imprime su uso y sale -- ver el bug documentado en
-  # hay_terminal_controladora. Bajo el "curl ... | bash" publicado, el
-  # stdin de ESTE proceso es la tubería que bash ya drenó, no una terminal,
-  # así que un "exec" liso que la heredara reproduciría exactamente eso.
+  # $LANZAR (el binario del producto u opencode) es una TUI: sin una
+  # terminal real en su stdin, abre, imprime su uso y sale -- ver el bug
+  # documentado en hay_terminal_controladora. Bajo el "curl ... | bash"
+  # publicado, el stdin de ESTE proceso es la tubería que bash ya drenó, no
+  # una terminal, así que un "exec" liso que la heredara reproduciría
+  # exactamente eso.
   if hay_terminal_controladora; then
     info "lanzando $LANZAR ($MOTIVO)..."
     bloque_accion_requerida
     # exec reemplaza este proceso por el de destino en vez de encadenarlo:
     # así install.sh no queda colgado en el árbol de procesos esperando a
     # que termine, y no hay nada suyo pendiente por ejecutar después de
-    # todos modos. "< /dev/tty" es lo que le da a pegasus/opencode una
-    # terminal real en vez del stdin muerto de este proceso -- la terminal
-    # de quien tipeó el comando sigue disponible ahí aunque este script
-    # haya llegado por una tubería.
+    # todos modos. "< /dev/tty" es lo que le da al binario del producto o a
+    # opencode una terminal real en vez del stdin muerto de este proceso --
+    # la terminal de quien tipeó el comando sigue disponible ahí aunque este
+    # script haya llegado por una tubería.
     exec "$LANZAR" < /dev/tty
   fi
 
@@ -1051,21 +1097,21 @@ main() {
     confirmar
     ((FALTA_NODE)) && instalar_node
     ((FALTA_OPENCODE)) && instalar_opencode
-    ((FALTA_PEGASUS)) && instalar_pegasus
+    ((FALTA_PRODUCTO)) && instalar_producto
   fi
 
   # Antes esto vivía adentro del "if FALTA_ALGO" de arriba: alcanzaba,
   # porque el lanzamiento final elegía opencode (siempre ya en el PATH por
   # cómo lo detecta detectar_opencode) cuando no hacía falta instalar nada.
-  # Ahora que decidir_lanzamiento SIEMPRE elige pegasus, hace falta correr
-  # esto también cuando no faltaba instalar nada: pegasus puede estar
-  # presente sólo por existir en $BIN_DIR (ver calcular_avisos_path), sin
-  # que ese directorio esté en el PATH con el que arrancó este proceso -- y
-  # sin asegurar_path, el "exec pegasus" de más abajo fallaría con "not
-  # found" (bajo set -euo pipefail, un exit 127) en vez de abrir la TUI.
-  # asegurar_path y escribir_path_rc ya son idempotentes (ver sus propios
-  # comentarios), así que llamarlos de más acá no cambia nada cuando de
-  # verdad no había nada que hacer.
+  # Ahora que decidir_lanzamiento SIEMPRE elige el binario del producto,
+  # hace falta correr esto también cuando no faltaba instalar nada: ese
+  # binario puede estar presente sólo por existir en $BIN_DIR (ver
+  # calcular_avisos_path), sin que ese directorio esté en el PATH con el
+  # que arrancó este proceso -- y sin asegurar_path, el "exec" de más abajo
+  # fallaría con "not found" (bajo set -euo pipefail, un exit 127) en vez de
+  # abrir la TUI. asegurar_path y escribir_path_rc ya son idempotentes (ver
+  # sus propios comentarios), así que llamarlos de más acá no cambia nada
+  # cuando de verdad no había nada que hacer.
   asegurar_path
   escribir_path_rc
 

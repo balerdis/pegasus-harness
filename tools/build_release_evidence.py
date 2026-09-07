@@ -9,18 +9,21 @@ this script through the wheel's own METADATA and the shim's tracked Git mode. Ne
 more: Pegasus has zero runtime dependencies and reads its content from inside a zip as readily as
 from a directory, so the wheel and the venv it needed are both gone, and with them the second file.
 
-v5 ships two things: `pegasus`, a `zipapp` built by `tools/build_zipapp.py` -- a single executable
-file that is the whole command -- and `install.sh`, the script `README.md` and `INSTALL.md`
-advertise as a one-liner served from `releases/latest/download/`. What was missing is evidence
-tying both files to the commit that produced them, so a person can verify what they downloaded
-*before* running it. That evidence is this script's only job. It does not build the artifact --
-that is `build_zipapp.py`'s job, and rebuilding it here would make this script a second place that
-has to agree about how. It runs the artifact it is given and reads what it reports, the same thing
-a person verifying a release would do by hand. `install.sh` has no runtime version to run and
-check the way the zipapp does, but it does have exact bytes a commit holds -- `tagged_file` reads
-them straight out of the commit with `git show`, and this script certifies that content, refusing
-if the commit lacks the file or if the working-tree copy the release procedure actually uploads
-does not match it (see `install_sh_evidence`).
+v5 ships several things: `pegasus`, a `zipapp` built by `tools/build_zipapp.py` -- a single
+executable file that is the whole command -- `install.sh`, the script `README.md` and
+`INSTALL.md` advertise as a one-liner served from `releases/latest/download/`, and the two builder
+scripts themselves (`tools/build_zipapp.py` and `tools/build_installer.py`), published so a
+distribution can build its own artifacts without cloning the engine source. What was missing is
+evidence tying every one of these files to the commit that produced them, so a person can verify
+what they downloaded *before* running it. That evidence is this script's only job. It does not
+build any artifact -- that is `build_zipapp.py`'s and `build_installer.py`'s job, and rebuilding
+either here would make this script a second place that has to agree about how. It runs the zipapp
+artifact it is given and reads what it reports, the same thing a person verifying a release would
+do by hand. The three plain scripts (`install.sh`, `build_zipapp.py`, `build_installer.py`) have
+no runtime version to run and check the way the zipapp does, but each has exact bytes a commit
+holds -- `tagged_file` reads them straight out of the commit with `git show`, and this script
+certifies that content, refusing if the commit lacks the file or if the working-tree copy the
+release procedure actually uploads does not match it (see `tracked_file_evidence` and its callers).
 
 `build_zipapp.py` pins the mtime and mode of everything it stages before zipping, so the SHA-256
 this script records is not only a claim about the exact bytes someone downloaded -- it is also what
@@ -71,6 +74,12 @@ INSTALL_SH_NAME = "install.sh"
 #: show` reads; `BUILD_ZIPAPP_ASSET_NAME` is the flat basename GitHub Releases actually serves.
 BUILD_ZIPAPP_PATH = "tools/build_zipapp.py"
 BUILD_ZIPAPP_ASSET_NAME = "build_zipapp.py"
+
+#: The installer builder, published for the same reason as `build_zipapp.py` above: a
+#: distribution needs no source checkout of the engine to generate its own `install.sh` from its
+#: own `identity.json` -- see `build_installer_evidence`.
+BUILD_INSTALLER_PATH = "tools/build_installer.py"
+BUILD_INSTALLER_ASSET_NAME = "build_installer.py"
 
 
 def git(*args: str, root: Path = ROOT) -> str:
@@ -207,6 +216,27 @@ def build_zipapp_evidence(commit: str, root: Path = ROOT) -> dict[str, str]:
     )
 
 
+def build_installer_evidence(commit: str, root: Path = ROOT) -> dict[str, str]:
+    """Certify the exact bytes of `tools/build_installer.py` the resolved commit holds.
+
+    Same reasoning as `build_zipapp_evidence`: without the installer builder attached to the
+    release, a distribution downloading it would have no way to generate its own `install.sh`
+    without cloning the full engine source.
+    """
+    return tracked_file_evidence(
+        commit,
+        BUILD_INSTALLER_PATH,
+        asset_name=BUILD_INSTALLER_ASSET_NAME,
+        missing_message=(
+            f"commit {commit} has no {BUILD_INSTALLER_PATH}; a distribution downloading this "
+            "release would have no way to generate its own install.sh without cloning the full "
+            "engine source"
+        ),
+        empty_message=f"commit {commit} has an empty {BUILD_INSTALLER_PATH}",
+        root=root,
+    )
+
+
 def artifact_evidence(artifact: Path, expected_version: str) -> dict[str, str]:
     """Run the artifact and check what it reports, rather than inspecting its bytes.
 
@@ -256,6 +286,7 @@ def main() -> int:
         artifact = artifact_evidence(args.artifact, expected_version)
         install_sh = install_sh_evidence(commit)
         build_zipapp = build_zipapp_evidence(commit)
+        build_installer = build_installer_evidence(commit)
     except (subprocess.CalledProcessError, KeyError, ValueError, tomllib.TOMLDecodeError) as error:
         parser.error(str(error))
 
@@ -264,7 +295,7 @@ def main() -> int:
         "tag": tag,
         "commit": commit,
         "package_version": expected_version,
-        "assets": [artifact, install_sh, build_zipapp],
+        "assets": [artifact, install_sh, build_zipapp, build_installer],
         "install": {"artifact": f"install -m 755 {artifact['name']} <bin_dir>/pegasus"},
     }
 
@@ -280,6 +311,12 @@ def main() -> int:
         checksum_line(build_zipapp["name"], build_zipapp["sha256"]), encoding="utf-8"
     )
     print(f"WROTE checksum: {build_zipapp_checksum}")
+
+    build_installer_checksum = args.output.parent / f"{build_installer['name']}.sha256"
+    build_installer_checksum.write_text(
+        checksum_line(build_installer["name"], build_installer["sha256"]), encoding="utf-8"
+    )
+    print(f"WROTE checksum: {build_installer_checksum}")
 
     print(f"WROTE release manifest: {args.output}")
     return 0

@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import os
 import pty
+import re
 import select
 import shutil
 import signal
@@ -141,6 +142,30 @@ class InstallScriptTestCase(unittest.TestCase):
         return self.markers / name
 
 
+def _accepted_options() -> set[str]:
+    """Every long option `install.sh`'s own `parsear_argumentos` case
+    statement accepts, parsed from the script's source rather than
+    hardcoded here -- a hardcoded list in the test would be the same defect
+    (a range that can silently desynchronize from the real option set) one
+    layer up from the bug this guards against.
+
+    Short single-dash aliases (`-y`, `-h`) and `--help` itself are excluded:
+    the usage text has never documented those (it is the long forms a
+    person is expected to type and read about), so requiring them here
+    would fail on a gap this finding never named, not the truncation this
+    test exists to catch.
+    """
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    match = re.search(r"parsear_argumentos\(\)\s*\{.*?\n\}\n", text, re.DOTALL)
+    assert match, "could not find parsear_argumentos() in install.sh"
+    body = match.group(0)
+    options: set[str] = set()
+    for arm in re.findall(r"^\s*(--[\w-]+(?:\|[\w-]+)*)\)", body, re.MULTILINE):
+        options.update(part for part in arm.split("|") if part.startswith("--"))
+    options.discard("--help")
+    return options
+
+
 class HelpTest(InstallScriptTestCase):
     def test_help_exits_zero_and_prints_usage(self):
         """`--help` must work with nothing else on PATH: it is the one thing a
@@ -149,6 +174,20 @@ class HelpTest(InstallScriptTestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("install.sh", result.stdout)
         self.assertIn("--verify", result.stdout)
+
+    def test_help_mentions_every_option_the_script_accepts(self):
+        """A hardcoded line range in `uso()` desynchronized from the real
+        usage comment block once already (a header comment grew by three
+        lines and silently dropped `--bin-dir`, `--opencode-version` and
+        `--opencode-ultima` from `--help`'s output). Derive the option list
+        from the script's own argument parser, not a list hardcoded here, so
+        this test cannot rot the same way `uso()` itself did."""
+        options = _accepted_options()
+        self.assertTrue(options, "no options parsed out of parsear_argumentos()")
+        result = self.run_install("--help")
+        self.assertEqual(result.returncode, 0)
+        missing = sorted(option for option in options if option not in result.stdout)
+        self.assertEqual(missing, [], f"--help output is missing: {missing}\n\n{result.stdout}")
 
 
 class VerifyWithOnlyOptionalToolsMissingTest(InstallScriptTestCase):
