@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Instala este producto en una cuenta Linux limpia: nvm + Node LTS, OpenCode y
-# su propio binario, en ese orden, y deja el resultado listo para trabajar.
-# Qué producto es exactamente lo dice el bloque de identidad, más abajo: este
-# archivo es la plantilla que tools/build_installer.py llena con los datos de
-# un identity.json -- ver el comentario junto a ese bloque.
+# Instala Pegasus en una cuenta Linux limpia: nvm + Node LTS, OpenCode y el
+# binario de pegasus, en ese orden, y deja el resultado listo para trabajar.
 #
 # Pensado para correrse así, como asset de un release (bash lee la tubería de
 # a poco, por eso todo el script vive adentro de funciones — ver el comentario
@@ -15,7 +12,7 @@
 #   ./install.sh --verify            informa el estado, no cambia nada
 #   ./install.sh --yes               salta la confirmación
 #   ./install.sh --no-run            instala lo que falte, pero no lanza nada al final; dice qué habría lanzado
-#   ./install.sh --bin-dir DIR       instala el binario del producto en DIR en vez de ~/.local/bin
+#   ./install.sh --bin-dir DIR       instala el binario de pegasus en DIR en vez de ~/.local/bin
 #   ./install.sh --opencode-version X   fija la versión de OpenCode a instalar
 #   ./install.sh --opencode-ultima      instala la última versión de OpenCode publicada
 #
@@ -35,6 +32,13 @@ set -euo pipefail
 # distinta reemplazando exactamente las cuatro líneas de abajo por los
 # valores del `identity.json` que se le da -- nunca bifurcando ni tocando una
 # sola línea del resto del archivo, que queda carácter por carácter igual.
+# Las dos únicas excepciones son las líneas del comentario de uso (arriba de
+# `set -euo pipefail`, fuera de este bloque) que nombran el producto: esas
+# también las reescribe `build_installer.py` a partir de `display_name` y
+# `program_name` -- ver `USAGE_INTRO` y `USAGE_BIN_DIR_LINE` ahí -- para que
+# `--help` siga diciendo qué producto es, sin que ese texto tenga que hablar
+# de plantillas ni de `identity.json`: eso es un detalle de build, no algo
+# que le importe a quien está instalando.
 #
 #   PRODUCT_ID                          identity.json: product_id
 #   PRODUCT_DISPLAY_NAME                identity.json: display_name
