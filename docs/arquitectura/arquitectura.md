@@ -1288,6 +1288,66 @@ Lo contesta el parser y nada más: no abre un home, no lee un journal, no resuel
 
 ---
 
+## Identidad de producto y raíz de composición
+
+Hasta acá el motor era, literalmente, Pegasus: el nombre, el wordmark, el directorio de datos y la
+fuente de auto-actualización estaban escritos como literales en `cli.py`, `core/upgrade.py` y
+`tui/wordmark.py`. Eso hacía imposible construir un binario con otro nombre sin tocar el motor, y
+tocar el motor para eso es exactamente lo que este cambio existe para evitar — cualquier
+organización tiene que poder producir su propia distribución sin bifurcar la fuente.
+
+**La identidad es un dato, nunca una rama de código.** `src/pegasus/identity.json` declara
+`product_id`, `display_name`, `program_name`, `wordmark_words` y un bloque `release` (plantilla de
+URL del asset, nombre del binario, API de último release, página de releases). `core/identity.py`
+lo parsea una sola vez — `parse()` valida charset y longitud de cada palabra del wordmark (sólo
+`A-Z`/`0-9`, hasta `MAX_WORD_LENGTH` caracteres), que cada URL de `release` sea `https` con host
+real (contra `urlsplit`, no un prefijo, para que `https://github.com@evil.example.com` no pase por
+`github.com`), y que `binary_asset` no tenga separador de ruta ni `..`. Nunca hay un valor por
+default: si `identity.json` falta o no valida, el arranque falla con `IdentityError` antes de que
+cualquier comando corra.
+
+**La raíz de composición es `cli.py`.** `default_identity()` lee el `identity.json` empaquetado
+(vía `importlib.resources`, igual que `core/content.py` lee `content/`) y arma el único `Identity`
+congelado de la corrida; `default_runtime` lo cuelga de `Runtime.identity` y lo cablea a `argparse`
+(`prog=`, `description=`, `help=`), a los mensajes de `install`/`upgrade`/`uninstall`, y a
+`core/upgrade.py` como el `ReleaseSource` contra el que se auto-actualiza. `core/`, `ports/`,
+`infra/` y `tui/` nunca conocen el nombre de una distribución: lo reciben como parámetro. Un test de
+arquitectura (`NoProductIdentityOutsideCompositionRootTest`) recorre el AST de esos cuatro paquetes
+buscando literales de string que mencionen un nombre de distribución conocido — no un `grep`, porque
+la palabra "Pegasus" aparece legítimamente en decenas de docstrings y comentarios; sólo un literal
+que no sea docstring cuenta como ofensor, con una lista explícita de excepciones para los
+identificadores de wire format que nunca cambian entre distribuciones (`cli.SCHEMA`,
+`journal-v4.json`, las claves `pegasus_version`/`pegasus_installed`, etc. — ver más abajo).
+
+**El wordmark se dibuja, no se elige.** `tui/wordmark.py` cubre el mismo alfabeto que
+`core.identity.ALLOWED_CHARACTERS` (`A-Z` y `0-9`), verificado por un test que compara los dos
+conjuntos en las dos direcciones; el renderer dibuja la cantidad de palabras que `identity` le da
+(una o dos), sin ninguna rama sobre el conteo.
+
+**`tools/build_zipapp.py --identity` es obligatorio, siempre — incluso para el propio release de
+Pegasus.** Es la única forma en que "una distribución no puede olvidarse de dar su propia identidad"
+sea una propiedad real y no una convención: sin el flag, `argparse` rechaza la construcción antes de
+escribir un solo byte. El nombre se valida con las mismas reglas de `core/identity.py` — cargado
+como módulo standalone desde el propio `--source` que se está construyendo, nunca importado del
+motor que corre la build, para que la regla de validación nunca pueda divergir de la que corre el
+binario resultante.
+
+**Lo que nunca varía por distribución** son los identificadores de wire format que otro programa
+parsea: `cli.SCHEMA`, `journal.SCHEMA`, `catalog.SCHEMA`, el nombre de archivo `journal-v4.json`,
+las claves JSON `pegasus_version`/`pegasus_installed`, y las variables de entorno
+`PEGASUS_SKILL_REGISTRY_BIN`/`PEGASUS_SKILL_ROOTS`/`PEGASUS_NO_UPDATE_CHECK`. Cambiarlos rompería a
+cualquier programa externo que ya los interpreta; la identidad de producto vive en una capa
+completamente distinta de la de esos contratos.
+
+**No-objetivo, deliberado: un producto por usuario del sistema operativo.** Instalar dos
+distribuciones bajo el mismo usuario no corrompe el journal ni el directorio de datos de ninguna de
+las dos — cada una está separada por su propio `product_id`. Pero `~/.config/opencode` y su
+`opencode.json` siguen siendo un recurso genuinamente compartido del cliente anfitrión, no de
+Pegasus, y este cambio no los vuelve seguros para dos productos a la vez: la segunda instalación
+sobreescribe lo que la primera dejó en esa configuración compartida. Esto se documenta como
+comportamiento conocido, no se soluciona acá — convivencia de dos productos bajo el mismo usuario no
+funciona, y no hay que dar a entender lo contrario.
+
 ## Deudas sin unidad asignada
 
 Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a propósito, y cada ítem declara qué lo destraba, para que el acarreo sea una decisión y no un olvido.

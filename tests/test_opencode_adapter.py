@@ -1070,7 +1070,8 @@ class RealZipappShipsTheEngramPluginTest(unittest.TestCase):
 
         cls._tmp = tempfile.TemporaryDirectory()
         cls.archive = Path(cls._tmp.name) / "pegasus"
-        build_zipapp(cls.repo_root / "src" / "pegasus", cls.archive)
+        real_identity = cls.repo_root / "src" / "pegasus" / "identity.json"
+        build_zipapp(cls.repo_root / "src" / "pegasus", cls.archive, real_identity)
 
     @classmethod
     def tearDownClass(cls):
