@@ -27,7 +27,7 @@ MAX_WORD_LENGTH = 12
 which still fits an 80-column terminal. Chosen, not derived."""
 
 PROGRAM_NAME_PATTERN = re.compile(r"\A[A-Za-z][A-Za-z0-9_-]*\Z")
-"""`program_name` reaches `install.sh` as the stem of a bash variable name --
+r"""`program_name` reaches `install.sh` as the stem of a bash variable name --
 `${PRODUCT_PROGRAM_NAME^^}_INSTALL_BASE_URL`, indirectly expanded with
 `${!...}` -- so it must start with a letter and never contain anything that
 would make that expansion refer to an illegal identifier (`${!...}` rejects
