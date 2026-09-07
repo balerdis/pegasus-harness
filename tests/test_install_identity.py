@@ -53,6 +53,7 @@ ACME_IDENTITY_PAYLOAD = {
         "binary_asset": "acme",
         "latest_release_api_url": "https://example.invalid/acme/api/releases/latest",
         "release_page_url": "https://example.invalid/acme/releases",
+        "install_base_url_default": "https://example.invalid/acme/releases/latest/download",
     },
 }
 
@@ -197,6 +198,58 @@ class BuildInstallerTest(unittest.TestCase):
             "'https://example.invalid/acme/releases/latest/download'",
             text,
         )
+
+    def test_install_base_url_default_is_used_directly_not_derived(self):
+        """`build_installer.py` must read `release.install_base_url_default`
+        straight off the identity, never derive it by splitting
+        `release_page_url` (or `asset_url_template`) -- see that field's own
+        docstring in `core/identity.py`. Proven here with a non-GitHub host
+        whose 'latest' download path does not follow GitHub's
+        `/latest/download` convention at all: if the generator were still
+        deriving instead of reading, this value would come out wrong."""
+        payload = {
+            **ACME_IDENTITY_PAYLOAD,
+            "release": {
+                **ACME_IDENTITY_PAYLOAD["release"],
+                "release_page_url": "https://example.invalid/acme/downloads",
+                "install_base_url_default": "https://cdn.example.invalid/acme/stable",
+            },
+        }
+        identity_path = self.root / "acme-identity-custom.json"
+        identity_path.write_text(json.dumps(payload), encoding="utf-8")
+        out = self.root / "install.sh"
+        result = self._run("--identity", str(identity_path), "--out", str(out))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = out.read_text(encoding="utf-8")
+        self.assertIn(
+            "PRODUCT_RELEASE_BASE_URL_DEFAULT='https://cdn.example.invalid/acme/stable'", text
+        )
+        self.assertNotIn("example.invalid/acme/downloads/latest/download", text)
+
+    def test_generated_installer_with_a_valid_program_name_runs_help_successfully(self):
+        """The assertion that would have caught the digit-leading
+        `program_name` bug: `install.sh` builds a bash variable name out of
+        `PRODUCT_PROGRAM_NAME` and reads it back with `${!...}` indirect
+        expansion, which fails under `set -euo pipefail` for a name that is
+        not a legal identifier once uppercased -- aborting the script before
+        argument parsing even runs, so even `--help` would die. `core/
+        identity.py::parse()` now rejects such a `program_name` at build
+        time (see `tests/test_identity.py`), but this test proves the other
+        half end-to-end: a *valid* name must still produce an installer
+        whose `--help` actually runs, not just one that statically looks
+        right."""
+        out = self.root / "install.sh"
+        result = self._run("--identity", str(self._acme_identity()), "--out", str(out))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        home = self.root / "acme-home-help"
+        home.mkdir()
+        run = subprocess.run(
+            ["bash", str(out), "--help"],
+            env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("install.sh", run.stdout)
 
     def test_generated_acme_installer_help_mentions_acme_not_pegasus(self):
         """Behavioural, not just textual: running the generated installer's

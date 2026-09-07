@@ -26,6 +26,16 @@ MAX_WORD_LENGTH = 12
 """A solo wordmark of the longest allowed word is `12 * 5 - 1 = 59` columns,
 which still fits an 80-column terminal. Chosen, not derived."""
 
+PROGRAM_NAME_PATTERN = re.compile(r"\A[A-Za-z][A-Za-z0-9_-]*\Z")
+"""`program_name` reaches `install.sh` as the stem of a bash variable name --
+`${PRODUCT_PROGRAM_NAME^^}_INSTALL_BASE_URL`, indirectly expanded with
+`${!...}` -- so it must start with a letter and never contain anything that
+would make that expansion refer to an illegal identifier (`${!...}` rejects
+even a name that is merely uppercased-and-underscored from something illegal,
+such as a name starting with a digit). The same charset also makes it a safe
+bare filename, which is how it doubles as the on-disk binary name. Anchored
+with `\A`/`\Z`, never `^`/`$`, for the same reason `SAFE_VERSION` is below."""
+
 SAFE_VERSION = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9.+-]*\Z")
 r"""The one charset a version string may use anywhere it reaches a release
 URL -- shared, not duplicated, with `core.upgrade._tag`, which applies this
@@ -137,6 +147,16 @@ def _version(payload: dict[str, Any]) -> str:
     return value
 
 
+def _program_name(payload: dict[str, Any]) -> str:
+    value = _text(payload, "program_name", "identity")
+    if not PROGRAM_NAME_PATTERN.match(value):
+        raise IdentityError(
+            f"identity.program_name must start with a letter and contain only letters, "
+            f"digits, '-' or '_': {value!r}"
+        )
+    return value
+
+
 def _wordmark_words(payload: dict[str, Any]) -> tuple[str, ...]:
     value = payload.get("wordmark_words")
     if not isinstance(value, list) or not (1 <= len(value) <= 2):
@@ -206,7 +226,7 @@ def parse(document: bytes) -> Identity:
     if "/" in product_id or "\\" in product_id or ".." in product_id:
         raise IdentityError(f"identity.product_id must be a bare name: {product_id!r}")
     display_name = _text(payload, "display_name", "identity")
-    program_name = _text(payload, "program_name", "identity")
+    program_name = _program_name(payload)
     version = _version(payload)
     wordmark_words = _wordmark_words(payload)
     release = _release_source(payload.get("release"))

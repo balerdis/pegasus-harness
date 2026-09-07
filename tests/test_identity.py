@@ -238,6 +238,38 @@ class ParseRejectsAMalformedDocumentTest(unittest.TestCase):
         with self.assertRaises(IdentityError):
             module.parse(document(version="-1.0.0"))
 
+    def test_a_program_name_starting_with_a_digit_is_rejected(self):
+        """`install.sh` builds a bash variable name from `PRODUCT_PROGRAM_NAME`
+        (see `NOMBRE_VARIABLE_BASE_URL` there): `${VAR^^}_INSTALL_BASE_URL`
+        indirectly expanded with `${!VAR}`. A name starting with a digit --
+        `"7ztool"` becomes `7ZTOOL_INSTALL_BASE_URL` -- is not a legal bash
+        identifier, and `${!...}` fails with "invalid variable name" under
+        `set -euo pipefail`, aborting the script before argument parsing even
+        runs, so even `--help` dies. Rejected here, at parse time, rather than
+        discovered by a generated installer crashing."""
+        with self.assertRaises(IdentityError):
+            module.parse(document(program_name="7ztool"))
+
+    def test_a_program_name_with_a_path_separator_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(program_name="a/b"))
+
+    def test_a_program_name_with_whitespace_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(program_name="my tool"))
+
+    def test_a_program_name_with_a_dot_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(program_name="my.tool"))
+
+    def test_an_empty_program_name_is_rejected(self):
+        with self.assertRaises(IdentityError):
+            module.parse(document(program_name=""))
+
+    def test_a_program_name_with_a_hyphen_and_underscore_is_valid(self):
+        parsed = module.parse(document(program_name="my-tool_2"))
+        self.assertEqual(parsed.program_name, "my-tool_2")
+
 
 if __name__ == "__main__":
     unittest.main()
