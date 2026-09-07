@@ -29,6 +29,7 @@ import shutil
 import sys
 import tempfile
 import types
+import uuid
 import zipapp
 from pathlib import Path
 
@@ -105,22 +106,32 @@ def _load_identity_module(source: Path) -> types.ModuleType:
     `source` is itself named `pegasus`, and it would silently resolve to whatever `pegasus` package
     is already imported (the real engine under test, when this runs from inside the test suite)
     rather than the one actually being built. Loading the file directly validates against the
-    exact source tree `--source` names, regardless of its directory name, and never touches
-    `sys.modules`.
+    exact source tree `--source` names, regardless of its directory name.
+
+    `exec_module` runs whatever code is actually in `<source>/core/identity.py`, arbitrary as far
+    as this function is concerned -- acceptable because whoever runs a build already controls the
+    `--source` tree being built.
+
+    This *does* touch `sys.modules`, briefly and on purpose: `identity.py` uses
+    `from __future__ import annotations`, so its `@dataclass(frozen=True)` fields are deferred
+    string annotations, and `dataclasses._is_type()` resolves them by looking `cls.__module__` up
+    in `sys.modules`. Without registering the module there first, `exec_module` raises
+    `AttributeError: 'NoneType' object has no attribute '__dict__'` before this function's own
+    validation ever runs. The `finally` removes the registration again as soon as `exec_module`
+    returns (or raises), so nothing of this transient load lingers in `sys.modules` afterward.
     """
     identity_module_path = source / "core" / "identity.py"
     if not identity_module_path.is_file():
         raise ValueError(
             f"{source} has no core/identity.py; it cannot validate the identity it is asked to stage"
         )
-    module_name = "_build_zipapp_identity_validator"
+    # Unique per call, not a fixed name: two builds in the same process on different threads must
+    # not delete each other's still-running `exec_module` registration out from under it.
+    module_name = f"_build_zipapp_identity_validator_{uuid.uuid4().hex}"
     spec = importlib.util.spec_from_file_location(module_name, identity_module_path)
     if spec is None or spec.loader is None:
         raise ValueError(f"could not load {identity_module_path} to validate identity")
     module = importlib.util.module_from_spec(spec)
-    # `dataclasses.dataclass` (used by this module) resolves string annotations by looking the
-    # module up in `sys.modules[cls.__module__]` -- without this, `@dataclass(frozen=True)` raises
-    # an unrelated `AttributeError` instead of ever reaching this module's own validation.
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
