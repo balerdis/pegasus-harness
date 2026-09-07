@@ -66,6 +66,12 @@ INSTALL_ONE_LINER = (
 )
 INSTALL_SH_NAME = "install.sh"
 
+#: The builder itself, published so a distribution can obtain it without cloning the engine
+#: source -- see `build_zipapp_evidence`. `BUILD_ZIPAPP_PATH` is the commit-relative path `git
+#: show` reads; `BUILD_ZIPAPP_ASSET_NAME` is the flat basename GitHub Releases actually serves.
+BUILD_ZIPAPP_PATH = "tools/build_zipapp.py"
+BUILD_ZIPAPP_ASSET_NAME = "build_zipapp.py"
+
 
 def git(*args: str, root: Path = ROOT) -> str:
     return subprocess.run(["git", *args], cwd=root, text=True, capture_output=True, check=True).stdout.strip()
@@ -113,38 +119,32 @@ def package_version_at(commit: str, root: Path = ROOT) -> str:
     return pyproject["project"]["version"]
 
 
-def install_sh_evidence(commit: str, root: Path = ROOT) -> dict[str, str]:
-    """Certify the exact bytes of `install.sh` the resolved commit holds.
+def tracked_file_evidence(
+    commit: str, path: str, *, asset_name: str, missing_message: str, empty_message: str, root: Path = ROOT
+) -> dict[str, str]:
+    """Certify the exact bytes a commit holds for `path`, matching the working tree copy.
 
-    A previous attempt at this evidence tool left `install.sh` out, reasoning it has "no runtime
-    version to check" the way the zipapp does. That missed the mechanism already available here:
-    `tagged_file` reads content straight out of the commit with `git show`, which is a real
-    verification story for a plain script -- content-addressed, and arguably stronger than a
-    version string, because it names the exact bytes that have to be uploaded.
+    `tagged_file` reads content straight out of the commit with `git show`, a real verification
+    story for a plain script or tool -- content-addressed, and arguably stronger than a version
+    string, because it names the exact bytes that have to be uploaded.
 
     Two things can go wrong, and both are refused rather than silently evidenced:
 
-    * The commit has no `install.sh` (or an empty one). Without it on the same release, the
-      one-liner everyone is told to run (see `INSTALL_ONE_LINER`) 404s.
-    * The working tree's `install.sh` -- the file `docs/release-distribution.md` actually has a
-      person upload -- does not match the bytes this commit holds. With `--tag` the worktree is
-      allowed to be dirty, so it is entirely possible to certify one script and upload another.
+    * The commit has no `path` (or an empty one) -- `missing_message`/`empty_message` name the
+      concrete consequence for whichever asset this is.
+    * The working tree's copy -- the file the release procedure actually uploads -- does not
+      match the bytes this commit holds. With `--tag` the worktree is allowed to be dirty, so it
+      is entirely possible to certify one file and upload another.
     """
     try:
-        committed_bytes = tagged_file(commit, INSTALL_SH_NAME, root=root)
+        committed_bytes = tagged_file(commit, path, root=root)
     except subprocess.CalledProcessError as error:
-        raise ValueError(
-            f"commit {commit} has no {INSTALL_SH_NAME}; the advertised one-liner "
-            f"({INSTALL_ONE_LINER}) 404s without it on the same release"
-        ) from error
+        raise ValueError(missing_message) from error
     if not committed_bytes:
-        raise ValueError(
-            f"commit {commit} has an empty {INSTALL_SH_NAME}; the advertised one-liner "
-            f"({INSTALL_ONE_LINER}) would download nothing usable"
-        )
+        raise ValueError(empty_message)
     committed_sha256 = digest_bytes(committed_bytes)
 
-    worktree_path = root / INSTALL_SH_NAME
+    worktree_path = root / path
     if not worktree_path.is_file():
         raise ValueError(
             f"{worktree_path} does not exist in the working tree, but {commit} has one; "
@@ -153,12 +153,58 @@ def install_sh_evidence(commit: str, root: Path = ROOT) -> dict[str, str]:
     worktree_sha256 = digest(worktree_path)
     if worktree_sha256 != committed_sha256:
         raise ValueError(
-            f"working tree {INSTALL_SH_NAME} (sha256 {worktree_sha256}) does not match "
-            f"the {INSTALL_SH_NAME} committed at {commit} (sha256 {committed_sha256}); "
+            f"working tree {path} (sha256 {worktree_sha256}) does not match "
+            f"the {path} committed at {commit} (sha256 {committed_sha256}); "
             "the release procedure uploads the working-tree file, so it would not be the one "
             "this manifest certifies"
         )
-    return {"name": INSTALL_SH_NAME, "sha256": committed_sha256}
+    return {"name": asset_name, "sha256": committed_sha256}
+
+
+def install_sh_evidence(commit: str, root: Path = ROOT) -> dict[str, str]:
+    """Certify the exact bytes of `install.sh` the resolved commit holds.
+
+    A previous attempt at this evidence tool left `install.sh` out, reasoning it has "no runtime
+    version to check" the way the zipapp does. That missed the mechanism already available here:
+    a plain tracked-file comparison is a real verification story for a plain script.
+    """
+    return tracked_file_evidence(
+        commit,
+        INSTALL_SH_NAME,
+        asset_name=INSTALL_SH_NAME,
+        missing_message=(
+            f"commit {commit} has no {INSTALL_SH_NAME}; the advertised one-liner "
+            f"({INSTALL_ONE_LINER}) 404s without it on the same release"
+        ),
+        empty_message=(
+            f"commit {commit} has an empty {INSTALL_SH_NAME}; the advertised one-liner "
+            f"({INSTALL_ONE_LINER}) would download nothing usable"
+        ),
+        root=root,
+    )
+
+
+def build_zipapp_evidence(commit: str, root: Path = ROOT) -> dict[str, str]:
+    """Certify the exact bytes of `tools/build_zipapp.py` the resolved commit holds.
+
+    Without the builder attached to the release, a distribution has to clone the whole engine
+    source just to obtain the one script it actually needs -- leaving a full checkout beside the
+    single-file artifact this whole distribution shape exists to avoid. GitHub release assets are
+    flat, so the published name (`BUILD_ZIPAPP_ASSET_NAME`) drops the `tools/` prefix the commit
+    path carries.
+    """
+    return tracked_file_evidence(
+        commit,
+        BUILD_ZIPAPP_PATH,
+        asset_name=BUILD_ZIPAPP_ASSET_NAME,
+        missing_message=(
+            f"commit {commit} has no {BUILD_ZIPAPP_PATH}; a distribution builder downloading this "
+            "release would have no way to build its own artifact without cloning the full engine "
+            "source"
+        ),
+        empty_message=f"commit {commit} has an empty {BUILD_ZIPAPP_PATH}",
+        root=root,
+    )
 
 
 def artifact_evidence(artifact: Path, expected_version: str) -> dict[str, str]:
@@ -209,6 +255,7 @@ def main() -> int:
         expected_version = package_version_at(commit)
         artifact = artifact_evidence(args.artifact, expected_version)
         install_sh = install_sh_evidence(commit)
+        build_zipapp = build_zipapp_evidence(commit)
     except (subprocess.CalledProcessError, KeyError, ValueError, tomllib.TOMLDecodeError) as error:
         parser.error(str(error))
 
@@ -217,7 +264,7 @@ def main() -> int:
         "tag": tag,
         "commit": commit,
         "package_version": expected_version,
-        "assets": [artifact, install_sh],
+        "assets": [artifact, install_sh, build_zipapp],
         "install": {"artifact": f"install -m 755 {artifact['name']} <bin_dir>/pegasus"},
     }
 
@@ -227,6 +274,13 @@ def main() -> int:
     checksum = args.output.parent / f"{artifact['name']}.sha256"
     checksum.write_text(checksum_line(artifact["name"], artifact["sha256"]), encoding="utf-8")
     print(f"WROTE checksum: {checksum}")
+
+    build_zipapp_checksum = args.output.parent / f"{build_zipapp['name']}.sha256"
+    build_zipapp_checksum.write_text(
+        checksum_line(build_zipapp["name"], build_zipapp["sha256"]), encoding="utf-8"
+    )
+    print(f"WROTE checksum: {build_zipapp_checksum}")
+
     print(f"WROTE release manifest: {args.output}")
     return 0
 
