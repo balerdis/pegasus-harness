@@ -1355,6 +1355,18 @@ como módulo standalone desde el propio `--source` que se está construyendo, nu
 motor que corre la build, para que la regla de validación nunca pueda divergir de la que corre el
 binario resultante.
 
+**`install.sh` también se genera por identidad, con `tools/build_installer.py`.** El instalador
+shell es la última pieza de la distribución que seguía hardcodeada: vive en la raíz del repositorio
+como una plantilla, con un único bloque de identidad delimitado por dos líneas `# ====...====` cerca
+del principio del archivo -- la raíz de composición del lado shell, el equivalente de `cli.py` del
+lado Python. `tools/build_installer.py --identity <identity.json> --out <ruta>` reemplaza sólo esas
+cuatro líneas (`PRODUCT_ID`, `PRODUCT_DISPLAY_NAME`, `PRODUCT_PROGRAM_NAME`,
+`PRODUCT_RELEASE_BASE_URL_DEFAULT`) por los valores de un `identity.json`, carácter por carácter
+igual en el resto del archivo, y valida ese `identity.json` cargando `core/identity.py::parse()`
+igual que `build_zipapp.py`. Un test, análogo en espíritu a
+`NoProductIdentityOutsideCompositionRootTest` pero para shell en vez de Python, escanea todo
+`install.sh` fuera de ese bloque buscando el nombre de una distribución conocida.
+
 **Lo que nunca varía por distribución** son los identificadores de wire format que otro programa
 parsea: `cli.SCHEMA`, `journal.SCHEMA`, `catalog.SCHEMA`, el nombre de archivo `journal-v4.json`,
 las claves JSON `pegasus_version`/`pegasus_installed`, y las variables de entorno
