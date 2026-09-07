@@ -494,7 +494,10 @@ class NoProductIdentityOutsideCompositionRootTest(unittest.TestCase):
         self.assertEqual(
             offenders,
             [],
-            "a distribution's identity leaked into core/ports/infra/tui:\n" + "\n".join(offenders),
+            # Built from the tuple rather than spelled out, so adding a package to the scan
+            # cannot leave this message naming a set it no longer describes.
+            f"a distribution's identity leaked into {'/'.join(PRODUCT_IDENTITY_PACKAGES)}:\n"
+            + "\n".join(offenders),
         )
 
     def test_a_literal_product_name_is_flagged(self):
