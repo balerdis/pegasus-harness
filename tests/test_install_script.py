@@ -39,6 +39,8 @@ import time
 import unittest
 from pathlib import Path
 
+from brand_fragments import BUILD_MECHANISM_FRAGMENTS
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "install.sh"
 
@@ -188,6 +190,28 @@ class HelpTest(InstallScriptTestCase):
         self.assertEqual(result.returncode, 0)
         missing = sorted(option for option in options if option not in result.stdout)
         self.assertEqual(missing, [], f"--help output is missing: {missing}\n\n{result.stdout}")
+
+    def test_help_names_the_product(self):
+        """Regression test: making the installer identity-driven once
+        genericised its usage comment into "este producto", so a person
+        running `--help` no longer saw what they were installing. The usage
+        text must name the product by its own display name."""
+        result = self.run_install("--help")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Pegasus", result.stdout)
+
+    def test_help_omits_build_mechanism_details(self):
+        """The other half of the same regression: the genericised usage
+        comment explained that `install.sh` is a template `tools/
+        build_installer.py` fills in from an `identity.json` -- true, but
+        aimed at a maintainer, not at the person piping this script into a
+        shell. That explanation belongs near the identity header block
+        (never printed by `uso()`), not in `--help`'s own output."""
+        result = self.run_install("--help")
+        self.assertEqual(result.returncode, 0)
+        lowered = result.stdout.lower()
+        for fragment in BUILD_MECHANISM_FRAGMENTS:
+            self.assertNotIn(fragment.lower(), lowered, f"--help output mentions build-mechanism detail {fragment!r}")
 
 
 class VerifyWithOnlyOptionalToolsMissingTest(InstallScriptTestCase):

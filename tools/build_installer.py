@@ -46,6 +46,27 @@ _ASSIGNMENT = {
     )
 }
 
+#: The two-line intro of `install.sh`'s own usage comment (the one `uso()` prints for
+#: `--help`), naming the product and what it installs. Lives above the identity header
+#: block -- `--help`'s audience installs the product and does not read the header -- so
+#: it cannot reference `PRODUCT_DISPLAY_NAME`/`PRODUCT_PROGRAM_NAME` the way the header
+#: itself does; a shell comment cannot expand a variable. Instead this is rendered
+#: straight from the identity, the same values the header assignments get, kept public
+#: (not "_"-prefixed) so `tests/test_install_identity.py` can import the exact same
+#: pattern rather than re-deriving the same shape a second time.
+USAGE_INTRO = re.compile(
+    r"^# Instala .+ en una cuenta Linux limpia: nvm \+ Node LTS, OpenCode y el\n"
+    r"# binario de .+, en ese orden, y deja el resultado listo para trabajar\.$",
+    re.MULTILINE,
+)
+
+#: The `--bin-dir DIR` line of the same usage comment, which also names the product
+#: (by its program name) rather than a generic "the product".
+USAGE_BIN_DIR_LINE = re.compile(
+    r"^(#   \./install\.sh --bin-dir DIR\s+instala el binario de ).+?( en DIR en vez de ~/\.local/bin)$",
+    re.MULTILINE,
+)
+
 
 def _load_identity_module(source: Path) -> types.ModuleType:
     """Load `<source>/core/identity.py` as a standalone module, by file path.
@@ -138,6 +159,22 @@ def render(template_text: str, identity: object) -> str:
             f"identity header block, found {banners}"
         )
     before, header, after = template_text.split(HEADER_BANNER)
+
+    if not USAGE_INTRO.search(before):
+        raise ValueError("template's usage comment has no product-naming intro paragraph to replace")
+    before = USAGE_INTRO.sub(
+        lambda match: (
+            f"# Instala {identity.display_name} en una cuenta Linux limpia: nvm + Node LTS, OpenCode y el\n"
+            f"# binario de {identity.program_name}, en ese orden, y deja el resultado listo para trabajar."
+        ),
+        before,
+        count=1,
+    )
+    if not USAGE_BIN_DIR_LINE.search(before):
+        raise ValueError("template's usage comment has no --bin-dir line naming the product to replace")
+    before = USAGE_BIN_DIR_LINE.sub(
+        lambda match: match.group(1) + identity.program_name + match.group(2), before, count=1
+    )
 
     replaced = header
     for name, value in values.items():

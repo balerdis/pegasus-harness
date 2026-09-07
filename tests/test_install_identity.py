@@ -24,12 +24,27 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from brand_fragments import BANNED_FRAGMENTS
+from brand_fragments import BANNED_FRAGMENTS, BUILD_MECHANISM_FRAGMENTS
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "install.sh"
 BUILD_INSTALLER = ROOT / "tools" / "build_installer.py"
 REAL_IDENTITY = ROOT / "src" / "pegasus" / "identity.json"
+
+# `tools/build_installer.py` is a standalone script, not a package, so it is loaded
+# by file path rather than assumed to be on `sys.path` -- the same reasoning
+# `build_installer.py` itself documents for `_load_identity_module`. This gives the
+# test the exact same `USAGE_INTRO` / `USAGE_BIN_DIR_LINE` patterns the generator
+# uses, so the two can never silently drift into checking two different shapes.
+import importlib.util as _importlib_util
+
+_build_installer_spec = _importlib_util.spec_from_file_location(
+    "_test_install_identity_build_installer", BUILD_INSTALLER
+)
+build_installer = _importlib_util.module_from_spec(_build_installer_spec)
+_build_installer_spec.loader.exec_module(build_installer)
+USAGE_INTRO = build_installer.USAGE_INTRO
+USAGE_BIN_DIR_LINE = build_installer.USAGE_BIN_DIR_LINE
 
 #: The banner line bracketing the identity header block in install.sh. Exactly two
 #: of these must appear: the block starts right after the first and ends right
@@ -60,12 +75,18 @@ ACME_IDENTITY_PAYLOAD = {
 
 
 def _body_outside_header(text: str) -> str:
-    """`install.sh`'s content with the identity header block removed.
+    """`install.sh`'s content with the identity header block -- and the
+    usage comment's own identity-derived lines -- removed.
 
     Splits on `HEADER_BANNER`: the header lives strictly between the first and
     second occurrence. Everything before the first banner (the top-of-file
     usage comment, `set -euo pipefail`) and everything after the second
-    banner (the rest of the script) is "outside" and must never name a brand.
+    banner (the rest of the script) is "outside" and must never name a brand
+    -- except the usage comment's own product-naming lines (`USAGE_INTRO`,
+    `USAGE_BIN_DIR_LINE`), which `tools/build_installer.py` regenerates from
+    `identity.json` exactly like the header assignments, and which are
+    stripped here before scanning rather than being a second place this test
+    would have to special-case a brand literal.
     """
     parts = text.split(HEADER_BANNER)
     if len(parts) != 3:
@@ -74,7 +95,10 @@ def _body_outside_header(text: str) -> str:
             f"identity header block, found {len(parts) - 1}"
         )
     before, _header, after = parts
-    return before + after
+    body = before + after
+    for pattern in (USAGE_INTRO, USAGE_BIN_DIR_LINE):
+        body = pattern.sub("", body)
+    return body
 
 
 class NoProductIdentityOutsideHeaderTest(unittest.TestCase):
@@ -254,7 +278,12 @@ class BuildInstallerTest(unittest.TestCase):
 
     def test_generated_acme_installer_help_mentions_acme_not_pegasus(self):
         """Behavioural, not just textual: running the generated installer's
-        `--help` under a throwaway HOME must print ACME's own usage text."""
+        `--help` under a throwaway HOME must print ACME's own usage text --
+        and, the other half of the same property (see
+        `test_generated_acme_installer_help_names_acme_and_omits_build_mechanism_talk`
+        below), must actually NAME Acme rather than merely fail to name
+        Pegasus: a usage comment anonymised down to "this product" would
+        also pass a check that only asserts what is absent."""
         out = self.root / "install.sh"
         result = self._run("--identity", str(self._acme_identity()), "--out", str(out))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -267,6 +296,50 @@ class BuildInstallerTest(unittest.TestCase):
         )
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertNotIn("pegasus", run.stdout.lower())
+
+    def test_generated_acme_installer_help_names_acme_and_omits_build_mechanism_talk(self):
+        """The mirror of the brand test above: it is not enough for a
+        generated installer's `--help` to avoid the ENGINE's brand, it must
+        also actually name its OWN distribution's brand, and must not leak
+        the build-time mechanism (`tools/build_installer.py` filling in
+        `install.sh` from an `identity.json`) to the person installing it --
+        that explanation belongs to a maintainer reading the source, not to
+        `--help`'s own output."""
+        out = self.root / "install.sh"
+        result = self._run("--identity", str(self._acme_identity()), "--out", str(out))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        home = self.root / "acme-home-mirror"
+        home.mkdir()
+        run = subprocess.run(
+            ["bash", str(out), "--help"],
+            env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("Acme", run.stdout)
+        lowered = run.stdout.lower()
+        for fragment in BUILD_MECHANISM_FRAGMENTS:
+            self.assertNotIn(fragment.lower(), lowered, f"generated ACME --help mentions {fragment!r}")
+
+    def test_pegasus_own_generated_installer_help_names_pegasus_and_omits_build_mechanism_talk(self):
+        """Same property, exercised for Pegasus's own identity rather than
+        ACME's, so the assertion is proven against the real product this
+        repository ships, not only against the fictional stand-in."""
+        out = self.root / "install.sh"
+        result = self._run("--identity", str(REAL_IDENTITY), "--out", str(out))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        home = self.root / "pegasus-home-mirror"
+        home.mkdir()
+        run = subprocess.run(
+            ["bash", str(out), "--help"],
+            env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("Pegasus", run.stdout)
+        lowered = run.stdout.lower()
+        for fragment in BUILD_MECHANISM_FRAGMENTS:
+            self.assertNotIn(fragment.lower(), lowered, f"generated Pegasus --help mentions {fragment!r}")
 
 
 if __name__ == "__main__":
