@@ -12,11 +12,17 @@ Pegasus se distribuye de forma aditiva. La instalacion reconoce lo que ya existe
 | --- | --- |
 | Cliente anfitrion | OpenCode o Claude Code ya instalado. Pegasus no lo instala, actualiza, reemplaza ni desinstala. |
 | Artifacts del usuario | No se borran, mueven ni sobreescriben. Si ya existe uno, se detecta y se preserva. |
-| Propiedad | Se declara por artifact o modulo, no por directorio completo. |
+| Propiedad | Se declara por artifact o modulo y por producto, no por directorio completo. Dos productos instalados bajo el mismo usuario nunca comparten la propiedad de un artifact: cada uno reclama y limpia solo lo suyo. |
 | Actualizacion o limpieza | Solo se puede actualizar o remover un artifact creado por Pegasus que siga sin cambios del usuario. |
 | Artifact existente | No pasa a ser de Pegasus por estar en una ruta conocida. Queda preservado. |
 
 ## Inclusion aprobada
+
+Esta lista describe el release de Pegasus en si mismo: el binario `pegasus` que este repositorio
+construye y publica, con la identidad y el contenido que trae de fabrica. No describe ningun otro
+binario basado en el mismo motor — una distribucion que construye su propio `identity.json` y su
+propio contenido con `tools/build_zipapp.py` decide su propia lista de inclusion, y esta seccion no
+se le aplica.
 
 El release incluye solamente lo siguiente:
 
