@@ -143,7 +143,10 @@ class UpdateReapplyTest(RealHomeTestCase):
 
         code, report = self.run_cli("update", "--cli", CLI)
         self.assertNotEqual(code, 0)
-        self.assertEqual(report["error"], cli._unresolved_bindings_message(CLI, ["cbm"]))
+        self.assertEqual(
+            report["error"],
+            cli._unresolved_bindings_message(CLI, ["cbm"], program_name=cli.default_identity().program_name),
+        )
         self.assertIn(cli.mcp_placeholder_instruction(), report["error"])
         self.assertIn("<key>", cli.mcp_placeholder_instruction())
 

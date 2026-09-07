@@ -7,7 +7,6 @@ import unittest
 
 from pegasus import cli
 from pegasus.tui.navigator import (
-    PEGASUS_PROGRAM,
     AgentRow,
     CliOption,
     Entry,
@@ -32,6 +31,14 @@ from pegasus.tui import view, wordmark
 from pegasus.tui.view import Line, Span, Style, render, render_busy, render_progress
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
+#: Stands in for `session._upgrade_preview`'s own `CliOption`, built at
+#: runtime from identity data -- this module tests rendering only, so a
+#: fixture with the same shape is enough; it is never read from `navigator`.
+SAMPLE_PROGRAM = CliOption(id="pegasus", display_name="Pegasus", config_dir="", tier="full")
+#: Stands in for a real identity's `wordmark_words` -- this module tests
+#: rendering only, so a fixture value plays the same role `session` would
+#: thread in from `runtime.identity.wordmark_words`.
+SAMPLE_WORDMARK = ("PEGASUS", "HARNESS")
 DOCTOR_REPORT = {
     "schema": cli.SCHEMA,
     "command": "doctor",
@@ -95,7 +102,7 @@ UPGRADE_PLANNED_REPORT = {
 UPGRADED_REPORT = {
     "schema": cli.SCHEMA, "command": "upgrade", "status": "upgraded",
     "old_version": "5.10.0", "new_version": "5.11.0", "destination": "/opt/pegasus/pegasus",
-    "restart_required": True,
+    "restart_required": True, "program_name": "pegasus",
 }
 UPGRADE_FAILED_REPORT = {
     "schema": cli.SCHEMA, "command": "upgrade", "status": "failed", "error": "5.10.0 is not writable",
@@ -396,19 +403,19 @@ class UpgradePlanRenderingTest(unittest.TestCase):
     borrowing Install's or Update's."""
 
     def test_the_title_and_footer_name_upgrade_not_install_or_update(self):
-        screen = InstallPlanScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_PLANNED_REPORT, command="upgrade")
+        screen = InstallPlanScreen(cli=SAMPLE_PROGRAM, report=UPGRADE_PLANNED_REPORT, command="upgrade")
         lines = [line.text for line in render(screen, cursor=0)]
-        self.assertIn(f"Upgrade · {PEGASUS_PROGRAM.display_name}", lines)
+        self.assertIn(f"Upgrade · {SAMPLE_PROGRAM.display_name}", lines)
         self.assertIn("enter: upgrade now · esc: back, nothing written", lines)
         self.assertFalse(any("Install ·" in text or "Update ·" in text for text in lines))
 
     def test_it_still_says_nothing_has_been_written_yet(self):
-        screen = InstallPlanScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_PLANNED_REPORT, command="upgrade")
+        screen = InstallPlanScreen(cli=SAMPLE_PROGRAM, report=UPGRADE_PLANNED_REPORT, command="upgrade")
         lines = [line.text for line in render(screen, cursor=0)]
         self.assertIn("PREVIEW — nothing has been written yet.", lines)
 
     def test_it_carries_the_exact_prose_the_flag_would_print(self):
-        screen = InstallPlanScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_PLANNED_REPORT, command="upgrade")
+        screen = InstallPlanScreen(cli=SAMPLE_PROGRAM, report=UPGRADE_PLANNED_REPORT, command="upgrade")
         lines = [line.text for line in render(screen, cursor=0)]
         for expected in cli.prose_for(UPGRADE_PLANNED_REPORT).splitlines():
             self.assertIn(expected, lines)
@@ -420,9 +427,9 @@ class UpgradeResultRenderingTest(unittest.TestCase):
     version -- it is still running the code it started with."""
 
     def test_a_successful_upgrade_says_so_and_names_a_restart(self):
-        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADED_REPORT, command="upgrade")
+        screen = InstallResultScreen(cli=SAMPLE_PROGRAM, report=UPGRADED_REPORT, command="upgrade")
         lines = [line.text for line in render(screen, cursor=0)]
-        self.assertIn(f"Upgrade · {PEGASUS_PROGRAM.display_name}", lines)
+        self.assertIn(f"Upgrade · {SAMPLE_PROGRAM.display_name}", lines)
         joined = "\n".join(lines)
         self.assertIn("restart", joined.lower())
         self.assertNotIn("INSTALLED.", lines)
@@ -431,14 +438,14 @@ class UpgradeResultRenderingTest(unittest.TestCase):
     def test_a_successful_upgrade_never_claims_this_process_is_now_the_new_version(self):
         """The process that reports success is still running the old code --
         `write_atomic`'s replace only changes what a *future* launch runs."""
-        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADED_REPORT, command="upgrade")
+        screen = InstallResultScreen(cli=SAMPLE_PROGRAM, report=UPGRADED_REPORT, command="upgrade")
         lines = [line.text for line in render(screen, cursor=0)]
         joined = "\n".join(lines)
         self.assertIn("5.10.0", joined)  # the old version this process is still running.
         self.assertIn("5.11.0", joined)  # the new version now on disk.
 
     def test_a_failed_upgrade_says_so_and_carries_no_traceback(self):
-        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_FAILED_REPORT, command="upgrade")
+        screen = InstallResultScreen(cli=SAMPLE_PROGRAM, report=UPGRADE_FAILED_REPORT, command="upgrade")
         lines = [line.text for line in render(screen, cursor=0)]
         self.assertTrue(any("not writable" in text for text in lines))
         self.assertFalse(any("Traceback" in text for text in lines))
@@ -449,7 +456,7 @@ class UpgradeResultRenderingTest(unittest.TestCase):
         """Nothing happened, but nothing was asked to happen and did not --
         this is neither the failure banner nor the one that celebrates a
         completed install."""
-        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_ALREADY_CURRENT_REPORT, command="upgrade")
+        screen = InstallResultScreen(cli=SAMPLE_PROGRAM, report=UPGRADE_ALREADY_CURRENT_REPORT, command="upgrade")
         lines = [line.text for line in render(screen, cursor=0)]
         self.assertNotIn("UPGRADE FAILED.", lines)
         self.assertFalse(any("UPGRADED" in text for text in lines))
@@ -458,13 +465,15 @@ class UpgradeResultRenderingTest(unittest.TestCase):
     def test_already_current_does_not_draw_the_success_wordmark(self):
         """The wordmark celebrates a completed install; nothing happened
         here, so it must not appear even when there is ample width for it."""
-        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_ALREADY_CURRENT_REPORT, command="upgrade")
+        screen = InstallResultScreen(
+            cli=SAMPLE_PROGRAM, report=UPGRADE_ALREADY_CURRENT_REPORT, command="upgrade", wordmark_words=SAMPLE_WORDMARK
+        )
         lines = [line.text for line in render(screen, cursor=0, width=200)]
-        self.assertNotIn(wordmark.wordmark_rows()[0], lines)
-        self.assertNotIn(wordmark.pegasus_rows()[0], lines)
+        self.assertNotIn(_full_wordmark_row(0), lines)
+        self.assertNotIn(_solo_wordmark_row(0), lines)
 
     def test_already_current_carries_the_exact_prose_the_flag_would_print(self):
-        screen = InstallResultScreen(cli=PEGASUS_PROGRAM, report=UPGRADE_ALREADY_CURRENT_REPORT, command="upgrade")
+        screen = InstallResultScreen(cli=SAMPLE_PROGRAM, report=UPGRADE_ALREADY_CURRENT_REPORT, command="upgrade")
         lines = [line.text for line in render(screen, cursor=0)]
         for expected in cli.prose_for(UPGRADE_ALREADY_CURRENT_REPORT).splitlines():
             self.assertIn(expected, lines)
@@ -624,6 +633,23 @@ class LineSpanTest(unittest.TestCase):
         self.assertFalse(Line("text").highlighted)
 
 
+#: The full mark's own rows and the solo mark's own rows, for the fixture
+#: wordmark this section renders -- computed once here rather than repeated
+#: inline at every assertion.
+_FULL_WORDMARK_ROW_COUNT = len(wordmark.word_rows(SAMPLE_WORDMARK[0]))
+_FULL_WORDMARK_WIDTH = wordmark.mark_width(SAMPLE_WORDMARK)
+_SOLO_WORDMARK_WIDTH = wordmark.solo_width(SAMPLE_WORDMARK)
+
+
+def _full_wordmark_row(index: int) -> str:
+    first, second = (wordmark.word_rows(word)[index] for word in SAMPLE_WORDMARK)
+    return f"{first}  {second}"
+
+
+def _solo_wordmark_row(index: int) -> str:
+    return wordmark.word_rows(SAMPLE_WORDMARK[0])[index]
+
+
 class MenuWordmarkTest(unittest.TestCase):
     """The main menu's title becomes the wordmark once something is actually
     installed -- an empty machine keeps the plain title it always had."""
@@ -634,80 +660,90 @@ class MenuWordmarkTest(unittest.TestCase):
             entries=(Entry("Exit", QUIT),),
             installed=installed,
             version="9.9.9",
+            wordmark_words=SAMPLE_WORDMARK,
         )
 
     def test_nothing_installed_keeps_the_plain_title(self):
         lines = [line.text for line in render(self.menu(installed=False), cursor=0, width=200)]
         self.assertEqual(lines[0], "Pegasus Harness 9.9.9")
-        self.assertNotIn(wordmark.wordmark_rows()[0], lines)
+        self.assertNotIn(_full_wordmark_row(0), lines)
+
+    def test_no_wordmark_words_keeps_the_plain_title_even_when_installed(self):
+        """The renderer draws whatever it is given -- an identity with no
+        words at all (never real, but the honest fallback) must not crash
+        or invent one; the plain title is what it falls back to."""
+        menu = Menu(title="t 1.0.0", entries=(Entry("Exit", QUIT),), installed=True, version="1.0.0")
+        lines = [line.text for line in render(menu, cursor=0, width=200)]
+        self.assertEqual(lines[0], "t 1.0.0")
 
     def test_something_installed_draws_the_wordmark_when_it_fits(self):
         lines = [line.text for line in render(self.menu(installed=True), cursor=0, width=200)]
-        for row in wordmark.wordmark_rows():
-            self.assertIn(row, lines)
+        for index in range(_FULL_WORDMARK_ROW_COUNT):
+            self.assertIn(_full_wordmark_row(index), lines)
         self.assertNotIn("Pegasus Harness 9.9.9", lines)
 
     def test_the_version_sits_on_its_own_line_right_aligned_to_the_art(self):
         lines = [line.text for line in render(self.menu(installed=True), cursor=0, width=200)]
-        version_line = lines[len(wordmark.wordmark_rows())]
-        self.assertEqual(version_line, "9.9.9".rjust(wordmark.WORDMARK_WIDTH))
+        version_line = lines[_FULL_WORDMARK_ROW_COUNT]
+        self.assertEqual(version_line, "9.9.9".rjust(_FULL_WORDMARK_WIDTH))
 
-    def test_installed_but_too_narrow_for_the_full_mark_falls_back_to_pegasus_alone(self):
+    def test_installed_but_too_narrow_for_the_full_mark_falls_back_to_solo(self):
         lines = [line.text for line in render(self.menu(installed=True), cursor=0, width=40)]
-        for row in wordmark.pegasus_rows():
-            self.assertIn(row, lines)
-        for row in wordmark.wordmark_rows():
-            self.assertNotIn(row, lines)
+        for index in range(_FULL_WORDMARK_ROW_COUNT):
+            self.assertIn(_solo_wordmark_row(index), lines)
+            self.assertNotIn(_full_wordmark_row(index), lines)
 
     def test_installed_but_too_narrow_for_any_mark_keeps_the_plain_title(self):
         lines = [line.text for line in render(self.menu(installed=True), cursor=0, width=20)]
         self.assertEqual(lines[0], "Pegasus Harness 9.9.9")
 
-    def test_the_full_marks_pegasus_half_is_dim_and_harness_half_is_normal(self):
-        """The reference banner dims only `PEGASUS`, leaving `HARNESS` beside
-        it in plain text on the very same row -- the whole reason `Line`
-        gained spans. Each art row is exactly two spans: the dim `PEGASUS`
-        glyph columns, then the normal `HARNESS` ones (the two-space gap
-        travels with the first span, matching how `wordmark.wordmark_rows`
-        joins them)."""
+    def test_the_full_marks_first_half_is_dim_and_second_half_is_normal(self):
+        """The reference banner dims only the first word, leaving the second
+        beside it in plain text on the very same row -- the whole reason
+        `Line` gained spans. Each art row is exactly two spans: the dim
+        first-word glyph columns, then the normal second-word ones (the
+        two-space gap travels with the first span)."""
         lines = render(self.menu(installed=True), cursor=0, width=200)
-        art_lines = lines[: len(wordmark.wordmark_rows())]
+        art_lines = lines[:_FULL_WORDMARK_ROW_COUNT]
         for index, line in enumerate(art_lines):
             self.assertEqual(len(line.spans), 2)
             dim_span, normal_span = line.spans
             self.assertEqual(dim_span.style, Style.DIM)
             self.assertEqual(normal_span.style, Style.NORMAL)
-            self.assertEqual(dim_span.text + normal_span.text, wordmark.wordmark_rows()[index])
-            self.assertEqual(dim_span.text, wordmark.pegasus_rows()[index] + "  ")
+            self.assertEqual(dim_span.text + normal_span.text, _full_wordmark_row(index))
+            self.assertEqual(dim_span.text, _solo_wordmark_row(index) + "  ")
 
     def test_the_solo_mark_is_entirely_dim(self):
-        """The narrow variant is `PEGASUS` alone -- the brand mark on its
-        own, without the second word there is nothing to split, and dim is
-        the emphasis the full mark already gives that half."""
+        """The narrow variant is the first word alone -- the brand mark on
+        its own, without the second word there is nothing to split, and dim
+        is the emphasis the full mark already gives that half."""
         lines = render(self.menu(installed=True), cursor=0, width=40)
-        art_lines = lines[: len(wordmark.pegasus_rows())]
+        art_lines = lines[:_FULL_WORDMARK_ROW_COUNT]
         for line in art_lines:
             self.assertEqual(len(line.spans), 1)
             self.assertEqual(line.spans[0].style, Style.DIM)
 
 
 class InstallResultWordmarkTest(unittest.TestCase):
+    def _screen(self, report: dict) -> InstallResultScreen:
+        return InstallResultScreen(cli=SAMPLE, report=report, wordmark_words=SAMPLE_WORDMARK)
+
     def test_a_successful_install_draws_the_wordmark_above_the_banner(self):
-        lines = render(InstallResultScreen(cli=SAMPLE, report=INSTALLED_REPORT), cursor=0, width=200)
+        lines = render(self._screen(INSTALLED_REPORT), cursor=0, width=200)
         texts = [line.text for line in lines]
-        self.assertIn(wordmark.wordmark_rows()[0], texts)
-        self.assertLess(texts.index(wordmark.wordmark_rows()[0]), texts.index("INSTALLED."))
+        self.assertIn(_full_wordmark_row(0), texts)
+        self.assertLess(texts.index(_full_wordmark_row(0)), texts.index("INSTALLED."))
 
     def test_a_failed_install_draws_no_wordmark_at_all(self):
-        lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=FAILED_REPORT), cursor=0, width=200)]
-        self.assertNotIn(wordmark.wordmark_rows()[0], lines)
-        self.assertNotIn(wordmark.pegasus_rows()[0], lines)
+        lines = [line.text for line in render(self._screen(FAILED_REPORT), cursor=0, width=200)]
+        self.assertNotIn(_full_wordmark_row(0), lines)
+        self.assertNotIn(_solo_wordmark_row(0), lines)
 
     def test_no_room_for_any_mark_still_shows_the_banner_plainly(self):
-        lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=INSTALLED_REPORT), cursor=0, width=20)]
+        lines = [line.text for line in render(self._screen(INSTALLED_REPORT), cursor=0, width=20)]
         self.assertIn("INSTALLED.", lines)
-        self.assertNotIn(wordmark.wordmark_rows()[0], lines)
-        self.assertNotIn(wordmark.pegasus_rows()[0], lines)
+        self.assertNotIn(_full_wordmark_row(0), lines)
+        self.assertNotIn(_solo_wordmark_row(0), lines)
 
 
 class ProgressRenderingTest(unittest.TestCase):

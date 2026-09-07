@@ -41,12 +41,12 @@ from pegasus.tui.navigator import (
     UpdateNotice,
     UpdateTarget,
     UpgradeTarget,
-    PEGASUS_PROGRAM,
     REMOTE_UPDATE_REMEDY,
     busy_message_for,
     install_menu,
     main_menu,
     models_menu,
+    program_option,
     restore_menu,
     uninstall_menu,
     update_menu,
@@ -54,6 +54,10 @@ from pegasus.tui.navigator import (
 )
 
 SAMPLE = CliOption(id="demo", display_name="Demo CLI", config_dir="/home/x/.demo", tier="full")
+#: Stands in for `session._upgrade_preview`'s own `program_option(...)`,
+#: built at runtime from identity data -- this module tests pure navigation,
+#: so a fixture with the same shape is enough.
+SAMPLE_PROGRAM = program_option(program_name="demo-program", display_name="Demo Program")
 
 REASONING_MODEL = ModelOption(id="deep-thinker", reasoning=True)
 PLAIN_MODEL = ModelOption(id="fast-model", reasoning=False)
@@ -97,8 +101,15 @@ class MainMenuTest(unittest.TestCase):
         )
 
     def test_the_title_names_the_running_release(self):
+        navigator = Navigator.starting(display_name="Demo Product")
+        self.assertEqual(navigator.current.title, f"Demo Product {pegasus.__version__}")
+
+    def test_the_title_falls_back_to_a_generic_name_when_none_is_given(self):
+        """`Navigator.starting`'s own `display_name` default is a plain
+        placeholder, never a specific product's own name -- this module
+        must never spell one (see its own module docstring)."""
         navigator = Navigator.starting()
-        self.assertEqual(navigator.current.title, f"Pegasus Harness {pegasus.__version__}")
+        self.assertNotIn("Pegasus", navigator.current.title)
 
     def test_the_cursor_starts_on_the_first_entry(self):
         navigator = Navigator.starting()
@@ -535,9 +546,9 @@ class RestoreMenuTest(unittest.TestCase):
         self.assertEqual(navigator, before)
 
     def test_the_preface_explains_what_a_generation_is(self):
-        menu = restore_menu((_summary(1),))
+        menu = restore_menu((_summary(1),), display_name="Demo Product")
         self.assertTrue(menu.preface)
-        self.assertIn("state of the files Pegasus owns", menu.preface[0])
+        self.assertIn("state of the files Demo Product owns", menu.preface[0])
 
     def test_a_label_shows_a_readable_timestamp_and_what_it_would_touch(self):
         """Future tense, deliberately. This label sits on a menu nothing has
@@ -1087,7 +1098,7 @@ class UpgradeMenuEntryTest(unittest.TestCase):
         self.assertIsNotNone(message)
 
     def test_confirming_an_upgrade_plan_says_something_other_than_installing_or_updating(self):
-        screen = InstallPlanScreen(cli=PEGASUS_PROGRAM, report={}, command="upgrade")
+        screen = InstallPlanScreen(cli=SAMPLE_PROGRAM, report={}, command="upgrade")
         message = busy_message_for(screen, 0, Action.CHOOSE)
         self.assertIsNotNone(message)
         self.assertNotIn("Installing", message)

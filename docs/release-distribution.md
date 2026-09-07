@@ -8,14 +8,28 @@ dependencia y lee su contenido desde adentro del propio zip, así que no queda n
 No hay pipeline de CI en este repositorio: los pasos siguientes son manuales, corridos por quien
 prepara el release.
 
+**`--identity` es obligatorio, sin excepción, incluso para el propio release de Pegasus.** Desde
+que el motor puede construir un binario con una identidad distinta (nombre, wordmark, directorio de
+datos y fuente de release propia — ver `docs/arquitectura/arquitectura.md`), `tools/build_zipapp.py`
+exige el flag siempre: es la única forma de que "una distribución no puede olvidarse de dar su propia
+identidad" sea literalmente cierto. El propio release de Pegasus pasa `src/pegasus/identity.json`
+explícitamente, igual que cualquier otra distribución pasaría el suyo.
+
 1. Sobre un commit con la suite verde (`PYTHONPATH=src:tests python3 -m unittest discover -s tests -q`), confirmá que `pyproject.toml` declara la versión que vas a publicar y creá el tag anotado `vX.Y.Z` sobre ese commit.
 2. Construí el artefacto:
 
    ```sh
-   python3 tools/build_zipapp.py --out dist/pegasus
+   python3 tools/build_zipapp.py --identity src/pegasus/identity.json --out dist/pegasus
    ```
 
-   Deja `dist/pegasus` (ejecutable, con shebang) y `dist/pegasus.sha256` al lado.
+   `--identity` se valida contra las reglas de `src/pegasus/core/identity.py` antes de escribir nada
+   — nombre con sólo letras y números (sin acentos, sin guiones), no más ancho de lo que entra en la
+   grilla del wordmark, URLs de release `https` con host real — y `--source` tiene que ser el propio
+   directorio del paquete (`.../pegasus`, con `core/content.py` adentro), no el directorio que lo
+   contiene: pasar el de arriba arma un archivo anidado `pegasus/pegasus/` que hoy se rechaza en el
+   momento de construir, con el error nombrando el motivo, en vez de fallar recién al ejecutar el
+   binario con un `ModuleNotFoundError`. Deja `dist/pegasus` (ejecutable, con shebang) y
+   `dist/pegasus.sha256` al lado.
 3. Generá la evidencia del release con `tools/build_release_evidence.py`, apuntando al tag:
 
    ```sh
@@ -29,17 +43,25 @@ prepara el release.
    para confirmar que el `pegasus_version` que reporta coincide con `pyproject.toml` en ese commit, y
    sólo entonces certifica el commit y el hash (`release-manifest.json` y un `.sha256`). Sin `--tag`,
    describe el `HEAD` limpio; con el worktree sucio, se niega. `assets` en el manifest ahora nombra
-   dos archivos, no uno: además de `pegasus`, certifica `install.sh` leyendo sus bytes exactos del
-   commit con `git show <commit>:install.sh` (no del working tree) y comparándolos contra el
-   `install.sh` del working tree — el archivo que este mismo paso 4 sube. El script se niega si el
-   commit no tiene `install.sh`, o si el del working tree no coincide con el del commit; en cualquiera
-   de los dos casos, subir igual dejaría un release sin el asset que el one-liner de abajo necesita,
-   o con una copia distinta de la que el manifest certificó.
-4. Publicá en GitHub Releases, sobre ese mismo tag, los cuatro archivos que `INSTALL.md` nombra:
-   `pegasus`, su `.sha256`, `release-manifest.json`, y `install.sh` (el archivo en la raíz del
+   tres archivos, no uno: además de `pegasus`, certifica `install.sh` y `tools/build_zipapp.py`
+   leyendo los bytes exactos de cada uno del commit con `git show <commit>:<ruta>` (no del working
+   tree) y comparándolos contra la copia del working tree — los archivos que este mismo paso 4 sube.
+   `build_zipapp.py` se publica con su propio nombre plano (`build_zipapp.py`, sin el prefijo
+   `tools/`, porque los assets de un release de GitHub no tienen subcarpetas) y su propio
+   `.sha256` al lado, igual que `pegasus`: una distribución que descarga el release no tiene que
+   clonar el repositorio entero sólo para conseguir el script que construye su propio binario. El
+   script se niega si el commit no tiene alguno de los tres archivos, o si el del working tree no
+   coincide con el del commit; en cualquiera de esos casos, subir igual dejaría un release sin un
+   asset que otro paso necesita, o con una copia distinta de la que el manifest certificó.
+4. Publicá en GitHub Releases, sobre ese mismo tag, estos seis archivos -- `release-manifest.json`
+   mismo, los tres que certifica su lista `assets`, y el `.sha256` de cada uno de los dos que lo
+   necesita, tal como los escribe el paso anterior:
+   `pegasus`, su `.sha256`, `release-manifest.json`, `install.sh` (el archivo en la raíz del
    repositorio, tal cual está en ese commit — no se genera, se sube directo, y es el mismo cuyo hash
-   quedó certificado en el paso anterior). `install.sh` tiene que publicarse en este mismo release, y
-   no en ningún otro lugar (por ejemplo, servido crudo desde `raw.githubusercontent.com`): todo lo que
+   quedó certificado en el paso anterior), y `build_zipapp.py` con su propio `.sha256` (el archivo en
+   `tools/build_zipapp.py`, subido con el nombre plano que el manifest certificó). `install.sh` y
+   `build_zipapp.py` tienen que publicarse en este mismo release, y no en ningún otro lugar (por
+   ejemplo, servido crudo desde `raw.githubusercontent.com`): todo lo que
    instala vive detrás de `releases/latest/download/`, así que si el script viviera en una URL aparte
    podría quedar apuntando a un binario de un release distinto del que lo acompaña — exactamente el
    tipo de desincronización que este esquema existe para evitar, y la razón por la que el paso 3 ya lo

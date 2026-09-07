@@ -57,17 +57,24 @@ UPDATE_FAILED_BANNER = "Update didn't succeed."
 #: The one banner that does not read as "done" -- a replaced binary is not a
 #: running one. `_render_install_result`'s own prose (`cli.prose_for`'s
 #: `"upgrade"` branch) already says to restart; this banner says it too,
-#: right where a person's eye lands first.
-UPGRADED_BANNER = "UPGRADED — restart pegasus to run the new version."
+#: right where a person's eye lands first. A function, not a constant,
+#: because it names the program by its own launch name -- read from
+#: `screen.report["program_name"]`, which `cli.upgrade`'s own report already
+#: carries (see `core/upgrade.py`), so there is no identity to import here,
+#: only a report field to read.
+def _upgraded_banner(program_name: str) -> str:
+    return f"UPGRADED — restart {program_name} to run the new version."
+
+
 UPGRADE_FAILED_BANNER = "Upgrade didn't succeed."
 #: Not a failure and not a completed upgrade: nothing was written because
 #: there was nothing to write. It takes the all-caps register deliberately --
 #: asking to be current and already being current is a finished, successful
 #: state, and putting it in the sentence-case failure wording would tell a
 #: person something went wrong when nothing did. What separates it from
-#: `UPGRADED_BANNER` is the words themselves plus the absent wordmark: that
-#: art celebrates a home this run actually wrote, and this run wrote nothing
-#: (see `_render_install_result`).
+#: `_upgraded_banner`'s own banner is the words themselves plus the absent
+#: wordmark: that art celebrates a home this run actually wrote, and this
+#: run wrote nothing (see `_render_install_result`).
 ALREADY_CURRENT_BANNER = "ALREADY UP TO DATE."
 UNINSTALLED_BANNER = "UNINSTALLED."
 UNINSTALL_FAILED_BANNER = "Uninstall didn't succeed."
@@ -258,44 +265,58 @@ def render(screen: Screen, cursor: int, *, width: int = _AMPLE_WIDTH) -> tuple[L
     raise TypeError(f"no rendering defined for screen: {screen!r}")
 
 
-def _wordmark_variant(width: int) -> str | None:
+def _wordmark_variant(width: int, words: tuple[str, ...]) -> str | None:
     """Which shape of the wordmark fits in `width` columns -- `"full"`, the
-    narrower `"solo"`, or `None` when even that does not fit and the plain
-    text stays the honest thing to draw. A plain function of a plain int, so
-    every boundary this decides is a call away from a test, no terminal
+    narrower `"solo"`, or `None` when even that does not fit (or there are no
+    words at all -- an identity with an empty `wordmark_words` is never real,
+    but this must not crash if it happens) and the plain text stays the
+    honest thing to draw. A plain function of a plain int and a plain tuple,
+    so every boundary this decides is a call away from a test, no terminal
     needed to probe it."""
-    if width >= wordmark.WORDMARK_WIDTH:
+    if not words:
+        return None
+    if width >= wordmark.mark_width(words):
         return "full"
-    if width >= wordmark.PEGASUS_WIDTH:
+    if width >= wordmark.solo_width(words):
         return "solo"
     return None
 
 
-def _wordmark_lines(variant: str) -> tuple[Line, ...]:
-    """The art itself. The reference wordmark this reproduces dims only its
-    first word and leaves the second plain beside it, on the very same row --
-    exactly what a two-span `Line` exists to draw. The solo variant is the
-    brand mark alone; with no second word to contrast against, it stays
-    entirely dim, the same emphasis the full mark already gives that half."""
+def _wordmark_lines(variant: str, words: tuple[str, ...]) -> tuple[Line, ...]:
+    """The art itself, drawn from whatever `words` the screen carries -- one
+    word or two, with no policy branch on how many there are (the spec's
+    "Wordmark Words Are Rendered, Not Chosen" requirement). The reference
+    wordmark this reproduces dims only the first word and leaves the rest
+    plain beside it, on the very same row -- exactly what a multi-span
+    `Line` exists to draw. The solo variant is the first word alone; with no
+    second word to contrast against, it stays entirely dim, the same
+    emphasis the full mark already gives that half."""
     if variant == "solo":
-        return tuple(Line((Span(row, Style.DIM),)) for row in wordmark.pegasus_rows())
-    pegasus_rows = wordmark.word_rows(wordmark.PEGASUS)
-    harness_rows = wordmark.word_rows(wordmark.HARNESS)
-    return tuple(
-        Line((Span(f"{pegasus}  ", Style.DIM), Span(harness, Style.NORMAL)))
-        for pegasus, harness in zip(pegasus_rows, harness_rows)
-    )
+        return tuple(Line((Span(row, Style.DIM),)) for row in wordmark.word_rows(words[0]))
+    rows_by_word = [wordmark.word_rows(word) for word in words]
+    lines = []
+    for row_index in range(len(rows_by_word[0])):
+        spans = []
+        last = len(rows_by_word) - 1
+        for word_index, rows in enumerate(rows_by_word):
+            text = rows[row_index]
+            style = Style.DIM if word_index == 0 else Style.NORMAL
+            if word_index != last:
+                text = f"{text}  "
+            spans.append(Span(text, style))
+        lines.append(Line(tuple(spans)))
+    return tuple(lines)
 
 
-def _wordmark_width(variant: str) -> int:
-    return wordmark.WORDMARK_WIDTH if variant == "full" else wordmark.PEGASUS_WIDTH
+def _wordmark_width(variant: str, words: tuple[str, ...]) -> int:
+    return wordmark.mark_width(words) if variant == "full" else wordmark.solo_width(words)
 
 
 def _render_menu(screen: Menu, cursor: int, width: int) -> tuple[Line, ...]:
-    variant = _wordmark_variant(width) if screen.installed else None
+    variant = _wordmark_variant(width, screen.wordmark_words) if screen.installed else None
     if variant is not None:
-        lines = list(_wordmark_lines(variant))
-        lines.append(Line(screen.version.rjust(_wordmark_width(variant))))
+        lines = list(_wordmark_lines(variant, screen.wordmark_words))
+        lines.append(Line(screen.version.rjust(_wordmark_width(variant, screen.wordmark_words))))
         lines.append(Line(""))
     else:
         lines = [Line(screen.title), Line("")]
@@ -352,16 +373,16 @@ def _render_install_result(screen: InstallResultScreen, width: int) -> tuple[Lin
         elif already_current:
             banner = ALREADY_CURRENT_BANNER
         else:
-            banner = UPGRADED_BANNER
+            banner = _upgraded_banner(screen.report["program_name"])
     else:
         banner = FAILED_BANNER if failed else INSTALLED_BANNER
     lines = [Line(f"{label} · {screen.cli.display_name}"), Line("")]
     # The wordmark celebrates a completed install; being told there was
     # nothing to do is neither that nor a failure, so it draws for neither.
     if not failed and not already_current:
-        variant = _wordmark_variant(width)
+        variant = _wordmark_variant(width, screen.wordmark_words)
         if variant is not None:
-            lines.extend(_wordmark_lines(variant))
+            lines.extend(_wordmark_lines(variant, screen.wordmark_words))
             lines.append(Line(""))
     lines += [Line(banner), Line("")]
     lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())

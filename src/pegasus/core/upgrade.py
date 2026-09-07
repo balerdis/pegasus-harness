@@ -25,32 +25,49 @@ there is no signature and no pinned key involved anywhere in this module.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from pegasus.core import ownership
+from pegasus.core.identity import ReleaseSource
 from pegasus.ports.downloader import Downloader, DownloaderError
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 
-#: Every asset a release publishes, at this exact address -- see
-#: `docs/release-distribution.md` (read-only from here: this module never
-#: reads it, only agrees with it).
-RELEASE_ASSET_URL = "https://github.com/balerdis/pegasus-harness/releases/download/{tag}/{asset}"
+# There used to be a module-level `RELEASE_ASSET_URL` constant here, always
+# Pegasus's own address. It is deleted, not defaulted: every function below
+# now *requires* a caller's own `ReleaseSource` (see `pegasus.core.identity`),
+# so a distribution whose identity is missing or malformed has no shared
+# constant left to silently fall back to -- the call simply cannot be made
+# without one. A binary that replaced itself with Pegasus's own release was a
+# real bug this shape makes unrepresentable, not merely unlikely.
 
 
 class UpgradeError(Exception):
-    """A newly published `pegasus` binary could not be safely fetched, verified, or placed."""
+    """A newly published binary could not be safely fetched, verified, or placed."""
+
+
+#: `version` arrives here straight from the remote release API's own
+#: `tag_name` field (see `cli._fetch_latest_version`) with no validation on
+#: the way -- unlike `binary_asset`, which `identity.parse` already confines
+#: to a bare filename. Restricting it to this charset is what keeps a
+#: malicious or compromised release endpoint from filling `{tag}` with a
+#: path that escapes the intended `download/{tag}/{asset}` segment on the
+#: same host (a version can never legitimately need `/`, `\`, or whitespace).
+_SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
 
 
 def _tag(version: str) -> str:
+    if not _SAFE_VERSION.match(version):
+        raise UpgradeError(f"refusing to build a release URL from an unsafe version string: {version!r}")
     return f"v{version}"
 
 
-def binary_url(version: str) -> str:
-    return RELEASE_ASSET_URL.format(tag=_tag(version), asset="pegasus")
+def binary_url(version: str, release: ReleaseSource) -> str:
+    return release.asset_url_template.format(tag=_tag(version), asset=release.binary_asset)
 
 
-def checksum_url(version: str) -> str:
-    return RELEASE_ASSET_URL.format(tag=_tag(version), asset="pegasus.sha256")
+def checksum_url(version: str, release: ReleaseSource) -> str:
+    return release.asset_url_template.format(tag=_tag(version), asset=f"{release.binary_asset}.sha256")
 
 
 def _expected_digest(checksum_document: bytes) -> str:
@@ -73,11 +90,13 @@ def _expected_digest(checksum_document: bytes) -> str:
     return f"{ownership.PREFIX}{parts[0]}"
 
 
-def fetch_and_verify(downloader: Downloader, version: str) -> bytes:
-    """Fetch the `pegasus` binary published for ``version``, verified against
-    its own published checksum.
+def fetch_and_verify(downloader: Downloader, version: str, release: ReleaseSource) -> bytes:
+    """Fetch the binary published for ``version`` at ``release``, verified
+    against its own published checksum.
 
-    The checksum is fetched first, and the binary only once it is in hand --
+    ``release`` names the one and only address this ever fetches from --
+    there is no second, implicit source it could fetch from instead. The
+    checksum is fetched first, and the binary only once it is in hand --
     never the other way around, so a checksum that cannot be fetched at all
     never spends the (much larger) binary download for nothing. Raises
     :class:`UpgradeError` naming what was expected and what arrived on a
@@ -86,19 +105,21 @@ def fetch_and_verify(downloader: Downloader, version: str) -> bytes:
     :func:`replace_binary`'s job, never this function's.
     """
     try:
-        checksum_document = downloader.fetch(checksum_url(version))
+        checksum_document = downloader.fetch(checksum_url(version, release))
     except DownloaderError as error:
-        raise UpgradeError(f"could not fetch the checksum for pegasus {version}: {error}") from error
+        raise UpgradeError(
+            f"could not fetch the checksum for {release.binary_asset} {version}: {error}"
+        ) from error
     expected = _expected_digest(checksum_document)
     try:
-        fetched = downloader.fetch(binary_url(version))
+        fetched = downloader.fetch(binary_url(version, release))
     except DownloaderError as error:
-        raise UpgradeError(f"could not fetch pegasus {version}: {error}") from error
+        raise UpgradeError(f"could not fetch {release.binary_asset} {version}: {error}") from error
     digest = ownership.digest_of_bytes(fetched)
     if digest != expected:
         raise UpgradeError(
-            f"checksum mismatch for pegasus {version}: expected {expected} but the download "
-            f"hashed to {digest}; nothing was replaced"
+            f"checksum mismatch for {release.binary_asset} {version}: expected {expected} but the "
+            f"download hashed to {digest}; nothing was replaced"
         )
     return fetched
 
@@ -139,4 +160,4 @@ def replace_binary(filesystem: FileSystem, destination: Path, content: bytes) ->
     try:
         filesystem.write_atomic(destination, content, mode=mode)
     except FileSystemError as error:
-        raise UpgradeError(f"pegasus was verified but could not be placed at {destination}: {error}") from error
+        raise UpgradeError(f"the verified binary could not be placed at {destination}: {error}") from error

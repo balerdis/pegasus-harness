@@ -45,7 +45,7 @@ class TimeoutTest(CheckForUpdateTestCase):
     see `cli.UPDATE_CHECK_TIMEOUT_SECONDS` for why a few seconds is enough."""
 
     def test_the_version_check_asks_for_the_short_timeout(self):
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("v5.11.0")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("v5.11.0")})
         runtime = self.runtime(downloader=downloader)
         cli.check_for_update(runtime)
         self.assertEqual(downloader.timeouts, [cli.UPDATE_CHECK_TIMEOUT_SECONDS])
@@ -60,17 +60,17 @@ class TimeoutTest(CheckForUpdateTestCase):
 
 class FreshLookupTest(CheckForUpdateTestCase):
     def test_a_successful_fetch_reports_the_tag_with_its_v_prefix_stripped(self):
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("v5.11.0")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("v5.11.0")})
         runtime = self.runtime(downloader=downloader)
         self.assertEqual(cli.check_for_update(runtime), "5.11.0")
 
     def test_a_tag_with_no_v_prefix_is_reported_unchanged(self):
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("5.11.0")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("5.11.0")})
         runtime = self.runtime(downloader=downloader)
         self.assertEqual(cli.check_for_update(runtime), "5.11.0")
 
     def test_a_successful_fetch_writes_the_cache(self):
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("v5.11.0")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("v5.11.0")})
         filesystem = FakeFileSystem()
         runtime = self.runtime(downloader=downloader, filesystem=filesystem)
         cli.check_for_update(runtime)
@@ -95,12 +95,12 @@ class SilentFailureTest(CheckForUpdateTestCase):
         self.assertIsNone(cli.check_for_update(runtime))
 
     def test_a_malformed_json_body_answers_none(self):
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: b"not json at all"})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: b"not json at all"})
         runtime = self.runtime(downloader=downloader)
         self.assertIsNone(cli.check_for_update(runtime))
 
     def test_a_response_missing_tag_name_answers_none(self):
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: json.dumps({"nope": True}).encode()})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: json.dumps({"nope": True}).encode()})
         runtime = self.runtime(downloader=downloader)
         self.assertIsNone(cli.check_for_update(runtime))
 
@@ -122,7 +122,7 @@ class SilentFailureTest(CheckForUpdateTestCase):
 
 class OffSwitchTest(CheckForUpdateTestCase):
     def test_the_environment_variable_disables_the_check_with_no_network_touched(self):
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("v9.9.9")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("v9.9.9")})
         runtime = self.runtime(downloader=downloader, variables={"PEGASUS_NO_UPDATE_CHECK": "1"})
         self.assertIsNone(cli.check_for_update(runtime))
         self.assertEqual(downloader.calls, [])
@@ -133,7 +133,7 @@ class OffSwitchTest(CheckForUpdateTestCase):
         provable without ever touching the real process environment."""
         import os
 
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("v9.9.9")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("v9.9.9")})
         # Set in the real environment but NOT in `runtime.variables`: if the
         # implementation ever reached for `os.environ` this would wrongly
         # disable the check.
@@ -157,7 +157,7 @@ class CacheTest(CheckForUpdateTestCase):
         filesystem = FakeFileSystem()
         cache_path = filesystem.data_dir(HOME) / "update-check.json"
         filesystem.write_atomic(cache_path, json.dumps({"success_checked_at": AT, "latest_version": "5.9.0"}).encode())
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("v5.12.0")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("v5.12.0")})
         runtime = self.runtime(now=MUCH_LATER, downloader=downloader, filesystem=filesystem)
         self.assertEqual(cli.check_for_update(runtime), "5.12.0")
         self.assertEqual(len(downloader.calls), 1)
@@ -180,7 +180,7 @@ class CacheTest(CheckForUpdateTestCase):
         filesystem = FakeFileSystem()
         cache_path = filesystem.data_dir(HOME) / "update-check.json"
         filesystem.write_atomic(cache_path, b"not json")
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("v5.12.0")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("v5.12.0")})
         runtime = self.runtime(downloader=downloader, filesystem=filesystem)
         self.assertEqual(cli.check_for_update(runtime), "5.12.0")
 
@@ -242,7 +242,7 @@ class FailureCacheTest(CheckForUpdateTestCase):
         filesystem.write_atomic(
             cache_path, json.dumps({"failure_checked_at": AT, "latest_version": None}).encode()
         )
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("v5.12.0")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("v5.12.0")})
         runtime = self.runtime(now=MUCH_LATER, downloader=downloader, filesystem=filesystem)
         self.assertEqual(cli.check_for_update(runtime), "5.12.0")
         self.assertEqual(len(downloader.calls), 1)
@@ -281,7 +281,7 @@ class FailureCacheTest(CheckForUpdateTestCase):
 
 class OffSwitchReadsNothingTest(CheckForUpdateTestCase):
     def test_the_off_switch_never_reads_the_cache_either(self):
-        downloader = FakeDownloader({cli.UPDATE_CHECK_URL: _release_body("v9.9.9")})
+        downloader = FakeDownloader({cli.default_identity().release.latest_release_api_url: _release_body("v9.9.9")})
         cache_path = FakeFileSystem().data_dir(HOME) / "update-check.json"
         filesystem = FakeFileSystem(fail_exists={cache_path})
         runtime = self.runtime(downloader=downloader, filesystem=filesystem, variables={"PEGASUS_NO_UPDATE_CHECK": "1"})

@@ -18,7 +18,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from build_release_evidence import (  # noqa: E402
+    BUILD_ZIPAPP_ASSET_NAME,
+    BUILD_ZIPAPP_PATH,
     artifact_evidence,
+    build_zipapp_evidence,
     digest,
     install_sh_evidence,
     tagged_file,
@@ -26,6 +29,7 @@ from build_release_evidence import (  # noqa: E402
 from build_zipapp import build  # noqa: E402
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "zipapp_source"
+FIXTURE_IDENTITY = Path(__file__).resolve().parent / "fixtures" / "zipapp_source_identity.json"
 FIXTURE_VERSION = "9.9.9-fixture"
 
 
@@ -53,7 +57,7 @@ class ArtifactEvidenceTest(unittest.TestCase):
         self._directory = tempfile.TemporaryDirectory()
         self.addCleanup(self._directory.cleanup)
         self.artifact = Path(self._directory.name) / "pegasus"
-        build(FIXTURE_ROOT, self.artifact)
+        build(FIXTURE_ROOT, self.artifact, FIXTURE_IDENTITY)
 
     def test_evidences_an_artifact_whose_reported_version_matches(self):
         evidence = artifact_evidence(self.artifact, FIXTURE_VERSION)
@@ -131,7 +135,7 @@ class InstallShEvidenceTest(unittest.TestCase):
         artifact_dir = tempfile.TemporaryDirectory()
         self.addCleanup(artifact_dir.cleanup)
         artifact_path = Path(artifact_dir.name) / "pegasus"
-        build(FIXTURE_ROOT, artifact_path)
+        build(FIXTURE_ROOT, artifact_path, FIXTURE_IDENTITY)
 
         artifact = artifact_evidence(artifact_path, FIXTURE_VERSION)
         install_sh = install_sh_evidence(commit, root=self.repo)
@@ -141,6 +145,74 @@ class InstallShEvidenceTest(unittest.TestCase):
         self.assertEqual(
             install_sh["sha256"],
             hashlib.sha256(tagged_file(commit, "install.sh", root=self.repo)).hexdigest(),
+        )
+
+
+class BuildZipappEvidenceTest(unittest.TestCase):
+    """Certifying `tools/build_zipapp.py` itself as a release asset, the same shape as
+    `install.sh` -- the builder must be obtainable from the release without cloning the engine."""
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.repo = Path(self._directory.name)
+        _init_repo(self.repo)
+
+    def test_certifies_build_zipapp_bytes_from_the_commit(self):
+        tool_path = self.repo / BUILD_ZIPAPP_PATH
+        tool_path.parent.mkdir(parents=True, exist_ok=True)
+        tool_path.write_text("#!/usr/bin/env python3\nprint('builder')\n", encoding="utf-8")
+        commit = _commit_all(self.repo, "add build_zipapp.py")
+
+        evidence = build_zipapp_evidence(commit, root=self.repo)
+
+        self.assertEqual(evidence["name"], BUILD_ZIPAPP_ASSET_NAME)
+        self.assertEqual(evidence["sha256"], digest(tool_path))
+
+    def test_rejects_a_commit_with_no_build_zipapp(self):
+        (self.repo / "pyproject.toml").write_text("[project]\nversion = \"1.0.0\"\n", encoding="utf-8")
+        commit = _commit_all(self.repo, "no build_zipapp.py here")
+
+        with self.assertRaises(ValueError) as raised:
+            build_zipapp_evidence(commit, root=self.repo)
+
+        self.assertIn(BUILD_ZIPAPP_PATH, str(raised.exception))
+
+    def test_rejects_a_working_tree_build_zipapp_that_differs_from_the_committed_one(self):
+        tool_path = self.repo / BUILD_ZIPAPP_PATH
+        tool_path.parent.mkdir(parents=True, exist_ok=True)
+        tool_path.write_text("#!/usr/bin/env python3\nprint('committed')\n", encoding="utf-8")
+        commit = _commit_all(self.repo, "add build_zipapp.py")
+        committed_sha256 = hashlib.sha256(tagged_file(commit, BUILD_ZIPAPP_PATH, root=self.repo)).hexdigest()
+        tool_path.write_text("#!/usr/bin/env python3\nprint('tampered')\n", encoding="utf-8")
+        worktree_sha256 = digest(tool_path)
+
+        with self.assertRaises(ValueError) as raised:
+            build_zipapp_evidence(commit, root=self.repo)
+
+        message = str(raised.exception)
+        self.assertIn(worktree_sha256, message)
+        self.assertIn(committed_sha256, message)
+
+    def test_manifest_assets_list_carries_all_three_files(self):
+        """The end-to-end shape `main()` writes: `assets` names all three files this release ships."""
+        (self.repo / "install.sh").write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+        tool_path = self.repo / BUILD_ZIPAPP_PATH
+        tool_path.parent.mkdir(parents=True, exist_ok=True)
+        tool_path.write_text("#!/usr/bin/env python3\nprint('builder')\n", encoding="utf-8")
+        commit = _commit_all(self.repo, "add install.sh and build_zipapp.py")
+        artifact_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(artifact_dir.cleanup)
+        artifact_path = Path(artifact_dir.name) / "pegasus"
+        build(FIXTURE_ROOT, artifact_path, FIXTURE_IDENTITY)
+
+        artifact = artifact_evidence(artifact_path, FIXTURE_VERSION)
+        install_sh = install_sh_evidence(commit, root=self.repo)
+        build_zipapp = build_zipapp_evidence(commit, root=self.repo)
+        assets = [artifact, install_sh, build_zipapp]
+
+        self.assertEqual(
+            {asset["name"] for asset in assets}, {"pegasus", "install.sh", BUILD_ZIPAPP_ASSET_NAME}
         )
 
 

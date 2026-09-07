@@ -213,6 +213,13 @@ class _FakeInstallWindow:
         return " ".join(text for _, _, text, _ in self.calls)
 
 
+#: Stands in for a real `cli.Runtime`'s own `.identity` -- every test below
+#: replaces `session.plan_task`/`session.step` entirely, so nothing here
+#: reads `runtime` for anything but the identity `busy_message_for` and
+#: `Navigator.starting` now need a name from.
+_FAKE_RUNTIME = SimpleNamespace(identity=SimpleNamespace(display_name="Demo Product", wordmark_words=("DEMO",)))
+
+
 class RunInstallTest(unittest.TestCase):
     """`_run_install` has never had a test of its own -- precisely why a
     worker exception collapsing into a meaningless `IndexError`, and a
@@ -237,7 +244,7 @@ class RunInstallTest(unittest.TestCase):
             mock.patch.object(app_module.curses, "flushinp"),
         ):
             with self.assertRaises(TypeError) as caught:
-                app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+                app_module._run_install(window, self._navigator(), runtime=_FAKE_RUNTIME, accent_attr=curses.A_BOLD)
         self.assertEqual(str(caught.exception), "sink chain exploded")
 
     def test_a_bare_os_error_from_the_worker_also_surfaces_unchanged(self):
@@ -253,7 +260,7 @@ class RunInstallTest(unittest.TestCase):
             mock.patch.object(app_module.curses, "flushinp"),
         ):
             with self.assertRaises(OSError) as caught:
-                app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+                app_module._run_install(window, self._navigator(), runtime=_FAKE_RUNTIME, accent_attr=curses.A_BOLD)
         self.assertEqual(str(caught.exception), "No space left on device")
 
     def test_keyboard_interrupt_still_joins_the_worker_and_restores_blocking_input(self):
@@ -271,7 +278,7 @@ class RunInstallTest(unittest.TestCase):
             mock.patch.object(app_module.curses, "flushinp") as flushinp,
         ):
             with self.assertRaises(KeyboardInterrupt):
-                app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+                app_module._run_install(window, self._navigator(), runtime=_FAKE_RUNTIME, accent_attr=curses.A_BOLD)
 
         # The join in `finally` must have actually waited -- if it merely
         # detached, the worker's `Event` would still be unset here.
@@ -291,7 +298,7 @@ class RunInstallTest(unittest.TestCase):
             mock.patch.object(app_module.curses, "flushinp"),
         ):
             with self.assertRaises(KeyboardInterrupt):
-                app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+                app_module._run_install(window, self._navigator(), runtime=_FAKE_RUNTIME, accent_attr=curses.A_BOLD)
 
         self.assertIn("cannot be safely interrupted", window.drawn_text())
 
@@ -305,7 +312,7 @@ class RunInstallTest(unittest.TestCase):
             mock.patch.object(app_module.session, "plan_task", return_value=task),
             mock.patch.object(app_module.curses, "flushinp") as flushinp,
         ):
-            result = app_module._run_install(window, self._navigator(), runtime=None, accent_attr=curses.A_BOLD)
+            result = app_module._run_install(window, self._navigator(), runtime=_FAKE_RUNTIME, accent_attr=curses.A_BOLD)
 
         self.assertEqual(result, "install-result")
         self.assertIn(-1, window.timeouts)
@@ -418,7 +425,7 @@ class StartUpdateCheckTest(unittest.TestCase):
     def test_the_happy_path_still_reaches_the_holder(self):
         with mock.patch.object(app_module.cli, "check_for_update", return_value="5.11.0"):
             holder = app_module._UpdateCheckHolder()
-            thread = app_module._start_update_check(runtime=None, holder=holder)
+            thread = app_module._start_update_check(runtime=_FAKE_RUNTIME, holder=holder)
             thread.join(timeout=1)
         self.assertFalse(thread.is_alive())
         self.assertEqual(holder.snapshot(), (True, "5.11.0"))
@@ -430,7 +437,7 @@ class StartUpdateCheckTest(unittest.TestCase):
         instead of leaving `holder` with a legitimate answer."""
         with mock.patch.object(app_module.cli, "check_for_update", side_effect=RuntimeError("boom")):
             holder = app_module._UpdateCheckHolder()
-            thread = app_module._start_update_check(runtime=None, holder=holder)
+            thread = app_module._start_update_check(runtime=_FAKE_RUNTIME, holder=holder)
             thread.join(timeout=1)
         self.assertFalse(thread.is_alive())
         self.assertEqual(holder.snapshot(), (True, None))
@@ -438,7 +445,7 @@ class StartUpdateCheckTest(unittest.TestCase):
     def test_the_returned_thread_is_a_daemon(self):
         with mock.patch.object(app_module.cli, "check_for_update", return_value=None):
             holder = app_module._UpdateCheckHolder()
-            thread = app_module._start_update_check(runtime=None, holder=holder)
+            thread = app_module._start_update_check(runtime=_FAKE_RUNTIME, holder=holder)
             thread.join(timeout=1)
         self.assertTrue(thread.daemon)
 
@@ -517,7 +524,7 @@ class MainLoopUpdateCheckTest(unittest.TestCase):
         window.timeout(app_module.UPDATE_CHECK_POLL_MS)  # what `run` does before entering `_main_loop`
         with mock.patch.object(holder, "snapshot", side_effect=snapshot):
             final = app_module._main_loop(
-                window, navigator, runtime=None, accent_attr=curses.A_BOLD, notice=notice, holder=holder
+                window, navigator, runtime=_FAKE_RUNTIME, accent_attr=curses.A_BOLD, notice=notice, holder=holder
             )
 
         self.assertTrue(final.quit, "the menu never reached Exit -- navigation was blocked by the update check")
@@ -559,7 +566,7 @@ class MainLoopUpdateCheckTest(unittest.TestCase):
             mock.patch.object(app_module.curses, "flushinp"),
         ):
             final = app_module._main_loop(
-                window, navigator, runtime=None, accent_attr=curses.A_BOLD, notice=notice, holder=holder
+                window, navigator, runtime=_FAKE_RUNTIME, accent_attr=curses.A_BOLD, notice=notice, holder=holder
             )
 
         self.assertTrue(final.quit)
@@ -578,7 +585,7 @@ class MainLoopUpdateCheckTest(unittest.TestCase):
         window = _FakeInstallWindow(
             getch_script=[curses.KEY_DOWN] * exit_index + [curses.KEY_ENTER]
         )
-        final = app_module._main_loop(window, navigator, runtime=None, accent_attr=curses.A_BOLD, notice=notice, holder=holder)
+        final = app_module._main_loop(window, navigator, runtime=_FAKE_RUNTIME, accent_attr=curses.A_BOLD, notice=notice, holder=holder)
         self.assertTrue(final.quit)
 
 

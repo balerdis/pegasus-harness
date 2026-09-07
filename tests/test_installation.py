@@ -37,7 +37,7 @@ class InstallAndRetireTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.home = Path(self.directory.name)
-        self.fs = PosixFileSystem()
+        self.fs = PosixFileSystem(product_id="pegasus-harness")
         self.registry = available()
         self.cli = self.registry.ids()[0]
         self.adapter = self.registry.get(self.cli)

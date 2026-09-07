@@ -233,7 +233,7 @@ def materialize_npm(
     if not node_present:
         raise MaterializeError(
             f"{item.name}: node is not on PATH; installing Node is the user's own responsibility, "
-            f"Pegasus does not materialize a runtime"
+            f"and a runtime is not materialized automatically"
         )
     if item.npm_lockfile is None or item.npm_package_name is None:
         raise MaterializeError(f"{item.name}: has no lockfile to install from")

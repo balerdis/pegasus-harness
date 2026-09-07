@@ -49,6 +49,7 @@ from pegasus.tui.navigator import (
 from pegasus.tui.view import render
 from platform_conditions import make_unwritable
 from real_home import RealHomeTestCase
+from test_cli_identity_sweep import ACME_IDENTITY, BrandAssertionMixin
 
 AT = "2026-08-14T00:00:00+00:00"
 CLI = available().ids()[0]
@@ -140,7 +141,7 @@ def _journal_shape(home: Path) -> dict:
     to hash the same is not, and comparing it as raw bytes elsewhere would
     fail the way `test_a_tui_install_matches...` did before this existed.
     """
-    document = json.loads(journal_path(PosixFileSystem(), home).read_text())
+    document = json.loads(journal_path(PosixFileSystem(product_id="pegasus-harness"), home).read_text())
     return _drop_digests(_sans(document, str(home)))
 
 
@@ -177,7 +178,7 @@ class SessionTestCase(RealHomeTestCase):
 
     def runtime(self, home: Path | None = None) -> cli.Runtime:
         return cli.Runtime(
-            filesystem=PosixFileSystem(), home=home or self.home, now=AT, out=io.StringIO(), variables=NO_BINARY
+            filesystem=PosixFileSystem(product_id="pegasus-harness"), home=home or self.home, now=AT, out=io.StringIO(), variables=NO_BINARY
         )
 
     def to_continue(self, navigator: Navigator) -> Navigator:
@@ -358,7 +359,10 @@ class GrantMcpThroughTheTuiTest(SessionTestCase):
         navigator = self.to_screen(runtime)
         self.assertIsInstance(navigator.current, Placeholder)
         self.assertIn("cbm", navigator.current.note)
-        self.assertEqual(navigator.current.note, cli._unresolved_bindings_message(CLI, ["cbm"]))
+        self.assertEqual(
+            navigator.current.note,
+            cli._unresolved_bindings_message(CLI, ["cbm"], program_name=runtime.identity.program_name),
+        )
 
     def test_a_shipped_server_is_never_offered_on_this_screen(self):
         """A server Pegasus itself installed is declared in the CLI's own
@@ -591,7 +595,7 @@ class ParityWithCliInstallTest(SessionTestCase):
             self.assertEqual(
                 _sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home))
             )
-            journal_relative = str(journal_path(PosixFileSystem(), self.home).relative_to(self.home))
+            journal_relative = str(journal_path(PosixFileSystem(product_id="pegasus-harness"), self.home).relative_to(self.home))
             self.assertEqual(
                 _tree(self.home, skip=frozenset({journal_relative})),
                 _tree(other_home, skip=frozenset({journal_relative})),
@@ -633,7 +637,7 @@ class ParityWithCliInstallMcpTest(SessionTestCase):
             self.assertEqual(
                 _sans(cli_report, str(self.home)), _sans(navigator.current.report, str(other_home))
             )
-            journal_relative = str(journal_path(PosixFileSystem(), self.home).relative_to(self.home))
+            journal_relative = str(journal_path(PosixFileSystem(product_id="pegasus-harness"), self.home).relative_to(self.home))
             self.assertEqual(
                 _tree(self.home, skip=frozenset({journal_relative})),
                 _tree(other_home, skip=frozenset({journal_relative})),
@@ -791,7 +795,10 @@ class LocalUpdateNoticeTest(SessionTestCase):
         behind = notice.local_behind[0]
         self.assertEqual(behind.recorded, "0.0.1")
         self.assertIsNotNone(behind.remedy_command)
-        self.assertEqual(behind.remedy_command, cli.install_command_for(CLI, ["cbm"]))
+        self.assertEqual(
+            behind.remedy_command,
+            cli.install_command_for(CLI, ["cbm"], program_name=runtime.identity.program_name),
+        )
 
         from pegasus.tui.navigator import update_notice_lines
 
@@ -799,6 +806,49 @@ class LocalUpdateNoticeTest(SessionTestCase):
         self.assertEqual(len(lines), 1)
         self.assertNotIn("choose Update", lines[0])
         self.assertIn(behind.remedy_command, lines[0])
+
+
+class LocalUpdateNoticeIdentityTest(BrandAssertionMixin, SessionTestCase):
+    """`local_update_notice` is the one impure bridge that used to build its
+    remedy command without ever passing `program_name=` down to
+    `cli.install_command_for` -- so it silently fell back to the packaged
+    identity's own program name instead of `runtime.identity`'s.
+
+    Every other test in this module builds its `Runtime` with no
+    `identity=` at all, which means `runtime.identity` and
+    `default_identity()` are the same object -- exactly the coincidence
+    that let the missing argument hide (see `test_cli_identity_sweep.py`'s
+    own module docstring for the same reasoning at the `cli.py` layer).
+    This test builds a `Runtime` around ACME -- an obviously fictional
+    product, never a real organization -- so a remedy command that quietly
+    named Pegasus instead cannot be mistaken for a coincidental match.
+    """
+
+    def runtime(self, home: Path | None = None) -> cli.Runtime:
+        return cli.Runtime(
+            filesystem=PosixFileSystem(product_id=ACME_IDENTITY.product_id),
+            home=home or self.home,
+            now=AT,
+            out=io.StringIO(),
+            variables=NO_BINARY,
+            identity=ACME_IDENTITY,
+        )
+
+    def test_remedy_command_names_acme_never_the_engine(self):
+        _present(self.home)
+        runtime = self.runtime()
+        cli.install(CLI, runtime, mcp=["cbm=acme-widget-key"])
+        store = cli.journal_store(runtime)
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        store.save(journal_module.with_install(journal, replace(install, mcp_bindings={})))
+
+        notice = session.local_update_notice(runtime, installed=session.detect_installed(runtime))
+        self.assertEqual(len(notice.local_behind), 1)
+        behind = notice.local_behind[0]
+        self.assertIsNotNone(behind.remedy_command)
+        self.assertIn(ACME_IDENTITY.program_name, behind.remedy_command)
+        self.assertNoEngineBrand(behind.remedy_command)
 
 
 class UpdateThroughTheTuiTest(SessionTestCase):

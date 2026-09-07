@@ -1,0 +1,12 @@
+{
+  "product_id": "fixture-product",
+  "display_name": "Fixture",
+  "program_name": "fixture",
+  "wordmark_words": ["FIXTURE"],
+  "release": {
+    "asset_url_template": "https://example.invalid/releases/download/{tag}/{asset}",
+    "binary_asset": "fixture",
+    "latest_release_api_url": "https://example.invalid/api/releases/latest",
+    "release_page_url": "https://example.invalid/releases"
+  }
+}
