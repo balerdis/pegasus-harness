@@ -589,7 +589,7 @@ class CommandRenderTest(unittest.TestCase):
             source=PurePosixPath("commands/sdd-apply.md"),
         )
         fields.update(overrides)
-        return self.adapter.render_command(self.layout, Command(**fields))[0].content.decode()
+        return self.adapter.render_command(self.layout, Command(**fields), "pegasus-orchestrator")[0].content.decode()
 
     def test_lands_in_the_commands_directory(self):
         artifact = self.adapter.render_command(
@@ -602,6 +602,7 @@ class CommandRenderTest(unittest.TestCase):
                 execution=Execution.INLINE,
                 source=PurePosixPath("commands/sdd-apply.md"),
             ),
+            "pegasus-orchestrator",
         )[0]
         self.assertEqual(artifact.path, CONFIG / "commands/sdd-apply.md")
 
@@ -1203,11 +1204,16 @@ class ShippedContentRenderTest(unittest.TestCase):
     def setUpClass(cls):
         adapter, cls.layout = Adapter(), Adapter().layout(ENVIRONMENT)
         loaded = cls.loaded = content_module.load()
+        orchestrator_name = next(agent.name for agent in loaded.agents if agent.default)
         cls.artifacts = [
             *(item for skill in loaded.skills for item in adapter.render_skill(cls.layout, skill)),
             *(item for agent in loaded.agents for item in adapter.render_agent(cls.layout, agent)),
             *(item for agent in loaded.agents for item in adapter.render_prompt(cls.layout, agent)),
-            *(item for command in loaded.commands for item in adapter.render_command(cls.layout, command)),
+            *(
+                item
+                for command in loaded.commands
+                for item in adapter.render_command(cls.layout, command, orchestrator_name)
+            ),
             *(item for mcp in loaded.mcp for item in adapter.render_mcp(cls.layout, mcp)),
             *adapter.render_system_prompt(cls.layout, loaded.system_prompt),
             *adapter.own_artifacts(cls.layout),
@@ -1506,7 +1512,7 @@ class PlaceholderRenderTest(unittest.TestCase):
             execution=Execution.ISOLATED,
             source=PurePosixPath("commands/sdd-apply.md"),
         )
-        content = self.adapter.render_command(self.layout, item)[0].content.decode("utf-8")
+        content = self.adapter.render_command(self.layout, item, "pegasus-orchestrator")[0].content.decode("utf-8")
         self.assertIn(self.skills, content)
 
     def test_a_system_prompt_body_gets_it(self):

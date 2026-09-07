@@ -130,6 +130,8 @@ def render(
         for item in _items(content, attribute):
             if capability is Capability.SUB_AGENTS:
                 artifacts.extend(getattr(adapter, renderer)(layout, item, overrides.get(item.name)))
+            elif capability is Capability.SLASH_COMMANDS:
+                artifacts.extend(getattr(adapter, renderer)(layout, item, _orchestrator_name(content)))
             else:
                 artifacts.extend(getattr(adapter, renderer)(layout, item))
 
@@ -203,6 +205,20 @@ def build(content: Content, adapter: Any) -> Catalog:
     config_root = adapter.layout(canonical).config_dir
     territory = Territory(roots=(config_root, CANONICAL_DATA_DIR))
     return Catalog(cli=adapter.id, entries=_entries(artifacts, territory, adapter.id))
+
+
+def _orchestrator_name(content: Content) -> str:
+    """The name of the agent this content declares a session starts in.
+
+    Read off `Agent.default`, which is itself content-declared (see
+    `pegasus.core.content.SESSION_STARTS_IN`), never a literal picked here --
+    this is the one place a `render_command` capability build learns what to
+    put in a rendered `agent:` field for `RunsAs.ORCHESTRATOR`.
+    """
+    starts = next((agent for agent in content.agents if agent.default), None)
+    if starts is None:
+        raise CatalogError("no agent starts the session; cannot render slash commands")
+    return starts.name
 
 
 def _items(content: Content, attribute: str) -> tuple[Any, ...]:

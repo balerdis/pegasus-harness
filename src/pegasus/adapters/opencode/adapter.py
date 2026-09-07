@@ -162,8 +162,8 @@ class Adapter:
     def render_prompt(self, layout: Layout, agent: Agent) -> list[Artifact]:
         return render.prompt(layout, agent)
 
-    def render_command(self, layout: Layout, command: Command) -> list[Artifact]:
-        return render.command(layout, command)
+    def render_command(self, layout: Layout, command: Command, orchestrator_name: str) -> list[Artifact]:
+        return render.command(layout, command, orchestrator_name)
 
     def render_system_prompt(self, layout: Layout, system_prompt: SystemPrompt) -> list[Artifact]:
         return render.system_prompt(layout, system_prompt)
