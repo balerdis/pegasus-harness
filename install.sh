@@ -117,7 +117,14 @@ ok()     { printf '  ✔ %s\n' "$*"; }
 info()   { printf '  %s\n' "$*"; }
 
 uso() {
-  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+  # Derivado por estructura, no por un rango de líneas fijo: imprime el
+  # bloque de comentario que arranca en la línea 2 (la 1 es el shebang) y
+  # sigue mientras cada línea empiece con "#", cortando en la primera que no
+  # lo haga -- así un comentario que crece o se achica más arriba nunca
+  # puede volver a desincronizar este texto del bloque real de uso (pasó una
+  # vez con un rango fijo: un comentario de identidad agregado más arriba
+  # corrió el bloque de uso y --help empezó a mostrar un texto incompleto).
+  awk 'NR==1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
 }
 
 # --- Argumentos ---
