@@ -219,8 +219,20 @@ class ParseRejectsAMalformedDocumentTest(unittest.TestCase):
             module.parse(document(version="1.0.0/../etc"))
 
     def test_a_version_with_whitespace_is_rejected(self):
-        with self.assertRaises(IdentityError):
-            module.parse(document(version="1.0.0 "))
+        """Every whitespace form, not just a trailing space.
+
+        A trailing newline is the one that hides: `$` in a Python pattern matches at
+        end-of-string *or* immediately before a final newline, so a rule anchored with
+        `$` and applied with `match()` accepts `"1.0.0\n"` while reading as though it
+        rejects all whitespace. This value reaches a release URL path, and a raw
+        newline there raises `http.client.InvalidURL` from inside `urlopen` -- which
+        subclasses neither `OSError` nor `ValueError`, so the downloader does not catch
+        it and the traceback escapes `upgrade` instead of becoming a clean refusal.
+        """
+        for version in ("1.0.0 ", " 1.0.0", "1.0.0\n", "1.0.0\r", "1.0.0\t", "1.0\n.0", "1.0.0\n\n"):
+            with self.subTest(version=version):
+                with self.assertRaises(IdentityError):
+                    module.parse(document(version=version))
 
     def test_a_version_starting_with_a_symbol_is_rejected(self):
         with self.assertRaises(IdentityError):

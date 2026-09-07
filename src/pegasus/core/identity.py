@@ -26,8 +26,8 @@ MAX_WORD_LENGTH = 12
 """A solo wordmark of the longest allowed word is `12 * 5 - 1 = 59` columns,
 which still fits an 80-column terminal. Chosen, not derived."""
 
-SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
-"""The one charset a version string may use anywhere it reaches a release
+SAFE_VERSION = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9.+-]*\Z")
+r"""The one charset a version string may use anywhere it reaches a release
 URL -- shared, not duplicated, with `core.upgrade._tag`, which applies this
 exact same rule to a remote release's own `tag_name` before building
 `f"v{version}"` into `asset_url_template`. `identity.version` reaches that
@@ -38,7 +38,16 @@ so a version string this loose would let a malformed or malicious
 risk `_https_url` and `release.binary_asset` already guard against. Defined
 here, in `core.identity`, rather than in `core.upgrade`, because `upgrade`
 already depends on `identity` (`ReleaseSource`) and a validation rule this
-module needs at parse time cannot depend back on a module that imports it."""
+module needs at parse time cannot depend back on a module that imports it.
+
+Anchored with `\A`/`\Z`, never `^`/`$`: Python's `$` also matches immediately
+before a final newline, so `^...$` applied with `match()` accepts `"1.0.0\n"` --
+passing a rule whose whole purpose is to refuse whitespace, and sending a raw
+newline into the release URL. `urlopen` then raises `http.client.InvalidURL`,
+which subclasses neither `OSError` nor `ValueError`, so the downloader does not
+catch it and the traceback escapes `upgrade` instead of becoming a clean refusal.
+`\Z` matches only at the true end of the string, whatever flags or match method
+a later caller reaches for."""
 
 
 class IdentityError(ValueError):
