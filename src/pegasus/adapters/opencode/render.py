@@ -361,15 +361,20 @@ def _body(layout: Layout, body: str, owner: str) -> str:
     This is where those facts become this layout's directories.
     """
     try:
-        return placeholders.fill(body, _facts(layout))
+        return placeholders.fill(body, facts(layout))
     except placeholders.Unanswered as missing:
         raise RenderError(
             f"{owner}: this layout has no {missing.name}, so the body cannot be filled"
         ) from None
 
 
-def _facts(layout: Layout) -> dict[str, str]:
-    """What this layout can answer. An absent anchor answers nothing, never a blank."""
+def facts(layout: Layout) -> dict[str, str]:
+    """What this layout can answer. An absent anchor answers nothing, never a blank.
+
+    Public to this package so `adapter.own_artifacts` answers a bundled asset's
+    `skills_root` from this one function rather than from a second copy of the
+    same rule -- two copies is how one of them ends up drifting.
+    """
     facts: dict[str, str] = {}
     if layout.skills_dir is not None:
         facts["skills_root"] = str(layout.skills_dir)

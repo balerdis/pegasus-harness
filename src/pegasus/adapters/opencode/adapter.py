@@ -231,14 +231,13 @@ class Adapter:
 def _asset_facts(layout: Layout, orchestrator_name: str) -> dict[str, str]:
     """What a bundled asset may ask this adapter to fill in.
 
-    Mirrors `render._facts`, which answers the same `skills_root` fact for a
-    content body -- `own_artifacts` needs its own copy because it also answers
-    `orchestrator`, a fact no content body has any reason to ask for.
+    Extends `render.facts`, which answers `skills_root` for a content body,
+    rather than restating that rule here: `own_artifacts` only adds
+    `orchestrator`, a fact no content body has any reason to ask for. Derived
+    and not copied, so changing how a layout answers `skills_root` cannot leave
+    assets answering it the old way.
     """
-    facts: dict[str, str] = {"orchestrator": orchestrator_name}
-    if layout.skills_dir is not None:
-        facts["skills_root"] = str(layout.skills_dir)
-    return facts
+    return {**render.facts(layout), "orchestrator": orchestrator_name}
 
 
 def _rendered_asset(raw: bytes, facts: dict[str, str]) -> bytes:
