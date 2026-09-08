@@ -10,7 +10,7 @@ import textwrap
 import unittest
 import zipfile
 from dataclasses import replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath, PurePosixPath
 
 from pegasus.adapters.opencode import Adapter
 from pegasus.adapters.opencode import adapter as adapter_module
@@ -980,6 +980,43 @@ class OwnArtifactsTest(unittest.TestCase):
     def test_everything_stays_inside_the_configuration_root(self):
         for item in self.artifacts:
             self.assertTrue(item.path.is_relative_to(self.layout.config_dir), item.path)
+
+    def test_no_shipped_asset_carries_an_installing_machine_s_absolute_path(self):
+        """The complement of filling placeholders: what an asset must NOT come out holding.
+
+        Substitution runs over an asset's whole text, comments included, so a comment
+        that merely *mentions* a placeholder gets rewritten too -- which is how a real
+        installing home's `skills_root` ended up baked into the notifier's own
+        documentation. No bundled asset needs a layout path today, and one that came to
+        need it would be relaxing this guard on purpose rather than by accident.
+
+        Scoped to the assets that ship from the tree, computed from the same walk
+        `own_artifacts` uses rather than by exempting an id: `pegasus-skill-registry.env`
+        is synthesized at install time and legitimately *is* nothing but layout paths.
+        Both halves are derived -- the anchors from the layout, the asset ids from the
+        asset tree -- so a new layout anchor or a new bundled asset is covered without
+        this test being touched.
+        """
+        anchors = {
+            name: value
+            for name, value in vars(self.layout).items()
+            if isinstance(value, PurePath)
+        }
+        self.assertTrue(anchors, "the layout exposes no paths; this test would prove nothing")
+        bundled = {
+            f"own:{group}/{relative}"
+            for group in adapter_module.ASSET_TARGETS
+            for _path, relative in adapter_module._asset_files(adapter_module.ASSETS / group)
+        }
+        self.assertTrue(bundled, "no bundled assets found; this test would prove nothing")
+        for item in only(self.artifacts, FileArtifact):
+            if item.id not in bundled:
+                continue
+            text = item.content.decode("utf-8", errors="ignore")
+            for name, value in anchors.items():
+                self.assertNotIn(
+                    str(value), text, f"{item.id} carries the layout's {name} ({value})"
+                )
 
 
     def test_only_the_assets_the_tree_marks_executable_become_executable(self):

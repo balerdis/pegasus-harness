@@ -5,9 +5,15 @@ import { spawn } from "node:child_process"
 // `Agent.default` / `SESSION_STARTS_IN` in the content core), never a literal
 // this plugin picks for itself: a distribution overlays its own content, so
 // the real orchestrator name varies per release and a hardcoded literal here
-// would silently stop matching. `{{orchestrator}}` is filled in at install
-// time from that content-declared name (see `core.placeholders`), the same
-// way `{{skills_root}}` already is for other bundled assets.
+// would silently stop matching. The value below is a placeholder the adapter
+// fills at install time from that content-declared name -- see
+// `core.placeholders` and `adapter.own_artifacts`.
+//
+// Substitution runs over an asset's whole text, comments included, so this
+// prose deliberately spells no placeholder token. An earlier version of this
+// comment named two of them and had itself rewritten: the sentences turned to
+// nonsense and an installing machine's absolute path was baked into a shipped
+// plugin. Describe a placeholder here; never write one.
 const ORCHESTRATOR_AGENT = "{{orchestrator}}"
 const sessionStates = new Map<string, "idle" | "blocked" | "working">()
 
