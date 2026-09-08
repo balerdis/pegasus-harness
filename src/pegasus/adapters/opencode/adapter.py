@@ -15,6 +15,7 @@ from pegasus.adapters.opencode import layout as layout_module
 from pegasus.adapters.opencode import manifest as manifest_module
 from pegasus.adapters.opencode import models as models_module
 from pegasus.adapters.opencode import render
+from pegasus.core import placeholders
 from pegasus.core.content import Agent, Command, Mcp, Skill, SystemPrompt
 from pegasus.core.model_catalog import ModelCatalog
 from pegasus.core.types import (
@@ -178,18 +179,24 @@ class Adapter:
 
     # --- What this adapter ships on its own ---
 
-    def own_artifacts(self, layout: Layout) -> list[Artifact]:
+    def own_artifacts(self, layout: Layout, orchestrator_name: str) -> list[Artifact]:
         """Files that exist only because OpenCode works the way it does.
 
         Plugins written against its plugin API, the npm manifest they depend on,
         the helper one of them invokes, and the settings keys that make OpenCode
         look for Pegasus's skills. None of these has an agnostic form.
+
+        `orchestrator_name` is filled into every bundled asset uniformly through
+        `_rendered_asset` -- one rule for all of them, never a check for which
+        file happens to need it -- so a plugin naming the orchestrator (the
+        notifier) asks for it the same way a skill or command body would.
         """
+        facts = _asset_facts(layout, orchestrator_name)
         artifacts: list[Artifact] = [
             FileArtifact(
                 id=f"own:{group}/{relative}",
                 path=layout.config_dir / target / relative,
-                content=path.read_bytes(),
+                content=_rendered_asset(path.read_bytes(), facts),
                 executable=_is_executable(path),
             )
             for group, target in sorted(ASSET_TARGETS.items())
@@ -219,6 +226,45 @@ class Adapter:
             ),
         ]
         return artifacts
+
+
+def _asset_facts(layout: Layout, orchestrator_name: str) -> dict[str, str]:
+    """What a bundled asset may ask this adapter to fill in.
+
+    Mirrors `render._facts`, which answers the same `skills_root` fact for a
+    content body -- `own_artifacts` needs its own copy because it also answers
+    `orchestrator`, a fact no content body has any reason to ask for.
+    """
+    facts: dict[str, str] = {"orchestrator": orchestrator_name}
+    if layout.skills_dir is not None:
+        facts["skills_root"] = str(layout.skills_dir)
+    return facts
+
+
+def _rendered_asset(raw: bytes, facts: dict[str, str]) -> bytes:
+    """Fill a bundled asset's placeholders, applied uniformly to every one of them.
+
+    Not a filename special case: every asset in `own_artifacts` passes through
+    here, so "this one plugin names the orchestrator" is nothing but an asset
+    that happens to use the vocabulary, the same as any content body would.
+
+    An asset that does not decode as UTF-8 text is shipped back unchanged.
+    Every bundled asset today is text, but substitution is a text operation,
+    and silently running it over an eventual binary asset would be an obscure
+    way to corrupt it -- refusing that quietly is the deliberate choice, not
+    an oversight.
+    """
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw
+    try:
+        filled = placeholders.fill(text, facts)
+    except placeholders.Unanswered as missing:
+        raise render.RenderError(
+            f"bundled asset: this layout has no {missing.name}, so it cannot be filled"
+        ) from None
+    return filled.encode("utf-8")
 
 
 def _is_executable(source: AssetNode) -> bool:

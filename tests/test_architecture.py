@@ -560,6 +560,64 @@ class NoProductIdentityOutsideCompositionRootTest(unittest.TestCase):
         self.assertEqual([text for _, text in _product_identity_offenders(probe)], ["pegasus"])
 
 
+def bundled_ts_assets() -> list[Path]:
+    """Every TypeScript/JavaScript asset an adapter bundles and ships verbatim.
+
+    `product_identity_modules()` above only walks `*.py` (it calls `ast.parse`
+    on what it finds), so a `.ts` asset is invisible to every brand scan in this
+    file -- exactly why the literal `pegasus-orchestrator` in
+    `pegasus-orchestrator-notifier.ts` shipped for a release without any test
+    noticing. This is the narrow mirror for that specific gap.
+    """
+    return sorted(
+        path
+        for path in (SOURCE / "adapters").rglob("*.ts")
+        if "__pycache__" not in path.parts
+    )
+
+
+class NoAgentNameLiteralInBundledTsAssetsTest(unittest.TestCase):
+    """Regression for the defect that shipped: a bundled `.ts` plugin hardcoded
+    the orchestrator agent's name as a literal, so the comparison it drove
+    silently never matched once a distribution's own content named its
+    orchestrator something else.
+
+    This does not (and must not) forbid the substring "pegasus" in a bundled
+    asset -- `pegasus-skill-registry.ts` and `pegasus-zellij-state.ts`
+    legitimately use it as this engine's own artifact/contract naming
+    convention, known debt this test leaves alone. It forbids one specific,
+    derived thing: the orchestrator's name *as it would actually be rendered*
+    -- `content.SESSION_STARTS_IN`, the one source of truth `catalog._orchestrator_name`
+    reads -- appearing as a quoted source literal in any bundled `.ts` asset.
+    Only a hardcoded copy of that exact name can trigger this; the placeholder
+    `{{orchestrator}}` this defect's fix introduced does not, because it is not
+    the rendered name, only the request for it.
+
+    Proven against the pre-fix asset: reverting
+    `pegasus-orchestrator-notifier.ts` to `const ORCHESTRATOR_AGENT =
+    "pegasus-orchestrator"` makes this test fail again.
+    """
+
+    def test_bundled_ts_assets_exist(self):
+        self.assertTrue(bundled_ts_assets(), "no .ts assets found under adapters/ -- scan target drifted")
+
+    def test_no_bundled_ts_asset_hardcodes_the_rendered_orchestrator_name(self):
+        from pegasus.core import content as content_module
+
+        literal = f'"{content_module.SESSION_STARTS_IN}"'
+        offenders = [
+            str(path.relative_to(SOURCE))
+            for path in bundled_ts_assets()
+            if literal in path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            f"a bundled .ts asset hardcodes the orchestrator name {literal} instead of "
+            "asking for it through {{orchestrator}}:\n" + "\n".join(offenders),
+        )
+
+
 def _owning_adapter(path: Path) -> str:
     """The adapter a file belongs to, or empty for the composition root itself."""
     relative = path.relative_to(ADAPTERS).parts

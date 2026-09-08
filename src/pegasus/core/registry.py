@@ -14,6 +14,17 @@ from pegasus.core.types import Capability, CapabilityManifest, Environment, Layo
 PROBE = Environment(home=Path("/nonexistent/pegasus-registry-probe"))
 """A home that does not exist, used to prove layouts are pure path arithmetic."""
 
+PROBE_ORCHESTRATOR = "probe-orchestrator-name-never-installed"
+"""An arbitrary orchestrator name, used only to satisfy `own_artifacts`'s
+required parameter at registration time.
+
+Registration has no `Content` to read a real one from -- it runs before any
+install exists -- and none is needed here: `_check_own_artifacts` only checks
+that every returned path stays inside `layout.config_dir`, a territory check
+that holds for any string at all. Named obviously synthetic so it can never be
+mistaken for a real distribution's orchestrator if it ever leaked into output.
+"""
+
 RENDERERS: dict[Capability, tuple[str, ...]] = {
     Capability.SKILLS: ("render_skill",),
     Capability.SYSTEM_PROMPT: ("render_system_prompt",),
@@ -123,7 +134,7 @@ def _check_own_artifacts(adapter: object, cli_id: str, layout: Layout) -> None:
         raise ManifestMismatchError(
             f"adapter {cli_id!r} must implement own_artifacts; return an empty list when it ships nothing"
         )
-    for artifact in adapter.own_artifacts(layout):
+    for artifact in adapter.own_artifacts(layout, PROBE_ORCHESTRATOR):
         if not artifact.path.is_relative_to(layout.config_dir):
             raise AdapterScopeError(
                 f"adapter {cli_id!r} would write {artifact.path} outside {layout.config_dir}"

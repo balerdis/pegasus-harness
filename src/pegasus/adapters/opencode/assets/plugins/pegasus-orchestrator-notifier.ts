@@ -1,7 +1,14 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { spawn } from "node:child_process"
 
-const ORCHESTRATOR_AGENT = "pegasus-orchestrator"
+// The name of the agent a session starts in is content-declared (see
+// `Agent.default` / `SESSION_STARTS_IN` in the content core), never a literal
+// this plugin picks for itself: a distribution overlays its own content, so
+// the real orchestrator name varies per release and a hardcoded literal here
+// would silently stop matching. `{{orchestrator}}` is filled in at install
+// time from that content-declared name (see `core.placeholders`), the same
+// way `{{skills_root}}` already is for other bundled assets.
+const ORCHESTRATOR_AGENT = "{{orchestrator}}"
 const sessionStates = new Map<string, "idle" | "blocked" | "working">()
 
 function sessionIDFrom(event: any) {

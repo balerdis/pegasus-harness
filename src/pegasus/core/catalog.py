@@ -124,6 +124,7 @@ def render(
     manifest = adapter.capabilities()
     overrides = model_overrides or {}
     artifacts: list[Any] = []
+    orchestrator_name = _orchestrator_name(content)
 
     for capability in sorted(manifest.enabled - INTERACTIVE, key=lambda item: item.value):
         attribute, renderer = SOURCES[capability]
@@ -131,11 +132,11 @@ def render(
             if capability is Capability.SUB_AGENTS:
                 artifacts.extend(getattr(adapter, renderer)(layout, item, overrides.get(item.name)))
             elif capability is Capability.SLASH_COMMANDS:
-                artifacts.extend(getattr(adapter, renderer)(layout, item, _orchestrator_name(content)))
+                artifacts.extend(getattr(adapter, renderer)(layout, item, orchestrator_name))
             else:
                 artifacts.extend(getattr(adapter, renderer)(layout, item))
 
-    artifacts.extend(adapter.own_artifacts(layout))
+    artifacts.extend(adapter.own_artifacts(layout, orchestrator_name))
     return artifacts
 
 

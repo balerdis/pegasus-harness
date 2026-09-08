@@ -102,7 +102,7 @@ class CliAdapter(Protocol):
 
     # --- What this adapter contributes on its own ---
 
-    def own_artifacts(self, layout: Layout) -> list[Artifact]:
+    def own_artifacts(self, layout: Layout, orchestrator_name: str) -> list[Artifact]:
         """Artifacts this adapter ships itself, not derived from the content core.
 
         Some files exist only because one CLI works the way it does: plugins
@@ -118,6 +118,11 @@ class CliAdapter(Protocol):
         Every returned artifact must resolve inside `layout.config_dir`; the
         registry rejects an adapter that writes outside its own territory. Return
         an empty list when the adapter ships nothing of its own.
+
+        `orchestrator_name` is the same content-declared name `render_command`
+        receives for `RunsAs.ORCHESTRATOR` (never a literal this adapter picks):
+        a bundled asset that needs to recognize the orchestrator session fills
+        it in through `core.placeholders` rather than hardcoding it.
         """
 
     # --- Models: only when the manifest declares per_agent_model ---

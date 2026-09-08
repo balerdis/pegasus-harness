@@ -35,6 +35,7 @@ from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileA
 HOME = Path("/home/probe")
 ENVIRONMENT = Environment(home=HOME, data_dir=HOME / ".local" / "share" / "pegasus-harness")
 CONFIG = HOME / ".config" / "opencode"
+ORCHESTRATOR = "pegasus-orchestrator"
 
 
 def only(artifacts, kind):
@@ -956,7 +957,7 @@ class ShippedEngramCommandTest(unittest.TestCase):
 class OwnArtifactsTest(unittest.TestCase):
     def setUp(self):
         self.layout = Adapter().layout(ENVIRONMENT)
-        self.artifacts = Adapter().own_artifacts(self.layout)
+        self.artifacts = Adapter().own_artifacts(self.layout, ORCHESTRATOR)
 
     def test_ships_the_adapter_only_assets(self):
         self.assertEqual(len(only(self.artifacts, FileArtifact)), 11)
@@ -989,7 +990,52 @@ class OwnArtifactsTest(unittest.TestCase):
         self.assertEqual(executable, {"pegasus-skill-registry"})
 
     def test_the_result_is_deterministic(self):
-        self.assertEqual(Adapter().own_artifacts(self.layout), Adapter().own_artifacts(self.layout))
+        self.assertEqual(
+            Adapter().own_artifacts(self.layout, ORCHESTRATOR),
+            Adapter().own_artifacts(self.layout, ORCHESTRATOR),
+        )
+
+    def test_the_shipped_notifier_names_the_content_declared_orchestrator(self):
+        """The positive half of the mirror: the notifier plugin must actually
+        carry whatever name content declares as its orchestrator, not just
+        fail to carry the old literal (that half is `test_no_asset_ships_...
+        pegasus_orchestrator_literal` below)."""
+        notifier = next(item for item in only(self.artifacts, FileArtifact) if item.path.name == "pegasus-orchestrator-notifier.ts")
+        self.assertIn(f'"{ORCHESTRATOR}"', notifier.content.decode("utf-8"))
+
+    def test_a_non_pegasus_orchestrator_name_reaches_the_notifier(self):
+        """The negative half: a distribution's own orchestrator name must
+        substitute cleanly, and the old literal must not survive alongside it."""
+        artifacts = Adapter().own_artifacts(self.layout, "king-pegasus-two")
+        notifier = next(item for item in only(artifacts, FileArtifact) if item.path.name == "pegasus-orchestrator-notifier.ts")
+        content = notifier.content.decode("utf-8")
+        self.assertIn('"king-pegasus-two"', content)
+        self.assertNotIn("pegasus-orchestrator", content)
+
+    def test_no_shipped_asset_still_carries_an_unfilled_placeholder(self):
+        """Derived from the data, never a hand-listed filename: whichever asset
+        ships, none of them may still say `{{...}}` once `own_artifacts` is done."""
+        for item in only(self.artifacts, FileArtifact):
+            self.assertNotIn(b"{{", item.content, item.path)
+
+    def test_every_placeholder_a_bundled_asset_uses_is_one_the_adapter_can_fill(self):
+        """A typo'd `{{...}}` in a bundled `.ts` (or other) asset must fail the
+        suite instead of shipping a broken plugin: every name any bundled asset
+        actually asks for must be inside the closed vocabulary `own_artifacts`
+        answers -- proven against the real source assets, not the rendered
+        (already-filled) output."""
+        from pegasus.core import placeholders as placeholders_module
+
+        used: set[str] = set()
+        for group in adapter_module.ASSET_TARGETS:
+            for path, _relative in adapter_module._asset_files(adapter_module.ASSETS / group):
+                try:
+                    text = path.read_bytes().decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                used.update(placeholders_module.names_in(text))
+        self.assertTrue(used, "fixture drifted: no bundled asset uses a placeholder any more")
+        self.assertEqual(used, used & placeholders_module.NAMES)
 
 
 class MissingAssetGroupTest(unittest.TestCase):
@@ -1111,7 +1157,7 @@ class RealZipappShipsTheEngramPluginTest(unittest.TestCase):
             env = Environment(home=home, data_dir=home / ".local" / "share" / "pegasus-harness")
             adapter = Adapter()
             layout = adapter.layout(env)
-            artifacts = adapter.own_artifacts(layout)
+            artifacts = adapter.own_artifacts(layout, "pegasus-orchestrator")
             plugin = next(
                 item for item in artifacts
                 if str(item.path).endswith("plugins/engram.ts")
@@ -1145,7 +1191,7 @@ class SkillRegistryContractTest(unittest.TestCase):
 
     def setUp(self):
         self.layout = Adapter().layout(ENVIRONMENT)
-        self.artifacts = Adapter().own_artifacts(self.layout)
+        self.artifacts = Adapter().own_artifacts(self.layout, ORCHESTRATOR)
         self.files = {item.path: item for item in only(self.artifacts, FileArtifact)}
 
     def contract_path(self):
@@ -1216,7 +1262,7 @@ class ShippedContentRenderTest(unittest.TestCase):
             ),
             *(item for mcp in loaded.mcp for item in adapter.render_mcp(cls.layout, mcp)),
             *adapter.render_system_prompt(cls.layout, loaded.system_prompt),
-            *adapter.own_artifacts(cls.layout),
+            *adapter.own_artifacts(cls.layout, orchestrator_name),
         ]
 
     def test_no_two_artifacts_claim_the_same_address(self):

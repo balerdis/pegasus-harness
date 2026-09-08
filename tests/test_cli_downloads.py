@@ -23,7 +23,7 @@ from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import journal as journal_module
 from pegasus.core import ownership
-from pegasus.core.content import Content, Distribution, Mcp
+from pegasus.core.content import Agent, AgentMode, Content, Distribution, Mcp, SESSION_STARTS_IN
 from pegasus.core.types import Environment
 from real_home import RealHomeTestCase as _RealHomeTestCase
 
@@ -43,7 +43,16 @@ PROBE = Mcp(
     version="1.2.3",
     checksum=CHECKSUM,
 )
-PROBE_CONTENT = Content(mcp=(PROBE,))
+#: `render` derives `orchestrator_name` unconditionally now, so a `Content`
+#: used with the real adapter through `cli.install` needs a default agent too.
+_ORCHESTRATOR = Agent(
+    name=SESSION_STARTS_IN,
+    description="A probe orchestrator",
+    body="Body.\n",
+    mode=AgentMode.PRIMARY,
+    source=PurePosixPath("agents/orchestrator.md"),
+)
+PROBE_CONTENT = Content(mcp=(PROBE,), agents=(_ORCHESTRATOR,))
 
 
 class RealHomeTestCase(_RealHomeTestCase):
@@ -189,7 +198,7 @@ ARCHIVE_PROBE = Mcp(
     archive_members=("probe", "README.md"),
     archive_executable="probe",
 )
-ARCHIVE_CONTENT = Content(mcp=(ARCHIVE_PROBE,))
+ARCHIVE_CONTENT = Content(mcp=(ARCHIVE_PROBE,), agents=(_ORCHESTRATOR,))
 
 
 @patch("pegasus.core.content.load", return_value=ARCHIVE_CONTENT)

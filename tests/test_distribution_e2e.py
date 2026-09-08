@@ -371,6 +371,18 @@ class DistributionOrchestratorRenameTest(unittest.TestCase):
         self.assertIsNotNone(match, "sdd-apply.md has no agent: frontmatter field")
         self.assertEqual(match.group(1), "acme-orchestrator")
 
+        # 6. The sibling defect this same rename exposes: the notifier plugin
+        # (`own_artifacts`, not `render_command`) used to hardcode
+        # `"pegasus-orchestrator"` as a TypeScript literal, independently of
+        # both `SESSION_STARTS_IN` and this fix's own `_orchestrator_name`.
+        # Installed end to end, it must carry ACME's own orchestrator name and
+        # never the old literal.
+        notifier = (
+            home / ".config" / "opencode" / "plugins" / "pegasus-orchestrator-notifier.ts"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"acme-orchestrator"', notifier)
+        self.assertNotIn("pegasus-orchestrator", notifier)
+
 
 if __name__ == "__main__":
     unittest.main()

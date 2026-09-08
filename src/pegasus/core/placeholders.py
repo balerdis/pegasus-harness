@@ -3,7 +3,11 @@
 A body is written once and installed by every adapter, so it must not name a
 path: an absolute directory under somebody's home is one product, one machine
 and one user. It names a fact instead -- `{{skills_root}}` -- and each adapter
-answers it from its own layout.
+answers it from its own layout. `{{orchestrator}}` is the same idea applied to
+identity rather than a path: the agent a session starts in is content-declared
+(`Agent.default`), never a literal an adapter or one of its bundled assets
+picks for itself -- see `core.catalog._orchestrator_name`, the one place that
+reads it off the content core.
 
 Double braces, because single ones are already spoken for. `{change-name}` and
 `{topic}` are addressed to the model reading the body, and confusing the two
@@ -20,7 +24,7 @@ import re
 from collections.abc import Mapping
 
 #: Every fact a body may ask for. Adding one obliges every adapter to answer it.
-NAMES = frozenset({"skills_root"})
+NAMES = frozenset({"skills_root", "orchestrator"})
 
 #: The lookarounds refuse a pair with another brace stuck to it. Without them
 #: `{{{skills_root}}}` matches the inner pair and fills into stray braces, which

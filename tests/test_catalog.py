@@ -32,6 +32,27 @@ def build(content, adapter):
     return catalog_module.build(content, adapter)
 
 
+#: `render` now derives `orchestrator_name` unconditionally -- `own_artifacts`
+#: is called on every build, never only when `SLASH_COMMANDS` is declared --
+#: so every synthetic `Content` exercised through `build`/`render` needs a
+#: default agent too, exactly as a real release always has one.
+_ORCHESTRATOR = content_module.Agent(
+    name=content_module.SESSION_STARTS_IN,
+    description="d",
+    body="body",
+    mode=content_module.AgentMode.PRIMARY,
+    source=PurePosixPath("agents/orchestrator.md"),
+)
+
+
+def _content(**fields):
+    """`Content(**fields)`, plus the default agent every real release carries."""
+    agents = fields.pop("agents", ())
+    if not any(agent.default for agent in agents):
+        agents = agents + (_ORCHESTRATOR,)
+    return Content(agents=agents, **fields)
+
+
 class StubAdapter:
     """An adapter that returns exactly the artifacts a test hands it."""
 
@@ -57,14 +78,15 @@ class StubAdapter:
         self.agent_calls.append((agent.name, model))
         return []
 
-    def own_artifacts(self, layout):
+    def own_artifacts(self, layout, orchestrator_name):
+        self.own_artifacts_orchestrator_name = orchestrator_name
         return list(self._own)
 
 
 def one_skill():
     from pegasus.core.content import Asset, Skill
 
-    return Content(
+    return _content(
         skills=(
             Skill(
                 name="alpha",
@@ -84,8 +106,13 @@ class BuildTest(unittest.TestCase):
 
     def test_includes_what_the_adapter_ships_itself(self):
         own = (FileArtifact(id="own:plugin", path=CONFIG / "plugins/x.ts", content=b"x", executable=False),)
-        catalog = build(Content(), StubAdapter(own=own))
+        catalog = build(_content(), StubAdapter(own=own))
         self.assertEqual([entry.id for entry in catalog.entries], ["own:plugin"])
+
+    def test_own_artifacts_receives_the_content_declared_orchestrator(self):
+        adapter = StubAdapter()
+        build(_content(), adapter)
+        self.assertEqual(adapter.own_artifacts_orchestrator_name, content_module.SESSION_STARTS_IN)
 
     def test_targets_are_relative_to_the_configuration_root(self):
         artifact = FileArtifact(id="a", path=CONFIG / "skills/alpha/SKILL.md", content=b"body", executable=False)
@@ -102,7 +129,7 @@ class BuildTest(unittest.TestCase):
     def test_a_capability_configured_after_installing_contributes_nothing(self):
         manifest = CapabilityManifest(cli_id="probe", skills=True, per_agent_model=True)
         adapter = StubAdapter(manifest=manifest)
-        self.assertEqual(len(build(Content(), adapter)), 0)
+        self.assertEqual(len(build(_content(), adapter)), 0)
 
     def test_every_non_interactive_capability_has_a_content_source(self):
         non_interactive = set(Capability) - catalog_module.INTERACTIVE
@@ -112,7 +139,7 @@ class BuildTest(unittest.TestCase):
 def one_agent(name="probe-agent"):
     from pegasus.core.content import Agent, AgentMode
 
-    return Content(
+    return _content(
         agents=(
             Agent(
                 name=name,
@@ -133,13 +160,16 @@ class RenderModelOverrideTest(unittest.TestCase):
         catalog_module.render(
             one_agent("probe-agent"), adapter, ENVIRONMENT, model_overrides={"probe-agent": "anthropic/x"}
         )
-        self.assertEqual(adapter.agent_calls, [("probe-agent", "anthropic/x")])
+        # `one_agent` now also carries the default orchestrator agent `_content`
+        # adds for `own_artifacts`'s sake; membership, not equality, is this
+        # test's business -- the override reaching the right name is.
+        self.assertIn(("probe-agent", "anthropic/x"), adapter.agent_calls)
 
     def test_an_agent_with_no_override_gets_none(self):
         manifest = CapabilityManifest(cli_id="probe", sub_agents=True)
         adapter = StubAdapter(manifest=manifest)
         catalog_module.render(one_agent("probe-agent"), adapter, ENVIRONMENT)
-        self.assertEqual(adapter.agent_calls, [("probe-agent", None)])
+        self.assertIn(("probe-agent", None), adapter.agent_calls)
 
     def test_build_never_forwards_a_model_override(self):
         """`build` has no `model_overrides` parameter at all, so an assignment
@@ -148,7 +178,7 @@ class RenderModelOverrideTest(unittest.TestCase):
         manifest = CapabilityManifest(cli_id="probe", sub_agents=True)
         adapter = StubAdapter(manifest=manifest)
         build(one_agent("probe-agent"), adapter)
-        self.assertEqual(adapter.agent_calls, [("probe-agent", None)])
+        self.assertIn(("probe-agent", None), adapter.agent_calls)
 
 
 class DigestTest(unittest.TestCase):
@@ -167,7 +197,7 @@ class DigestTest(unittest.TestCase):
     def test_a_configuration_digest_ignores_key_order(self):
         def digest(value):
             artifact = ConfigKeyArtifact(id="k", path=CONFIG / "settings.json", pointer="/a", value=value)
-            return build(Content(), StubAdapter(own=(artifact,))).entries[0].digest
+            return build(_content(), StubAdapter(own=(artifact,))).entries[0].digest
 
         self.assertEqual(digest({"a": 1, "b": 2}), digest({"b": 2, "a": 1}))
 
@@ -274,6 +304,17 @@ class McpConventionNamespaceTest(unittest.TestCase):
                 f"---\n\n# {server_id} convention body\n",
                 encoding="utf-8",
             )
+        agents_dir = root / "agents"
+        agents_dir.mkdir()
+        # `render` now derives `orchestrator_name` unconditionally, so a content
+        # tree used with `build`/`render` needs a default agent, exactly like a
+        # real release always has.
+        (agents_dir / f"{content_module.SESSION_STARTS_IN}.md").write_text(
+            f"---\nname: {content_module.SESSION_STARTS_IN}\ndescription: Probe orchestrator\n"
+            "mode: primary\noptional_mcp: [cbm, engram]\n---\n\nUses {{skills_root}}/_shared/mcp/cbm-convention.md "
+            "and {{skills_root}}/_shared/mcp/engram-convention.md.\n",
+            encoding="utf-8",
+        )
         return content_module.load(root)
 
     def test_two_colliding_ids_load_and_render_without_a_catalog_error(self):
@@ -402,7 +443,7 @@ class ShippedCatalogTest(unittest.TestCase):
         ambient home reach the rendered bytes, and only then can a `build` that
         quietly reads the environment again be told apart from one that does not.
         """
-        content = Content(
+        content = _content(
             agents=(
                 content_module.Agent(
                     name="probe",
