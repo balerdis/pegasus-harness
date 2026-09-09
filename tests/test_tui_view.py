@@ -548,6 +548,25 @@ class ModelsRowsRenderingTest(unittest.TestCase):
         lines = [line.text for line in render(_models_screen(rows=()), cursor=0)]
         self.assertTrue(any("no agent" in text.lower() for text in lines))
 
+    def test_an_activation_notice_from_a_write_is_shown(self):
+        """The bug: the rows step is the screen a write to this wizard
+        rebuilds, so it is the one place a person would ever see the notice
+        that the assignment just made is not in the running CLI configuration
+        yet. Nothing pins today's `_NOT_INSTALLED_YET` wording here -- that
+        string belongs to `cli.py` -- only that whatever `screen.activation`
+        holds reaches a rendered line."""
+        lines = [line.text for line in render(_models_screen(activation=("Reinstall to write it.",)), cursor=0)]
+        self.assertIn("Reinstall to write it.", lines)
+
+    def test_no_activation_notice_means_no_extra_lines_at_all(self):
+        """The mirror of the case above: a screen reached by narrowing (or
+        built before `activation` existed) must render byte-for-byte what it
+        always did -- an empty `activation` is not "the empty string", it is
+        nothing to show."""
+        with_notice = render(_models_screen(activation=("Reinstall to write it.",)), cursor=0)
+        without_notice = render(_models_screen(), cursor=0)
+        self.assertEqual(len(with_notice), len(without_notice) + 2)
+
 
 class ModelsProviderStepRenderingTest(unittest.TestCase):
     def test_every_reachable_provider_is_offered(self):

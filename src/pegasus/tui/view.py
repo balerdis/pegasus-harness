@@ -432,7 +432,14 @@ def _visible_window(count: int, cursor: int) -> tuple[int, int]:
 
 
 def _render_choices(
-    title: str, items: tuple[str, ...], cursor: int, footer: str, *, header: str | None = None, empty: str | None = None
+    title: str,
+    items: tuple[str, ...],
+    cursor: int,
+    footer: str,
+    *,
+    header: str | None = None,
+    empty: str | None = None,
+    trailer: tuple[str, ...] = (),
 ) -> tuple[Line, ...]:
     lines = [Line(title), Line("")]
     if not items:
@@ -448,6 +455,13 @@ def _render_choices(
         lines.append(Line(f"{prefix}{items[index]}", highlighted=index == cursor))
     if end < len(items):
         lines.append(Line(f"  ... {len(items) - end} more below"))
+    # Same convention `_render_grant_mcp_result` already uses for the same
+    # notice: a blank line, then the activation text itself, only when there
+    # is one -- an empty `trailer` must render byte-for-byte what this
+    # function always has, for every other screen that never passes one.
+    if trailer:
+        lines.append(Line(""))
+        lines.extend(Line(text) for text in trailer)
     lines += [Line(""), Line(footer)]
     return tuple(lines)
 
@@ -512,6 +526,11 @@ def _render_models(screen: ModelsScreen, cursor: int) -> tuple[Line, ...]:
     heading = f"Models · {screen.cli.display_name}"
     if screen.agent is None:
         items = tuple(f"{row.agent:<24} {row.current or '(no model)'}" for row in screen.rows)
+        # `activation` is only ever set right after `session` rebuilds this
+        # rows step following a write (set or remove) -- narrowing into the
+        # wizard's later steps starts a fresh `ModelsScreen` with none, so
+        # this is the one place on this screen the notice ever has something
+        # to say.
         return _render_choices(
             heading,
             items,
@@ -519,6 +538,7 @@ def _render_models(screen: ModelsScreen, cursor: int) -> tuple[Line, ...]:
             "enter: configure · d: remove current model · esc: back",
             header=f"{'Agent':<24} Current model",
             empty="This release ships no agent that accepts a model assignment.",
+            trailer=screen.activation,
         )
     heading = f"{heading} · {screen.agent}"
     if screen.provider_id is None:

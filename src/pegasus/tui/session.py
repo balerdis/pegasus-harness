@@ -12,6 +12,7 @@ untouched.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Callable
 
@@ -490,6 +491,19 @@ def _models_screen(cli_option: CliOption, runtime: cli.Runtime) -> Menu | Placeh
     return ModelsScreen(cli=cli_option, providers=providers, rows=rows)
 
 
+def _models_activation(report: dict) -> tuple[str, ...]:
+    """The activation notice `cli.models_set`/`models_unset` return, carried
+    onto the screen `_models_write` rebuilds -- or nothing, on a failure.
+
+    Same discipline `_grant_mcp_write` already follows for its own write: a
+    failed `cli.safe_report` document is `{"status": "failed", "error": ...}`
+    with no `activation` key at all, so reading it with `.get` rather than
+    `[...]` already withholds the notice on a failure without a separate
+    branch -- showing it would promise a write that never reached disk.
+    """
+    return tuple(report.get("activation") or ())
+
+
 def _models_write(screen: ModelsScreen, navigator: Navigator, runtime: cli.Runtime, action: Action) -> Navigator | None:
     """The three moments in the wizard that are a real write rather than a
     pure narrowing: removing an assignment, and committing a plain model or
@@ -497,32 +511,39 @@ def _models_write(screen: ModelsScreen, navigator: Navigator, runtime: cli.Runti
     see `ModelsScreen`'s own docstring -- so this is where they actually
     happen. Returns `None` for every other action, which tells `step` to
     fall through to `navigator.handle` as usual.
+
+    Each branch keeps the write's own report only long enough to read
+    `activation` off it, then rebuilds the screen fresh from state (the same
+    `_models_screen` read every other step already does) and stamps that
+    notice onto it -- the fix for the bug where this screen's own "Current
+    model" column stayed truthful about Pegasus's stored assignment while
+    never telling anyone the running CLI configuration had not moved.
     """
     if action is Action.REMOVE and screen.agent is None and screen.rows:
         agent = screen.rows[navigator.cursor].agent
-        cli.safe_report("models", lambda: cli.models_unset(screen.cli.id, agent, runtime))
-        return navigator.replaced(_models_screen(screen.cli, runtime))
+        _, report = cli.safe_report("models", lambda: cli.models_unset(screen.cli.id, agent, runtime))
+        return navigator.replaced(replace(_models_screen(screen.cli, runtime), activation=_models_activation(report)))
     if action is not Action.CHOOSE:
         return None
     if screen.model_id is not None:
         effort = EFFORT_OPTIONS[navigator.cursor]
-        cli.safe_report(
+        _, report = cli.safe_report(
             "models",
             lambda: cli.models_set(
                 screen.cli.id, screen.agent, f"{screen.provider_id}/{screen.model_id}", runtime, effort=effort
             ),
         )
-        return navigator.replaced(_models_screen(screen.cli, runtime))
+        return navigator.replaced(replace(_models_screen(screen.cli, runtime), activation=_models_activation(report)))
     if screen.provider_id is not None:
         provider = next(provider for provider in screen.providers if provider.id == screen.provider_id)
         if not provider.models or provider.models[navigator.cursor].reasoning:
             return None  # a reasoning model: `Navigator` narrows to the effort step itself.
         model_id = provider.models[navigator.cursor].id
-        cli.safe_report(
+        _, report = cli.safe_report(
             "models",
             lambda: cli.models_set(screen.cli.id, screen.agent, f"{screen.provider_id}/{model_id}", runtime, effort=None),
         )
-        return navigator.replaced(_models_screen(screen.cli, runtime))
+        return navigator.replaced(replace(_models_screen(screen.cli, runtime), activation=_models_activation(report)))
     return None
 
 

@@ -494,6 +494,17 @@ class ModelsScreen:
     choosing a plain model, an effort, or removing an assignment needs a real
     write and is left to `session` to notice and act on -- the same split
     `_ENGINE_TARGETS` already draws for every other screen.
+
+    `activation` is the same wording `GrantMcpResultScreen` already carries
+    for the same reason: a write here only ever changes Pegasus's own state,
+    never the rendered CLI configuration a running agent actually reads --
+    that only happens on the next install/update. `cli.models_set`/
+    `models_unset` already say so under their own `activation` key; `session`
+    copies it onto the screen it rebuilds after a write so the person is told,
+    rather than left to trust a "Current model" column that can now silently
+    disagree with what the CLI is actually running. Empty by default, so a
+    screen reached by narrowing rather than writing (or a screen built before
+    this field existed) renders exactly as before -- no notice, nothing to say.
     """
 
     cli: CliOption
@@ -502,6 +513,7 @@ class ModelsScreen:
     agent: str | None = None
     provider_id: str | None = None
     model_id: str | None = None
+    activation: tuple[str, ...] = ()
 
 
 def _models_provider(screen: ModelsScreen) -> ProviderOption:

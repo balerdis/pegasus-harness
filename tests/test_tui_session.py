@@ -14,6 +14,7 @@ import os
 import tempfile
 import time
 import unittest
+import unittest.mock
 from dataclasses import replace
 from pathlib import Path
 
@@ -1327,6 +1328,88 @@ class RemovingAnAssignmentTest(ModelsScreenTestCase):
         self.assertIsNone(model_assignments_module.get(assignments, CLI, CONFIGURABLE_AGENT))
         row = next(row for row in navigator.current.rows if row.agent == CONFIGURABLE_AGENT)
         self.assertIsNone(row.current)
+
+
+class ModelsWriteActivationTest(ModelsScreenTestCase):
+    """The bug the product owner hit: the models screen only ever shows what
+    Pegasus's own state remembers, never what the *running* CLI configuration
+    actually holds -- those only line up again after an install/update writes
+    the assignment into the rendered file. `cli.models_set`/`models_unset`
+    already say so under `activation` (`cli._NOT_INSTALLED_YET`); this is the
+    one place that notice reaches a person, so every write this screen makes
+    must carry it forward onto the screen it rebuilds.
+
+    Deliberately not asserting the exact `_NOT_INSTALLED_YET` wording -- that
+    string belongs to `cli.py`, which this change does not own and must not
+    pin in a TUI test. Asserting instead that whatever `report["activation"]`
+    says survives the round trip, whatever its shape, is the mirror: a test
+    pinned to today's wording would stay green even if `_models_write` started
+    dropping the report and hardcoding its own text instead.
+    """
+
+    def _to_agent_row(self, navigator: Navigator) -> Navigator:
+        rows = navigator.current.rows
+        index = next(i for i, row in enumerate(rows) if row.agent == CONFIGURABLE_AGENT)
+        for _ in range(index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+        return navigator.handle(Action.CHOOSE)
+
+    def test_setting_a_plain_model_surfaces_the_engine_s_own_activation_notice(self):
+        _write_catalog(self.home, ONE_PLAIN_MODEL)
+        runtime = self.runtime()
+        navigator = self.to_models_screen(runtime)
+        navigator = self._to_agent_row(navigator)  # agent chosen
+        navigator = navigator.handle(Action.CHOOSE)  # the one provider
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # the one, plain, model: commits
+
+        expected = cli.models_set(CLI, "sdd-verify", "anthropic/fast-model", runtime)["activation"]
+        self.assertIsInstance(navigator.current, ModelsScreen)
+        self.assertEqual(navigator.current.activation, tuple(expected))
+        self.assertTrue(navigator.current.activation)
+
+    def test_setting_a_reasoning_model_with_an_effort_surfaces_the_notice(self):
+        _write_catalog(self.home, ONE_REASONING_MODEL)
+        runtime = self.runtime()
+        navigator = self.to_models_screen(runtime)
+        navigator = self._to_agent_row(navigator)
+        navigator = navigator.handle(Action.CHOOSE)  # the one provider
+        navigator = navigator.handle(Action.CHOOSE)  # the one, reasoning, model: only narrows
+
+        navigator = session.step(navigator, runtime, Action.CHOOSE)  # the first effort offered: commits
+        expected = cli.models_set(CLI, "sdd-verify", "anthropic/deep-thinker", runtime, effort="low")["activation"]
+        self.assertIsInstance(navigator.current, ModelsScreen)
+        self.assertEqual(navigator.current.activation, tuple(expected))
+
+    def test_removing_an_assignment_surfaces_the_notice_too(self):
+        _write_catalog(self.home, ONE_PLAIN_MODEL)
+        runtime = self.runtime()
+        cli.models_set(CLI, CONFIGURABLE_AGENT, "anthropic/fast-model", runtime)
+
+        navigator = self.to_models_screen(runtime)
+        index = next(i for i, row in enumerate(navigator.current.rows) if row.agent == CONFIGURABLE_AGENT)
+        for _ in range(index):
+            navigator = navigator.handle(Action.MOVE_DOWN)
+
+        navigator = session.step(navigator, runtime, Action.REMOVE)
+        self.assertIsInstance(navigator.current, ModelsScreen)
+        self.assertTrue(navigator.current.activation)
+
+    def test_a_failed_write_withholds_the_activation_notice(self):
+        """The same discipline `_grant_mcp_write` already follows: a failure
+        report carries no `activation` key at all (`cli.safe_report` never
+        invents one), so a screen rebuilt after a failed write must not claim
+        the write landed by showing the notice anyway."""
+        _write_catalog(self.home, ONE_PLAIN_MODEL)
+        runtime = self.runtime()
+        navigator = self.to_models_screen(runtime)
+        navigator = self._to_agent_row(navigator)
+        navigator = navigator.handle(Action.CHOOSE)  # the one provider
+
+        with unittest.mock.patch.object(cli, "models_set", side_effect=cli.CommandError("boom")):
+            navigator = session.step(navigator, runtime, Action.CHOOSE)  # commits, but the write fails
+
+        self.assertIsInstance(navigator.current, ModelsScreen)
+        self.assertEqual(navigator.current.activation, ())
 
 
 class NoCredentialReachesARenderedLineTest(ModelsScreenTestCase):
