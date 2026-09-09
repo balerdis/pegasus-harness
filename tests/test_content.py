@@ -1231,19 +1231,27 @@ class ShippedContentTest(unittest.TestCase):
             [server.name for server in self.content.mcp], ["cbm", "context7", "engram", "playwright"]
         )
 
-    def test_playwright_is_declared_by_exactly_the_agents_that_drive_a_browser(self):
+    def test_playwright_is_declared_by_exactly_the_agents_meant_to_reach_it(self):
         """Regression guard for the bug `_require_mcp_reaches_an_agent` now
         refuses at load time: `playwright` shipped with a descriptor and a
         README promise, but no agent declared it, so choosing it installed a
-        server nothing could ever use. This asserts over the loaded agents
-        themselves, not a hand-kept copy of the list -- the list is the thing
-        that drifted last time.
+        server nothing could ever use.
+
+        The set now holds two different reasons, and saying so is the point.
+        Four agents declare it because they drive a browser. `king-pegasus`
+        declares it because the reconversion made that voice declare every
+        server this release ships -- see
+        `test_the_teaching_voice_declares_every_server_this_release_ships`,
+        which derives its side from the content tree. Spelled out here on
+        purpose: an agent gaining browser reach should have to come and change
+        this line, rather than the assertion quietly widening to fit.
         """
         declares_playwright = {
             agent.name for agent in self.content.agents if "playwright" in agent.optional_mcp
         }
         self.assertEqual(
-            declares_playwright, {"sdd-apply", "sdd-explore", "sdd-verify", "pegasus-general"}
+            declares_playwright,
+            {"sdd-apply", "sdd-explore", "sdd-verify", "pegasus-general", "king-pegasus"},
         )
 
     def test_every_shipped_server_declares_a_mechanism_and_a_convention(self):
@@ -1396,6 +1404,59 @@ class ShippedContentTest(unittest.TestCase):
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         self.assertNotIn("king-pegasus", orchestrator.may_delegate_to)
 
+    def test_the_teaching_voice_is_not_more_limited_than_the_dispatching_one(self):
+        """Both voices face the user; only their discipline differs.
+
+        `king-pegasus` used to declare `[read, write, edit, skill, ask]` -- no
+        `bash`, no `grep`, no `glob` -- so the voice whose entire purpose is to
+        explain could not search the code it was explaining, and had to ask the
+        user to hand it the file. A test two modules over even reasoned that
+        "this voice acts rather than delegates, so the discovery a phase agent
+        would have done for it is its own", which the frontmatter had been
+        contradicting the whole time.
+
+        The reconversion made the obligation the axis instead of the toolbox:
+        nothing is withheld, and the single thing forbidden is working in
+        silence -- which is a rule a prompt carries and a permission cannot.
+
+        Set equality, not containment and not a hardcoded list: if a tool is
+        ever added to the orchestrator, this fails until someone decides what it
+        means for the voice as well. Forcing that decision is the point. The
+        shape this replaced was never decided, it was inherited.
+        """
+        voice = next(a for a in self.content.agents if a.name == "king-pegasus")
+        orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
+        self.assertEqual(set(voice.requires_tools), set(orchestrator.requires_tools))
+
+    def test_the_teaching_voice_declares_every_server_this_release_ships(self):
+        """Whatever the user chose to install, this voice can reach.
+
+        Derived from the content tree, never a list spelled out here: a
+        hardcoded set of four would be right today and wrong the moment a fifth
+        server ships, which is the same defect shape as the hand-enumerated
+        rename list that once made a distribution miss a file. Ship a new
+        server and this fails until the voice declares it -- which is the
+        decision, not an obstacle to it.
+
+        `optional_mcp` is a declaration of what the voice would use if the
+        server is there, not a demand that it be installed; selection stays the
+        user's. Before the reconversion it named `cbm` and `engram` only, so a
+        voice whose own Behavior says to "mention tools and resources" could not
+        reach the server that holds current library documentation.
+        """
+        voice = next(a for a in self.content.agents if a.name == "king-pegasus")
+        self.assertEqual(set(voice.optional_mcp), {server.name for server in self.content.mcp})
+
+    def test_the_voice_carries_no_rule_that_contradicts_its_own_mandate(self):
+        """Its body told this voice to apply what it explains and, four lines
+        later, forbade it from ever running anything -- so it could open a loop
+        and was barred from closing it. It wrote the file and could not tell you
+        whether the file worked. The rule is gone; this keeps habit from
+        restoring it.
+        """
+        voice = next(a for a in self.content.agents if a.name == "king-pegasus")
+        self.assertNotIn("Never build", voice.body)
+
     def test_the_orchestrator_may_delegate_to_every_subagent_it_ships_with(self):
         # render.py turns may_delegate_to into {"*": "deny", <named>: "allow"}, so an agent
         # missing from the list is not merely undeclared: it is denied. Comparing against a
@@ -1496,7 +1557,12 @@ class ShippedContentTest(unittest.TestCase):
             with self.subTest(agent=agent.name):
                 self.assertIn("engram", [s.name for s in agent.mcp_sections])
 
-    def test_the_six_context7_agents_carry_the_shared_section_and_no_one_else_does(self):
+    def test_the_context7_agents_carry_the_shared_section_and_no_one_else_does(self):
+        """`king-pegasus` joined this set with the reconversion: a voice whose
+        own Behavior says to "mention tools and resources" had no way to reach
+        current library documentation. It carries the shared section, not an
+        override -- its only agent-specific framing is for the graph server.
+        """
         context7_agents = {
             "sdd-apply",
             "sdd-design",
@@ -1504,6 +1570,7 @@ class ShippedContentTest(unittest.TestCase):
             "sdd-verify",
             "sdd-onboard",
             "pegasus-general",
+            "king-pegasus",
         }
         for agent in self.content.agents:
             with self.subTest(agent=agent.name):
@@ -2032,10 +2099,22 @@ class SelectMcpShippedContentTest(unittest.TestCase):
         for agent in selected.agents:
             self.assertNotIn("playwright", agent.optional_mcp, agent.name)
 
-    def test_playwright_chosen_grants_it_to_exactly_the_intended_agents(self):
+    def test_playwright_chosen_grants_it_to_exactly_the_agents_that_declare_it(self):
+        """Selecting a server must not change WHICH agents reach it, only
+        whether it is there at all.
+
+        Derived from the unselected content rather than spelled out: the claim
+        is that `select_mcp` preserves the declaration, and a hardcoded copy
+        would restate the declaration instead of testing that it survives --
+        and would go stale the next time an agent declares the server.
+        """
+        expected = {
+            agent.name for agent in self.loaded.agents if "playwright" in agent.optional_mcp
+        }
+        self.assertTrue(expected, "no agent declares playwright: this would pass vacuously")
         selected = content.select_mcp(self.loaded, ["playwright"])
         granted = {agent.name for agent in selected.agents if "playwright" in agent.optional_mcp}
-        self.assertEqual(granted, {"sdd-apply", "sdd-explore", "sdd-verify", "pegasus-general"})
+        self.assertEqual(granted, expected)
 
 
 class BoundMcpTest(unittest.TestCase):

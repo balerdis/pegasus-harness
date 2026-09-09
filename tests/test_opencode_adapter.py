@@ -1387,9 +1387,21 @@ class ShippedContentRenderTest(unittest.TestCase):
             self.assertEqual(value["permission"]["edit"], "allow", agent.name)
 
     def test_the_persona_renders_its_declared_tools_as_a_real_restriction(self):
-        """The voice declares `read`, `write` and `edit` -- what applying a change
-        takes -- plus the two servers whose contract is ambient, and only this
-        side proves that denies everything else, `bash` included.
+        """The voice declares the same reach as the orchestrator, and only this
+        side proves the deny baseline still stands underneath it.
+
+        The map is spelled out rather than derived from the declaration: a test
+        that rebuilt it from `requires_tools` would agree with the renderer by
+        construction and prove nothing. This is also where the rename shows --
+        `ask` reaches the runtime as `question` -- and where `*: False` stays
+        visible, so granting everything the voice needs is still an enumeration
+        and not an open door.
+
+        It used to pin `{read, write, edit, skill, question}` and read "denies
+        everything else, `bash` included". The reconversion made the obligation
+        the axis instead of the toolbox, so what is withheld here is no longer
+        a capability but the option of working in silence -- which a permission
+        map cannot express and the prompt has to carry.
         """
         persona = next(a for a in self.loaded.agents if a.name == "king-pegasus")
         value = only(render_module.agent(self.layout, persona), ConfigKeyArtifact)[0].value
@@ -1400,10 +1412,15 @@ class ShippedContentRenderTest(unittest.TestCase):
                 "read": True,
                 "write": True,
                 "edit": True,
+                "bash": True,
+                "grep": True,
+                "glob": True,
                 "skill": True,
                 "question": True,
                 "cbm*": True,
+                "context7*": True,
                 "engram*": True,
+                "playwright*": True,
             },
         )
 
@@ -1501,7 +1518,12 @@ class ShippedContentRenderTest(unittest.TestCase):
         deny baseline left untouched.
         """
         selected = content_module.select_mcp(self.loaded, ["playwright"])
-        intended = {"sdd-apply", "sdd-explore", "sdd-verify", "pegasus-general"}
+        # Derived from the declarations, not spelled out: what is under test is
+        # whether the RENDERER honours the declaration, so taking the expected
+        # set from the declaration is the mirror rather than a tautology -- and
+        # it cannot fall behind the content tree the way a copied list does.
+        intended = {a.name for a in selected.agents if "playwright" in a.optional_mcp}
+        self.assertTrue(intended, "no agent declares playwright: this would pass vacuously")
         for agent in selected.agents:
             value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
             self.assertIs(value["tools"]["*"], False, agent.name)

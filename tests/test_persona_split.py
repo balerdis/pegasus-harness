@@ -255,20 +255,38 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
         """
         self.assertEqual(self.agent.mode, content_module.AgentMode.PRIMARY)
 
-    def test_the_persona_asks_for_no_more_than_it_needs(self):
+    def test_the_persona_declares_the_reach_the_reconversion_gave_it(self):
         """What the voice declares. That the declaration binds is the adapter's to prove.
 
-        king-pegasus acts rather than delegates, so it does structural discovery
-        too, and it now applies what it explains: `write` and `edit` are what
-        that takes. Doing its own discovery is exactly why it declares the graph
-        server, and memory it declares like every other agent -- but it must
-        never gain `bash`: applying stops at the edit, never at running anything.
+        This test used to be called "asks for no more than it needs" and pinned
+        `{read, write, edit, skill, ask}`, forbidding `bash` outright: applying
+        stopped at the edit, never at running anything. Its own docstring, in
+        the same breath, said the voice "does structural discovery too" -- while
+        the set it pinned withheld `grep` and `glob`, so the only discovery
+        available was through the graph server. The MCP was standing in for
+        tools the voice should have had.
+
+        The reconversion inverted the axis. What limits this voice is an
+        obligation its prompt carries -- work out loud, close the loop you open
+        -- and no longer a shorter toolbox, so it declares the same reach as the
+        orchestrator. The graph server stays, as a complement to searching
+        rather than a substitute for it.
+
+        Parity with the orchestrator is asserted in
+        `test_content.test_the_teaching_voice_is_not_more_limited_than_the_dispatching_one`;
+        this pins the literal declaration, so a drift in either file has to
+        disagree with one of the two.
         """
         self.assertEqual(
-            set(self.agent.requires_tools), {"read", "write", "edit", "skill", "ask"}
+            set(self.agent.requires_tools),
+            {"read", "write", "edit", "bash", "grep", "glob", "skill", "ask"},
         )
         self.assertEqual(self.agent.optional_tools, ())
-        self.assertEqual(set(self.agent.optional_mcp), {"cbm", "engram"})
+        # The MCP set is deliberately NOT spelled out here: the voice declares
+        # every server this release ships, which
+        # `test_content.test_the_teaching_voice_declares_every_server_this_release_ships`
+        # asserts by deriving the set from the content tree. A second hardcoded
+        # copy would be one more place to go stale when a server is added.
 
     def test_the_persona_carries_the_voice_sections(self):
         """A set, not a sequence: `## Persona Scope` promises these exist."""

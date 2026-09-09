@@ -248,16 +248,20 @@ class KingPegasusToolsTest(unittest.TestCase):
         # delegates, so the discovery a phase agent would have done for it is
         # its own, and an explanation is only as good as the shape of the code
         # behind it. Memory it declares for the same reason every agent does.
+        #
+        # That reasoning finally matches the frontmatter. It was written while
+        # the agent declared neither `grep` nor `glob`, so the discovery it
+        # called "its own" was discovery the voice could not perform; the
+        # reconversion gave it the tools the sentence had always assumed. What
+        # this still pins is the MCP side: the servers whose contract is
+        # ambient, and nothing beyond them. See
+        # `test_the_teaching_voice_is_not_more_limited_than_the_dispatching_one`
+        # for the toolbox itself.
         self.assertEqual(self.agent.optional_tools, ())
-        self.assertEqual(set(self.agent.optional_mcp), {"cbm", "engram"})
-
-    def test_gains_nothing_beyond_applying_a_file_change(self):
-        # `write` and `edit` are what let this voice apply what it explains; `bash`
-        # stays out, matching its own "never build after changes" rule.
-        for granted in ("write", "edit"):
-            self.assertIn(granted, self.agent.requires_tools)
-        self.assertNotIn("bash", self.agent.requires_tools)
-        self.assertNotIn("bash", self.agent.optional_tools)
+        # What this module is about: the graph server is one the voice declares.
+        # The full set is derived from the content tree in
+        # `test_content.test_the_teaching_voice_declares_every_server_this_release_ships`.
+        self.assertIn("cbm", self.agent.optional_mcp)
 
 
 if __name__ == "__main__":
