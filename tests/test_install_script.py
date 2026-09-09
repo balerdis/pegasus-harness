@@ -56,6 +56,19 @@ BASH = shutil.which("bash") or "/bin/bash"
 # resolving to something real from a wider PATH.
 SYSTEM_PATH = "/usr/bin:/bin"
 
+# A `curl` that succeeds -- and, like the real one, actually writes the file it
+# was given with `-o`. The empty file it leaves is what an empty response body
+# used to be when the script piped curl straight into bash, so the scenarios
+# below behave exactly as they did before downloads gained a seam; a stub that
+# exits 0 while writing nothing is a fake the real program cannot produce.
+CURL_STUB_SUCCEEDS = """dest=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-o" ]; then dest="$2"; shift; fi
+  shift
+done
+if [ -n "$dest" ]; then : > "$dest"; fi
+exit 0"""
+
 
 def _write_stub(bin_dir: Path, name: str, body: str) -> None:
     path = bin_dir / name
@@ -241,7 +254,7 @@ class MultilineVersionOutputDoesNotAbortTest(InstallScriptTestCase):
 
     def _stub_python_and_curl_present(self):
         self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
-        self.stub("curl", "exit 0\n")
+        self.stub("curl", CURL_STUB_SUCCEEDS)
 
     def test_multiline_node_version_does_not_abort_verify(self):
         self._stub_python_and_curl_present()
@@ -323,7 +336,7 @@ class VerifyWithOnlyOptionalToolsMissingTest(InstallScriptTestCase):
         found it: no directories, no files, not even a `.local/bin` -- verify
         never writes anything, viable or not."""
         self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
-        self.stub("curl", "exit 0\n")
+        self.stub("curl", CURL_STUB_SUCCEEDS)
 
         before = _snapshot(self.home)
         result = self.run_install("--verify")
@@ -359,7 +372,7 @@ class VerifyExitCodeMeansViableTest(InstallScriptTestCase):
             "  *) echo '3.11.4' ;;\n"
             "esac\n",
         )
-        self.stub("curl", "exit 0\n")
+        self.stub("curl", CURL_STUB_SUCCEEDS)
 
         result = self.run_install("--verify")
 
@@ -395,7 +408,7 @@ class VerifyIgnoresNoRunTest(InstallScriptTestCase):
         is exactly why this is a separate scenario from NoRunActuallyInstallsTest
         below: --no-run alone (this class's sibling) DOES install for real."""
         self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
-        self.stub("curl", "exit 0\n")
+        self.stub("curl", CURL_STUB_SUCCEEDS)
 
         result = self.run_install("--verify", "--no-run")
 
@@ -856,18 +869,27 @@ class ClosingPathGuidanceTest(InstallScriptTestCase):
     """
 
     def _stub_curl_that_fakes_the_opencode_installer(self):
-        """Stands in for `curl -fsSL https://opencode.ai/install | bash`:
-        emits (to stdout, so the outer pipe's `bash` runs it) a script that
-        creates a fake `opencode` binary at $OPENCODE_BIN_DIR, exactly what
-        the real official installer does. Any other curl invocation (the
-        pegasus download, which passes `-o` and a `file://` URL) is
-        delegated to the real `curl` from SYSTEM_PATH so that seam still
-        exercises the genuine download-then-verify code path."""
+        """Stands in for the OpenCode installer download: writes, to the `-o`
+        destination the script asks for, a script that creates a fake
+        `opencode` binary at $OPENCODE_BIN_DIR -- exactly what the real
+        official installer does. It writes a file rather than emitting to
+        stdout because the script no longer pipes a downloaded installer into
+        bash; it saves it and runs it from disk, so bash can never start
+        executing a half-downloaded script. Any other curl invocation (the
+        pegasus download, which passes a `file://` URL) is delegated to the
+        real `curl` from SYSTEM_PATH so that seam still exercises the genuine
+        download-then-verify code path."""
         self.stub(
             "curl",
+            "dest=''\n"
+            "prev=''\n"
+            'for arg in "$@"; do\n'
+            '  if [ "$prev" = "-o" ]; then dest="$arg"; fi\n'
+            '  prev="$arg"\n'
+            "done\n"
             "case \"$*\" in\n"
             "  *opencode.ai/install*)\n"
-            "    cat <<'EOS'\n"
+            "    cat > \"$dest\" <<'EOS'\n"
             'mkdir -p "$HOME/.opencode/bin"\n'
             "cat > \"$HOME/.opencode/bin/opencode\" <<'BIN'\n"
             "#!/bin/sh\n"
@@ -993,7 +1015,7 @@ class ClosingPathGuidanceTest(InstallScriptTestCase):
         "just installed" to give closing PATH guidance about -- the only
         `=== PATH ===` section left is the pre-existing preflight one."""
         self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
-        self.stub("curl", "exit 0\n")
+        self.stub("curl", CURL_STUB_SUCCEEDS)
 
         result = self.run_install("--verify")
 
@@ -1158,7 +1180,7 @@ class ShellDetectionAndPathPersistenceTest(InstallScriptTestCase):
 
     def test_verify_mode_with_zsh_touches_no_rc_file(self):
         self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
-        self.stub("curl", "exit 0\n")
+        self.stub("curl", CURL_STUB_SUCCEEDS)
 
         result = self.run_install("--verify", extra_env={"SHELL": "/usr/bin/zsh"})
 
@@ -1424,7 +1446,7 @@ class RequiredActionBlockTest(InstallScriptTestCase):
 
     def test_block_absent_under_verify(self):
         self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
-        self.stub("curl", "exit 0\n")
+        self.stub("curl", CURL_STUB_SUCCEEDS)
 
         result = self.run_install("--verify", extra_env={"SHELL": "/usr/bin/zsh"})
 
@@ -1608,6 +1630,289 @@ class NoStaleReleaseTagTest(unittest.TestCase):
             or self.TAG_ASSIGNMENT.search(
                 "release-manifest.json: coincide con v5.9.0 57d58ccd2d942043a32a20f7696c48fc075e6e5d"
             )
+        )
+
+
+class CurlAlwaysFailsOnHttpErrorTest(unittest.TestCase):
+    """Every curl invocation in the script must carry `-f`.
+
+    Without it, curl exits 0 on an HTTP error and writes the error *body* to
+    its output. The nvm step piped that output straight into bash, so a 462-byte
+    XML error page reached bash as a script and the install died with two
+    `syntax error near unexpected token` lines instead of one honest failure.
+
+    The instance fix is a flag on one line; this is the mirror. It reads the
+    invocations out of the source rather than naming them, so a curl added later
+    without `-f` fails here -- including one in a comment, since the usage the
+    script documents is the usage a person will paste.
+    """
+
+    # `curl` at a command position followed by at least one option. Excludes
+    # `command -v curl` and prose that merely names the program, both of which
+    # appear in the script and neither of which downloads anything.
+    INVOCATION = re.compile(r"(?<![-\w])curl((?:\s+-\S+)+)")
+
+    def test_no_curl_invocation_can_succeed_on_an_http_error(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        invocations = self.INVOCATION.findall(text)
+        # Guards against a regex that silently matches nothing, which would make
+        # the assertion below vacuously true.
+        self.assertTrue(invocations, "found no curl invocations in install.sh")
+        without_f = [
+            flags.strip()
+            for flags in invocations
+            if not any(
+                # `--fail` is exactly as safe as `-f`; anything else spelled
+                # with two dashes is a different option that happens to
+                # contain an f, so it does not count.
+                token == "--fail"
+                or (token.startswith("-") and not token.startswith("--") and "f" in token)
+                for token in flags.split()
+            )
+        ]
+        self.assertEqual(
+            [],
+            without_f,
+            "curl without -f exits 0 on an HTTP error and emits the error body: "
+            f"{without_f}",
+        )
+
+
+class TransientDownloadFailureTest(InstallScriptTestCase):
+    """A download that fails because the other end is momentarily unwell must
+    say so, and say to try again later.
+
+    The failure that motivated this: Fastly's Buenos Aires edge answered the
+    nvm installer URL with `503 Backend.max_conn reached` and a 465-byte XML
+    body. Nothing was wrong with the URL, the pin, or the machine -- a retry
+    minutes later succeeded. What the person saw instead was two lines of bash
+    syntax errors, which points at the wrong thing entirely.
+
+    Deliberately NOT a retry: retrying quietly hides that the problem is on the
+    other side. The script says what happened and hands the decision back.
+
+    Both tests stub `curl` failing at the *nvm* step, which is the first
+    download a run reaches, so nothing here can touch the network.
+    """
+
+    def _stub_curl_failing(self, exit_code: int, http_code: str):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        # `-w %{http_code}` output goes to curl's stdout, which is what the
+        # script captures; the exit status is what it classifies on.
+        self.stub("curl", f'echo "{http_code}"\nexit {exit_code}\n')
+
+    def test_a_5xx_is_reported_as_transient_and_worth_retrying_later(self):
+        self._stub_curl_failing(exit_code=22, http_code="503")
+
+        result = self.run_install("--yes", "--no-run")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("HTTP 503", result.stderr)
+        self.assertIn("transitoria", result.stderr)
+        self.assertIn("más tarde", result.stderr)
+
+    def test_a_429_is_transient_too(self):
+        self._stub_curl_failing(exit_code=22, http_code="429")
+
+        result = self.run_install("--yes", "--no-run")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("transitoria", result.stderr)
+
+    def test_a_transport_failure_with_no_http_status_is_transient(self):
+        """curl exit 6 is "could not resolve host": no response ever arrived,
+        so there is no HTTP status to report -- and the advice is the same."""
+        self._stub_curl_failing(exit_code=6, http_code="000")
+
+        result = self.run_install("--yes", "--no-run")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("transitoria", result.stderr)
+        self.assertNotIn("HTTP 000", result.stderr)
+
+    def test_a_404_is_not_reported_as_transient(self):
+        """The mirror of the above, and the reason this is a classification and
+        not a blanket message: a 404 means the URL is wrong (a bad pin, a
+        renamed asset). Telling someone to wait and retry that is telling them
+        to wait forever."""
+        self._stub_curl_failing(exit_code=22, http_code="404")
+
+        result = self.run_install("--yes", "--no-run")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("HTTP 404", result.stderr)
+        self.assertNotIn("transitoria", result.stderr)
+        self.assertNotIn("más tarde", result.stderr)
+
+
+class EveryDownloadGoesThroughOneSeamTest(unittest.TestCase):
+    """All of the script's real curl invocations live inside `descargar()`.
+
+    Not style: the transient/permanent classification tested above is only
+    honest if there is one place that can produce it. Five loose curl calls
+    were five different failure messages, and the one that mattered said
+    nothing at all. Comment lines are excluded -- the usage comment names the
+    published `curl ... | bash` on purpose, and is prose, not an invocation.
+    """
+
+    INVOCATION = re.compile(r"(?<![-\w])curl((?:\s+-\S+)+)")
+
+    def test_curl_is_invoked_from_exactly_one_function(self):
+        code = "\n".join(
+            line
+            for line in INSTALL_SH.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        seam = re.search(r"^descargar\(\)\s*\{.*?^\}", code, re.DOTALL | re.MULTILINE)
+        self.assertIsNotNone(seam, "could not find descargar() in install.sh")
+        everywhere = self.INVOCATION.findall(code)
+        inside = self.INVOCATION.findall(seam.group(0))
+        self.assertTrue(everywhere, "found no curl invocations in install.sh")
+        self.assertEqual(
+            len(everywhere),
+            len(inside),
+            f"{len(everywhere) - len(inside)} curl invocation(s) bypass descargar(): "
+            f"all={everywhere} inside={inside}",
+        )
+
+
+class FailingVersionProbeDoesNotAbortTest(InstallScriptTestCase):
+    """The sibling of MultilineVersionOutputDoesNotAbortTest, one layer over.
+
+    That class fixed `--version | head -1` dying on SIGPIPE. What survived is
+    the plainer case: `salida_completa=$(opencode --version 2>&1)` under
+    `set -e`. An assignment whose command substitution exits non-zero aborts
+    the whole script, and the ERR trap does not print for it -- so the run ends
+    with exit 1 and not one byte of output, which is precisely the mute
+    terminal that trap exists to prevent.
+
+    Found on a real machine, not by reading: an `opencode` installed through
+    npm as `opencode-ai` whose postinstall never ran answers `--version` with
+    an explanation and a non-zero status. That alone was enough to make
+    `install.sh --verify` die silently -- and `--verify` is the command
+    INSTALL.md tells people to run first.
+
+    A probe is a *question*, and a tool that refuses to answer it is an answer
+    in itself: report what it said and keep going. All four detection sites get
+    their own test, same as the class above.
+    """
+
+    _REFUSES = 'echo "no puedo responder eso"\nexit 1\n'
+
+    def _stub_python_and_curl_present(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("curl", CURL_STUB_SUCCEEDS)
+
+    def test_a_node_that_fails_its_version_probe_does_not_abort_verify(self):
+        self._stub_python_and_curl_present()
+        self.stub("opencode", 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        self.stub("node", self._REFUSES)
+
+        result = self.run_install("--verify")
+
+        self.assertEqual(result.returncode, 0, f"stderr={result.stderr!r}")
+        self.assertIn("no puedo responder eso", result.stdout)
+
+    def test_an_opencode_that_fails_its_version_probe_does_not_abort_verify(self):
+        """The exact real-world case: an npm `opencode-ai` with no postinstall."""
+        self._stub_python_and_curl_present()
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub("opencode", self._REFUSES)
+
+        result = self.run_install("--verify")
+
+        self.assertIn("no puedo responder eso", result.stdout)
+        self.assertTrue(result.stdout, "the run produced no output at all")
+
+    def test_a_product_binary_on_path_that_fails_its_version_probe_does_not_abort(self):
+        self._stub_python_and_curl_present()
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub("opencode", 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        self.stub("pegasus", self._REFUSES)
+
+        result = self.run_install("--verify")
+
+        self.assertIn("no puedo responder eso", result.stdout)
+
+    def test_a_product_binary_in_bin_dir_that_fails_its_version_probe_does_not_abort(self):
+        """The `$BIN_DIR/pegasus` branch of `detectar_producto`, a distinct
+        probe from the `command -v` one above."""
+        self._stub_python_and_curl_present()
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub("opencode", 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        bin_dir = self.home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        pegasus_bin = bin_dir / "pegasus"
+        pegasus_bin.write_text("#!/bin/sh\n" + self._REFUSES, encoding="utf-8")
+        pegasus_bin.chmod(0o755)
+
+        result = self.run_install("--verify")
+
+        self.assertIn("no puedo responder eso", result.stdout)
+
+
+class InterruptedDownloadLeavesNoTempDirTest(InstallScriptTestCase):
+    """Ctrl-C during a download must not leave a temp directory behind.
+
+    `instalar_producto` already registers `trap 'rm -rf "$PRODUCTO_TMPDIR"' EXIT`
+    for exactly this reason: inline cleanup covers the paths the script chooses
+    to take, and a signal is not one of them. The installer downloads over a
+    slow institutional link, so an interrupted run is an ordinary event, not a
+    hypothetical.
+
+    `TMPDIR` is pointed at this test's own throwaway directory so the assertion
+    is about the whole of it -- there is nothing else in there to confuse with
+    what the script left. That also keeps the test from ever writing to the
+    real `/tmp`.
+    """
+
+    def test_interrupting_a_download_leaves_nothing_in_tmpdir(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        # A curl that never finishes, so the signal always lands while the temp
+        # directory exists -- no race to lose.
+        self.stub("curl", "sleep 30\n")
+        tmpdir = Path(self.tmp.name) / "tmpdir"
+        tmpdir.mkdir()
+
+        proceso = subprocess.Popen(
+            [BASH, str(INSTALL_SH), "--yes", "--no-run"],
+            env={
+                "HOME": str(self.home),
+                "PATH": f"{self.stub_bin}:{SYSTEM_PATH}",
+                "TMPDIR": str(tmpdir),
+            },
+            cwd=str(ROOT),
+            text=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            # Its own session, so the signal below can go to the whole process
+            # group -- which is what Ctrl-C actually does. Signalling bash
+            # alone proves nothing: a non-interactive bash waits for its
+            # foreground child, so the `sleep` would run to completion first.
+            start_new_session=True,
+        )
+        try:
+            # Wait for the script to have actually created the directory rather
+            # than sleeping a guessed interval: the assertion below is only
+            # meaningful once there is something to clean up.
+            plazo = time.monotonic() + 15
+            while not any(tmpdir.iterdir()) and time.monotonic() < plazo:
+                time.sleep(0.05)
+            self.assertTrue(
+                any(tmpdir.iterdir()),
+                "the script never created a temp directory, so this test proves nothing",
+            )
+            os.killpg(os.getpgid(proceso.pid), signal.SIGINT)
+            proceso.communicate(timeout=15)
+        finally:
+            if proceso.poll() is None:
+                proceso.kill()
+                proceso.communicate()
+
+        self.assertEqual(
+            [], sorted(p.name for p in tmpdir.iterdir()),
+            "an interrupted download left its temp directory behind",
         )
 
 

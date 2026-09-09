@@ -120,6 +120,10 @@ BASE_URL="${!NOMBRE_VARIABLE_BASE_URL:-$PRODUCT_RELEASE_BASE_URL_DEFAULT}"
 # vacía — el trap fallaría con "unbound variable" en vez de limpiar.
 PRODUCTO_TMPDIR=''
 
+# El de descargar_y_ejecutar, global por la misma razón que el de arriba: su
+# trap corre cuando la función que lo creó ya retornó o fue interrumpida.
+DESCARGA_TMPDIR=''
+
 fallar() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 # A diferencia de fallar, no aborta: la usa escribir_path_rc, donde el resto
 # de la instalación ya terminó bien y una falla acá es sólo cosmética (ver
@@ -128,6 +132,108 @@ advertir() { printf 'ADVERTENCIA: %s\n' "$*" >&2; }
 titulo() { printf '\n=== %s ===\n' "$*"; }
 ok()     { printf '  ✔ %s\n' "$*"; }
 info()   { printf '  %s\n' "$*"; }
+
+# --- Descargas: única costura de red de este script ---
+#
+#
+# Todo curl del archivo vive acá adentro, por dos razones que salieron de un
+# fallo real y no de una preferencia de estilo:
+#
+#   * Sin -f, curl sale 0 ante un error HTTP y escribe el CUERPO del error en
+#     su salida. La descarga de nvm iba por tubería a bash, así que una página
+#     de error de 465 bytes llegó a bash como si fuera un script y el install
+#     murió con "syntax error near unexpected token" -- señalando el lugar
+#     equivocado, en un caso donde no había nada roto de este lado.
+#   * Un fallo transitorio y uno permanente piden cosas distintas de quien
+#     está instalando. Con cinco curl sueltos había cinco mensajes distintos,
+#     y justo el que importaba no decía nada. Clasificar sólo es honesto si
+#     hay un único lugar capaz de hacerlo.
+#
+# A propósito no reintenta. Reintentar en silencio esconde que el problema es
+# del otro lado; lo que hace es nombrarlo y devolver la decisión a la persona.
+
+# Códigos de salida de curl que son del transporte y no del pedido: DNS que no
+# resuelve (6), TCP que no conecta (7), timeout (28), fallo de TLS (35), la
+# conexión que se corta a mitad (52, 56). Con espacios en los bordes para que
+# la comparación de abajo sea por elemento y no por subcadena.
+#
+# 6 y 35 merecen una palabra, porque en general pueden ser permanentes: un
+# host mal escrito no va a resolver nunca, y un certificado vencido no se
+# arregla esperando. Acá cuentan como transitorios porque este script no toma
+# ningún host de nadie: los tres que usa son literales de este archivo
+# (raw.githubusercontent.com, opencode.ai, github.com). Que uno de esos deje
+# de resolver o de presentar un certificado válido es un problema de la red de
+# quien instala, o una noticia; en ninguno de los dos casos hay algo que esa
+# persona pueda cambiar acá, que es exactamente lo que el mensaje dice.
+CURL_ESTADOS_TRANSITORIOS=' 6 7 28 35 52 56 '
+
+# Escritos por descargar, leídos por fallar_descarga. Globales porque son el
+# resultado que descargar no puede devolver: su estado de salida ya se usa
+# para decir si funcionó.
+DESCARGA_ESTADO=0
+DESCARGA_HTTP=''
+
+descargar() {
+  local url=$1 destino=$2
+  DESCARGA_ESTADO=0
+  DESCARGA_HTTP=''
+  # --progress-bar en vez de -s: una descarga de varios MB sin ninguna señal
+  # de avance se ve igual que un cuelgue. El %{http_code} sale por stdout, que
+  # es lo que captura la sustitución de acá abajo; la barra va por stderr.
+  DESCARGA_HTTP=$(curl -fL --progress-bar -w '%{http_code}' -o "$destino" "$url") \
+    || DESCARGA_ESTADO=$?
+  return "$DESCARGA_ESTADO"
+}
+
+# Aborta nombrando qué se estaba bajando, con qué falló, y -- cuando el fallo
+# es de los que se arreglan solos -- que no hay nada que cambiar y conviene
+# volver más tarde.
+fallar_descarga() {
+  local descripcion=$1
+  local detalle="curl salió $DESCARGA_ESTADO"
+  # 000 es "nunca llegó una respuesta": no hay estado HTTP que informar, y
+  # decir "HTTP 000" sería inventar una respuesta que no existió.
+  [[ -n $DESCARGA_HTTP && $DESCARGA_HTTP != 000 ]] && detalle+=", HTTP $DESCARGA_HTTP"
+
+  local transitorio=0
+  [[ $CURL_ESTADOS_TRANSITORIOS == *" $DESCARGA_ESTADO "* ]] && transitorio=1
+  # 5xx es "el otro lado está mal ahora"; 429 es "te estoy limitando ahora".
+  [[ $DESCARGA_HTTP == 5?? || $DESCARGA_HTTP == 429 ]] && transitorio=1
+
+  if ((transitorio)); then
+    fallar "$descripcion ($detalle). Es una falla transitoria del otro lado -- del servidor o de la red --, no de este script ni de lo que estás instalando: no hay nada que cambiar acá, volvé a intentarlo más tarde."
+  fi
+  fallar "$descripcion ($detalle)."
+}
+
+# Baja un script instalador y lo ejecuta desde el archivo, nunca por tubería:
+# así bash no puede empezar a correr un script a medio bajar, y ningún cuerpo
+# de error puede llegarle como si fuera código. Los argumentos que sobran son
+# asignaciones VAR=valor para el bash hijo.
+descargar_y_ejecutar() {
+  local url=$1 descripcion=$2
+  shift 2
+  DESCARGA_TMPDIR=$(mktemp -d) || fallar 'no se pudo crear un directorio temporal'
+  # Mismo motivo que el trap de instalar_producto, y misma razón para que la
+  # variable sea global y no local (ver el comentario junto a PRODUCTO_TMPDIR):
+  # la limpieza explícita de abajo cubre los caminos que el script elige tomar,
+  # y una señal no es uno de ellos. Un Ctrl-C durante una descarga lenta -- que
+  # sobre un enlace institucional es un evento común, no una hipótesis --
+  # dejaba el directorio tirado en $TMPDIR.
+  #
+  # El trap no se saca al salir de la función: dejarlo puesto es inofensivo
+  # (rm -rf de un directorio ya borrado no hace nada) y evita el riesgo de que
+  # un "trap - EXIT" acá pise el trap de otra función que corra después.
+  trap 'rm -rf "$DESCARGA_TMPDIR"' EXIT
+  if ! descargar "$url" "$DESCARGA_TMPDIR/instalador.sh"; then
+    rm -rf "$DESCARGA_TMPDIR"
+    fallar_descarga "$descripcion"
+  fi
+  local estado=0
+  env "$@" bash "$DESCARGA_TMPDIR/instalador.sh" || estado=$?
+  rm -rf "$DESCARGA_TMPDIR"
+  return "$estado"
+}
 
 uso() {
   # Derivado por estructura, no por un rango de líneas fijo: imprime el
@@ -224,8 +330,19 @@ detectar_node() {
     # salida completa en una variable (nada que puedan cerrar antes de
     # tiempo) y recién ahí se recorta a la primera línea con expansión de
     # parámetros, que no ejecuta ningún proceso ni abre ninguna tubería.
+    #
+    # El "|| true" cierra el otro medio del mismo agujero: bajo "set -e", una
+    # asignación cuya sustitución de comando sale distinto de 0 aborta el
+    # script entero, y para ese caso el trap ERR no llega a imprimir -- la
+    # corrida termina con exit 1 y cero bytes de salida, exactamente la
+    # terminal muda que ese trap existe para evitar. Pasó de verdad: un
+    # opencode instalado por npm como "opencode-ai" cuyo postinstall nunca
+    # corrió contesta "--version" con una explicación y estado distinto de 0,
+    # y sólo con eso "install.sh --verify" se moría en silencio. Un probe es
+    # una PREGUNTA, y una herramienta que se niega a contestarla ya es una
+    # respuesta: se informa lo que dijo y se sigue.
     local salida_completa
-    salida_completa=$(node --version 2>&1)
+    salida_completa=$(node --version 2>&1) || true
     NODE_VERSION=${salida_completa%%$'\n'*}
   else
     NODE_PRESENTE=0
@@ -239,9 +356,9 @@ OPENCODE_VERSION=''
 detectar_opencode() {
   if command -v opencode >/dev/null 2>&1; then
     OPENCODE_PRESENTE=1
-    # Ver el comentario en detectar_node sobre por qué no "| head -1".
+    # Ver el comentario en detectar_node: por qué no "| head -1", y por qué "|| true".
     local salida_completa
-    salida_completa=$(opencode --version 2>&1)
+    salida_completa=$(opencode --version 2>&1) || true
     OPENCODE_VERSION=${salida_completa%%$'\n'*}
   else
     OPENCODE_PRESENTE=0
@@ -254,17 +371,17 @@ PRODUCTO_VERSION=''
 PRODUCTO_RUTA=''
 
 detectar_producto() {
-  # Ver el comentario en detectar_node sobre por qué no "| head -1".
+  # Ver el comentario en detectar_node: por qué no "| head -1", y por qué "|| true".
   local salida_completa
   if command -v "$PRODUCT_PROGRAM_NAME" >/dev/null 2>&1; then
     PRODUCTO_PRESENTE=1
     PRODUCTO_RUTA=$(command -v "$PRODUCT_PROGRAM_NAME")
-    salida_completa=$("$PRODUCT_PROGRAM_NAME" --version 2>&1)
+    salida_completa=$("$PRODUCT_PROGRAM_NAME" --version 2>&1) || true
     PRODUCTO_VERSION=${salida_completa%%$'\n'*}
   elif [[ -x "$BIN_DIR/$PRODUCT_PROGRAM_NAME" ]]; then
     PRODUCTO_PRESENTE=1
     PRODUCTO_RUTA="$BIN_DIR/$PRODUCT_PROGRAM_NAME"
-    salida_completa=$("$BIN_DIR/$PRODUCT_PROGRAM_NAME" --version 2>&1)
+    salida_completa=$("$BIN_DIR/$PRODUCT_PROGRAM_NAME" --version 2>&1) || true
     PRODUCTO_VERSION=${salida_completa%%$'\n'*}
   else
     PRODUCTO_PRESENTE=0
@@ -674,7 +791,9 @@ instalar_node() {
 
   if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
     info "instalando nvm $NVM_VERSION..."
-    curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | bash \
+    descargar_y_ejecutar \
+      "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" \
+      'no se pudo descargar el instalador de nvm' \
       || fallar 'no se pudo instalar nvm'
   else
     info 'nvm ya estaba instalado'
@@ -701,12 +820,15 @@ instalar_opencode() {
 
   if [[ -n "$VERSION_OPENCODE" ]]; then
     info "instalando OpenCode $VERSION_OPENCODE con el mecanismo oficial..."
-    curl -fsSL https://opencode.ai/install | VERSION="$VERSION_OPENCODE" bash \
+    descargar_y_ejecutar https://opencode.ai/install \
+      'no se pudo descargar el instalador de OpenCode' \
+      VERSION="$VERSION_OPENCODE" \
       || fallar "falló la instalación de OpenCode $VERSION_OPENCODE"
   else
     info 'instalando la última versión de OpenCode con el mecanismo oficial...'
     info 'esto consulta la API de GitHub, que sin autenticar permite 60 pedidos por hora por IP'
-    curl -fsSL https://opencode.ai/install | bash \
+    descargar_y_ejecutar https://opencode.ai/install \
+      'no se pudo descargar el instalador de OpenCode' \
       || fallar 'falló la instalación de OpenCode; si dice "Failed to fetch version information", es el límite de la API de GitHub: esperá o usá --opencode-version'
   fi
 
@@ -716,9 +838,9 @@ instalar_opencode() {
   export PATH="$OPENCODE_BIN_DIR:$PATH"
   command -v opencode >/dev/null 2>&1 \
     || fallar 'OpenCode se instaló pero no quedó en el PATH; revisá ~/.bashrc'
-  # Ver el comentario en detectar_node sobre por qué no "| head -1".
+  # Ver el comentario en detectar_node: por qué no "| head -1", y por qué "|| true".
   local salida_completa
-  salida_completa=$(opencode --version 2>&1)
+  salida_completa=$(opencode --version 2>&1) || true
   ok "instalado: ${salida_completa%%$'\n'*}"
 }
 
@@ -738,10 +860,10 @@ instalar_producto() {
   trap 'rm -rf "$PRODUCTO_TMPDIR"' EXIT
 
   info "descargando $PRODUCT_PROGRAM_NAME y su checksum..."
-  curl -fL -o "$PRODUCTO_TMPDIR/$PRODUCT_PROGRAM_NAME" "$BASE_URL/$PRODUCT_PROGRAM_NAME" \
-    || fallar "no se pudo descargar $PRODUCT_PROGRAM_NAME"
-  curl -fL -o "$PRODUCTO_TMPDIR/$PRODUCT_PROGRAM_NAME.sha256" "$BASE_URL/$PRODUCT_PROGRAM_NAME.sha256" \
-    || fallar "no se pudo descargar $PRODUCT_PROGRAM_NAME.sha256"
+  descargar "$BASE_URL/$PRODUCT_PROGRAM_NAME" "$PRODUCTO_TMPDIR/$PRODUCT_PROGRAM_NAME" \
+    || fallar_descarga "no se pudo descargar $PRODUCT_PROGRAM_NAME"
+  descargar "$BASE_URL/$PRODUCT_PROGRAM_NAME.sha256" "$PRODUCTO_TMPDIR/$PRODUCT_PROGRAM_NAME.sha256" \
+    || fallar_descarga "no se pudo descargar $PRODUCT_PROGRAM_NAME.sha256"
 
   # sha256sum -c lee el basename adentro del archivo de checksum, por eso se
   # verifica parado en el mismo directorio donde cayeron los dos archivos.
