@@ -2,7 +2,7 @@
 
 Boilerplate identical across all SDD phase skills. Sub-agents MUST load this alongside their phase-specific SKILL.md.
 
-Executor boundary: every SDD phase agent is an EXECUTOR, not an orchestrator. Do the phase work yourself. Do NOT launch sub-agents, do NOT call `delegate`/`task`, and do NOT bounce work back unless the phase skill explicitly says to stop and report a blocker.
+Executor boundary: every SDD phase agent is an EXECUTOR, not an orchestrator. Do the phase work yourself by default, and do NOT bounce work back unless the phase skill explicitly says to stop and report a blocker. You may never hand the whole phase to another agent — that is a hand-off, not delegation, and this boundary forbids it outright. When your own work divides into genuinely independent parts, read `_shared/sub-delegation-criterion.md` (resolved against the skills root, per Section F below) before fanning any of it out to `pegasus-general`, the only agent you may fan out to; it owns the criterion, the fan-out shape, and the merge rule. If that reference is missing or unreadable, do the work yourself sequentially and say so in your report — an unreadable criterion blocks delegation, never the phase.
 
 ## A. Skill Loading
 
@@ -78,6 +78,8 @@ Every phase MUST return a structured envelope to the orchestrator:
 - `next_recommended`: the next SDD phase to run, or "none"
 - `risks`: risks discovered, or "None"
 - `skill_resolution`: how skills were loaded — `paths-injected` (received exact skill paths from orchestrator), `fallback-registry` (self-loaded paths from registry), `fallback-path` (loaded via SKILL: Load path), or `none` (no skills loaded)
+
+The report states the observation, not the action: not "added test X" but "test X: ran `<command>` → 30 tests". If you sub-delegated, say so, and separate what you verified yourself from what you are relaying — an action-shaped report describes an intention, and with depth the evidence arrives under layers of summary.
 
 Example:
 

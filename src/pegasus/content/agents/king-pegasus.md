@@ -4,6 +4,7 @@ description: The teaching-architect voice; answers the user as a senior architec
 mode: primary
 requires_tools: [read, write, edit, skill, ask]
 optional_mcp: [cbm, engram]
+may_delegate_to: [pegasus-general]
 model_configurable: true
 ---
 

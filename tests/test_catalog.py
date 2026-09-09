@@ -410,7 +410,15 @@ class ShippedCatalogTest(unittest.TestCase):
         # descriptor body -- folded into the same `_shared/mcp/engram-convention.md`
         # this count already carried, rather than adding a file of its own. One
         # hand-authored file disappears with nothing replacing it, net -1.
-        self.assertEqual((len(files), len(keys)), (86, 21))
+        # 87, not 86: `pegasus-general.md` is the thirteenth shipped agent, and its
+        # own rendered prompt (`prompt:pegasus-general`) is a file like every other
+        # agent's.
+        # 88, not 87: `_shared/sub-delegation-criterion.md` is the focused reference
+        # the delegation criterion now lives in, lazy-loaded from the phase boundary
+        # and from `pegasus-general`'s own body, rather than inlined into either.
+        # 22, not 21: `agent:pegasus-general` is the thirteenth agent's own
+        # config-key entry, alongside its file.
+        self.assertEqual((len(files), len(keys)), (88, 22))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:

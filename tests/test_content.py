@@ -1242,7 +1242,9 @@ class ShippedContentTest(unittest.TestCase):
         declares_playwright = {
             agent.name for agent in self.content.agents if "playwright" in agent.optional_mcp
         }
-        self.assertEqual(declares_playwright, {"sdd-apply", "sdd-explore", "sdd-verify"})
+        self.assertEqual(
+            declares_playwright, {"sdd-apply", "sdd-explore", "sdd-verify", "pegasus-general"}
+        )
 
     def test_every_shipped_server_declares_a_mechanism_and_a_convention(self):
         """A server nothing can carry out is not installable.
@@ -1267,6 +1269,7 @@ class ShippedContentTest(unittest.TestCase):
             {a.name for a in self.content.agents},
             {
                 "king-pegasus",
+                "pegasus-general",
                 "pegasus-orchestrator",
                 "sdd-apply",
                 "sdd-archive",
@@ -1284,8 +1287,13 @@ class ShippedContentTest(unittest.TestCase):
     def test_the_orchestrator_declares_its_delegation(self):
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         self.assertEqual(orchestrator.mode, AgentMode.PRIMARY)
-        self.assertIn("explore", orchestrator.may_delegate_to)
-        self.assertIn("general", orchestrator.may_delegate_to)
+        # `explore` and `general` are OpenCode's own built-ins -- Pegasus ships no
+        # descriptor or permission for either, and their names would not exist under
+        # another CLI. `pegasus-general` is the shipped, portable stand-in, so it is
+        # what the orchestrator declares now instead of the two built-ins.
+        self.assertNotIn("explore", orchestrator.may_delegate_to)
+        self.assertNotIn("general", orchestrator.may_delegate_to)
+        self.assertIn("pegasus-general", orchestrator.may_delegate_to)
         # Named on purpose: it is the sole readiness authority, so losing the right to
         # launch it would disable verification rather than one phase.
         self.assertIn("sdd-verify", orchestrator.may_delegate_to)
@@ -1388,9 +1396,6 @@ class ShippedContentTest(unittest.TestCase):
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         self.assertNotIn("king-pegasus", orchestrator.may_delegate_to)
 
-    #: Agents the runtime supplies, which Pegasus may delegate to without shipping them.
-    RUNTIME_BUILT_INS = frozenset({"explore", "general"})
-
     def test_the_orchestrator_may_delegate_to_every_subagent_it_ships_with(self):
         # render.py turns may_delegate_to into {"*": "deny", <named>: "allow"}, so an agent
         # missing from the list is not merely undeclared: it is denied. Comparing against a
@@ -1412,9 +1417,16 @@ class ShippedContentTest(unittest.TestCase):
         # The other direction. A name nobody answers to is a permission entry that grants
         # access to nothing: a typo or a removed agent survives as a silent no-op, and the
         # one-directional check above stays green through both.
+        #
+        # No runtime-built-in tolerance survives here on purpose: `explore` and `general`
+        # were OpenCode's own built-ins, tolerated only because the orchestrator used to
+        # name them without Pegasus shipping either. Now that `pegasus-general` is the
+        # shipped, portable stand-in and the orchestrator no longer names a built-in at
+        # all, every name in `may_delegate_to` must resolve to a shipped agent -- a
+        # strictly tighter invariant than the one this test used to hold.
         orchestrator = next(a for a in self.content.agents if a.name == "pegasus-orchestrator")
         shipped = {a.name for a in self.content.agents}
-        self.assertEqual(set(orchestrator.may_delegate_to) - shipped - self.RUNTIME_BUILT_INS, set())
+        self.assertEqual(set(orchestrator.may_delegate_to) - shipped, set())
 
     def test_system_prompt_loads(self):
         self.assertIn("Co-Authored-By", self.content.system_prompt.body)
@@ -1438,13 +1450,14 @@ class ShippedContentTest(unittest.TestCase):
         """Not everyone: an agent that never asks the graph a question should
         not carry the graph's convention, and the pairing invariant would make
         it carry one. The two primaries earn it for different reasons -- the
-        orchestrator to route, the voice to answer -- and the four phase agents
-        because discovery is their work.
+        orchestrator to route, the voice to answer -- and the five phase agents
+        (four SDD phases plus the generic worker) because discovery is their work.
         """
         self.assertEqual(
             {agent.name for agent in self.content.agents if "cbm" in agent.optional_mcp},
             {
                 "king-pegasus",
+                "pegasus-general",
                 "pegasus-orchestrator",
                 "sdd-apply",
                 "sdd-design",
@@ -1483,19 +1496,26 @@ class ShippedContentTest(unittest.TestCase):
             with self.subTest(agent=agent.name):
                 self.assertIn("engram", [s.name for s in agent.mcp_sections])
 
-    def test_the_five_context7_agents_carry_the_shared_section_and_no_one_else_does(self):
-        context7_agents = {"sdd-apply", "sdd-design", "sdd-explore", "sdd-verify", "sdd-onboard"}
+    def test_the_six_context7_agents_carry_the_shared_section_and_no_one_else_does(self):
+        context7_agents = {
+            "sdd-apply",
+            "sdd-design",
+            "sdd-explore",
+            "sdd-verify",
+            "sdd-onboard",
+            "pegasus-general",
+        }
         for agent in self.content.agents:
             with self.subTest(agent=agent.name):
                 carries = "context7" in [s.name for s in agent.mcp_sections]
                 self.assertEqual(carries, agent.name in context7_agents)
 
-    def test_the_cbm_section_is_shared_for_three_agents_and_overridden_for_three(self):
-        """`sdd-apply`, `sdd-design` and `sdd-explore` carry the plain pointer;
-        `king-pegasus`, `pegasus-orchestrator` and `sdd-verify` each carry
-        deliberate, agent-specific framing that a shared file would flatten.
+    def test_the_cbm_section_is_shared_for_four_agents_and_overridden_for_three(self):
+        """`sdd-apply`, `sdd-design`, `sdd-explore` and `pegasus-general` carry the
+        plain pointer; `king-pegasus`, `pegasus-orchestrator` and `sdd-verify` each
+        carry deliberate, agent-specific framing that a shared file would flatten.
         """
-        shared_agents = {"sdd-apply", "sdd-design", "sdd-explore"}
+        shared_agents = {"sdd-apply", "sdd-design", "sdd-explore", "pegasus-general"}
         overridden_agents = {"king-pegasus", "pegasus-orchestrator", "sdd-verify"}
         by_name = {agent.name: agent for agent in self.content.agents}
 
@@ -1532,6 +1552,127 @@ class ShippedContentTest(unittest.TestCase):
         for skill in self.content.skills:
             self.assertIsInstance(skill.source, PurePosixPath)
             self.assertFalse(skill.source.is_absolute())
+
+    # -- Delegation criterion: sub-agents may now decide to fan out, so a set of
+    # invariants replaces the outright prohibition that used to make these moot.
+
+    _SHARED_DIR = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content" / "skills" / "_shared"
+
+    def test_no_shipped_agent_still_carries_the_old_prohibition(self):
+        """The literal that used to forbid delegation outright must be gone from
+        every shipped agent body -- derived from the loaded agent list, not a
+        hand-written file list, so a future agent is covered automatically.
+        """
+        offenders = [
+            agent.name for agent in self.content.agents if "do not delegate" in agent.body.lower()
+        ]
+        self.assertEqual(offenders, [])
+
+    def test_gate_zero_names_no_shipped_mcp_server(self):
+        """Gate 0's text has to stay portable: an optional MCP server is a
+        per-install choice, and naming one in the criterion would offer a
+        capability that does not exist for an install that never chose it. The
+        id list is derived from the shipped mcp descriptors, not hand-listed, so
+        a future server is covered automatically.
+        """
+        criterion = (self._SHARED_DIR / "sub-delegation-criterion.md").read_text(encoding="utf-8")
+        mcp_ids = [server.name for server in self.content.mcp]
+        self.assertTrue(mcp_ids, "fixture drifted: no shipped mcp server to check against")
+        for mcp_id in mcp_ids:
+            with self.subTest(mcp_id=mcp_id):
+                self.assertNotIn(mcp_id, criterion.lower())
+
+    def test_the_criterion_reference_is_never_loaded_unconditionally(self):
+        """Lazy loading is the point of splitting the criterion out of the phase
+        boundary: every place that names `sub-delegation-criterion.md` must do so
+        behind the same WHEN condition, never as an unconditional loading gate.
+        Checked mechanically -- every line naming the file must also carry the
+        conditioning phrase -- across every shipped agent body plus the phase
+        boundary file itself, rather than hand-listing the two places that
+        currently reference it.
+        """
+        needle = "sub-delegation-criterion.md"
+        condition = "divides into genuinely independent parts"
+        sources = {
+            "_shared/sdd-phase-common.md": (self._SHARED_DIR / "sdd-phase-common.md").read_text(
+                encoding="utf-8"
+            ),
+            **{agent.source.as_posix(): agent.body for agent in self.content.agents},
+        }
+        checked_any = False
+        for name, text in sources.items():
+            for line in text.splitlines():
+                if needle in line:
+                    checked_any = True
+                    with self.subTest(source=name):
+                        self.assertIn(condition, line)
+        self.assertTrue(checked_any, "fixture drifted: nothing references the criterion file")
+
+    def test_the_phase_common_macro_stayed_within_its_measured_budget(self):
+        """`sdd-phase-common.md` measured 114 lines before this change replaced
+        its one-line delegation prohibition with a same-length compact gate (see
+        the lazy-load framework's macro-vs-reference split) and added the
+        two/three-line truthful-report rule to Section D. The ceiling below is
+        that pre-change measurement plus the report rule's own documented,
+        deliberate addition -- not a number the gate itself is allowed to grow
+        into over time.
+        """
+        path = self._SHARED_DIR / "sdd-phase-common.md"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        self.assertLessEqual(len(lines), 118, "sdd-phase-common.md grew past its measured budget")
+
+    def test_no_verifier_is_reachable_from_anything_that_implements(self):
+        """The one new hard structural invariant this change adds: `sdd-verify`
+        must not sit in the transitive closure of `may_delegate_to` starting from
+        any executor that can write or edit code. `pegasus-general` only
+        delegates to itself today, so this holds by construction -- this test
+        exists to keep it enforced rather than merely true, computed from the
+        data rather than hand-listed.
+
+        Scoped to `AgentMode.SUBAGENT`, on purpose: the coordinator itself
+        (`pegasus-orchestrator`, `AgentMode.PRIMARY`) also declares `write` and
+        `edit` for its own small, already-known edits, and reaching `sdd-verify`
+        is precisely its job -- `sdd-phase-common.md`'s "sole readiness
+        authority" gate depends on that reach existing. The invariant this test
+        protects is narrower and still real: an executor that writes the change
+        must never be able to reach the agent that signs off on it, whether
+        directly or through a chain of fan-outs.
+
+        The same walk also proves termination: bounding it at one more step than
+        there are shipped agents means a future cycle introduced through a third
+        agent fails this test instead of hanging the suite.
+        """
+        agents = {agent.name: agent for agent in self.content.agents}
+        implementers = [
+            name
+            for name, agent in agents.items()
+            if agent.mode is AgentMode.SUBAGENT
+            and (
+                "edit" in agent.requires_tools + agent.optional_tools
+                or "write" in agent.requires_tools + agent.optional_tools
+            )
+        ]
+        self.assertTrue(implementers, "fixture drifted: no shipped subagent declares write or edit")
+
+        def closure(start: str) -> set[str]:
+            seen: set[str] = set()
+            frontier = [start]
+            budget = len(agents) + 1
+            steps = 0
+            while frontier:
+                steps += 1
+                self.assertLessEqual(steps, budget, "closure did not terminate: a cycle survived")
+                current = frontier.pop()
+                for target in agents[current].may_delegate_to:
+                    if target in seen or target not in agents:
+                        continue
+                    seen.add(target)
+                    frontier.append(target)
+            return seen
+
+        for name in implementers:
+            with self.subTest(agent=name):
+                self.assertNotIn("sdd-verify", closure(name))
 
 
 class SelectMcpTest(unittest.TestCase):
@@ -1891,7 +2032,7 @@ class SelectMcpShippedContentTest(unittest.TestCase):
     def test_playwright_chosen_grants_it_to_exactly_the_intended_agents(self):
         selected = content.select_mcp(self.loaded, ["playwright"])
         granted = {agent.name for agent in selected.agents if "playwright" in agent.optional_mcp}
-        self.assertEqual(granted, {"sdd-apply", "sdd-explore", "sdd-verify"})
+        self.assertEqual(granted, {"sdd-apply", "sdd-explore", "sdd-verify", "pegasus-general"})
 
 
 class BoundMcpTest(unittest.TestCase):

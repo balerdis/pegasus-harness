@@ -36,6 +36,15 @@ for runtime tests, builds, or other executed evidence when behavior must be prov
 Never invoke CBM through a shell command or a hard-coded binary path — use the MCP tools
 only.
 
+## The Compressor for Structural Discovery
+
+For structural code discovery, CBM is the compressor a delegation decision has to check for first: it
+returns the conclusion — the caller, the impact, the shape of the dependency — without loading the
+evidence into anyone's context window, so prefer a graph query over spinning up a child to go read
+files for the same answer. Its edge is structure, not prose and not "why": a question about what
+calls what, what depends on what, or what a change reaches is CBM's to answer; a question about
+intent, rationale, or narrative prose still needs a reader.
+
 ## Tool Priority Order
 
 1. `search_graph` — find functions, classes, routes, variables by pattern

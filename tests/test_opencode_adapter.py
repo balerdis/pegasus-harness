@@ -1468,13 +1468,40 @@ class ShippedContentRenderTest(unittest.TestCase):
         for name in orchestrator.may_delegate_to:
             self.assertEqual(value["permission"]["task"][name], "allow")
 
+    def test_every_declared_delegator_renders_exactly_its_declared_allows(self):
+        """The mirror of the orchestrator-only check above, generalized to every
+        agent that declares `may_delegate_to` -- `sdd-explore`, `sdd-verify`,
+        `king-pegasus` and `pegasus-general` each fan out to `pegasus-general` now
+        that the delegation criterion replaces the outright prohibition. Both
+        directions matter: a declared target must render `allow`, and a name
+        nobody declared must stay on the `deny` baseline rather than leaking in
+        from another agent's grant.
+        """
+        agents_with_delegation = [
+            agent for agent in self.loaded.agents if agent.may_delegate_to
+        ]
+        # Fixture drift guard: if this ever shrinks to just the orchestrator, the
+        # rest of this test would still pass while checking nothing new.
+        self.assertGreaterEqual(len(agents_with_delegation), 4)
+        for agent in agents_with_delegation:
+            with self.subTest(agent=agent.name):
+                value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
+                self.assertEqual(value["permission"]["task"]["*"], "deny")
+                for name in agent.may_delegate_to:
+                    self.assertEqual(value["permission"]["task"][name], "allow")
+                other_agents = {a.name for a in self.loaded.agents} - set(agent.may_delegate_to)
+                for name in other_agents:
+                    self.assertNotEqual(
+                        value["permission"]["task"].get(name), "allow", (agent.name, name)
+                    )
+
     def test_playwright_selected_is_granted_only_to_the_intended_agents(self):
         """`playwright*` must render `True`/`"allow"` for exactly the agents
         that declare it once Playwright is chosen, with every other agent's
         deny baseline left untouched.
         """
         selected = content_module.select_mcp(self.loaded, ["playwright"])
-        intended = {"sdd-apply", "sdd-explore", "sdd-verify"}
+        intended = {"sdd-apply", "sdd-explore", "sdd-verify", "pegasus-general"}
         for agent in selected.agents:
             value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
             self.assertIs(value["tools"]["*"], False, agent.name)
