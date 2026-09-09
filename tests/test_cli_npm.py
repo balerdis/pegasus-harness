@@ -231,12 +231,16 @@ class UninstallNpmTest(RealHomeTestCase):
         journal = cli.journal_store(self.runtime()).load()
         self.assertIsNone(journal_module.install_for(journal, CLI))
 
-    def test_dropping_the_flag_on_reinstall_retires_it_without_uninstalling(self, _load):
-        # `--mcp` still decides what installs: not naming it on a later run
-        # retires just this server, and the rest of the installation stays.
+    def test_reinstalling_with_mcp_none_retires_it_without_uninstalling(self, _load):
+        # `--mcp` still decides what installs: an explicit empty selection
+        # (`--mcp none`) on a later run retires just this server, and the
+        # rest of the installation stays. Dropping `--mcp` altogether no
+        # longer reaches this path -- a bare reinstall over a recorded
+        # selection now refuses instead of silently retiring it, so the
+        # retirement has to be asked for explicitly with `--mcp none`.
         self.present()
         self.run_cli("install", "--cli", CLI, "--mcp", "probe")
-        code, report = self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "none")
         self.assertEqual(code, cli.OK)
         self.assertFalse(self.target().exists())
         self.assertIn("dependency:probe", [item["id"] for item in report["retired"]])

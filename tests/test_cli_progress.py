@@ -214,26 +214,30 @@ class DownloadByteProgressTest(RealHomeTestCase):
 
 @patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
 class RetirementProgressTest(RealHomeTestCase):
-    """Dropping `--mcp probe` on a reinstall is the case that actually
-    exercises the retire phase: nothing new to place, one dependency tree and
-    its artifacts to retire."""
+    """Reinstalling with `mcp=[]` -- the explicit empty selection, `--mcp
+    none` at the argv level -- over an installation that recorded `probe` is
+    the case that actually exercises the retire phase: nothing new to place,
+    one dependency tree and its artifacts to retire. `mcp=None` (the bare
+    `--mcp`-was-never-given case) would trip the guard in `cli.install` and
+    refuse instead, since an installation already has a recorded selection
+    here."""
 
     def test_a_reinstall_that_retires_a_server_counts_it_in_the_total(self, _load):
         self.present()
         cli.install(CLI, self.runtime(), mcp=["probe"])
-        dry = cli.install(CLI, self.runtime(), dry_run=True)
+        dry = cli.install(CLI, self.runtime(), mcp=[], dry_run=True)
         placements = len(dry["created"]) + len(dry["updated"])
         retirements = len(dry["retired"])
         self.assertGreater(retirements, 0)
         events = []
-        cli.install(CLI, self.runtime(), on_progress=events.append)
+        cli.install(CLI, self.runtime(), mcp=[], on_progress=events.append)
         self.assertEqual(events[0].total, placements + retirements + 2)
 
     def test_the_retire_phase_appears_and_done_still_reaches_the_total(self, _load):
         self.present()
         cli.install(CLI, self.runtime(), mcp=["probe"])
         events = []
-        cli.install(CLI, self.runtime(), on_progress=events.append)
+        cli.install(CLI, self.runtime(), mcp=[], on_progress=events.append)
         self.assertIn("retire", {event.phase for event in events})
         total = events[0].total
         self.assertEqual([event.done for event in events], list(range(total + 1)))

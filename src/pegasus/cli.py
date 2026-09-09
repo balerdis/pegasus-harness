@@ -481,6 +481,54 @@ def install(
     # nothing new -- `plan` below already needed this same lookup, so this
     # only moves an existing read earlier rather than adding one.
     installed = journal_module.install_for(journal, adapter.id)
+    # A bare `install` (`mcp is None`, meaning `--mcp` was never given on the
+    # command line -- an empty list from `--mcp none` is a different, explicit
+    # thing) against an installation that already has a recorded MCP
+    # selection is the exact damage this guard exists to prevent: silence
+    # about `--mcp` means select nothing, so a plain reinstall run for an
+    # unrelated reason (a config drift fix, a new agent) would otherwise
+    # retire every MCP server, convention file and binding this install ever
+    # recorded, and still report success, because from `install`'s own point
+    # of view retiring an unnamed server is the documented contract, not a
+    # failure. `update` is unaffected: it always calls `install` with an
+    # explicit reconstruction of that same selection (see `_mcp_update_selection`),
+    # so `mcp` is never `None` on its path, no matter what it reconstructs --
+    # this checks `mcp is None`, never the selection's own emptiness, so
+    # `update`'s explicit empty selection (a first install with no MCP
+    # servers at all) sails through exactly as it always has. A first
+    # install, or one already recorded with an empty selection, has nothing
+    # to lose either, so `installed is None` and an empty reconstruction both
+    # fall through untouched -- see `UnaffectedInstallsTest` for both cases.
+    #
+    # `dry_run` is exempt from the refusal itself: this guard exists to stop
+    # silent damage, and a dry run writes nothing -- there is no damage here
+    # to stop, silent or otherwise. It is also the one command that lets a
+    # person ask "what would you retire?" before deciding anything, and a
+    # bare `install --dry-run` is exactly how someone would go looking for
+    # that answer after hearing about this very guard; refusing it would
+    # delete the only way to ask. So a dry run still reports the plan
+    # (`retired` and all) exactly as it did before this guard existed, but
+    # carries `mcp_warnings` -- the same advisory-prose convention
+    # `model_warnings`/`grant_warnings` already use below -- naming that a
+    # real run would refuse, so nobody is surprised by the refusal one
+    # command later.
+    mcp_warnings: list[str] = []
+    if mcp is None and installed is not None:
+        recorded_selection, recorded_unresolved = _mcp_update_selection(
+            installed, display_name=runtime.identity.display_name
+        )
+        if recorded_selection or recorded_unresolved:
+            named = ", ".join(sorted({*recorded_selection, *recorded_unresolved}))
+            message = (
+                f"{adapter.id} already has an mcp selection recorded ({named}), and a bare "
+                f"install with no --mcp would silently retire all of it -- every install names "
+                f"its whole selection explicitly, so this refuses instead of guessing. Run "
+                f"`{runtime.identity.program_name} update --cli {adapter.id}` to keep the recorded "
+                f"selection, pass --mcp ... to change it, or pass --mcp none to revoke it on purpose"
+            )
+            if not dry_run:
+                raise CommandError(message)
+            mcp_warnings = [f"a real (non-dry) run would refuse: {message}"]
     # Resolved here, once `installed` is known, and applied before anything
     # downstream reads `content` again -- the Node guard included, since a
     # granted key never carries a distribution to fetch and so never changes
@@ -555,6 +603,7 @@ def install(
             "retired": [_recorded(record) for record in retirements],
             "model_warnings": list(model_warnings),
             "grant_warnings": grant_warnings,
+            "mcp_warnings": mcp_warnings,
         }
 
     # Taken before a single byte of this run reaches disk, and never for a dry
@@ -2296,6 +2345,18 @@ def _adapter(cli_id: str):
     return registry.get(cli_id)
 
 
+#: The one `--mcp` spelling this module understands and `content.select_mcp`
+#: never sees. `select_mcp`'s empty list already means "choose nothing" --
+#: that is its documented default -- so there is no missing concept in the
+#: core to add; what is missing is a way for someone typing a command line to
+#: reach that empty list *on purpose* rather than by omission, since omission
+#: now means something else entirely (see `install`'s guard, below). Kept as
+#: a CLI-only spelling, translated away before `content_module.select_mcp`
+#: ever runs, so the core stays exactly as unaware of "none" as it is of any
+#: other command-line concern.
+_MCP_NONE = "none"
+
+
 def _select_mcp(chosen: list[str] | None) -> content_module.Content:
     """The user's `--mcp` flags, applied to the whole content tree once.
 
@@ -2303,9 +2364,26 @@ def _select_mcp(chosen: list[str] | None) -> content_module.Content:
     exist, which is a clean message rather than the traceback a malformed
     shipped descriptor would still deserve — that case is left to whatever
     already raises `ContentError` unhandled in `main`.
+
+    `--mcp none` is handled here, not in `content_module.select_mcp`: it
+    means "select nothing", the same result an empty list already produces,
+    so it is translated to `[]` before the core ever sees it rather than
+    taught as a second spelling of the same thing down there. `none` is
+    refused combined with anything else -- `--mcp none --mcp cbm` is a
+    contradiction, not a hint that one of the two wins, so this never guesses
+    which.
     """
+    chosen = chosen or []
+    if _MCP_NONE in chosen:
+        if len(chosen) > 1:
+            raise CommandError(
+                f"--mcp {_MCP_NONE} means selecting no server, on purpose, and cannot be combined "
+                f"with any other --mcp value -- pass --mcp {_MCP_NONE} alone, or drop it and name "
+                f"only the servers you actually want"
+            )
+        chosen = []
     try:
-        return content_module.select_mcp(content_module.load(), chosen or [])
+        return content_module.select_mcp(content_module.load(), chosen)
     except content_module.ContentError as error:
         raise CommandError(str(error)) from error
 
@@ -2637,6 +2715,9 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
         if report.get("grant_warnings"):
             lines.append("Carried-forward grants dropped as redundant:")
             lines.extend(f"  {warning}" for warning in report["grant_warnings"])
+        if report.get("mcp_warnings"):
+            lines.append("Only reported because this is a dry run:")
+            lines.extend(f"  {warning}" for warning in report["mcp_warnings"])
         return "\n".join(_and_retention(_and_activation(lines, report), report))
     if command == "upgrade":
         if report["status"] == "planned":

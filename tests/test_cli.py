@@ -983,12 +983,15 @@ class InstallMcpTest(RealHomeTestCase):
         install = journal_module.install_for(self.store().load(), CLI)
         self.assertEqual(install.mcp_bindings, {"cbm": "other-server-key"})
 
-    def test_reinstalling_without_the_server_drops_its_recorded_binding(self):
+    def test_reinstalling_with_an_explicit_empty_selection_drops_its_recorded_binding(self):
         """A binding dropped from the selection must not linger on the journal
-        once the reinstall that dropped it is recorded."""
+        once the reinstall that dropped it is recorded. This must be asked for
+        through `--mcp none`, the explicit empty selection: a bare reinstall
+        (`--mcp` never given) now refuses instead of guessing, per the guard
+        in `cli.install`."""
         self.present()
         self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
-        code, _ = self.run_cli("install", "--cli", CLI)
+        code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "none")
         self.assertEqual(code, 0)
         install = journal_module.install_for(self.store().load(), CLI)
         self.assertEqual(install.mcp_bindings, {})
@@ -1037,16 +1040,18 @@ class InstallMcpTest(RealHomeTestCase):
         self.assertEqual(code, 0)
         self.assertIn("context7", self.settings()["mcp"])
 
-    def test_reinstalling_without_the_server_takes_its_key_and_file_back_out(self):
-        """A server chosen once and then left unnamed on the next install should
-        not stay behind as an orphan: this is the case the unit exists to prove
-        one way or the other."""
+    def test_reinstalling_with_none_takes_its_key_and_file_back_out(self):
+        """A server chosen once and then explicitly revoked with `--mcp none`
+        should not stay behind as an orphan: this is the case the unit exists
+        to prove one way or the other. A *bare* reinstall no longer reaches
+        this at all -- it refuses instead, per `InstallMcpGuardTest` -- so
+        retirement now has to be asked for on purpose."""
         self.present()
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         self.assertIn("context7", self.settings()["mcp"])
         self.assertTrue(self.filesystem.exists(self.convention_path("context7")))
 
-        code, report = self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "none")
         self.assertEqual(code, 0)
         self.assertNotIn("context7", self.settings().get("mcp", {}))
         self.assertFalse(self.filesystem.exists(self.convention_path("context7")))
@@ -1065,11 +1070,11 @@ class InstallMcpTest(RealHomeTestCase):
         self.assertEqual({item["id"] for item in report["retired"]}, {"mcp:context7", "mcp-convention:context7"})
         self.assertEqual(self.snapshot(), before)
 
-    def test_reinstalling_without_the_server_reports_what_it_retired(self):
+    def test_reinstalling_with_none_reports_what_it_retired(self):
         self.present()
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
 
-        code, report = self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "none")
 
         self.assertEqual(code, 0)
         self.assertEqual({item["id"] for item in report["retired"]}, {"mcp:context7", "mcp-convention:context7"})
@@ -1082,7 +1087,7 @@ class InstallMcpTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         convention = self.convention_path("context7")
 
-        self.run_cli("install", "--cli", CLI)
+        self.run_cli("install", "--cli", CLI, "--mcp", "none")
 
         self.assertFalse(self.filesystem.exists(convention))
 
@@ -1104,7 +1109,7 @@ class InstallMcpTest(RealHomeTestCase):
         convention = self.convention_path("context7")
         self.addCleanup(self.make_journal_unwritable())
 
-        code, report = self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "none")
 
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
@@ -1127,7 +1132,7 @@ class InstallMcpTest(RealHomeTestCase):
         convention = self.convention_path("context7")
         self.addCleanup(make_undeletable(convention))
 
-        code, report = self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "none")
 
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
@@ -1229,7 +1234,7 @@ class InstallUnaccountedRetirementTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         self.inject_unaccounted_entry()
 
-        code, report = self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "none")
 
         self.assertEqual(code, 0)
         self.assertNotIn("own:fantasma", {item["id"] for item in report["retired"]})
@@ -1240,7 +1245,7 @@ class InstallUnaccountedRetirementTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         self.inject_unaccounted_entry()
 
-        self.run_cli("install", "--cli", CLI)
+        self.run_cli("install", "--cli", CLI, "--mcp", "none")
 
         self.assertIn("own:fantasma", {entry.id for entry in self.installed_entries()})
 
@@ -1252,7 +1257,7 @@ class InstallUnaccountedRetirementTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         self.inject_unaccounted_entry()
 
-        code, report = self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "none")
 
         self.assertEqual(code, 0)
         self.assertEqual({item["id"] for item in report["retired"]}, {"mcp:context7", "mcp-convention:context7"})
@@ -1270,7 +1275,7 @@ class InstallUnaccountedRetirementTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI, "--mcp", "context7")
         self.inject_unaccounted_entry()
 
-        code, out = self.run_prose("install", "--cli", CLI)
+        code, out = self.run_prose("install", "--cli", CLI, "--mcp", "none")
 
         self.assertEqual(code, 0)
         self.assertIn("own:fantasma", out)
@@ -1322,7 +1327,7 @@ class SecondaryFaultTest(RealHomeTestCase):
         self.addCleanup(make_undeletable(self.convention()))
         self.refuse_to_probe_once_it_exists(settings)
 
-        code, report = self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "none")
 
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
