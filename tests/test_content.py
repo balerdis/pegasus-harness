@@ -1609,17 +1609,20 @@ class ShippedContentTest(unittest.TestCase):
         self.assertTrue(checked_any, "fixture drifted: nothing references the criterion file")
 
     def test_the_phase_common_macro_stayed_within_its_measured_budget(self):
-        """`sdd-phase-common.md` measured 114 lines before this change replaced
-        its one-line delegation prohibition with a same-length compact gate (see
-        the lazy-load framework's macro-vs-reference split) and added the
-        two/three-line truthful-report rule to Section D. The ceiling below is
-        that pre-change measurement plus the report rule's own documented,
-        deliberate addition -- not a number the gate itself is allowed to grow
-        into over time.
+        """`sdd-phase-common.md` measured 114 lines before this change replaced its
+        one-line delegation prohibition with a same-length compact gate (see the
+        lazy-load framework's macro-vs-reference split) and added the truthful-report
+        rule to Section D, which is a `Results` concern the macro legitimately owns.
+
+        The ceiling is the exact post-change measurement, with no slack: a budget that
+        leaves room to grow into is not a budget. The macro is already past the
+        framework's 70-line figure for an eager global instruction, so the only
+        acceptable direction from here is down -- anything new belongs in a lazily
+        loaded reference, and lowering this number as text moves out is the point.
         """
         path = self._SHARED_DIR / "sdd-phase-common.md"
         lines = path.read_text(encoding="utf-8").splitlines()
-        self.assertLessEqual(len(lines), 118, "sdd-phase-common.md grew past its measured budget")
+        self.assertLessEqual(len(lines), 116, "sdd-phase-common.md grew past its measured budget")
 
     def test_no_verifier_is_reachable_from_anything_that_implements(self):
         """The one new hard structural invariant this change adds: `sdd-verify`
