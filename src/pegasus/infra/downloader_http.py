@@ -14,6 +14,7 @@ never a live fetch.
 """
 from __future__ import annotations
 
+import http.client
 import urllib.request
 from typing import Callable
 
@@ -59,7 +60,13 @@ class HttpDownloader:
                     if on_progress is not None:
                         on_progress(downloaded, total)
                 return b"".join(chunks)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            # `http.client.HTTPException` is the base for every protocol-level
+            # failure `http.client` raises -- `InvalidURL` (a malformed URL,
+            # e.g. a non-numeric port) among them -- and none of its subclasses
+            # derive from `OSError` or `ValueError`, so `urlopen` raising one
+            # would otherwise escape this boundary as a raw, undocumented
+            # exception instead of the `DownloaderError` callers expect.
             raise DownloaderError(f"cannot fetch {url}: {error}") from error
 
 

@@ -13,6 +13,7 @@ care how the bytes arrived, stay proven against `FakeDownloader` in
 """
 from __future__ import annotations
 
+import http.client
 import unittest
 from unittest.mock import patch
 
@@ -63,6 +64,13 @@ class FetchWithoutACallbackTest(unittest.TestCase):
 
     def test_a_fetch_failure_still_raises_downloader_error(self):
         with patch("pegasus.infra.downloader_http.urllib.request.urlopen", side_effect=OSError("boom")):
+            downloader = HttpDownloader()
+            with self.assertRaises(DownloaderError):
+                downloader.fetch(URL)
+
+    def test_a_malformed_url_raises_downloader_error_not_invalid_url(self):
+        side_effect = http.client.InvalidURL("nonnumeric port")
+        with patch("pegasus.infra.downloader_http.urllib.request.urlopen", side_effect=side_effect):
             downloader = HttpDownloader()
             with self.assertRaises(DownloaderError):
                 downloader.fetch(URL)
