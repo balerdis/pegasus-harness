@@ -1237,21 +1237,33 @@ class ShippedContentTest(unittest.TestCase):
         README promise, but no agent declared it, so choosing it installed a
         server nothing could ever use.
 
-        The set now holds two different reasons, and saying so is the point.
-        Four agents declare it because they drive a browser. `king-pegasus`
-        declares it because the reconversion made that voice declare every
-        server this release ships -- see
+        The set now holds three different reasons, and saying so is the point.
+        Four agents declare it because they drive a browser: `sdd-apply`,
+        `sdd-explore`, `sdd-verify`, `pegasus-general`. `king-pegasus` declares
+        it because the reconversion made that voice declare every server this
+        release ships -- see
         `test_the_teaching_voice_declares_every_server_this_release_ships`,
-        which derives its side from the content tree. Spelled out here on
-        purpose: an agent gaining browser reach should have to come and change
-        this line, rather than the assertion quietly widening to fit.
+        which derives its side from the content tree. `pegasus-orchestrator`
+        declares it for neither reason: it does not drive a browser as a
+        trade, but its own Direct Work Threshold lets it resolve a small
+        change on its own, and when that change touches a page it needs to be
+        able to see the page it touched. Spelled out here on purpose: an agent
+        gaining browser reach should have to come and change this line, rather
+        than the assertion quietly widening to fit.
         """
         declares_playwright = {
             agent.name for agent in self.content.agents if "playwright" in agent.optional_mcp
         }
         self.assertEqual(
             declares_playwright,
-            {"sdd-apply", "sdd-explore", "sdd-verify", "pegasus-general", "king-pegasus"},
+            {
+                "sdd-apply",
+                "sdd-explore",
+                "sdd-verify",
+                "pegasus-general",
+                "king-pegasus",
+                "pegasus-orchestrator",
+            },
         )
 
     def test_every_shipped_server_declares_a_mechanism_and_a_convention(self):
@@ -1321,11 +1333,17 @@ class ShippedContentTest(unittest.TestCase):
             {"read", "bash", "grep", "glob", "write", "edit", "skill", "ask"},
         )
         self.assertEqual(orchestrator.optional_tools, ())
-        # It declares the two servers whose contract is ambient rather than
-        # phase-owned: memory, which every agent must be able to write, and the
-        # code graph, which is how a router decides where to send work without
-        # reading four files to find out.
-        self.assertEqual(set(orchestrator.optional_mcp), {"cbm", "engram"})
+        # It declares memory and the code graph because their contract is
+        # ambient rather than phase-owned: memory, which every agent must be
+        # able to write, and the code graph, which is how a router decides
+        # where to send work without reading four files to find out. It also
+        # declares context7 and playwright, but only because its own Direct
+        # Work Threshold lets it resolve a small change on its own -- doing
+        # that needs the same library documentation and page visibility any
+        # implementer would need, not a routing concern.
+        self.assertEqual(
+            set(orchestrator.optional_mcp), {"cbm", "context7", "engram", "playwright"}
+        )
 
     def test_the_two_voices_that_face_the_user_can_reach_the_skills_and_ask(self):
         """Both are demanded by text this repository ships, and neither survives
@@ -1562,6 +1580,15 @@ class ShippedContentTest(unittest.TestCase):
         own Behavior says to "mention tools and resources" had no way to reach
         current library documentation. It carries the shared section, not an
         override -- its only agent-specific framing is for the graph server.
+
+        `pegasus-orchestrator` joined it for a different reason: its own
+        Direct Work Threshold lets it resolve a small, mechanical change
+        without delegating, and an agent doing that needs the same library
+        documentation any implementer would need. It has nothing
+        orchestrator-specific to say about docs, so it carries the shared
+        section rather than an override. Its `cbm` entry is the opposite case
+        and shows the contrast: that one IS an override, because the graph
+        framing is genuinely its own.
         """
         context7_agents = {
             "sdd-apply",
@@ -1571,6 +1598,7 @@ class ShippedContentTest(unittest.TestCase):
             "sdd-onboard",
             "pegasus-general",
             "king-pegasus",
+            "pegasus-orchestrator",
         }
         for agent in self.content.agents:
             with self.subTest(agent=agent.name):
