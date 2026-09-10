@@ -5,6 +5,14 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
+// The state directory below keeps its engine-branded name -- "pegasus-zellij-state" --
+// on purpose, even though the file you are reading was itself renamed off that same
+// brand. This directory sits outside `~/.config/opencode`, so no journal entry claims
+// it and no retirement or migration would ever find it under a new name: renaming it
+// here would silently orphan an existing user's state (their report script, their debug
+// log) with nothing left pointing at it. The file gets this distribution's own name;
+// the directory does not. Do not "fix" this without a real migration for what already
+// lives here.
 const REPORT_SCRIPT = join(homedir(), ".config", "pegasus-zellij-state", "scripts", "agent-report.sh")
 const DEBUG_LOG = join(homedir(), ".cache", "pegasus-zellij-state", "events.log")
 const ACTIVE_STATUS = new Set(["active", "busy", "pending", "running", "streaming", "working", "retry"])
@@ -185,7 +193,7 @@ export function createEventProcessor(reporter: Reporter) {
   }
 }
 
-const PegasusZellijStatePlugin: Plugin = async () => {
+const {{program_pascal_name}}ZellijStatePlugin: Plugin = async () => {
   await debugLog("plugin.loaded", {
     zellijPaneId: process.env.ZELLIJ_PANE_ID,
     zellij: process.env.ZELLIJ,
@@ -222,4 +230,4 @@ const PegasusZellijStatePlugin: Plugin = async () => {
   }
 }
 
-export default PegasusZellijStatePlugin
+export default {{program_pascal_name}}ZellijStatePlugin

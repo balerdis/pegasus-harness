@@ -29,6 +29,9 @@ class RecordingFileSystem:
     def exists(self, path: Path) -> bool:
         return self._filesystem.exists(path)
 
+    def is_symlink(self, path: Path) -> bool:
+        return self._filesystem.is_symlink(path)
+
     def read_bytes(self, path: Path) -> bytes:
         return self._filesystem.read_bytes(path)
 
@@ -74,8 +77,14 @@ class RecordingFileSystem:
         self._filesystem.remove_dir(path)
         self.removals.append(path)
 
-    def make_dir(self, path: Path, *, mode: int = 0o755) -> None:
-        self._filesystem.make_dir(path, mode=mode)
+    def remove_empty_dir(self, path: Path) -> bool:
+        removed = self._filesystem.remove_empty_dir(path)
+        if removed:
+            self.removals.append(path)
+        return removed
+
+    def make_dir(self, path: Path, *, mode: int = 0o755) -> tuple[Path, ...]:
+        return self._filesystem.make_dir(path, mode=mode)
 
     # --- Who is running ---
 

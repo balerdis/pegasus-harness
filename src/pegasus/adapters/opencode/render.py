@@ -23,6 +23,7 @@ from pegasus.core.content import (
     mcp_convention_path,
 )
 from pegasus.core.dependencies import npm_script_path, program_path
+from pegasus.core.identity import Identity
 from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout, ModelAssignment
 
 #: `RunsAs.ORCHESTRATOR` is deliberately absent here: which agent that role
@@ -193,7 +194,7 @@ def command(layout: Layout, item: Command, orchestrator_name: str) -> list[Artif
     ]
 
 
-def system_prompt(layout: Layout, item: SystemPrompt) -> list[Artifact]:
+def system_prompt(layout: Layout, item: SystemPrompt, identity: Identity) -> list[Artifact]:
     """A file of its own, wired in by appending to OpenCode's instructions list.
 
     Appending rather than replacing is what keeps this additive: the user's own
@@ -201,16 +202,32 @@ def system_prompt(layout: Layout, item: SystemPrompt) -> list[Artifact]:
 
     The value is the absolute path, not a relative one. OpenCode resolves a
     relative entry in this list by walking up from the directory being worked
-    in -- the project, never the configuration root -- so `./pegasus-AGENTS.md`
-    written into the global configuration names a file that exists nowhere the
-    runtime looks, and the whole system prompt is dropped without a word. An
-    absolute entry is resolved against itself, which is the only spelling that
-    means the file this artifact actually places.
+    in -- the project, never the configuration root -- so `./{identity.
+    program_name}-AGENTS.md` written into the global configuration names a
+    file that exists nowhere the runtime looks, and the whole system prompt is
+    dropped without a word. An absolute entry is resolved against itself,
+    which is the only spelling that means the file this artifact actually
+    places.
+
+    The filename itself comes from `identity`, not from `layout.system_prompt_
+    file`: `layout` is built with no `Identity` in reach (see `adapter.layout`,
+    called from many places that never carry one), so its own anchor stays the
+    fixed, identity-unaware default -- correct only for the packaged
+    distribution, and never consulted for what this function actually writes.
+
+    The artifact's `id` carries the filename (`system-prompt:{name}`) rather
+    than staying the bare, identity-blind `"system-prompt"` it used to be:
+    `planner.retirements` marks a journal entry stale precisely when its `id`
+    is absent from a new render, so an id that never changed across an
+    identity change would read as an ordinary update at the *new* filename and
+    silently orphan the *old* one on disk -- the exact rename-as-retire-and-
+    create shape every other identity-derived artifact in this module already
+    gets right because its own id already carries its filename.
     """
-    path = layout.system_prompt_file
+    path = layout.config_dir / f"{identity.program_name}-AGENTS.md"
     return [
         FileArtifact(
-            id="system-prompt",
+            id=f"system-prompt:{path.name}",
             path=path,
             content=_system_prompt_body(layout, item).encode("utf-8"),
             executable=False,

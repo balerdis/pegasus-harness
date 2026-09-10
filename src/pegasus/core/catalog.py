@@ -21,6 +21,7 @@ from typing import Any
 
 from pegasus.core import ownership
 from pegasus.core.content import Content
+from pegasus.core.identity import Identity
 from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileArtifact
 
 SCHEMA = "pegasus/artifact-catalog/v4"
@@ -104,13 +105,29 @@ class Catalog:
 
 
 def render(
-    content: Content, adapter: Any, environment: Environment, model_overrides: dict[str, Any] | None = None
+    content: Content,
+    adapter: Any,
+    environment: Environment,
+    identity: Identity,
+    model_overrides: dict[str, Any] | None = None,
 ) -> list[Any]:
     """Everything the adapter declares it supports, plus what it ships itself.
 
     This is the output of the adapt-and-decorate steps: finished artifacts,
     addressed at real paths for this environment. The catalog turns them into a
     portable manifest; an installation hands them to the planner instead.
+
+    `identity` is `Runtime.identity`, threaded through from the composition
+    root (`cli.py`) rather than read by the adapter on its own. `own_artifacts`
+    and `render_system_prompt` are the two places an adapter names a file that
+    does not simply mirror the content core one-for-one -- the first ships
+    files of its own, the second names *which* file the base system prompt is
+    -- so those are the two renderers this function passes it to. `Identity` is
+    a `core` dataclass (see `tests/test_architecture.py`'s layer rules), so
+    passing it through `core` to an `adapters/` implementation is legal; it
+    carries no CLI-specific or distribution-literal knowledge of its own, so
+    threading it here does not teach `core.catalog` which distribution is
+    running.
 
     `model_overrides` maps an agent's name to an already-resolved
     ``ModelAssignment`` -- model and effort together, a fact about one
@@ -133,10 +150,12 @@ def render(
                 artifacts.extend(getattr(adapter, renderer)(layout, item, overrides.get(item.name)))
             elif capability is Capability.SLASH_COMMANDS:
                 artifacts.extend(getattr(adapter, renderer)(layout, item, orchestrator_name))
+            elif capability is Capability.SYSTEM_PROMPT:
+                artifacts.extend(getattr(adapter, renderer)(layout, item, identity))
             else:
                 artifacts.extend(getattr(adapter, renderer)(layout, item))
 
-    artifacts.extend(adapter.own_artifacts(layout, orchestrator_name))
+    artifacts.extend(adapter.own_artifacts(layout, orchestrator_name, identity))
     return artifacts
 
 
@@ -173,7 +192,7 @@ class Territory:
         return None
 
 
-def build(content: Content, adapter: Any) -> Catalog:
+def build(content: Content, adapter: Any, identity: Identity) -> Catalog:
     """The portable manifest of what one CLI would receive.
 
     Built in a canonical frame on purpose, because this is release identity: two
@@ -183,6 +202,12 @@ def build(content: Content, adapter: Any) -> Catalog:
     `core.placeholders` -- would end that quietly, giving every user a different
     digest for the same release. Taking the environment away makes the property
     structural instead of accidental.
+
+    The frame is what makes two machines agree; it is not what makes the digest
+    unique. `identity` is the other half, and it belongs in the digest rather
+    than beside it: artifact names derive from the product's own name, so two
+    distributions of one engine legitimately receive different files and must
+    not be able to claim the same catalog.
 
     The permission a program and a plain file are written with is spelled
     here as a constant of the format, the same way the home is: what a given
@@ -202,7 +227,7 @@ def build(content: Content, adapter: Any) -> Catalog:
     # the build, and a canonical frame that spells itself differently on Windows
     # is not canonical.
     canonical = Environment(home=CANONICAL_HOME, data_dir=CANONICAL_DATA_DIR)
-    artifacts = render(content, adapter, canonical)
+    artifacts = render(content, adapter, canonical, identity)
     config_root = adapter.layout(canonical).config_dir
     territory = Territory(roots=(config_root, CANONICAL_DATA_DIR))
     return Catalog(cli=adapter.id, entries=_entries(artifacts, territory, adapter.id))

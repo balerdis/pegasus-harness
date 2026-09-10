@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
+from pegasus.core.identity import Identity
 from pegasus.core.types import (
     Artifact,
     CapabilityManifest,
@@ -76,7 +77,7 @@ class CliAdapter(Protocol):
 
     def render_prompt(self, layout: Layout, prompt: Any) -> list[Artifact]: ...
 
-    def render_system_prompt(self, layout: Layout, system_prompt: Any) -> list[Artifact]: ...
+    def render_system_prompt(self, layout: Layout, system_prompt: Any, identity: Identity) -> list[Artifact]: ...
 
     def render_mcp(self, layout: Layout, server: Any, resolved: Any) -> list[Artifact]: ...
 
@@ -102,7 +103,7 @@ class CliAdapter(Protocol):
 
     # --- What this adapter contributes on its own ---
 
-    def own_artifacts(self, layout: Layout, orchestrator_name: str) -> list[Artifact]:
+    def own_artifacts(self, layout: Layout, orchestrator_name: str, identity: Identity) -> list[Artifact]:
         """Artifacts this adapter ships itself, not derived from the content core.
 
         Some files exist only because one CLI works the way it does: plugins
@@ -123,6 +124,20 @@ class CliAdapter(Protocol):
         receives for `RunsAs.ORCHESTRATOR` (never a literal this adapter picks):
         a bundled asset that needs to recognize the orchestrator session fills
         it in through `core.placeholders` rather than hardcoding it.
+
+        `identity` is the running distribution's own `Identity` -- threaded
+        explicitly from `Runtime.identity` through `core.catalog`, never read
+        by the adapter on its own (an adapter must not know how to find
+        `identity.json`; it only ever receives what the composition root
+        resolved). The whole value is passed, not just `program_name`, because
+        an adapter-shipped asset is exactly the kind of thing a distribution-
+        naming task needs more than one field of `Identity` for (a plugin's
+        own npm-visible display text, say, alongside the on-disk names
+        `program_name` drives) -- passing the dataclass once avoids
+        re-threading this same seam field by field later. A concrete adapter
+        implementing this method derives every one of its own asset names
+        from `identity` rather than from a fixed literal of its own -- see
+        any adapter's own `own_artifacts` for the pattern.
         """
 
     # --- Models: only when the manifest declares per_agent_model ---

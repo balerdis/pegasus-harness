@@ -51,7 +51,7 @@ def dependency_record(**overrides) -> Record:
     return Record(**fields)
 
 
-def install(*entries, cli="opencode", links=(), mcp_bindings=None, granted_mcp=None) -> Install:
+def install(*entries, cli="opencode", links=(), mcp_bindings=None, granted_mcp=None, created_dirs=None) -> Install:
     return Install(
         cli=cli,
         installed_at=AT,
@@ -61,6 +61,7 @@ def install(*entries, cli="opencode", links=(), mcp_bindings=None, granted_mcp=N
         links=tuple(links),
         mcp_bindings=dict(mcp_bindings) if mcp_bindings else {},
         granted_mcp=tuple(granted_mcp) if granted_mcp else (),
+        created_dirs=tuple(created_dirs) if created_dirs else (),
     )
 
 
@@ -167,6 +168,29 @@ class RoundTripTest(unittest.TestCase):
         parsed = journal_module.from_dict(payload, HOME)
         self.assertEqual(parsed.installs[0].granted_mcp, ())
 
+    def test_created_dirs_survives_serialization(self):
+        journal = Journal(
+            pegasus_version="4.0.0",
+            installs=(install(record(), created_dirs=(CONFIG / "skills", CONFIG / "skills/alpha")),),
+        )
+        payload = journal_module.to_dict(journal)
+        self.assertEqual(journal_module.from_dict(payload, HOME), journal)
+
+    def test_an_install_with_no_created_dirs_omits_the_key(self):
+        payload = journal_module.to_dict(self.journal)
+        self.assertNotIn("created_dirs", payload["installs"][0])
+
+    def test_a_journal_from_before_created_dirs_existed_still_loads(self):
+        """A journal written before this field existed has no `created_dirs`
+        key at all -- that must load exactly as cleanly as one that carries
+        it, with the resulting install carrying an empty tuple. Empty is also
+        the conservative answer: an install that never recorded what it
+        created must not let a later retirement prune anything at all."""
+        payload = journal_module.to_dict(self.journal)
+        self.assertNotIn("created_dirs", payload["installs"][0])
+        parsed = journal_module.from_dict(payload, HOME)
+        self.assertEqual(parsed.installs[0].created_dirs, ())
+
 
 class ValidationTest(unittest.TestCase):
     def payload(self, **overrides):
@@ -185,6 +209,51 @@ class ValidationTest(unittest.TestCase):
         with self.assertRaises(JournalError) as raised:
             journal_module.from_dict(payload, HOME)
         self.assertIn("/etc/passwd", str(raised.exception))
+
+    def test_a_target_that_climbs_out_with_dot_dot_is_refused(self):
+        """`is_relative_to` compares strings and the kernel resolves paths, so
+        this target reads as contained and lands somewhere else. Retirement
+        deletes what a target names and prunes the directories above it, so a
+        journal that got this past the door would authorise removals outside
+        the home entirely."""
+        payload = self.payload()
+        payload["installs"][0]["entries"][0]["target"] = f"{HOME}/.config/../../elsewhere/loot.md"
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("..", str(raised.exception))
+
+    def test_the_dot_dot_refusal_covers_config_dir_too(self):
+        """The entry and the install's own root are separate doors into the
+        same removals, and a guard on one of them is not a guard."""
+        payload = self.payload()
+        payload["installs"][0]["config_dir"] = f"{HOME}/.config/../../elsewhere"
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("..", str(raised.exception))
+
+    def test_a_created_dir_outside_the_home_is_refused(self):
+        payload = self.payload()
+        payload["installs"][0]["created_dirs"] = ["/etc"]
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("/etc", str(raised.exception))
+
+    def test_a_created_dir_that_climbs_out_with_dot_dot_is_refused(self):
+        """The same door `config_dir` and every `target` are already guarded
+        against: `created_dirs` grants `_prune_empty_directories` the
+        authority to remove a directory, so it needs the identical guard or
+        it is the one door left unlocked."""
+        payload = self.payload()
+        payload["installs"][0]["created_dirs"] = [f"{HOME}/.config/../../elsewhere"]
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("..", str(raised.exception))
+
+    def test_created_dirs_must_be_a_list(self):
+        payload = self.payload()
+        payload["installs"][0]["created_dirs"] = "not-a-list"
+        with self.assertRaises(JournalError):
+            journal_module.from_dict(payload, HOME)
 
     def test_a_relative_target_is_refused(self):
         payload = self.payload()

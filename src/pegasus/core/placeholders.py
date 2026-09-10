@@ -9,6 +9,20 @@ identity rather than a path: the agent a session starts in is content-declared
 picks for itself -- see `core.catalog._orchestrator_name`, the one place that
 reads it off the content core.
 
+`{{program_name}}`, `{{display_name}}`, `{{program_module_name}}`,
+`{{program_pascal_name}}` and `{{program_npm_name}}` are the same idea again,
+applied to a distribution's own `Identity` (`core.identity.Identity`) rather
+than to content: a bundled asset that names the running product -- a log
+prefix, a toast title, an exported symbol, a filename it references by name --
+asks for one of these instead of hardcoding one distribution's own brand.
+`program_module_name`, `program_pascal_name` and `program_npm_name` are
+`program_name` reshaped for a context `program_name` itself cannot satisfy: a
+valid Python module stem (hyphens are not legal in an import), a PascalCase
+identifier (for a plugin's exported symbol), and an npm-legal package name
+(npm rejects uppercase in `package.json`'s `name` field, which
+`PROGRAM_NAME_PATTERN` otherwise allows), respectively -- derived by whichever
+adapter's own naming helper needs them, never by this module.
+
 Double braces, because single ones are already spoken for. `{change-name}` and
 `{topic}` are addressed to the model reading the body, and confusing the two
 audiences is how a prompt ends up with a literal brace where a path belongs.
@@ -24,7 +38,17 @@ import re
 from collections.abc import Mapping
 
 #: Every fact a body may ask for. Adding one obliges every adapter to answer it.
-NAMES = frozenset({"skills_root", "orchestrator"})
+NAMES = frozenset(
+    {
+        "skills_root",
+        "orchestrator",
+        "program_name",
+        "display_name",
+        "program_module_name",
+        "program_pascal_name",
+        "program_npm_name",
+    }
+)
 
 #: The lookarounds refuse a pair with another brace stuck to it. Without them
 #: `{{{skills_root}}}` matches the inner pair and fills into stray braces, which

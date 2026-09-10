@@ -567,9 +567,11 @@ def install(
     # message instead of a traceback over a finished installation.
     activation = list(adapter.activation_steps())
 
-    catalog = catalog_module.build(content, adapter)
+    catalog = catalog_module.build(content, adapter, runtime.identity)
     model_overrides, model_warnings = _resolve_model_overrides(runtime, adapter, environment, content)
-    artifacts = catalog_module.render(content, adapter, environment, model_overrides=model_overrides)
+    artifacts = catalog_module.render(
+        content, adapter, environment, runtime.identity, model_overrides=model_overrides
+    )
     plan = planner.plan(
         runtime.filesystem,
         cli=adapter.id,
@@ -726,9 +728,25 @@ def install(
     # one is what gets recorded: everything this CLI owns, old and new. The
     # placed one is only what this run wrote, and it is the only thing a rollback
     # may touch — undoing the merged view would delete a working installation
-    # that this run never even created.
+    # that this run never even created. `created_dirs` follows the same split:
+    # `placed` carries only what *this run's* `apply` reported making, because
+    # `unplace` below may only prune what this run itself created, never a
+    # directory an earlier, already-successful install put there.
     placed = Install(
-        cli=adapter.id, installed_at=runtime.now, config_dir=config_dir, release={}, entries=all_records
+        cli=adapter.id,
+        installed_at=runtime.now,
+        config_dir=config_dir,
+        release={},
+        entries=all_records,
+        created_dirs=applied.created_dirs,
+    )
+    # The wider registry `retire`, below, needs for `retirements` -- entries an
+    # *earlier* install owned and this render no longer asks for. Those
+    # directories were never touched by this run, so `placed.created_dirs`
+    # alone would never authorise pruning any of them; the previous install's
+    # own registry is what remembers they were ever Pegasus's to begin with.
+    historical_created_dirs = tuple(
+        dict.fromkeys((*(installed.created_dirs if installed is not None else ()), *applied.created_dirs))
     )
 
     # What this render no longer asks for goes back out now: after `apply`,
@@ -751,11 +769,11 @@ def install(
     try:
         stale = planner.retire(
             runtime.filesystem,
-            replace(placed, entries=retirements),
+            replace(placed, entries=retirements, created_dirs=historical_created_dirs),
             on_step=(lambda name: _tick("retire", name)) if on_progress is not None else None,
         )
     except (FileSystemError, planner.PlannerError) as error:
-        removed, failures = _undo_placements(runtime.filesystem, applied, placed)
+        removed, pruned, failures = _undo_placements(runtime.filesystem, applied, placed)
         _undo_dependencies(runtime.filesystem, new_dependencies)
         left = _left_behind(runtime.filesystem, documents - existing)
         raise _unretirable(
@@ -765,6 +783,7 @@ def install(
             replaced=len(applied.replaced),
             failures=failures,
             removed=removed,
+            pruned=pruned,
         ) from error
 
     # `applied.reconciled` joins the journal here and nowhere else. It never
@@ -787,13 +806,18 @@ def install(
         content,
         granted_keys,
         runtime.identity.version,
+        applied.created_dirs,
+        # `Retired.pruned` names directories relative to the configuration
+        # root, because that is what a report should read like; the journal
+        # records absolute paths, so they are joined back on here.
+        tuple(placed.config_dir / relative for relative in stale.pruned),
     )
     try:
         store.save(journal_module.with_install(journal, merged))
         if on_progress is not None:
             _tick("journal", "journal")
     except JournalStoreError as error:
-        removed, failures = _undo_placements(runtime.filesystem, applied, placed)
+        removed, pruned, failures = _undo_placements(runtime.filesystem, applied, placed)
         _undo_dependencies(runtime.filesystem, new_dependencies)
         left = _left_behind(runtime.filesystem, documents - existing)
         raise _unrecordable(
@@ -803,6 +827,7 @@ def install(
             replaced=len(applied.replaced),
             failures=failures,
             removed=removed,
+            pruned=pruned,
             retired=list(stale.removed),
         ) from error
 
@@ -833,6 +858,12 @@ def install(
         # never happened.
         "retired": [_recorded(record) for record in retirements if record.id in retired_ids],
         "unaccounted": list(stale.unaccounted),
+        # `uninstall` has always reported this; `install`/`update` retire the
+        # same way (see the `stale = planner.retire(...)` call above, for what
+        # the current render no longer asks for) but silently dropped
+        # `stale.pruned` on the floor, so a directory could disappear here
+        # with nothing in the report to say so.
+        "pruned": list(stale.pruned),
         "journal": str(store.path),
         "retention": _retain(snapshot),
         "model_warnings": list(model_warnings),
@@ -1336,6 +1367,8 @@ def _merged(
     content,
     granted_mcp: tuple[str, ...],
     version: str,
+    created_dirs: tuple[Path, ...] = (),
+    pruned_dirs: tuple[Path, ...] = (),
 ) -> Install:
     """Add what this run placed to what earlier runs already owned.
 
@@ -1378,12 +1411,42 @@ def _merged(
     forward -- and it is simply recorded here, replaced outright the same way
     ``mcp_bindings`` is, since it is likewise a fact about this run's own
     final choice rather than an artifact with an identity to merge.
+
+    ``created_dirs`` is merged the same way ``entries`` is above, union rather
+    than replacement: a directory an earlier install created and this run
+    never touched again must stay prunable by a later retirement, not be
+    forgotten the moment this run's own journal write supersedes the one that
+    recorded it. Unlike ``entries``, nothing here is ever dropped from it --
+    see `Install.created_dirs` for why letting this set only grow is the right
+    call.
     """
     previous = journal_module.install_for(journal, adapter.id)
     entries = records
     if previous is not None:
         dropped = {record.id for record in records} | set(retired_ids)
-        entries = tuple(entry for entry in previous.entries if entry.id not in dropped) + tuple(records)
+        # An id-only comparison misses the one case this merge exists to
+        # guard against when a release changes how an id is derived without
+        # moving the address it names: the freshly written or reconciled
+        # record lands under the *new* id, so `dropped` (built from `records`
+        # above) never names the *old* one, and the previous entry would
+        # otherwise survive this merge sitting right beside its own
+        # replacement -- two journal entries claiming the same file. Address
+        # identity is what actually decided, in `planner`, that this previous
+        # entry was the same artifact under its old name; the same comparison
+        # here is what retires it from the journal now that a record under
+        # the new name has taken its place. `planner.record_address` is
+        # reused rather than compared inline so the one carve-out it makes --
+        # an appended list item has no exclusive slot of its own, several can
+        # legitimately share one pointer -- cannot drift between the two call
+        # sites.
+        claimed = {
+            address for address in (planner.record_address(record) for record in records) if address is not None
+        }
+        entries = tuple(
+            entry
+            for entry in previous.entries
+            if entry.id not in dropped and planner.record_address(entry) not in claimed
+        ) + tuple(records)
     return Install(
         cli=adapter.id,
         # The date Pegasus first landed here, not the date it was topped up.
@@ -1394,7 +1457,33 @@ def _merged(
         links=previous.links if previous is not None else (),
         mcp_bindings={server.name: server.bound_to for server in content.mcp if server.is_bound},
         granted_mcp=tuple(granted_mcp),
+        created_dirs=_recorded_dirs(previous, created_dirs, pruned_dirs),
     )
+
+
+def _recorded_dirs(
+    previous: Install | None, created: tuple[Path, ...], pruned: tuple[Path, ...]
+) -> tuple[Path, ...]:
+    """What `Install.created_dirs` should say after this run.
+
+    The union with the previous record is what makes a directory created by one
+    run and only emptied by a later one still prunable then. But union alone
+    lets the record keep naming directories this very run took away, and that
+    is not a harmless surplus: the field's whole claim is "these exist because
+    we created them", so a pruned path left in it is the record asserting
+    something false about the disk. Worse, it stays claimable -- if the person
+    later recreates that directory for their own reasons and Pegasus writes
+    into it again, retirement would find it already in the record and prune a
+    directory it did not create this time.
+
+    Subtracting what was pruned keeps the claim true in both directions, and
+    costs nothing: a directory Pegasus creates again is reported by `make_dir`
+    again, so it comes back on its own.
+    """
+    kept = dict.fromkeys((*(previous.created_dirs if previous is not None else ()), *created))
+    for path in pruned:
+        kept.pop(path, None)
+    return tuple(kept)
 
 
 #: Distributions whose materialized tree lives outside the catalog pipeline
@@ -1636,6 +1725,7 @@ def uninstall(cli_id: str, runtime: Runtime) -> dict[str, Any]:
         "removed": list(retired.removed),
         "unaccounted": list(retired.unaccounted),
         "kept_links": list(retired.kept_links),
+        "pruned": list(retired.pruned),
         "retention": _retain(snapshot),
     }
 
@@ -2483,6 +2573,7 @@ def _unrecordable(
     replaced: int = 0,
     failures: list[str] | None = None,
     removed: int = 0,
+    pruned: int = 0,
     retired: list[str] | None = None,
 ) -> CommandError:
     """The install came back out. Say so, and say what did not come with it.
@@ -2534,6 +2625,7 @@ def _unrecordable(
         "left_behind": left_behind,
         "restored": replaced,
         "removed": removed,
+        "pruned": pruned,
         "retired": retired or [],
     }
     return failure
@@ -2547,6 +2639,7 @@ def _unretirable(
     replaced: int = 0,
     failures: list[str] | None = None,
     removed: int = 0,
+    pruned: int = 0,
 ) -> CommandError:
     """This run's own placements came back out, because retiring what this
     render no longer asks for failed before the journal ever got a chance to
@@ -2594,6 +2687,7 @@ def _unretirable(
         "left_behind": left_behind,
         "restored": replaced,
         "removed": removed,
+        "pruned": pruned,
     }
     return failure
 
@@ -2608,7 +2702,7 @@ def _recorded(record: Record) -> dict[str, Any]:
 
 def _undo_placements(
     filesystem: FileSystem, applied: planner.Applied, placed: Install
-) -> tuple[int, list[str]]:
+) -> tuple[int, int, list[str]]:
     """Take this run's own placements back out, and never raise doing it.
 
     ``unplace`` probes as it works — retiring a file asks whether it is there,
@@ -2624,8 +2718,8 @@ def _undo_placements(
     try:
         retired, failures = planner.unplace(filesystem, applied, placed)
     except (FileSystemError, planner.PlannerError) as error:
-        return 0, [f"the rollback could not be completed: {error}"]
-    return len(retired.removed), [reason for _, reason in failures]
+        return 0, 0, [f"the rollback could not be completed: {error}"]
+    return len(retired.removed), len(retired.pruned), [reason for _, reason in failures]
 
 
 def _left_behind(filesystem: FileSystem, candidates: set[Path]) -> list[str]:
@@ -2709,6 +2803,12 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
         # what it could not account for. Only a run that happened can.
         if report.get("unaccounted"):
             lines.append(f"Could not be accounted for: {', '.join(report['unaccounted'])}")
+        # Same reasoning as `unaccounted` just above: absent on a dry run,
+        # because a plan never asks `retire` anything and so never learns what
+        # it left empty behind it.
+        if report.get("pruned"):
+            n = len(report["pruned"])
+            lines.append(f"Pruned {n} empty director{'y' if n == 1 else 'ies'}: {', '.join(report['pruned'])}")
         if report.get("model_warnings"):
             lines.append("Model assignments that could not be honoured:")
             lines.extend(f"  {warning}" for warning in report["model_warnings"])
@@ -2737,7 +2837,11 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
     if command == "mcp":
         return _mcp_prose(report)
 
-    lines = [f"{report['cli']}: removed {len(report['removed'])}."]
+    pruned = report.get("pruned") or []
+    lines = [
+        f"{report['cli']}: removed {len(report['removed'])}"
+        + (f", pruned {len(pruned)} empty director{'y' if len(pruned) == 1 else 'ies'}." if pruned else ".")
+    ]
     if report["unaccounted"]:
         lines.append(f"Could not be accounted for: {', '.join(report['unaccounted'])}")
     return "\n".join(_and_retention(_and_activation(lines, report), report))

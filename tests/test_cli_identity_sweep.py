@@ -147,15 +147,56 @@ class InstallBrandLeakTest(AcmeRuntimeTestCase):
         self.assertNoEngineBrand(prose)
 
     def test_install_json_report_has_no_engine_brand(self):
-        """Scoped to the fields `cli.py` itself renders (`schema`, `journal`,
-        `activation`) -- not `created`/`updated`, which name catalog content
-        (skill/prompt filenames) that is a separate concern from this
-        module's identity sweep and out of scope here."""
+        """Scoped to the fields `cli.py` itself renders: `schema`, `journal`,
+        `activation`. `created`/`updated` -- the catalog artifacts this install
+        actually placed -- get their own test right below, derived from the
+        report instead of hand-picked, so a new artifact with a fixed brand
+        breaks that test the moment it ships."""
         self.present()
         _code, report = self.run_cli("install", "--cli", CLI)
         self.assertNoEngineBrand(report["schema"])
         self.assertNoEngineBrand(report["journal"])
         self.assertNoEngineBrand(" ".join(report["activation"]))
+
+    def test_created_and_updated_artifact_names_have_no_engine_brand(self):
+        """The debt `test_install_json_report_has_no_engine_brand` used to
+        admit and exclude: `created`/`updated` name catalog artifacts, and a
+        fixed engine-branded name among them is exactly as much a leak as one
+        in `cli.py`'s own prose.
+
+        Scoped to the artifacts an *adapter* names on its own -- its `id`
+        starts with `own:`, or it is the system prompt (`system-prompt:{name}`,
+        which carries the identity-derived filename since the id started
+        naming it explicitly, or the fixed `system-prompt-instruction`) --
+        derived from the id prefix `own_artifacts` itself uses rather than a
+        hand-picked list of filenames, so a new adapter-owned artifact with a
+        fixed brand fails this the moment it ships.
+
+        Deliberately NOT scoped to every entry: an agent, skill or command's
+        own *name* is content-authored data (`core.content`), never a name
+        this adapter derives from `Identity` -- `king-pegasus`, one of this
+        repository's own shipped persona names, is exactly this shape, and
+        would fail here as a false positive. Renaming a content-declared
+        identifier is a real, still-open piece of brand debt, but it is a
+        content-authoring concern with its own blast radius, not the
+        artifact-naming debt this test (and this change) closes -- excluded
+        here by name, not silently, so it stays visible as unfinished.
+        """
+        self.present()
+        _code, report = self.run_cli("install", "--cli", CLI)
+        placed = report["created"] + report["updated"]
+        self.assertTrue(placed, "fixture drifted: install placed nothing")
+        adapter_owned = [
+            entry
+            for entry in placed
+            if entry["id"].startswith("own:")
+            or entry["id"] == "system-prompt-instruction"
+            or entry["id"].startswith("system-prompt:")
+        ]
+        self.assertTrue(adapter_owned, "fixture drifted: no adapter-owned artifact was placed")
+        for entry in adapter_owned:
+            self.assertNoEngineBrand(entry["id"])
+            self.assertNoEngineBrand(entry["target"])
 
     def test_dropped_grant_warning_has_no_engine_brand(self):
         """Covers the `pegasus mcp grant --cli ...` suggested-command literal

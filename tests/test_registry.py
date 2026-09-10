@@ -50,7 +50,7 @@ class FakeAdapter:
     def _render(self, layout, item):
         return [FileArtifact(id="x", path=CONFIG / "x", content=b"", executable=False)]
 
-    def own_artifacts(self, layout, orchestrator_name):
+    def own_artifacts(self, layout, orchestrator_name, identity):
         return list(self._own)
 
     def activation_steps(self):

@@ -1,6 +1,6 @@
 """A `console.error` that is the only trace of a registry refresh failure.
 
-`pegasus-skill-registry.ts` used to have two failure paths -- a missing
+The skill-registry plugin used to have two failure paths -- a missing
 contract and a generator process that fails or times out -- and both ended in
 `console.error` and nothing else. A plugin's stderr never reaches the person
 running OpenCode, so the skill registry could go stale or empty in total
@@ -23,7 +23,7 @@ from pathlib import Path
 
 PLUGIN = (
     Path(__file__).resolve().parent.parent
-    / "src/pegasus/adapters/opencode/assets/plugins/pegasus-skill-registry.ts"
+    / "src/pegasus/adapters/opencode/assets/plugins/skill-registry.ts"
 )
 
 #: The helper's own name, not restated logic. If it gets renamed, this test

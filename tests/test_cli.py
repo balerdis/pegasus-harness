@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import stat
 import tempfile
 import tomllib
@@ -348,6 +349,60 @@ class InstallTest(RealHomeTestCase):
         self.run_cli("install", "--cli", CLI)
         self.assertIsNotNone(journal_module.install_for(self.store().load(), CLI))
 
+    def test_no_recorded_created_directory_is_missing_from_the_disk(self):
+        """`created_dirs` claims "these exist because we created them", and the
+        claim has to survive the run that prunes one of them.
+
+        Merging the record forward is what keeps a directory created by one run
+        prunable when a later run empties it, but union alone never subtracts,
+        so a pruned path stayed in the record naming a directory that was gone.
+        Two harms, not one: the record asserted something false about the disk,
+        and it stayed claimable -- recreate that directory by hand, let Pegasus
+        write into it again, and retirement would prune a directory this
+        installation never created.
+
+        Derived from the record against the real disk rather than from the one
+        path this happened to reproduce with, so any other way of going stale
+        fails here too.
+        """
+        self.present()
+        other = identity_module.parse(json.dumps(_DISTRIBUTION_IDENTITY_PAYLOAD).encode("utf-8"))
+        self.run_cli("install", "--cli", CLI, "--mcp", "none")
+        # Reinstalling under another identity renames the artifacts whose names
+        # derive from it, which empties the subtree the old name held -- the
+        # shortest route to a prune that goes through the real CLI surface.
+        _, report = self.run_cli("install", "--cli", CLI, "--mcp", "none", identity=other)
+        self.assertTrue(report["pruned"], "the run has to actually prune something to be a test")
+
+        recorded = journal_module.install_for(self.store(identity=other).load(), CLI).created_dirs
+        self.assertTrue(recorded)
+        self.assertEqual([path for path in recorded if not path.exists()], [])
+
+    def test_a_directory_pruned_by_this_run_leaves_the_record(self):
+        self.present()
+        other = identity_module.parse(json.dumps(_DISTRIBUTION_IDENTITY_PAYLOAD).encode("utf-8"))
+        self.run_cli("install", "--cli", CLI, "--mcp", "none")
+        _, report = self.run_cli("install", "--cli", CLI, "--mcp", "none", identity=other)
+        self.assertTrue(report["pruned"], "the run has to actually prune something to be a test")
+
+        config_dir = self.layout().config_dir
+        recorded = journal_module.install_for(self.store(identity=other).load(), CLI).created_dirs
+        for relative in report["pruned"]:
+            self.assertNotIn(config_dir / relative, recorded)
+
+    def test_installing_reports_the_directories_it_pruned(self):
+        """`install`/`update` retire what a re-render no longer asks for the
+        same way `uninstall` retires everything -- see the `planner.retire`
+        call in `install()` -- but used to drop `Retired.pruned` on the
+        floor instead of reporting it, the one thing `uninstall`'s own report
+        has always carried."""
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0)
+        self.assertIn("pruned", report)
+        self.assertIsInstance(report["pruned"], list)
+
     def test_the_journal_records_the_release_that_placed_the_artifacts(self):
         self.present()
         self.run_cli("install", "--cli", CLI)
@@ -417,7 +472,7 @@ class InstallTest(RealHomeTestCase):
         original = target.read_bytes()
         target.write_bytes(b"the user's own words\n")
         _, report = self.run_cli("install", "--cli", CLI)
-        self.assertIn("system-prompt", [item["id"] for item in report["updated"]])
+        self.assertIn("system-prompt:pegasus-AGENTS.md", [item["id"] for item in report["updated"]])
         self.assertEqual(target.read_bytes(), original)
 
     def test_the_prose_names_what_it_updated(self):
@@ -455,6 +510,14 @@ class InstallTest(RealHomeTestCase):
         self.assertTrue(report["rolled_back"])
         left = [path for path in self.layout().config_dir.rglob("*") if path.is_file()]
         self.assertEqual(left, [self.layout().settings_file])
+
+    def test_an_install_that_cannot_be_recorded_reports_directories_the_rollback_pruned(self):
+        self.present()
+        self.addCleanup(self.make_journal_unwritable())
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertNotEqual(code, 0)
+        self.assertIn("pruned", report)
+        self.assertIsInstance(report["pruned"], int)
 
     def test_a_journal_that_cannot_be_read_stops_the_install_before_it_writes(self):
         """A journal we cannot read is one we cannot extend.
@@ -1021,7 +1084,7 @@ class InstallMcpTest(RealHomeTestCase):
         code, report = self.run_cli("install", "--cli", CLI, "--mcp", "engram", "--dry-run")
         self.assertEqual(code, 0)
         created_ids = {item["id"] for item in report["created"]}
-        self.assertIn("system-prompt", created_ids)
+        self.assertIn("system-prompt:pegasus-AGENTS.md", created_ids)
 
     def test_an_unknown_server_id_fails_cleanly_and_places_nothing(self):
         self.present()
@@ -1367,6 +1430,69 @@ class UninstallTest(RealHomeTestCase):
         _, report = self.run_cli("uninstall", "--cli", CLI)
         self.assertIn(edited.id, report["removed"])
         self.assertFalse(edited.target.exists())
+
+    def test_uninstalling_reports_the_directories_it_pruned(self):
+        self.install()
+        _, report = self.run_cli("uninstall", "--cli", CLI)
+        self.assertIn("pruned", report)
+        self.assertIsInstance(report["pruned"], list)
+
+    def test_a_preexisting_empty_directory_survives_uninstall_and_is_not_reported_pruned(self):
+        """The repro this whole change exists for: someone who already had
+        `~/.config/opencode/plugins/` before ever installing Pegasus loses it
+        on `uninstall` if Pegasus later wrote a file inside it and the prune
+        pass cannot tell "I made this directory" from "this was here all
+        along" -- both look identical once the file inside is gone and the
+        directory is empty.
+
+        A fabricated journal entry stands in for that file here, planted
+        directly rather than through the real catalog, because what matters
+        is the fact this journal entry's directory was never reported by
+        `make_dir` -- `created_dirs` never names it -- and that fact does not
+        depend on which real artifact the catalog happens to place where.
+        """
+        self.install()
+        config_dir = self.layout().config_dir
+        preexisting = config_dir / "a-directory-the-person-already-had"
+        preexisting.mkdir()
+        target = preexisting / "a-file-pegasus-later-wrote.md"
+        content = b"whatever this release rendered"
+        target.write_bytes(content)
+
+        store = self.store()
+        journal = store.load()
+        install = journal_module.install_for(journal, CLI)
+        fabricated = journal_module.Record(
+            id="probe:fabricated",
+            kind="file",
+            target=target,
+            after_digest=ownership.digest_of_bytes(content),
+            created_at=AT,
+        )
+        store.save(journal_module.with_install(journal, replace(install, entries=install.entries + (fabricated,))))
+
+        _, report = self.run_cli("uninstall", "--cli", CLI)
+        self.assertTrue(preexisting.exists())
+        self.assertNotIn("a-directory-the-person-already-had", report["pruned"])
+
+    def test_uninstalling_leaves_no_empty_directory_behind(self):
+        """The integration-level mirror of `PruneEmptyDirectoriesTest`'s own
+        guardian assertion in `test_planner.py`: whatever this CLI's real
+        catalog places, nothing empty is left standing under its config
+        directory once uninstall is done with it."""
+        self.install()
+        config_dir = self.layout().config_dir
+        self.run_cli("uninstall", "--cli", CLI)
+        empties = (
+            [
+                dirpath
+                for dirpath, dirnames, filenames in os.walk(config_dir)
+                if dirpath != str(config_dir) and not dirnames and not filenames
+            ]
+            if config_dir.exists()
+            else []
+        )
+        self.assertEqual(empties, [])
 
 
 class DoctorTest(RealHomeTestCase):

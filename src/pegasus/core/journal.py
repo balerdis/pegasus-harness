@@ -122,6 +122,45 @@ class Install:
     never a crash, and never confused with a mapping that legitimately holds
     nothing because this install bound no server."""
 
+    created_dirs: tuple[Path, ...] = ()
+    """Every directory Pegasus itself brought into existence for this install.
+
+    Not every directory a `file` or `dependency-tree` target sits under --
+    only the ones this installation actually created, reported once by
+    `FileSystem.make_dir` at the moment of creation, which is the only moment
+    that fact is knowable at all. A directory the person already had, empty or
+    not, before Pegasus ever wrote into it, never appears here -- and that is
+    the whole reason this field exists: `_prune_empty_directories` prunes
+    exactly this set and nothing wider, so a directory the person brought with
+    them survives retirement even when it ends up empty.
+
+    Additive across installs the same way `entries` is, and merged the same
+    way -- see `cli._merged` -- because a directory created by an earlier
+    install and only emptied by a later one must still be prunable then, not
+    forgotten the moment the run that created it ends.
+
+    Absent from a journal written before this field existed, the same
+    discipline `mcp_bindings` and `granted_mcp` already follow: it loads as an
+    empty tuple, never an invented one, and an install with nothing recorded
+    here prunes nothing at all -- the conservative, correct answer for a
+    generation of the journal that never learned to ask `make_dir` what it
+    created. That is not a bug to route around; it is the only honest thing to
+    do with a fact that was never recorded.
+
+    It also does not heal itself: a later install or update against the same
+    CLI only calls `make_dir` for directories that are still missing, and by
+    then the ones this field would need to name already exist, so nothing
+    reports them and this set stays empty forever. Pruning covers every
+    installation that started recording `created_dirs` from 5.28.0 onward;
+    an installation from before that keeps its empty directories and is never
+    migrated, because telling a directory Pegasus made from one the person
+    made, with no record that ever tracked the difference, is a guess -- and
+    a guess here means deleting something that might be someone else's.
+    Reaching the pre-5.28.0 installed base would need asking the person
+    directly, which cannot be inferred from disk state alone; that is a
+    separate piece of work this field does not attempt.
+    """
+
     granted_mcp: tuple[str, ...] = ()
     """The server keys this installation was told to expose to every agent.
 
@@ -203,6 +242,8 @@ def _install_to_dict(install: Install) -> dict[str, Any]:
         payload["mcp_bindings"] = dict(install.mcp_bindings)
     if install.granted_mcp:
         payload["granted_mcp"] = list(install.granted_mcp)
+    if install.created_dirs:
+        payload["created_dirs"] = [str(path) for path in install.created_dirs]
     return payload
 
 
@@ -263,6 +304,7 @@ def _install_from_dict(payload: Any, home: Path) -> Install:
         links=tuple(_link_from_dict(item, cli) for item in payload.get("links", [])),
         mcp_bindings=_mcp_bindings_from_dict(payload.get("mcp_bindings"), cli),
         granted_mcp=_granted_mcp_from_dict(payload.get("granted_mcp"), cli),
+        created_dirs=_created_dirs_from_dict(payload.get("created_dirs"), home, cli),
     )
 
 
@@ -313,6 +355,23 @@ def _granted_mcp_from_dict(value: Any, cli: str) -> tuple[str, ...]:
                 f"`grant_mcp`, so the journal can only be a hand edit or corrupted"
             )
     return tuple(value)
+
+
+def _created_dirs_from_dict(value: Any, home: Path, cli: str) -> tuple[Path, ...]:
+    """Absent means a journal from before this field existed -- an empty
+    tuple, not an error and not a fabricated claim of ownership; see
+    `Install.created_dirs`. Present, it must be a list of paths, each validated
+    with `_contained` exactly as `config_dir` and every record's `target`
+    already are: this field grants `_prune_empty_directories` the authority to
+    remove a directory, so a path that could climb outside the target's home
+    with `..` or land outside it entirely is exactly the same hazard those two
+    already guard against, and letting it in unchecked here would open the one
+    door this whole change exists to close."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise JournalError(f"{cli}: created_dirs must be a list")
+    return tuple(_contained(item, home, f"{cli}: created_dirs entry") for item in value)
 
 
 def _record_from_dict(payload: Any, home: Path, cli: str) -> Record:
@@ -403,12 +462,24 @@ def _link_from_dict(payload: Any, cli: str) -> Link:
 
 
 def _contained(value: Any, home: Path, what: str) -> Path:
-    """Every path in the journal must be absolute and inside the target's home."""
+    """Every path in the journal must be absolute and inside the target's home.
+
+    `..` is refused rather than normalised away, and that refusal is the whole
+    guard: `is_relative_to` is a comparison between two strings, so a path such
+    as `<home>/.config/../../elsewhere` is "inside the home" to it while the
+    kernel resolves it somewhere else entirely. Callers act on these paths with
+    real syscalls, which do resolve, so a check that does not is not a boundary
+    at all. `_leaves_the_tree` already refused `..` in `program_relpath`, and an
+    invariant enforced on one path in a file and not the other is exactly how a
+    bug gets in: this closes that side.
+    """
     if not isinstance(value, str) or not value:
         raise JournalError(f"{what} needs a path")
     path = Path(value)
     if not path.is_absolute():
         raise JournalError(f"{what} must be an absolute path: {value}")
+    if ".." in path.parts:
+        raise JournalError(f"{what} must not climb out of its own path with '..': {value}")
     if not path.is_relative_to(home):
         raise JournalError(f"{what} is outside the target home: {value}")
     return path

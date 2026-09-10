@@ -16,6 +16,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+from pegasus import cli
 from pegasus.adapters import available
 from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
@@ -43,7 +44,9 @@ class InstallAndRetireTest(unittest.TestCase):
         self.adapter = self.registry.get(self.cli)
         self.environment = Environment(home=self.home, data_dir=self.fs.data_dir(self.home))
         self.layout = self.adapter.layout(self.environment)
-        self.artifacts = catalog_module.render(content_module.load(), self.adapter, self.environment)
+        self.artifacts = catalog_module.render(
+            content_module.load(), self.adapter, self.environment, cli.default_identity()
+        )
 
     def install(self) -> planner.Applied:
         plan = planner.plan(self.fs, cli=self.cli, artifacts=self.artifacts)
@@ -90,8 +93,10 @@ class InstallAndRetireTest(unittest.TestCase):
         recorded digest is the digest of the artifact this run rendered.
         """
         applied = self.install()
-        catalog = catalog_module.build(content_module.load(), self.adapter)
-        rendered = catalog_module.render(content_module.load(), self.adapter, self.environment)
+        catalog = catalog_module.build(content_module.load(), self.adapter, cli.default_identity())
+        rendered = catalog_module.render(
+            content_module.load(), self.adapter, self.environment, cli.default_identity()
+        )
 
         recorded = {record.id: record.after_digest for record in applied.records}
         self.assertEqual(set(recorded), {entry.id for entry in catalog.entries})

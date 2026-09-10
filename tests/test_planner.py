@@ -19,6 +19,8 @@ once and then succeed — are stubbed at the system call.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import unittest
 from pathlib import Path
 
@@ -187,6 +189,52 @@ class PlanTest(RealHomeTestCase):
         result = self.plan_for(installed=previous)
         self.assertEqual(result.retirements, (stale,))
 
+    # --- An id scheme change, over an address that never moved ---
+
+    def test_an_entry_claimed_under_a_different_id_but_the_same_address_is_ours(self):
+        """The shape a release upgrade can hit for every existing installation
+        at once: an artifact's `id` is derived differently from one release to
+        the next, but the file it names is exactly where it always was. The
+        journal entry written under the old scheme still claims this address,
+        and that has to be recognized even though `owned` (keyed by `id`) no
+        longer finds it under the render's new name -- otherwise the address
+        reads as a stranger's file, `SKIP`/`collision`, on every single machine
+        that already has it installed."""
+        self.seed(files={self.SKILL: b"old content"})
+        previous_entry = Record(
+            id="skill:alpha",
+            kind="file",
+            target=self.SKILL,
+            after_digest=ownership.digest_of_bytes(b"old content"),
+            created_at=AT,
+        )
+        previous = Install(cli=CLI, installed_at=AT, config_dir=self.CONFIG, release={}, entries=(previous_entry,))
+        renamed_artifact = self.a_file(identifier="skill:alpha:v2", content=b"new content")
+
+        step = self.plan_for(renamed_artifact, installed=previous).steps[0]
+
+        self.assertEqual(step.action, planner.UPDATE)
+        self.assertIsNone(step.reason)
+
+    def test_an_entry_at_an_unrelated_address_does_not_protect_a_real_collision(self):
+        """The fix above must not widen what counts as ours. An address the
+        journal claims nowhere -- under any id -- is still a stranger's file,
+        even when this installation owns something else entirely."""
+        self.seed(files={self.SKILL: b"theirs"})
+        elsewhere = Record(
+            id="skill:beta",
+            kind="file",
+            target=self.CONFIG / "unrelated.md",
+            after_digest="sha256:" + "0" * 64,
+            created_at=AT,
+        )
+        previous = Install(cli=CLI, installed_at=AT, config_dir=self.CONFIG, release={}, entries=(elsewhere,))
+
+        step = self.plan_for(self.a_file(), installed=previous).steps[0]
+
+        self.assertEqual(step.action, planner.SKIP)
+        self.assertEqual(step.reason, planner.COLLISION)
+
 
 class RetirementsTest(RealHomeTestCase):
     """The other half of ownership. `plan()` asks, for every artifact, whether
@@ -209,6 +257,18 @@ class RetirementsTest(RealHomeTestCase):
     def test_an_entry_still_rendered_is_not_returned(self):
         install = self.install(self.entry())
         self.assertEqual(planner.retirements(install, [self.a_file(identifier="skill:alpha")]), ())
+
+    def test_an_entry_claimed_by_address_under_a_new_id_is_not_returned(self):
+        """The write-side half of the same rule `PlanTest` exercises on the
+        read side. An id absent from the render is not, on its own, proof the
+        address is unwanted -- `_step` may already have picked this entry
+        back up under its new id, by address, as an `UPDATE` or `UNCHANGED`.
+        Retiring it here regardless would have `retire`, which `install`
+        deliberately runs after `apply`, delete the very file the render just
+        asked to keep."""
+        install = self.install(self.entry(identifier="skill:alpha"))
+        renamed_artifact = self.a_file(identifier="skill:alpha:v2")
+        self.assertEqual(planner.retirements(install, [renamed_artifact]), ())
 
     def test_without_a_journal_there_is_nothing_to_retire(self):
         self.assertEqual(planner.retirements(None, [self.a_file()]), ())
@@ -531,6 +591,24 @@ class UpdateTest(RealHomeTestCase):
     def test_an_update_is_recorded_with_the_new_fingerprint(self):
         applied = planner.apply(self.filesystem, self.plan_with(self.record()), at=AT)
         self.assertEqual(applied.records[0].after_digest, ownership.digest(self.artifact))
+
+    def test_an_id_change_over_identical_content_is_reconciled_under_the_new_id(self):
+        """The one case an `UPDATE` cannot reach: a release renders the exact
+        bytes already on disk, under a new `id` for an address the journal
+        still claims under the old one. The digest agrees, so the step reads
+        `UNCHANGED` and nothing is written -- but the journal must still end
+        up naming this address by the id the render will keep asking for, or
+        every later run reaches the same `UNCHANGED` conclusion and the
+        journal's `id` never catches up. `_reconciled` is what closes that gap,
+        the same way it already does for a digest that disagrees."""
+        renamed_same_content = self.a_file(identifier="skill:alpha:v2", content=self.previous)
+        plan = self.plan_with(self.record(id="skill:alpha"), artifact=renamed_same_content)
+        self.assertEqual(plan.steps[0].action, planner.UNCHANGED)
+
+        applied = planner.apply(self.filesystem, plan, at=AT)
+
+        self.assertEqual(self.filesystem.writes, [])
+        self.assertEqual([record.id for record in applied.reconciled], ["skill:alpha:v2"])
 
     def test_undoing_a_run_that_could_not_be_recorded_restores_and_leaves_alone(self):
         plan = self.plan_with(self.record())
@@ -978,6 +1056,340 @@ class RetireTest(RealHomeTestCase):
         self.assertEqual(second.unaccounted, ())
 
 
+class PruneEmptyDirectoriesTest(RealHomeTestCase):
+    """Retirement must not leave the skeleton standing: a directory a target
+    used to live in, and every ancestor that becomes empty because of it, is
+    taken back too -- but never `config_dir` itself, never past a symlink,
+    and never a directory a person still keeps something of their own in.
+    """
+
+    def install(self, *entries, links=(), created_dirs=()) -> Install:
+        return Install(
+            cli=CLI,
+            installed_at=AT,
+            config_dir=self.CONFIG,
+            release={},
+            entries=tuple(entries),
+            links=tuple(links),
+            created_dirs=tuple(created_dirs),
+        )
+
+    def file_entry(self, target: Path, content: bytes = b"hello", **overrides) -> Record:
+        fields = dict(
+            id="skill:alpha",
+            kind="file",
+            target=target,
+            after_digest=ownership.digest_of_bytes(content),
+            created_at=AT,
+            mode="0644",
+        )
+        fields.update(overrides)
+        return Record(**fields)
+
+    def dependency_entry(self, target: Path, **overrides) -> Record:
+        fields = dict(
+            id="dependency:some-mcp",
+            kind="dependency-tree",
+            target=target,
+            after_digest="sha256:" + "1" * 64,
+            created_at=AT,
+        )
+        fields.update(overrides)
+        return Record(**fields)
+
+    # --- Basic pruning ---
+
+    def test_retiring_the_only_file_in_a_directory_prunes_that_directory(self):
+        alpha = self.CONFIG / "skills" / "alpha" / "SKILL.md"
+        beta = self.CONFIG / "skills" / "beta" / "SKILL.md"
+        self.seed(files={alpha: b"hello", beta: b"other"})
+        retired = planner.retire(
+            self.filesystem, self.install(self.file_entry(alpha), created_dirs=(alpha.parent,))
+        )
+        self.assertFalse(alpha.parent.exists())
+        self.assertTrue((self.CONFIG / "skills").exists())
+        self.assertTrue(beta.exists())
+        self.assertEqual(retired.pruned, ("skills/alpha",))
+
+    def test_a_directory_pegasus_only_wrote_into_survives_retirement(self):
+        """The repro this whole change exists for: someone who already had
+        `~/.config/opencode/plugins/` before ever installing Pegasus. Pegasus
+        wrote a file into it because the address was free, but `make_dir`
+        found the directory already there and so never reported creating it
+        -- `created_dirs` never names it. A sibling directory Pegasus *did*
+        create, `skills/alpha`, is pruned exactly as before; `skills/beta`,
+        the directory the person already had, survives retiring the very
+        file Pegasus wrote inside it, and is never named in `pruned`."""
+        alpha = self.CONFIG / "skills" / "alpha" / "SKILL.md"
+        beta = self.CONFIG / "skills" / "beta" / "SKILL.md"
+        self.seed(files={alpha: b"a"})
+        (self.CONFIG / "skills" / "beta").mkdir(parents=True)
+        beta.write_bytes(b"b")
+        retired = planner.retire(
+            self.filesystem,
+            self.install(
+                self.file_entry(alpha, content=b"a", id="skill:alpha"),
+                self.file_entry(beta, content=b"b", id="skill:beta"),
+                created_dirs=(self.CONFIG / "skills", self.CONFIG / "skills" / "alpha"),
+            ),
+        )
+        self.assertFalse((self.CONFIG / "skills" / "alpha").exists())
+        self.assertTrue((self.CONFIG / "skills" / "beta").exists())
+        self.assertNotIn("skills/beta", retired.pruned)
+
+    def test_pruning_ascends_several_levels_and_stops_at_the_first_one_still_occupied(self):
+        target = self.CONFIG / "skills" / "alpha" / "refs" / "deep" / "file.md"
+        beta = self.CONFIG / "skills" / "beta" / "SKILL.md"
+        self.seed(files={target: b"hello", beta: b"other"})
+        retired = planner.retire(
+            self.filesystem,
+            self.install(
+                self.file_entry(target),
+                created_dirs=(
+                    target.parent,
+                    target.parent.parent,
+                    target.parent.parent.parent,
+                    self.CONFIG / "skills",
+                ),
+            ),
+        )
+        self.assertFalse((self.CONFIG / "skills" / "alpha").exists())
+        self.assertTrue((self.CONFIG / "skills").exists())
+        self.assertTrue(beta.exists())
+        self.assertEqual(
+            set(retired.pruned), {"skills/alpha/refs/deep", "skills/alpha/refs", "skills/alpha"}
+        )
+
+    def test_config_dir_itself_is_never_removed_even_when_it_becomes_empty(self):
+        target = self.CONFIG / "skills" / "alpha" / "SKILL.md"
+        self.seed(files={target: b"hello"})
+        retired = planner.retire(
+            self.filesystem,
+            self.install(self.file_entry(target), created_dirs=(target.parent, target.parent.parent)),
+        )
+        self.assertTrue(self.CONFIG.exists())
+        self.assertEqual(self.filesystem.list_dir(self.CONFIG), [])
+        self.assertNotIn("", retired.pruned)
+        self.assertNotIn(".", retired.pruned)
+
+    def test_a_directory_holding_a_file_the_person_left_survives_with_its_ancestors(self):
+        target = self.CONFIG / "skills" / "alpha" / "SKILL.md"
+        theirs = self.CONFIG / "skills" / "alpha" / "notes.txt"
+        self.seed(files={target: b"hello", theirs: b"my own notes"})
+        retired = planner.retire(
+            self.filesystem,
+            self.install(self.file_entry(target), created_dirs=(target.parent, target.parent.parent)),
+        )
+        self.assertFalse(target.exists())
+        self.assertTrue(theirs.exists())
+        self.assertTrue((self.CONFIG / "skills" / "alpha").exists())
+        self.assertTrue((self.CONFIG / "skills").exists())
+        self.assertEqual(retired.pruned, ())
+
+    def test_a_target_that_was_never_written_does_not_erase_an_unrelated_directory(self):
+        """The aggravating half of the repro: `remove_empty_dir` answers
+        `True` for a path that was never there at all -- "already gone counts
+        as done", the same posture `remove` takes -- so a journal entry whose
+        file an aborted install never actually wrote still feeds an ascent
+        from its parent. Before this change that ascent had nothing else to
+        stop it; now `created_dirs` does, because a directory Pegasus never
+        actually wrote into was never reported by `make_dir` either."""
+        never_written = self.CONFIG / "skills" / "orphan" / "SKILL.md"
+        theirs = self.CONFIG / "skills" / "orphan" / "their-own-file.txt"
+        self.seed(files={theirs: b"not Pegasus's"})
+        self.assertFalse(never_written.exists())
+        retired = planner.retire(self.filesystem, self.install(self.file_entry(never_written)))
+        self.assertTrue((self.CONFIG / "skills" / "orphan").exists())
+        self.assertTrue(theirs.exists())
+        self.assertEqual(retired.pruned, ())
+
+    def test_an_install_with_no_created_dirs_registry_prunes_nothing_and_does_not_fail(self):
+        """An install recorded before this field existed carries an empty
+        `created_dirs` -- see `Install.created_dirs`. The conservative,
+        correct answer is to prune nothing at all rather than guess, and to
+        do so cleanly rather than raise, so a pre-existing installation keeps
+        working exactly as it did before this change until it is next
+        installed or updated."""
+        alpha = self.CONFIG / "skills" / "alpha" / "SKILL.md"
+        self.seed(files={alpha: b"hello"})
+        retired = planner.retire(self.filesystem, self.install(self.file_entry(alpha)))
+        self.assertTrue((self.CONFIG / "skills" / "alpha").exists())
+        self.assertTrue((self.CONFIG / "skills").exists())
+        self.assertEqual(retired.pruned, ())
+        self.assertEqual(retired.removed, ("skill:alpha",))
+
+    # --- Symlinks ---
+
+    def test_a_symlink_in_the_ancestor_chain_stops_pruning_and_is_left_standing(self):
+        destination = self.home / "external-skills"
+        (destination / "alpha").mkdir(parents=True)
+        content = b"hello"
+        (destination / "alpha" / "SKILL.md").write_bytes(content)
+        link = self.CONFIG / "skills"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(destination, link)
+        target = link / "alpha" / "SKILL.md"
+
+        retired = planner.retire(
+            self.filesystem,
+            self.install(self.file_entry(target, content=content), created_dirs=(target.parent,)),
+        )
+
+        self.assertFalse((destination / "alpha" / "SKILL.md").exists())
+        self.assertTrue((destination / "alpha").exists())
+        self.assertTrue(destination.exists())
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), str(destination))
+        self.assertEqual(retired.pruned, ())
+
+    def test_a_symlink_above_config_dir_stops_pruning_and_is_left_standing(self):
+        """The chain checked by `_free_of_symlinks` must not stop at
+        `root` (`config_dir`) -- it has to reach all the way up to the
+        filesystem root. Here `.config` itself, an ancestor of `config_dir`,
+        is the symlink: it points somewhere entirely outside `home`, and
+        `config_dir` is only reachable by walking through it. `_contained`
+        happily accepts the resulting `config_dir` -- lexically it is still
+        under `home`, with no `..` in it -- so nothing upstream of pruning
+        catches this; it has to be caught here."""
+        outside = Path(self.directory.name).parent / f"outside-{self.home.name}"
+        outside.mkdir()
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        link = self.home / ".config"
+        os.symlink(outside, link)
+        config_dir = link / "some-cli"
+        target = config_dir / "skills" / "alpha" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        content = b"hello"
+        target.write_bytes(content)
+
+        install = Install(
+            cli=CLI,
+            installed_at=AT,
+            config_dir=config_dir,
+            release={},
+            entries=(self.file_entry(target, content=content),),
+            links=(),
+            created_dirs=(target.parent,),
+        )
+        retired = planner.retire(self.filesystem, install)
+
+        self.assertFalse(target.exists())
+        self.assertTrue((outside / "some-cli" / "skills" / "alpha").exists())
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(retired.pruned, ())
+
+    def test_retiring_an_artifact_that_is_itself_a_symlink_removes_only_the_link(self):
+        real_content = self.home / "actual-content.md"
+        real_content.write_bytes(b"the real bytes")
+        link = self.CONFIG / "skills" / "alpha" / "SKILL.md"
+        link.parent.mkdir(parents=True)
+        os.symlink(real_content, link)
+
+        retired = planner.retire(self.filesystem, self.install(self.file_entry(link, content=b"the real bytes")))
+
+        self.assertFalse(link.is_symlink())
+        self.assertFalse(link.exists())
+        self.assertTrue(real_content.exists())
+        self.assertEqual(real_content.read_bytes(), b"the real bytes")
+        self.assertEqual(retired.removed, ("skill:alpha",))
+
+    # --- unplace ---
+
+    def test_unplace_prunes_directories_this_run_created(self):
+        target = self.CONFIG / "skills" / "gamma" / "SKILL.md"
+        artifact = self.a_file(identifier="skill:gamma", path=target, content=b"new")
+        plan = self.plan_for(artifact)
+        applied = planner.apply(self.filesystem, plan, at=AT)
+        # `apply` also reports `config_dir` itself and its own parent among
+        # what it created, since this throwaway home has neither yet -- and
+        # that is harmless: `_prune_empty_directories` never ascends to
+        # `config_dir` or above regardless of what this set names.
+        self.assertIn(self.CONFIG / "skills" / "gamma", applied.created_dirs)
+        self.assertIn(self.CONFIG / "skills", applied.created_dirs)
+        placed = self.install(*applied.records, created_dirs=applied.created_dirs)
+        retired, failures = planner.unplace(self.filesystem, applied, placed)
+        self.assertEqual(failures, [])
+        self.assertFalse(target.exists())
+        self.assertFalse((self.CONFIG / "skills" / "gamma").exists())
+        self.assertFalse((self.CONFIG / "skills").exists())
+        self.assertTrue(self.CONFIG.exists())
+        self.assertEqual(set(retired.pruned), {"skills/gamma", "skills"})
+
+    def test_unplace_never_prunes_a_directory_an_earlier_install_created(self):
+        """`unplace` undoes a run that could not be recorded -- it may only
+        take back what *that run* created, never a directory an earlier,
+        already-successful install put there. `placed.created_dirs` scoped to
+        this run's own `applied.created_dirs` is what enforces that; passing
+        the wider, merged registry here would be the bug this guards
+        against."""
+        target = self.CONFIG / "skills" / "gamma" / "SKILL.md"
+        artifact = self.a_file(identifier="skill:gamma", path=target, content=b"new")
+        plan = self.plan_for(artifact)
+        applied = planner.apply(self.filesystem, plan, at=AT)
+        # `skills` is deliberately left out, as if an earlier install had
+        # created it -- only `skills/gamma` is this run's own.
+        placed = self.install(*applied.records, created_dirs=(self.CONFIG / "skills" / "gamma",))
+        retired, failures = planner.unplace(self.filesystem, applied, placed)
+        self.assertEqual(failures, [])
+        self.assertFalse((self.CONFIG / "skills" / "gamma").exists())
+        self.assertTrue((self.CONFIG / "skills").exists())
+        self.assertEqual(retired.pruned, ("skills/gamma",))
+
+    # --- The mirror: no empty directory survives anywhere ---
+
+    def test_no_empty_directory_survives_a_full_retire_anywhere_below_config_dir(self):
+        """The derived mirror of the basic pruning tests above: after
+        retiring everything an install owns, nothing Pegasus created is left
+        standing empty anywhere under `config_dir`, measured by walking the
+        real disk rather than by enumerating what was expected by hand.
+
+        This does **not** claim every empty directory disappears -- only
+        those `created_dirs` names as Pegasus's own. A directory the person
+        brought with them, empty or not, is a different scenario, covered by
+        `test_a_preexisting_empty_directory_is_never_pruned_and_never_reported`
+        above; folding that claim into this one would make this test false
+        the moment such a directory exists, for a reason that has nothing to
+        do with what it actually guards."""
+        alpha = self.CONFIG / "skills" / "alpha" / "SKILL.md"
+        beta = self.CONFIG / "skills" / "beta" / "nested" / "deep.md"
+        dependency_target = self.CONFIG / "deps" / "some-mcp" / "1.2.3"
+        payload = {"agent": {"alpha": {"model": "vendor/model"}}}
+        self.seed(files={alpha: b"a", beta: b"b", self.SETTINGS: document(payload)})
+        dependency_target.mkdir(parents=True)
+        (dependency_target / "package.json").write_bytes(b"{}")
+
+        install = self.install(
+            self.file_entry(alpha, content=b"a", id="skill:alpha"),
+            self.file_entry(beta, content=b"b", id="skill:beta"),
+            Record(
+                id="agent:alpha",
+                kind="config-key",
+                target=self.SETTINGS,
+                pointer="/agent/alpha",
+                codec="json",
+                after_digest=ownership.digest_of_value({"model": "vendor/model"}),
+                created_at=AT,
+            ),
+            self.dependency_entry(dependency_target),
+            created_dirs=(
+                self.CONFIG / "skills",
+                self.CONFIG / "skills" / "alpha",
+                self.CONFIG / "skills" / "beta",
+                self.CONFIG / "skills" / "beta" / "nested",
+                self.CONFIG / "deps",
+                self.CONFIG / "deps" / "some-mcp",
+            ),
+        )
+        planner.retire(self.filesystem, install)
+
+        empties = [
+            dirpath
+            for dirpath, dirnames, filenames in os.walk(self.CONFIG)
+            if dirpath != str(self.CONFIG) and not dirnames and not filenames
+        ]
+        self.assertEqual(empties, [])
+
+
 class OnStepTest(RealHomeTestCase):
     """`on_step` opens the seam a caller uses to render progress. `apply` and
     `retire` only ever report a fact -- "this unit is done, it is called X" --
@@ -1293,3 +1705,60 @@ class ReconciliationTest(unittest.TestCase):
         before = self.filesystem.read_bytes(artifact.path)
         planner.apply(self.filesystem, plan, at=AT)
         self.assertEqual(self.filesystem.read_bytes(artifact.path), before)
+
+
+class RecordAddressAppendCarveOutTest(unittest.TestCase):
+    """`record_address` returns ``None`` for an appended list item so that
+    two records sharing the same ``(target, pointer)`` -- several owners
+    appending to the same array via ``/plugin/-`` -- never collide as if one
+    had replaced the other. Nothing in the existing suite forces two records
+    to actually share a pointer this way, because today's own content only
+    ever appends one item per pointer per owner; this test builds that
+    "siblings" case explicitly against the same address-based filter
+    `cli._merged` runs, to prove the carve-out is load-bearing rather than
+    merely present.
+    """
+
+    TARGET = Path("/home/probe/.config/some-cli/settings.json")
+    POINTER = "/plugin/-"
+
+    def sibling(self, owner: str, digest_seed: str) -> Record:
+        return Record(
+            id=owner,
+            kind="config-key",
+            target=self.TARGET,
+            pointer=self.POINTER,
+            after_digest="sha256:" + digest_seed * 64,
+            created_at=AT,
+        )
+
+    def merge(self, previous_entries: tuple[Record, ...], records: tuple[Record, ...]) -> tuple[Record, ...]:
+        """The same address-based filter `cli._merged` runs over
+        ``previous.entries`` when folding a run's own ``records`` back in --
+        reproduced here directly against `planner.record_address` rather than
+        through `cli._merged` itself, since that function needs a journal,
+        an adapter and a whole environment to call at all."""
+        dropped = {record.id for record in records}
+        claimed = {
+            address for address in (planner.record_address(record) for record in records) if address is not None
+        }
+        return tuple(
+            entry
+            for entry in previous_entries
+            if entry.id not in dropped and planner.record_address(entry) not in claimed
+        ) + records
+
+    def test_two_owners_appending_to_the_same_pointer_both_survive_a_merge(self):
+        owner_one = self.sibling("own:p1", "1")
+        owner_two_old = self.sibling("own:p2", "2")
+        owner_two_new = self.sibling("own:p2", "3")
+
+        self.assertIsNone(planner.record_address(owner_one))
+        self.assertIsNone(planner.record_address(owner_two_old))
+
+        merged = self.merge((owner_one, owner_two_old), (owner_two_new,))
+
+        self.assertIn(owner_one, merged)
+        self.assertIn(owner_two_new, merged)
+        self.assertNotIn(owner_two_old, merged)
+        self.assertEqual(len(merged), 2)

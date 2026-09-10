@@ -306,6 +306,26 @@ class PosixFileSystemTest(unittest.TestCase):
         with self.assertRaises(FileSystemError):
             self.fs.make_dir(target)
 
+    def test_make_dir_reports_every_directory_it_actually_created(self):
+        """The whole point of the new return value: a caller that later has
+        to know what Pegasus is allowed to take back needs to learn, at the
+        one moment this is knowable, every directory this call brought into
+        existence -- not just the leaf it asked for."""
+        target = self.root / "one" / "two" / "three"
+        created = self.fs.make_dir(target)
+        self.assertEqual(created, (self.root / "one", self.root / "one" / "two", target))
+
+    def test_make_dir_reports_nothing_when_the_directory_already_existed(self):
+        target = self.root / "folder"
+        target.mkdir()
+        self.assertEqual(self.fs.make_dir(target), ())
+
+    def test_make_dir_reports_only_the_missing_ancestors_not_the_ones_already_there(self):
+        (self.root / "existing").mkdir()
+        target = self.root / "existing" / "new-child" / "leaf"
+        created = self.fs.make_dir(target)
+        self.assertEqual(created, (self.root / "existing" / "new-child", target))
+
     def test_mode_of_reports_the_permission_bits(self):
         target = self.root / "note.txt"
         target.write_bytes(b"")
@@ -433,6 +453,72 @@ class PosixFileSystemTest(unittest.TestCase):
 
     def test_owned_by_current_user_is_false_for_a_missing_path(self):
         self.assertFalse(self.fs.owned_by_current_user(self.root / "absent.txt"))
+
+    # --- Symlinks ---
+
+    def test_is_symlink_is_false_for_a_plain_directory(self):
+        target = self.root / "plain"
+        target.mkdir()
+        self.assertFalse(self.fs.is_symlink(target))
+
+    def test_is_symlink_is_false_for_a_plain_file(self):
+        target = self.root / "note.txt"
+        target.write_bytes(b"hello")
+        self.assertFalse(self.fs.is_symlink(target))
+
+    def test_is_symlink_is_false_for_an_absent_path(self):
+        self.assertFalse(self.fs.is_symlink(self.root / "absent"))
+
+    def test_is_symlink_is_true_for_a_symlink_without_resolving_it(self):
+        destination = self.root / "destination"
+        destination.mkdir()
+        link = self.root / "link"
+        link.symlink_to(destination)
+        self.assertTrue(self.fs.is_symlink(link))
+
+    def test_is_symlink_is_true_for_a_dangling_symlink(self):
+        link = self.root / "dangling"
+        link.symlink_to(self.root / "never-existed")
+        self.assertTrue(self.fs.is_symlink(link))
+
+    # --- Pruning empty directories ---
+
+    def test_remove_empty_dir_deletes_an_empty_directory(self):
+        target = self.root / "empty"
+        target.mkdir()
+        self.assertTrue(self.fs.remove_empty_dir(target))
+        self.assertFalse(target.exists())
+
+    def test_remove_empty_dir_on_an_absent_directory_is_true(self):
+        self.assertTrue(self.fs.remove_empty_dir(self.root / "absent"))
+
+    def test_remove_empty_dir_on_a_non_empty_directory_is_false_and_removes_nothing(self):
+        target = self.root / "occupied"
+        target.mkdir()
+        (target / "note.txt").write_bytes(b"still here")
+        self.assertFalse(self.fs.remove_empty_dir(target))
+        self.assertTrue(target.exists())
+        self.assertTrue((target / "note.txt").exists())
+
+    def test_remove_empty_dir_on_a_file_raises_the_port_error(self):
+        target = self.root / "note.txt"
+        target.write_bytes(b"hello")
+        with self.assertRaises(FileSystemError):
+            self.fs.remove_empty_dir(target)
+        self.assertTrue(target.exists())
+
+    def test_remove_empty_dir_on_a_symlink_raises_the_port_error(self):
+        """A symlink is never a directory this call may aim at -- the caller
+        picked the wrong kind of path, and that is a bug to surface, not a
+        normal stopping point to answer `False` for."""
+        destination = self.root / "destination"
+        destination.mkdir()
+        link = self.root / "link"
+        link.symlink_to(destination)
+        with self.assertRaises(FileSystemError):
+            self.fs.remove_empty_dir(link)
+        self.assertTrue(destination.exists())
+        self.assertTrue(link.exists())
 
 
 if __name__ == "__main__":

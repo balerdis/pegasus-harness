@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from pegasus.adapters import available  # noqa: E402
 from pegasus.core import catalog as catalog_module  # noqa: E402
 from pegasus.core import content as content_module  # noqa: E402
+from pegasus.cli import default_identity  # noqa: E402
 
 # The catalog carries its own canonical frame, so this tool has no home to pick:
 # targets stay relative to each CLI's configuration root and nothing about the
@@ -34,7 +35,10 @@ def main() -> int:
     parser.add_argument("--summary", action="store_true", help="print counts and digest only")
     arguments = parser.parse_args()
 
-    catalog = catalog_module.build(content_module.load(), registry.get(arguments.cli))
+    # The identity is the packaged one and never a flag: this tool regenerates the
+    # catalog THIS distribution ships, and a catalog built under someone else's
+    # identity would carry their artifact names under our digest.
+    catalog = catalog_module.build(content_module.load(), registry.get(arguments.cli), default_identity())
 
     if arguments.summary:
         files = sum(1 for entry in catalog.entries if entry.kind == "file")

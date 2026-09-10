@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pegasus.core.identity import Identity, ReleaseSource
 from pegasus.core.types import Capability, CapabilityManifest, Environment, Layout
 
 PROBE = Environment(home=Path("/nonexistent/pegasus-registry-probe"))
@@ -23,6 +24,30 @@ install exists -- and none is needed here: `_check_own_artifacts` only checks
 that every returned path stays inside `layout.config_dir`, a territory check
 that holds for any string at all. Named obviously synthetic so it can never be
 mistaken for a real distribution's orchestrator if it ever leaked into output.
+"""
+
+PROBE_IDENTITY = Identity(
+    product_id="probe-identity-never-installed",
+    display_name="Probe Identity Never Installed",
+    program_name="probe",
+    version="0.0.0",
+    wordmark_words=("PROBE",),
+    release=ReleaseSource(
+        asset_url_template="https://example.invalid/probe/releases/download/{tag}/{asset}",
+        binary_asset="probe",
+        latest_release_api_url="https://example.invalid/probe/api/releases/latest",
+        release_page_url="https://example.invalid/probe/releases",
+        install_base_url_default="https://example.invalid/probe/releases/latest/download",
+    ),
+)
+"""The same idea as `PROBE_ORCHESTRATOR`, for `own_artifacts`'s `identity`
+parameter: registration runs before any `Runtime` exists, so there is no real
+`Identity` to hand the adapter yet. `_check_own_artifacts` only checks that
+every returned path stays inside `layout.config_dir`, a territory check that
+holds regardless of which identity produced the artifacts, so an obviously
+synthetic one is exactly as good as a real one here -- and, being obviously
+synthetic, can never be mistaken for a real distribution's identity if it ever
+leaked into output.
 """
 
 RENDERERS: dict[Capability, tuple[str, ...]] = {
@@ -134,7 +159,7 @@ def _check_own_artifacts(adapter: object, cli_id: str, layout: Layout) -> None:
         raise ManifestMismatchError(
             f"adapter {cli_id!r} must implement own_artifacts; return an empty list when it ships nothing"
         )
-    for artifact in adapter.own_artifacts(layout, PROBE_ORCHESTRATOR):
+    for artifact in adapter.own_artifacts(layout, PROBE_ORCHESTRATOR, PROBE_IDENTITY):
         if not artifact.path.is_relative_to(layout.config_dir):
             raise AdapterScopeError(
                 f"adapter {cli_id!r} would write {artifact.path} outside {layout.config_dir}"

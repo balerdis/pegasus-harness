@@ -1,4 +1,4 @@
-/** Refresh the Pegasus skill registry asynchronously when OpenCode starts. */
+/** Refresh the {{display_name}} skill registry asynchronously when OpenCode starts. */
 import type { Plugin } from "@opencode-ai/plugin"
 import { execFile } from "child_process"
 import { existsSync, readFileSync } from "fs"
@@ -12,7 +12,7 @@ const CONTRACT_KEYS = new Set(["PEGASUS_SKILL_REGISTRY_BIN", "PEGASUS_SKILL_ROOT
 
 function loadLocalContract() {
   const configDirectory = process.env.XDG_CONFIG_HOME || join(homedir(), ".config")
-  const contractPath = join(configDirectory, "opencode", "pegasus-skill-registry.env")
+  const contractPath = join(configDirectory, "opencode", "{{program_name}}-skill-registry.env")
   if (!existsSync(contractPath)) return
   for (const line of readFileSync(contractPath, "utf8").split(/\r?\n/)) {
     const match = line.match(/^\s*(PEGASUS_SKILL_REGISTRY_BIN|PEGASUS_SKILL_ROOTS)=(.+?)\s*$/)
@@ -22,22 +22,22 @@ function loadLocalContract() {
   }
 }
 
-export const PegasusSkillRegistryPlugin: Plugin = async (input) => {
+export const {{program_pascal_name}}SkillRegistryPlugin: Plugin = async (input) => {
   // console.error alone never reaches whoever is running OpenCode -- a plugin's
   // stderr is not surfaced anywhere a person looks. Route every failure through
   // here so the log of record and the on-screen surfacing can never drift apart.
   async function reportFailure(variant: "warning" | "error", message: string, detail?: unknown) {
     if (detail === undefined) {
-      console.error(`[pegasus-skill-registry] ${message}`)
+      console.error(`[{{program_name}}-skill-registry] ${message}`)
     } else {
-      console.error(`[pegasus-skill-registry] ${message}`, detail)
+      console.error(`[{{program_name}}-skill-registry] ${message}`, detail)
     }
     try {
       // Best-effort: `opencode run` and other non-TUI clients have nothing to
       // show a toast on, so a failed call here is an ordinary outcome, not a
       // second failure to report.
       await input.client.tui.showToast({
-        body: { title: "Pegasus skill registry", message, variant },
+        body: { title: "{{display_name}} skill registry", message, variant },
       })
     } catch {
       // ignore, see above
@@ -72,4 +72,4 @@ export const PegasusSkillRegistryPlugin: Plugin = async (input) => {
   return {}
 }
 
-export default PegasusSkillRegistryPlugin
+export default {{program_pascal_name}}SkillRegistryPlugin

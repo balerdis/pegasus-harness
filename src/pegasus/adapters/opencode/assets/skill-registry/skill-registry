@@ -1,4 +1,4 @@
 #!/usr/bin/env sh
 set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec python3 "$SCRIPT_DIR/pegasus_skill_registry.py" "$@"
+exec python3 "$SCRIPT_DIR/{{program_module_name}}_skill_registry.py" "$@"

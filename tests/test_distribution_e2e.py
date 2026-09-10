@@ -378,7 +378,7 @@ class DistributionOrchestratorRenameTest(unittest.TestCase):
         # Installed end to end, it must carry ACME's own orchestrator name and
         # never the old literal.
         notifier = (
-            home / ".config" / "opencode" / "plugins" / "pegasus-orchestrator-notifier.ts"
+            home / ".config" / "opencode" / "plugins" / "acme-orchestrator-notifier.ts"
         ).read_text(encoding="utf-8")
         self.assertIn('"acme-orchestrator"', notifier)
         self.assertNotIn("pegasus-orchestrator", notifier)

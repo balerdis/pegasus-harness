@@ -135,12 +135,15 @@ class FakeFileSystem:
         fail_always: set[Path] | None = None,
         fail_remove: set[Path] | None = None,
         fail_remove_dir: set[Path] | None = None,
+        fail_remove_empty_dir: set[Path] | None = None,
         fail_list: set[Path] | None = None,
         fail_read: set[Path] | None = None,
         fail_exists: set[Path] | None = None,
         fail_mode: set[Path] | None = None,
+        fail_is_symlink: set[Path] | None = None,
         unwritable: set[Path] | None = None,
         unowned: set[Path] | None = None,
+        symlinks: set[Path] | None = None,
     ):
         self.files: dict[Path, bytes] = dict(files or {})
         self.modes: dict[Path, int] = dict(modes or {})
@@ -151,10 +154,20 @@ class FakeFileSystem:
         self.fail_always: set[Path] = set(fail_always or ())
         self.fail_remove: set[Path] = set(fail_remove or ())
         self.fail_remove_dir: set[Path] = set(fail_remove_dir or ())
+        self.fail_remove_empty_dir: set[Path] = set(fail_remove_empty_dir or ())
         self.fail_list: set[Path] = set(fail_list or ())
         self.fail_read: set[Path] = set(fail_read or ())
         self.fail_mode: set[Path] = set(fail_mode or ())
         self.fail_exists: set[Path] = set(fail_exists or ())
+        self.fail_is_symlink: set[Path] = set(fail_is_symlink or ())
+        # Paths `is_symlink` answers `True` for -- a test's way of putting a
+        # path into the same "is a symlink" condition a real one carries,
+        # without a real filesystem to create one against. Membership here is
+        # authoritative regardless of whether the path is also in `files` or
+        # `directories`: a symlink is neither of those, it is its own kind of
+        # entry, and a fake that required one of the other two first could
+        # not model a dangling symlink at all.
+        self.symlinks: set[Path] = set(symlinks or ())
         # Paths `is_writable` answers `False` for, regardless of whether they
         # exist -- a test's way of putting a destination or a directory into
         # the same "cannot be written to" condition `make_unwritable` puts a
@@ -178,6 +191,11 @@ class FakeFileSystem:
         if path in self.fail_exists:
             raise FileSystemError(f"refusing to tell whether {path} exists: injected failure")
         return path in self.files or path in self.directories
+
+    def is_symlink(self, path: Path) -> bool:
+        if path in self.fail_is_symlink:
+            raise FileSystemError(f"refusing to tell whether {path} is a symlink: injected failure")
+        return path in self.symlinks
 
     def read_bytes(self, path: Path) -> bytes:
         if path in self.fail_read:
@@ -277,19 +295,46 @@ class FakeFileSystem:
                 self.directory_modes.pop(candidate, None)
         self.removals.append(path)
 
-    def make_dir(self, path: Path, *, mode: int = 0o755) -> None:
+    def remove_empty_dir(self, path: Path) -> bool:
+        if path in self.fail_remove_empty_dir:
+            raise FileSystemError(f"refusing to remove {path}: injected failure")
+        if path in self.files or path in self.symlinks:
+            # The real one calls `os.rmdir`, which raises `ENOTDIR` on
+            # anything but a directory -- a symlink included, even one that
+            # points at a directory, because `rmdir` never follows one.
+            # Answering `False` here instead would let a caller aimed at the
+            # wrong kind of path treat a bug as the normal "not empty yet"
+            # stopping point.
+            raise FileSystemError(f"cannot remove {path}: not a directory")
+        has_something_inside = any(
+            candidate != path and path in candidate.parents for candidate in (*self.files, *self.directories)
+        )
+        if has_something_inside:
+            return False
+        if path not in self.directories:
+            return True
+        self.directories.discard(path)
+        self.directory_modes.pop(path, None)
+        self.removals.append(path)
+        return True
+
+    def make_dir(self, path: Path, *, mode: int = 0o755) -> tuple[Path, ...]:
         # Additive, like the real filesystem: a directory that already exists
         # keeps whatever mode it has. The mode argument only ever applies to
         # the leaf this call creates; any missing parents created along the
         # way get the default mode, never the one that was requested.
         if path in self.directories:
-            return
+            return ()
+        created: list[Path] = []
         for ancestor in reversed(path.parents):
             if ancestor not in self.directories:
                 self.directories.add(ancestor)
                 self.directory_modes[ancestor] = DEFAULT_DIR_MODE
+                created.append(ancestor)
         self.directories.add(path)
         self.directory_modes[path] = mode
+        created.append(path)
+        return tuple(created)
 
     # --- Who is running ---
 

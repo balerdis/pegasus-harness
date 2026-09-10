@@ -164,6 +164,16 @@ class Applied:
     ``retire`` cannot answer this: it removes what the journal records, and an
     updated artifact existed before the run, so removing it would take away a
     working file, or a key whose previous value nothing else remembers."""
+    created_dirs: tuple[Path, ...] = ()
+    """Every directory this run itself brought into existence while placing a file.
+
+    Reported by `FileSystem.make_dir`, called explicitly here rather than left
+    to `write_atomic`'s own internal call for exactly this reason: the moment
+    of creation is the only moment this fact is knowable, and a caller that
+    only learns a placement's parent existed after the fact cannot tell "I
+    made this" from "this was already here". A caller merges this into
+    `Install.created_dirs` -- see that field's own docstring -- which is what
+    later lets `retire` prune only what Pegasus actually created."""
 
 
 @dataclass(frozen=True)
@@ -182,6 +192,17 @@ class Retired:
     removed: tuple[str, ...] = ()
     unaccounted: tuple[str, ...] = ()
     kept_links: tuple[str, ...] = ()
+    pruned: tuple[str, ...] = ()
+    """Directories left empty by retirement and taken back along with it.
+
+    Retiring a `file` or a `dependency-tree` removes what the journal
+    recorded, but never the directory that held it -- a skill's directory, a
+    dependency's version folder -- so the address stays a live file but its
+    scaffolding does not. These are those directories, named relative to
+    `config_dir` in POSIX form, deepest ones first where an ancestor and its
+    child are both here. Never `config_dir` itself, and never one reached
+    only through a symlink -- see `_prune_empty_directories`, which computes
+    this."""
 
 
 def plan(
@@ -203,8 +224,72 @@ def plan(
     _refuse_duplicates(cli, artifacts)
     documents = _load_documents(filesystem, artifacts)
     owned = {entry.id: entry for entry in (installed.entries if installed else ())}
-    steps = tuple(_step(filesystem, artifact, documents, owned) for artifact in artifacts)
+    claimed = _claimed_by_address(installed)
+    steps = tuple(_step(filesystem, artifact, documents, owned, claimed) for artifact in artifacts)
     return Plan(cli=cli, steps=steps, retirements=retirements(installed, artifacts))
+
+
+def record_address(entry: Record) -> tuple[str, Path, str | None] | None:
+    """The slot ``entry`` occupies, when it occupies one at all.
+
+    A ``file`` and an addressable ``config-key`` each hold one exclusive
+    slot -- ``(kind, target, pointer)`` -- and two records can share that
+    triple only if one has replaced the other. An appended list item is
+    different: several distinct, simultaneously-valid records legitimately
+    share the same ``(target, pointer)`` -- that pointer only ever names the
+    *list*, never one item in it, so nothing about the triple picks one
+    entry over its siblings. Returning ``None`` for it, rather than the
+    triple, is what keeps every caller below from silently treating list
+    siblings as the same slot -- see `_claimed_by_address`, `retirements`
+    and, in `cli.py`, `_merged`.
+
+    Public, unlike the rest of this module's journal-reading half: `cli.py`'s
+    own merge of a completed run back into the journal needs the identical
+    exclusion, on records rather than artifacts, and duplicating the append
+    check there would let the two drift.
+    """
+    if entry.kind == "config-key" and entry.pointer is not None and _appends(entry.pointer):
+        return None
+    return entry.kind, entry.target, entry.pointer
+
+
+def _claimed_by_address(installed: Install | None) -> dict[tuple[str, Path, str | None], Record]:
+    """Every address this installation's journal already reclaims, keyed by
+    the address itself rather than by the ``id`` recorded against it.
+
+    An artifact's ``id`` is how the *current* render happens to name it, not
+    what makes an address belong to this installation. A release is free to
+    change the scheme that derives an `id` -- to make a rename visible, say --
+    without a single byte on disk moving, and when it does, the journal entry
+    written under the old scheme is still ours: same ``kind``, same
+    ``target``, same ``pointer``. This map is how `_step` recognizes that
+    entry even though `owned` (keyed by `id`) no longer finds it, so an `id`
+    change alone never reads as a stranger's file to skip or an abandoned one
+    to retire -- see `_file_step` and `_claimable` for the read side, and
+    `retirements`, below, for the write side of the same rule.
+    """
+    if installed is None:
+        return {}
+    result: dict[tuple[str, Path, str | None], Record] = {}
+    for entry in installed.entries:
+        address = record_address(entry)
+        if address is not None:
+            result[address] = entry
+    return result
+
+
+def _artifact_address(artifact: Artifact) -> tuple[str, Path, str | None] | None:
+    """The address `_claimed_by_address` would have recorded for this artifact,
+    had a previous release already placed it. ``None`` for a shape with no
+    exclusive slot of its own -- an append (see `record_address`) or a shape
+    this module does not journal by address at all (there is none today, but
+    `plan` already refuses any shape besides these two in
+    `_refuse_duplicates`)."""
+    if isinstance(artifact, FileArtifact):
+        return "file", artifact.path, None
+    if isinstance(artifact, ConfigKeyArtifact) and not _appends(artifact.pointer):
+        return "config-key", artifact.path, artifact.pointer
+    return None
 
 
 def retirements(installed: Install | None, artifacts: Sequence[Artifact]) -> tuple[Record, ...]:
@@ -216,25 +301,60 @@ def retirements(installed: Install | None, artifacts: Sequence[Artifact]) -> tup
     holds, does the render still want it — an id absent from ``artifacts``
     never produces a step, so nothing would otherwise notice it is gone.
 
-    A set difference over ids, and nothing more: it takes no ``filesystem``
-    because it touches no disk, which is what makes it the purest thing in
-    this module. ``installed.links`` are excluded by their type rather than
-    by a condition here, the same way ``retire`` never looks at them — a link
-    was never something Pegasus owned, so it is never something to retire.
+    Almost a set difference over ids, and nothing more: it takes no
+    ``filesystem`` because it touches no disk, which is what makes it the
+    purest thing in this module. ``installed.links`` are excluded by their
+    type rather than by a condition here, the same way ``retire`` never looks
+    at them — a link was never something Pegasus owned, so it is never
+    something to retire.
+
+    "Almost", because an id absent from ``artifacts`` is not, on its own,
+    proof the render dropped the address: an `id` scheme change can rename
+    every entry at once while every target stays exactly where it was (see
+    `_claimed_by_address`). An entry is only actually unwanted when *neither*
+    its `id` nor its address survives into this render — otherwise `_step`
+    has already picked it back up under its new `id`, by address, as an
+    `UPDATE` or `UNCHANGED`, and retiring it here would remove the very file
+    (or key) that step just decided to keep. Excluding it here is therefore
+    not an optimization: without it, `retire` running after `apply` -- which
+    it must, for the reason documented at its call site -- would delete what
+    `apply` just wrote.
     """
     if installed is None:
         return ()
-    rendered = {artifact.id for artifact in artifacts}
-    return tuple(entry for entry in installed.entries if entry.id not in rendered)
+    rendered_ids = {artifact.id for artifact in artifacts}
+    rendered_addresses = {
+        address for address in (_artifact_address(artifact) for artifact in artifacts) if address is not None
+    }
+    return tuple(
+        entry
+        for entry in installed.entries
+        if entry.id not in rendered_ids and record_address(entry) not in rendered_addresses
+    )
 
 
 def _step(
-    filesystem: FileSystem, artifact: Artifact, documents: dict[Path, Any], owned: dict[str, Record]
+    filesystem: FileSystem,
+    artifact: Artifact,
+    documents: dict[Path, Any],
+    owned: dict[str, Record],
+    claimed: dict[tuple[str, Path, str | None], Record],
 ) -> Step:
     digest = ownership.digest(artifact)
+    entry = owned.get(artifact.id)
+    if entry is None:
+        # The `id` this release renders is not one the journal recognizes, but
+        # the address it renders may still be one this installation already
+        # holds under a different, older `id` -- see `_claimed_by_address`.
+        # Falling back to the id lookup keeps every other case identical to
+        # before: an `id` the journal does recognize is never second-guessed
+        # by an address lookup that could only ever agree with it.
+        address = _artifact_address(artifact)
+        if address is not None:
+            entry = claimed.get(address)
     if isinstance(artifact, FileArtifact):
-        return _file_step(filesystem, artifact, digest, owned.get(artifact.id))
-    return _key_step(artifact, documents.get(artifact.path), digest, owned.get(artifact.id))
+        return _file_step(filesystem, artifact, digest, entry)
+    return _key_step(artifact, documents.get(artifact.path), digest, entry)
 
 
 def _file_step(
@@ -377,6 +497,7 @@ def apply(
     created: list[Path] = []
     restorable: dict[Path, tuple[bytes | None, int | None]] = {}
     records: list[Record] = []
+    created_dirs: list[Path] = []
 
     def _notify(unit: str) -> None:
         if on_step is None:
@@ -385,6 +506,24 @@ def apply(
             on_step(unit)
         except Exception as error:
             raise PlannerError(_undone(filesystem, created, restorable, error)) from error
+
+    def _make_dir_for(path: Path) -> None:
+        # Called explicitly, ahead of `write_atomic`, rather than left to that
+        # call's own internal `make_dir` -- the moment of creation is the only
+        # moment `FileSystem.make_dir` can say what it made, and by the time
+        # `write_atomic` returns that answer is gone. Idempotent, so
+        # `write_atomic`'s own call right after this one creates nothing and
+        # reports nothing: this one already did. No mode is asked for here on
+        # purpose, the same restraint `mode_for` already keeps this module
+        # from ever choosing a permission bit itself: a POSIX mode is a
+        # platform detail, and a bare literal naming one has no business in
+        # `core/` at all (`test_architecture.NoPermissionOctalLiteralsTest`
+        # holds every module here to that). Every implementation of this port
+        # already carries its own ordinary, traversable default for a
+        # directory nobody asked to be made private -- the same one
+        # `write_atomic`'s own internal call has always used -- so this simply
+        # defers to it instead of inventing one.
+        created_dirs.extend(filesystem.make_dir(path.parent))
 
     try:
         for step in plan.placements:
@@ -396,6 +535,7 @@ def apply(
                         step.artifact.path,
                         (filesystem.read_bytes(step.artifact.path), filesystem.mode_of(step.artifact.path)),
                     )
+                _make_dir_for(step.artifact.path)
                 filesystem.write_atomic(
                     step.artifact.path,
                     step.artifact.content,
@@ -421,6 +561,7 @@ def apply(
                     _address_for(step, document),
                     step.artifact.value,
                 )
+            _make_dir_for(path)
             _write_document(filesystem, path, document, codec, restorable[path][1])
             records.extend(_key_record(step, at) for step in steps)
             for step in steps:
@@ -432,6 +573,7 @@ def apply(
         skipped=plan.collisions,
         unchanged=plan.unchanged,
         reconciled=_reconciled(filesystem, plan, at),
+        created_dirs=tuple(created_dirs),
         # Files and configuration documents alike: an update's address is one
         # that already held something, and putting that back is the same act
         # whichever shape lives there. A path this run brought into existence is
@@ -547,13 +689,27 @@ def _reconciled(filesystem: FileSystem, plan: Plan, at: str) -> tuple[Record, ..
 
     Only a step whose entry actually disagrees produces one. Recording the rest
     would put a journal write in every run of an install that did nothing.
+
+    A changed ``id`` is exactly this kind of disagreement, and not a separate
+    one invented for it. A release that renders the same bytes at the same
+    address under a new `id` -- a scheme change with no content change behind
+    it -- is picked up by `_step`'s address fallback (`_claimed_by_address`)
+    as the same artifact, so the step still reads `UNCHANGED`; but the entry
+    it was judged against still carries the *old* `id`, and nothing about the
+    digest disagreeing captures that. Left alone, the journal would keep
+    claiming this address under an `id` no render will ever produce again,
+    forever -- the very address `retirements` is trusted, above, to leave
+    alone precisely because some entry still claims it. Recording it here
+    closes that loop the same way a digest mismatch does: for free, off a
+    step that was already read.
     """
     return tuple(
         _file_record(filesystem, step, at)
         if isinstance(step.artifact, FileArtifact)
         else _key_record(step, at)
         for step in plan.unchanged
-        if step.entry is not None and step.entry.after_digest != step.digest
+        if step.entry is not None
+        and (step.entry.after_digest != step.digest or step.entry.id != step.artifact.id)
     )
 
 
@@ -716,11 +872,160 @@ def retire(
     for kind in sorted(KINDS):
         RETIRE_HANDLERS[kind](filesystem, by_kind[kind], outcomes, on_step)
 
+    # `config-key` rewrites a document in place rather than removing a file,
+    # so it is the one kind that never leaves a directory behind -- only
+    # `file` and `dependency-tree` ever contribute a candidate to prune.
+    candidates = [entry.target.parent for entry in (*by_kind["file"], *by_kind["dependency-tree"])]
+    pruned = _prune_empty_directories(filesystem, install.config_dir, candidates, install.created_dirs)
+
     return Retired(
         removed=tuple(outcomes["removed"]),
         unaccounted=tuple(outcomes["unaccounted"]),
         kept_links=tuple(link.id for link in install.links),
+        pruned=pruned,
     )
+
+
+def _prune_empty_directories(
+    filesystem: FileSystem, root: Path, candidates: list[Path], created: tuple[Path, ...]
+) -> tuple[str, ...]:
+    """Take back what retiring a file or a dependency tree left standing --
+    but only the ground Pegasus itself broke.
+
+    ``candidates`` is the immediate parent of every target retirement just
+    removed; each is checked and, if empty, taken back, then its own parent is
+    checked the same way, ascending until one is not empty, one was never
+    created by Pegasus, or ``root`` is reached. ``root`` itself is never a
+    candidate — the CLI's own configuration directory is not Pegasus's to
+    remove, however empty it ends up.
+
+    ``created`` is ``Install.created_dirs`` — every directory some `make_dir`
+    call, on this install or an earlier one, actually reported creating. It is
+    the one thing that tells a directory the person already had apart from one
+    Pegasus put there: both can end up empty, and emptiness alone cannot
+    distinguish them. A directory absent from this set is never removed, full
+    stop, no matter how empty it is or how deep under a just-vacated candidate
+    it sits — the ascent below stops the instant it reaches one, exactly the
+    same stopping condition an occupied directory already gives it. An install
+    recorded before this set was ever tracked carries an empty one, which
+    means nothing under it is ever pruned; that is not a gap to route around,
+    it is the correct, conservative answer for a fact that was never recorded
+    (see `Install.created_dirs`).
+
+    It does not heal itself on a later install or update, either: `make_dir`
+    only reports what it actually creates, and by the time a CLI already
+    installed before 5.28.0 is reinstalled or updated, the directories this
+    set would need to name already exist, so nothing calls `make_dir` for
+    them and `created_dirs` stays empty. Pruning applies to every install
+    that started recording `created_dirs` from 5.28.0 onward; an install from
+    before that keeps its empty directories, unmigrated, because telling a
+    directory Pegasus made from one the person made, with no record that ever
+    tracked the difference, is a guess -- and guessing here means deleting
+    something that might not be Pegasus's to delete. Reaching that older
+    installed base would need asking the person directly; that cannot be
+    inferred from disk state and is separate work this function does not do.
+
+    A candidate outside ``root`` entirely (a `dependency-tree` may live under
+    the product's own data directory rather than under a CLI's configuration)
+    is left alone: there is nothing here to ascend from it towards. This is
+    also, incidentally, the same guarantee `journal._contained` gives every
+    ``target`` and ``config_dir`` it parses — a `..` cannot buy a candidate a
+    way past `root in candidate.parents` by resolving somewhere `is_relative_to`
+    cannot see, because the journal already refuses to load a path shaped that
+    way. The guarantee lives there, not here; this function only relies on it.
+
+    Before a candidate is touched at all, every component of its absolute
+    path — from the filesystem root down through the candidate itself, not
+    only the portion under ``root`` — is checked with `is_symlink`. Any
+    symlink in that chain stops the whole candidate cold — nothing below it
+    or above it is pruned — because `remove_empty_dir` is a bare `os.rmdir`,
+    which resolves every path component but the last, and a symlinked
+    ancestor anywhere in the chain, including one standing above ``root``
+    itself (``config_dir`` reached through a symlinked parent, say), would
+    otherwise send it outside the tree entirely. `_contained` only refuses a
+    `..` in the recorded path; it does not resolve anything, so a
+    lexically-contained ``config_dir`` is no guarantee against this and the
+    check here cannot be narrowed to ``root``'s own descendants. That check
+    happens once, up front, against the chain as it stood before this
+    candidate's own ascent — not re-run at every step of it — because every
+    directory in that ascent is a prefix of the same already-checked chain.
+    That single check does not close every window: a directory found to be
+    real here can still be swapped for a symlink by something else on the
+    machine in the moment between this check and the `os.rmdir` that later
+    visits it, and nothing here re-checks at that instant. Closing that would
+    need a check immediately before every single `rmdir`, atomic with it,
+    which this port does not offer. Left open on purpose — closing it needs a
+    local attacker with the same access Pegasus already has, in which case an
+    empty directory is the least of what they could already do — but named
+    here rather than implied away, because a reader of the paragraph above
+    this one could otherwise take "checked once, up front" for "safe for the
+    whole ascent."
+
+    Processed deepest candidate first, so a child directory is gone before its
+    parent is ever asked about, and each candidate is only ever visited once.
+    """
+    created_dirs = set(created)
+    pruned: list[Path] = []
+    # Sorted by the path *relative to* `root`, never by the candidate's own
+    # absolute path: two installs of the same content into different homes
+    # produce candidates whose absolute paths differ but whose structure
+    # below `root` is identical, and a caller comparing their two reports --
+    # the TUI against the equivalent CLI run, on separate throwaway homes --
+    # needs the same tie-break both times. Sorting on the absolute path (or
+    # relying on `set` iteration order) would let two candidates at the same
+    # depth swap places from one home to the other for no reason connected to
+    # what was actually pruned.
+    under_root = {candidate for candidate in candidates if root in candidate.parents}
+    ordered = sorted(
+        under_root,
+        key=lambda path: (-len(path.relative_to(root).parts), path.relative_to(root).as_posix()),
+    )
+    for candidate in ordered:
+        if not _free_of_symlinks(filesystem, candidate):
+            continue
+        current = candidate
+        while root in current.parents and current in created_dirs:
+            if not filesystem.remove_empty_dir(current):
+                break
+            pruned.append(current)
+            current = current.parent
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for path in pruned:
+        relative = path.relative_to(root).as_posix()
+        if relative not in seen:
+            seen.add(relative)
+            result.append(relative)
+    return tuple(result)
+
+
+def _free_of_symlinks(filesystem: FileSystem, candidate: Path) -> bool:
+    """Whether every component of ``candidate``'s absolute path, from the
+    filesystem root down through ``candidate`` itself, is a real directory.
+
+    Walked from the filesystem root and not from ``config_dir``, because a
+    symlink standing above the configuration root sends a later `os.rmdir`
+    outside the tree exactly as well as one standing below it: `_contained`
+    refuses a `..` in the recorded path but resolves nothing, so a
+    ``config_dir`` that is lexically under the home can still be reached
+    through a link. Checking only the half below the root left the other half
+    unchecked, and an invariant enforced in one direction is where the bug
+    gets in.
+
+    One consequence worth knowing rather than discovering: on a machine whose
+    home is itself reached through a symlink, no component of any candidate is
+    symlink-free, so nothing is ever pruned there. That is the conservative
+    side of the trade and it fails safe -- an empty directory survives -- but
+    it does mean pruning is a property of the path a home sits on, not only of
+    what Pegasus recorded.
+    """
+    current = Path(candidate.anchor)
+    for part in candidate.relative_to(candidate.anchor).parts:
+        current = current / part
+        if filesystem.is_symlink(current):
+            return False
+    return True
 
 
 def _retire_key(document: Any, entry: Record) -> tuple[Any, str]:

@@ -46,6 +46,22 @@ class FileSystem(Protocol):
         them lying.
         """
 
+    def is_symlink(self, path: Path) -> bool:
+        """Whether ``path`` itself is a symbolic link, without resolving it.
+
+        Never follows the link: a directory reached only through one is not
+        itself one, and this asks about ``path`` exactly as written, never
+        about whatever it might point to. A path that does not exist is not a
+        symlink either -- absence answers ``False``, the same one-meaning-per-
+        value posture :meth:`exists` takes.
+
+        Raises :class:`FileSystemError` when that cannot be told, the same
+        posture as :meth:`exists` and for the same reason: a caller pruning an
+        install must never treat "cannot tell" as "not a symlink," because
+        that could send a real directory removal through a symlink it never
+        meant to follow.
+        """
+
     def read_bytes(self, path: Path) -> bytes:
         """Read a file whole. Raises :class:`FileSystemError` if it cannot be read."""
 
@@ -215,8 +231,31 @@ class FileSystem(Protocol):
         already cleared the folder away.
         """
 
-    def make_dir(self, path: Path, *, mode: int) -> None:
-        """Create a directory and its parents. Idempotent.
+    def remove_empty_dir(self, path: Path) -> bool:
+        """Delete ``path`` only if it is already empty, and say whether it is gone.
+
+        ``True`` means ``path`` is no longer there -- either this call just
+        removed it, or it was already absent, the same posture :meth:`remove`
+        takes for "already gone counts as done." ``False`` means it is still
+        there because something is still inside it, and that is not a
+        failure: it is the normal stopping condition a caller pruning empty
+        directories upward relies on, which is exactly why it is a return
+        value here and not an exception.
+
+        Never recursive and never follows a symlink: this is `os.rmdir` and
+        nothing more, so whether ``path`` turns out to be empty is decided by
+        the very same system call that removes it, in one step -- never by a
+        caller checking first and removing second, with a directory free to
+        change in between.
+
+        Any other failure raises :class:`FileSystemError` -- in particular,
+        aiming this at something that is not a directory at all (a symlink,
+        chief among them) is a caller error, not a normal stopping point, and
+        is reported as one rather than silently answered ``False``.
+        """
+
+    def make_dir(self, path: Path, *, mode: int) -> tuple[Path, ...]:
+        """Create a directory and its parents. Idempotent. Returns what was actually created.
 
         ``mode`` applies **only to directories this call creates**. A directory
         that already exists keeps the permissions it has, and so do parents
@@ -232,6 +271,18 @@ class FileSystem(Protocol):
         traversable is exactly the distinction this call exists to state, and
         a port that assumed one for a caller who forgot would decide it by
         accident.
+
+        The return value is the whole point of asking a caller that must later
+        know what Pegasus is allowed to take back to call this instead of
+        checking for a directory's existence itself: an install that later
+        retires everything it placed must prune only the directories it put
+        there, never one the person already had, and the moment of creation is
+        the only moment that fact is ever knowable at all -- a caller asking
+        `exists` a second time later cannot tell "I made this" from "this was
+        always here" once both answer the same `True`. Every ancestor this call
+        had to create on the way to ``path`` is included, shallowest first,
+        ``path`` itself last; a ``path`` that already existed, with every
+        ancestor already there too, returns an empty tuple.
         """
 
     def owned_by_current_user(self, path: Path) -> bool:

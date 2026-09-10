@@ -28,7 +28,7 @@ El release incluye solamente lo siguiente:
 
 1. Todos los commands, el registro de skills y los assets del registro.
 2. Los MCP CBM, Engram y Playwright.
-3. Los plugins locales aprobados `engram.ts`, `pegasus-zellij-state.ts`, `zellij-status.js` y los plugins de registro. El notifier externo `@mohak34/opencode-notifier@0.2.4` se fija con su `package-lock.json` y se instala solo con `npm ci --ignore-scripts` durante la aceptación aislada.
+3. Los plugins locales aprobados `engram.ts`, el de estado de Zellij (código fuente `zellij-state.ts`, instalado con el prefijo del binario, `pegasus-zellij-state.ts` en esta distribución), `zellij-status.js` y los plugins de registro. El notifier externo `@mohak34/opencode-notifier@0.2.4` se fija con su `package-lock.json` y se instala solo con `npm ci --ignore-scripts` durante la aceptación aislada.
 4. Skills:
    - Todos los Core y SDD.
    - Todos los de contexto, Git y colaboracion, excepto los que comienzan con `sergio-`.

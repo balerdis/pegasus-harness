@@ -81,6 +81,31 @@ class FakeFileSystemMakeDirTest(unittest.TestCase):
         filesystem.write_atomic(target, b"hello")
         self.assertEqual(filesystem.mode_of(ROOT), 0o700)
 
+    def test_make_dir_reports_every_directory_it_actually_created(self):
+        """Mirrors `PosixFileSystemTest`'s own version of this: the fake must
+        report the same thing the real filesystem does, since a caller that
+        relies on this to know what it may later take back cannot afford the
+        two disagreeing. `ROOT` is created first, the same way the real
+        test's tempdir already exists before the call under test, so what is
+        asserted is exactly the *new* directories this one call made."""
+        filesystem = FakeFileSystem()
+        filesystem.make_dir(ROOT, mode=0o755)
+        target = ROOT / "a" / "b" / "c"
+        created = filesystem.make_dir(target, mode=0o700)
+        self.assertEqual(created, (ROOT / "a", ROOT / "a" / "b", target))
+
+    def test_make_dir_reports_nothing_when_the_directory_already_existed(self):
+        filesystem = FakeFileSystem()
+        filesystem.make_dir(ROOT, mode=0o755)
+        self.assertEqual(filesystem.make_dir(ROOT, mode=0o700), ())
+
+    def test_make_dir_reports_only_the_missing_ancestors_not_the_ones_already_there(self):
+        filesystem = FakeFileSystem()
+        filesystem.make_dir(ROOT / "existing", mode=0o755)
+        target = ROOT / "existing" / "new-child" / "leaf"
+        created = filesystem.make_dir(target)
+        self.assertEqual(created, (ROOT / "existing" / "new-child", target))
+
 
 class FakeFileSystemModeForTest(unittest.TestCase):
     def test_an_executable_artifact_gets_a_program_mode(self):
@@ -120,6 +145,84 @@ class FakeFileSystemMakeDirRemoveDirTest(unittest.TestCase):
         with self.assertRaises(FileSystemError):
             filesystem.remove_dir(ROOT / "note.txt")
         self.assertIn(ROOT / "note.txt", filesystem.files)
+
+
+class FakeFileSystemIsSymlinkTest(unittest.TestCase):
+    def test_a_path_not_named_a_symlink_is_not_one(self):
+        filesystem = FakeFileSystem()
+        filesystem.make_dir(ROOT / "plain")
+        self.assertFalse(filesystem.is_symlink(ROOT / "plain"))
+
+    def test_an_absent_path_is_not_a_symlink(self):
+        filesystem = FakeFileSystem()
+        self.assertFalse(filesystem.is_symlink(ROOT / "absent"))
+
+    def test_a_path_named_in_symlinks_is_one(self):
+        target = ROOT / "link"
+        filesystem = FakeFileSystem(symlinks={target})
+        self.assertTrue(filesystem.is_symlink(target))
+
+    def test_fail_is_symlink_makes_the_call_raise(self):
+        target = ROOT / "mystery"
+        filesystem = FakeFileSystem(fail_is_symlink={target})
+        with self.assertRaises(FileSystemError):
+            filesystem.is_symlink(target)
+
+
+class FakeFileSystemRemoveEmptyDirTest(unittest.TestCase):
+    def test_removes_an_empty_directory_and_reports_it_gone(self):
+        filesystem = FakeFileSystem()
+        filesystem.make_dir(ROOT / "empty")
+        self.assertTrue(filesystem.remove_empty_dir(ROOT / "empty"))
+        self.assertNotIn(ROOT / "empty", filesystem.directories)
+
+    def test_an_already_absent_directory_reports_gone_without_error(self):
+        filesystem = FakeFileSystem()
+        self.assertTrue(filesystem.remove_empty_dir(ROOT / "absent"))
+
+    def test_a_directory_holding_a_file_reports_false_and_removes_nothing(self):
+        filesystem = FakeFileSystem()
+        filesystem.write_atomic(ROOT / "occupied" / "note.txt", b"hello")
+        self.assertFalse(filesystem.remove_empty_dir(ROOT / "occupied"))
+        self.assertIn(ROOT / "occupied" / "note.txt", filesystem.files)
+        self.assertIn(ROOT / "occupied", filesystem.directories)
+
+    def test_a_directory_holding_an_empty_subdirectory_reports_false(self):
+        filesystem = FakeFileSystem()
+        filesystem.make_dir(ROOT / "parent" / "child")
+        self.assertFalse(filesystem.remove_empty_dir(ROOT / "parent"))
+        self.assertIn(ROOT / "parent", filesystem.directories)
+
+    def test_a_file_target_raises_rather_than_answering_false(self):
+        filesystem = FakeFileSystem(files={ROOT / "note.txt": b"payload"})
+        with self.assertRaises(FileSystemError):
+            filesystem.remove_empty_dir(ROOT / "note.txt")
+        self.assertIn(ROOT / "note.txt", filesystem.files)
+
+    def test_fail_remove_empty_dir_makes_the_call_raise(self):
+        target = ROOT / "empty"
+        filesystem = FakeFileSystem(fail_remove_empty_dir={target})
+        filesystem.make_dir(target)
+        with self.assertRaises(FileSystemError):
+            filesystem.remove_empty_dir(target)
+        self.assertIn(target, filesystem.directories)
+
+    def test_a_symlink_raises_rather_than_answering_true(self):
+        """The mirror of `PosixFileSystemTest.test_remove_empty_dir_on_a_symlink_raises_the_port_error`:
+        the real `os.rmdir` never follows a symlink, even one pointing at a
+        directory, and reports `ENOTDIR` -- translated by the real
+        implementation into `FileSystemError`, the same way a plain file
+        already is here. The double used to skip `self.symlinks` entirely for
+        this call, so a path it declared a symlink silently answered `True`
+        instead -- claiming a removal that never happened, and a caller
+        (`_prune_empty_directories`) that trusted it could tell a symlinked
+        ancestor apart from a genuinely gone directory only against the real
+        filesystem, never against this one."""
+        target = ROOT / "link"
+        filesystem = FakeFileSystem(symlinks={target})
+        with self.assertRaises(FileSystemError):
+            filesystem.remove_empty_dir(target)
+        self.assertIn(target, filesystem.symlinks)
 
 
 if __name__ == "__main__":

@@ -14,9 +14,11 @@ from typing import Any
 from pegasus.adapters.opencode import layout as layout_module
 from pegasus.adapters.opencode import manifest as manifest_module
 from pegasus.adapters.opencode import models as models_module
+from pegasus.adapters.opencode import naming
 from pegasus.adapters.opencode import render
 from pegasus.core import placeholders
 from pegasus.core.content import Agent, Command, Mcp, Skill, SystemPrompt
+from pegasus.core.identity import Identity
 from pegasus.core.model_catalog import ModelCatalog
 from pegasus.core.types import (
     Artifact,
@@ -47,9 +49,12 @@ ASSET_TARGETS: dict[str, PurePosixPath] = {
     "plugins": PurePosixPath("plugins"),
     "notifier": PurePosixPath("notifier"),
     "registry": PurePosixPath("registry"),
-    # The skill registry helper lives under a Pegasus-owned subtree so it never
-    # sits next to files OpenCode manages itself.
-    "skill-registry": PurePosixPath("pegasus/skill-registry"),
+    # The skill registry helper lives under a subtree of its own so it never
+    # sits next to files OpenCode manages itself. Named here with no product
+    # prefix at all: `_skill_registry_target` below prepends this running
+    # distribution's own `program_name`, so the subtree never carries a brand
+    # that is not the one actually installed.
+    "skill-registry": PurePosixPath("skill-registry"),
 }
 
 
@@ -96,15 +101,57 @@ def _check_asset_groups(assets_root: AssetNode, targets: dict[str, PurePosixPath
 _check_asset_groups(ASSETS, ASSET_TARGETS)
 
 # The skill registry plugin reads its contract from this file, at the root of
-# OpenCode's configuration directory. The name is stated once here and once in
-# the plugin, and a test reads the plugin to hold the two together.
-SKILL_REGISTRY_CONTRACT = "pegasus-skill-registry.env"
-SKILL_REGISTRY_BIN = "pegasus-skill-registry"
+# OpenCode's configuration directory. Both the plugin and `_skill_registry_
+# contract` below derive its name the same way -- `f"{program_name}-skill-
+# registry.env"` -- so nothing here restates a name the plugin also states;
+# `SkillRegistryContractTest` holds the two derivations together by reading
+# the plugin's own rendered content instead of a shared literal.
+def _skill_registry_bin(identity: Identity) -> str:
+    return f"{identity.program_name}-skill-registry"
 
-#: The assets that ship as programs. Everything else this package carries is
-#: text. Kept as a declaration because the executable bit cannot be read from
-#: inside an archive; a test holds it to what the tree on disk actually says.
-EXECUTABLE_ASSETS = frozenset({SKILL_REGISTRY_BIN})
+
+def _skill_registry_contract_name(identity: Identity) -> str:
+    return f"{identity.program_name}-skill-registry.env"
+
+
+def _skill_registry_target(identity: Identity) -> PurePosixPath:
+    return PurePosixPath(identity.program_name) / ASSET_TARGETS["skill-registry"]
+
+
+#: The physical, on-disk source filenames that ship as programs -- fixed
+#: forever, since one repository tree serves every distribution, and never
+#: what a distribution's own installed copy is named (see `_RENAMED_ASSETS`).
+#: Everything else this package carries is text. Kept as a declaration
+#: because the executable bit cannot be read from inside an archive; a test
+#: holds it to what the tree on disk actually says.
+EXECUTABLE_ASSETS = frozenset({"skill-registry"})
+
+#: Bundled source assets whose installed name is not their source name.
+#: Keyed by the bare source filename `_asset_files` hands back -- never by
+#: group, since two groups never collide on one bare name -- and mapping to
+#: the callable that derives this distribution's own installed name for it.
+#: Everything not listed here installs under the name it ships with.
+_RENAMED_ASSETS: dict[str, Any] = {
+    "skill-registry": _skill_registry_bin,
+    "skill_registry.py": lambda identity: f"{naming.module_name(identity)}_skill_registry.py",
+    "skill-registry.ts": lambda identity: f"{identity.program_name}-skill-registry.ts",
+    "orchestrator-notifier.ts": lambda identity: f"{identity.program_name}-orchestrator-notifier.ts",
+    "zellij-state.ts": lambda identity: f"{identity.program_name}-zellij-state.ts",
+}
+
+
+def _installed_relative(relative: PurePosixPath, identity: Identity) -> PurePosixPath:
+    """The name this one bundled asset is installed under.
+
+    Distinct from the name it ships with in the package: the source tree
+    carries one physical file per asset, forever, while the installed name
+    is this distribution's own -- see `_RENAMED_ASSETS`.
+    """
+    rename = _RENAMED_ASSETS.get(relative.name)
+    if rename is None:
+        return relative
+    return relative.parent / rename(identity)
+
 
 NOTIFIER_PLUGIN = "@mohak34/opencode-notifier@0.2.4"
 
@@ -166,8 +213,8 @@ class Adapter:
     def render_command(self, layout: Layout, command: Command, orchestrator_name: str) -> list[Artifact]:
         return render.command(layout, command, orchestrator_name)
 
-    def render_system_prompt(self, layout: Layout, system_prompt: SystemPrompt) -> list[Artifact]:
-        return render.system_prompt(layout, system_prompt)
+    def render_system_prompt(self, layout: Layout, system_prompt: SystemPrompt, identity: Identity) -> list[Artifact]:
+        return render.system_prompt(layout, system_prompt, identity)
 
     def render_mcp(self, layout: Layout, mcp: Mcp) -> list[Artifact]:
         return render.mcp(layout, mcp)
@@ -179,7 +226,7 @@ class Adapter:
 
     # --- What this adapter ships on its own ---
 
-    def own_artifacts(self, layout: Layout, orchestrator_name: str) -> list[Artifact]:
+    def own_artifacts(self, layout: Layout, orchestrator_name: str, identity: Identity) -> list[Artifact]:
         """Files that exist only because OpenCode works the way it does.
 
         Plugins written against its plugin API, the npm manifest they depend on,
@@ -190,19 +237,36 @@ class Adapter:
         `_rendered_asset` -- one rule for all of them, never a check for which
         file happens to need it -- so a plugin naming the orchestrator (the
         notifier) asks for it the same way a skill or command body would.
+
+        `identity` (threaded through `core.catalog` from `Runtime.identity`)
+        is consulted the same way: every fixed "pegasus-*" name this method
+        used to ship is now derived from it -- the skill-registry subtree and
+        its binary and module, the three local plugin files and the contract
+        between the first and one of the second, and the notifier's own npm
+        package name -- through `_installed_relative`, `_skill_registry_
+        target` and the `program_name`/`display_name`/`program_module_name`/
+        `program_pascal_name`/`program_npm_name` placeholders `_asset_facts`
+        answers. Only the
+        wire-format env var *names* (`PEGASUS_SKILL_REGISTRY_BIN`,
+        `PEGASUS_SKILL_ROOTS`) and the external notifier's own package id
+        stay fixed, by design -- see `core.identity` and this repository's
+        own product-identity rules for which strings are wire plumbing and
+        which are brand.
         """
-        facts = _asset_facts(layout, orchestrator_name)
+        facts = _asset_facts(layout, orchestrator_name, identity)
         artifacts: list[Artifact] = [
             FileArtifact(
-                id=f"own:{group}/{relative}",
-                path=layout.config_dir / target / relative,
+                id=f"own:{group}/{_installed_relative(relative, identity)}",
+                path=layout.config_dir
+                / (_skill_registry_target(identity) if group == "skill-registry" else target)
+                / _installed_relative(relative, identity),
                 content=_rendered_asset(path.read_bytes(), facts),
                 executable=_is_executable(path),
             )
             for group, target in sorted(ASSET_TARGETS.items())
             for path, relative in _asset_files(ASSETS / group)
         ]
-        artifacts.append(_skill_registry_contract(layout))
+        artifacts.append(_skill_registry_contract(layout, identity))
         artifacts += [
             # Appending keeps the user's own skill paths and plugins untouched.
             ConfigKeyArtifact(
@@ -228,16 +292,27 @@ class Adapter:
         return artifacts
 
 
-def _asset_facts(layout: Layout, orchestrator_name: str) -> dict[str, str]:
+def _asset_facts(layout: Layout, orchestrator_name: str, identity: Identity) -> dict[str, str]:
     """What a bundled asset may ask this adapter to fill in.
 
     Extends `render.facts`, which answers `skills_root` for a content body,
-    rather than restating that rule here: `own_artifacts` only adds
-    `orchestrator`, a fact no content body has any reason to ask for. Derived
-    and not copied, so changing how a layout answers `skills_root` cannot leave
-    assets answering it the old way.
+    rather than restating that rule here: `own_artifacts` adds `orchestrator`
+    plus everything a bundled asset needs from `identity` -- `program_name`
+    and `display_name` as `Identity` states them, and `program_module_name`/
+    `program_pascal_name`/`program_npm_name` as `naming` reshapes them for a
+    context neither field can satisfy as-is. Derived and not copied, so
+    changing how a layout answers `skills_root` cannot leave assets answering
+    it the old way.
     """
-    return {**render.facts(layout), "orchestrator": orchestrator_name}
+    return {
+        **render.facts(layout),
+        "orchestrator": orchestrator_name,
+        "program_name": identity.program_name,
+        "display_name": identity.display_name,
+        "program_module_name": naming.module_name(identity),
+        "program_pascal_name": naming.pascal_name(identity),
+        "program_npm_name": naming.npm_name(identity),
+    }
 
 
 def _rendered_asset(raw: bytes, facts: dict[str, str]) -> bytes:
@@ -285,7 +360,7 @@ def _is_executable(source: AssetNode) -> bool:
     return source.name in EXECUTABLE_ASSETS
 
 
-def _skill_registry_contract(layout: Layout) -> FileArtifact:
+def _skill_registry_contract(layout: Layout, identity: Identity) -> FileArtifact:
     """Answer, at install time, the two paths the skill registry plugin needs.
 
     This file cannot be shipped as an asset: both values are absolute paths into
@@ -295,14 +370,15 @@ def _skill_registry_contract(layout: Layout) -> FileArtifact:
     """
     declared = {
         "PEGASUS_SKILL_REGISTRY_BIN": layout.config_dir
-        / ASSET_TARGETS["skill-registry"]
-        / SKILL_REGISTRY_BIN,
+        / _skill_registry_target(identity)
+        / _skill_registry_bin(identity),
         "PEGASUS_SKILL_ROOTS": layout.skills_dir,
     }
     body = "".join(f"{key}={value}\n" for key, value in declared.items())
+    contract_name = _skill_registry_contract_name(identity)
     return FileArtifact(
-        id=f"own:{SKILL_REGISTRY_CONTRACT}",
-        path=layout.config_dir / SKILL_REGISTRY_CONTRACT,
+        id=f"own:{contract_name}",
+        path=layout.config_dir / contract_name,
         content=body.encode("utf-8"),
         executable=False,
     )

@@ -17,6 +17,7 @@ is what a platform implementation should have to get right.
 """
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import stat
@@ -69,6 +70,12 @@ class PosixFileSystem:
             # snapshot deciding what to write back — cannot tell one from
             # the other once they do.
             raise FileSystemError(f"cannot tell whether {path} exists: {error}") from error
+
+    def is_symlink(self, path: Path) -> bool:
+        try:
+            return path.is_symlink()
+        except OSError as error:
+            raise FileSystemError(f"cannot tell whether {path} is a symlink: {error}") from error
 
     def read_bytes(self, path: Path) -> bytes:
         try:
@@ -203,11 +210,30 @@ class PosixFileSystem:
         except OSError as error:
             raise FileSystemError(f"cannot remove {path}: {error}") from error
 
-    def make_dir(self, path: Path, *, mode: int = 0o755) -> None:
+    def remove_empty_dir(self, path: Path) -> bool:
         try:
+            os.rmdir(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as error:
+            # POSIX lets a not-empty rmdir raise either of these depending on
+            # the platform -- both mean the same thing here, and neither is a
+            # failure this call reports as one.
+            if error.errno in (errno.ENOTEMPTY, errno.EEXIST):
+                return False
+            raise FileSystemError(f"cannot remove {path}: {error}") from error
+
+    def make_dir(self, path: Path, *, mode: int = 0o755) -> tuple[Path, ...]:
+        try:
+            # What is about to be missing has to be asked *before* `mkdir`
+            # creates it -- afterwards every one of them answers `exists`,
+            # and the fact this call exists to report would already be gone.
+            missing = tuple(ancestor for ancestor in (*reversed(path.parents), path) if not ancestor.exists())
             path.mkdir(mode=mode, parents=True, exist_ok=True)
         except OSError as error:
             raise FileSystemError(f"cannot create {path}: {error}") from error
+        return missing
 
     # --- Who is running ---
 

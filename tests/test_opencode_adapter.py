@@ -12,6 +12,7 @@ import zipfile
 from dataclasses import replace
 from pathlib import Path, PurePath, PurePosixPath
 
+from pegasus import cli
 from pegasus.adapters.opencode import Adapter
 from pegasus.adapters.opencode import adapter as adapter_module
 from pegasus.adapters.opencode import render as render_module
@@ -36,6 +37,10 @@ HOME = Path("/home/probe")
 ENVIRONMENT = Environment(home=HOME, data_dir=HOME / ".local" / "share" / "pegasus-harness")
 CONFIG = HOME / ".config" / "opencode"
 ORCHESTRATOR = "pegasus-orchestrator"
+#: A real `Identity`, standing in for `Runtime.identity`: `own_artifacts`
+#: requires one now, and every direct call in this file passes the same real
+#: value `cli.py`'s composition root would.
+IDENTITY = cli.default_identity()
 
 
 def only(artifacts, kind):
@@ -653,7 +658,7 @@ class CommandRenderTest(unittest.TestCase):
 
 class SystemPromptRenderTest(unittest.TestCase):
     def render(self, prompt: SystemPrompt):
-        return self.adapter.render_system_prompt(self.layout, prompt)
+        return self.adapter.render_system_prompt(self.layout, prompt, IDENTITY)
 
     def setUp(self):
         self.adapter = Adapter()
@@ -954,10 +959,31 @@ class ShippedEngramCommandTest(unittest.TestCase):
         self.assertEqual(key.value["command"][1:], ["mcp", "--tools=agent"])
 
 
+class OwnArtifactsIdentityPlumbingTest(unittest.TestCase):
+    """`own_artifacts` must receive its `Identity` explicitly -- it has no way
+    to look one up on its own, and this is what proves it: the parameter is
+    required, so calling it without one is a `TypeError`, not a silent fall
+    back to some constant the adapter reached for by itself."""
+
+    def test_identity_is_a_required_parameter_not_a_default(self):
+        layout = Adapter().layout(ENVIRONMENT)
+        with self.assertRaises(TypeError):
+            Adapter().own_artifacts(layout, ORCHESTRATOR)
+
+    def test_own_artifacts_never_imports_identity_or_identity_json(self):
+        """The adapter module itself must never know how to find an
+        `identity.json` or read `pegasus.core.identity.parse`; it may only
+        receive an already-resolved `Identity` value through this parameter."""
+        source = Path(adapter_module.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("identity.json", source)
+        self.assertNotIn("identity_module.parse", source)
+        self.assertNotIn(".parse(", source)
+
+
 class OwnArtifactsTest(unittest.TestCase):
     def setUp(self):
         self.layout = Adapter().layout(ENVIRONMENT)
-        self.artifacts = Adapter().own_artifacts(self.layout, ORCHESTRATOR)
+        self.artifacts = Adapter().own_artifacts(self.layout, ORCHESTRATOR, IDENTITY)
 
     def test_ships_the_adapter_only_assets(self):
         self.assertEqual(len(only(self.artifacts, FileArtifact)), 11)
@@ -991,11 +1017,12 @@ class OwnArtifactsTest(unittest.TestCase):
         need it would be relaxing this guard on purpose rather than by accident.
 
         Scoped to the assets that ship from the tree, computed from the same walk
-        `own_artifacts` uses rather than by exempting an id: `pegasus-skill-registry.env`
-        is synthesized at install time and legitimately *is* nothing but layout paths.
-        Both halves are derived -- the anchors from the layout, the asset ids from the
-        asset tree -- so a new layout anchor or a new bundled asset is covered without
-        this test being touched.
+        `own_artifacts` uses rather than by exempting an id: the skill-registry `.env`
+        file (named `f"{identity.program_name}-skill-registry.env"`, not a fixed
+        literal) is synthesized at install time and legitimately *is* nothing but
+        layout paths. Both halves are derived -- the anchors from the layout, the
+        asset ids from the asset tree -- so a new layout anchor or a new bundled
+        asset is covered without this test being touched.
         """
         anchors = {
             name: value
@@ -1004,7 +1031,7 @@ class OwnArtifactsTest(unittest.TestCase):
         }
         self.assertTrue(anchors, "the layout exposes no paths; this test would prove nothing")
         bundled = {
-            f"own:{group}/{relative}"
+            f"own:{group}/{adapter_module._installed_relative(relative, IDENTITY)}"
             for group in adapter_module.ASSET_TARGETS
             for _path, relative in adapter_module._asset_files(adapter_module.ASSETS / group)
         }
@@ -1028,8 +1055,8 @@ class OwnArtifactsTest(unittest.TestCase):
 
     def test_the_result_is_deterministic(self):
         self.assertEqual(
-            Adapter().own_artifacts(self.layout, ORCHESTRATOR),
-            Adapter().own_artifacts(self.layout, ORCHESTRATOR),
+            Adapter().own_artifacts(self.layout, ORCHESTRATOR, IDENTITY),
+            Adapter().own_artifacts(self.layout, ORCHESTRATOR, IDENTITY),
         )
 
     def test_the_shipped_notifier_names_the_content_declared_orchestrator(self):
@@ -1043,11 +1070,33 @@ class OwnArtifactsTest(unittest.TestCase):
     def test_a_non_pegasus_orchestrator_name_reaches_the_notifier(self):
         """The negative half: a distribution's own orchestrator name must
         substitute cleanly, and the old literal must not survive alongside it."""
-        artifacts = Adapter().own_artifacts(self.layout, "king-pegasus-two")
+        artifacts = Adapter().own_artifacts(self.layout, "king-pegasus-two", IDENTITY)
         notifier = next(item for item in only(artifacts, FileArtifact) if item.path.name == "pegasus-orchestrator-notifier.ts")
         content = notifier.content.decode("utf-8")
         self.assertIn('"king-pegasus-two"', content)
         self.assertNotIn("pegasus-orchestrator", content)
+
+    def test_the_notifier_npm_manifests_agree_on_a_lowercase_package_name(self):
+        """npm rejects any uppercase character in `package.json`'s `name`
+        field, but `PROGRAM_NAME_PATTERN` allows one -- so a `program_name`
+        like `MyTool` must not reach the notifier's manifests verbatim. All
+        three occurrences (one in `package.json`, two in `package-lock.json`)
+        must agree, or `npm ci` fails on the mismatch."""
+        identity = replace(IDENTITY, program_name="MyTool")
+        artifacts = Adapter().own_artifacts(self.layout, ORCHESTRATOR, identity)
+        files = only(artifacts, FileArtifact)
+        manifest = next(item for item in files if item.path.name == "package.json")
+        lockfile = next(item for item in files if item.path.name == "package-lock.json")
+
+        expected_name = "mytool-opencode-notifier"
+        self.assertTrue(expected_name.islower())
+
+        manifest_payload = json.loads(manifest.content.decode("utf-8"))
+        self.assertEqual(manifest_payload["name"], expected_name)
+
+        lockfile_payload = json.loads(lockfile.content.decode("utf-8"))
+        self.assertEqual(lockfile_payload["name"], expected_name)
+        self.assertEqual(lockfile_payload["packages"][""]["name"], expected_name)
 
     def test_no_shipped_asset_still_carries_an_unfilled_placeholder(self):
         """Derived from the data, never a hand-listed filename: whichever asset
@@ -1188,13 +1237,14 @@ class RealZipappShipsTheEngramPluginTest(unittest.TestCase):
             sys.path.insert(0, {str(self.archive)!r})
             from pathlib import Path
             from pegasus.adapters.opencode.adapter import Adapter
+            from pegasus.cli import default_identity
             from pegasus.core.types import Environment
 
             home = Path("/dev/shm/pegasus-zip-probe-home")
             env = Environment(home=home, data_dir=home / ".local" / "share" / "pegasus-harness")
             adapter = Adapter()
             layout = adapter.layout(env)
-            artifacts = adapter.own_artifacts(layout, "pegasus-orchestrator")
+            artifacts = adapter.own_artifacts(layout, "pegasus-orchestrator", default_identity())
             plugin = next(
                 item for item in artifacts
                 if str(item.path).endswith("plugins/engram.ts")
@@ -1221,19 +1271,25 @@ class SkillRegistryContractTest(unittest.TestCase):
     plugin reads a file the installer writes, and neither side imports the other.
     """
 
-    PLUGIN = (
-        Path(__file__).resolve().parent.parent
-        / "src/pegasus/adapters/opencode/assets/plugins/pegasus-skill-registry.ts"
-    )
-
     def setUp(self):
         self.layout = Adapter().layout(ENVIRONMENT)
-        self.artifacts = Adapter().own_artifacts(self.layout, ORCHESTRATOR)
+        self.artifacts = Adapter().own_artifacts(self.layout, ORCHESTRATOR, IDENTITY)
         self.files = {item.path: item for item in only(self.artifacts, FileArtifact)}
+
+    def rendered_plugin(self) -> str:
+        """The installed skill-registry plugin's own (placeholder-filled) content.
+
+        Read from the render output rather than the bundled source file: the
+        source spells the contract name as `{{program_name}}-skill-registry.env`,
+        and only the rendered artifact carries this distribution's real one.
+        """
+        path = self.layout.plugins_dir / f"{IDENTITY.program_name}-skill-registry.ts"
+        self.assertIn(path, self.files, "the skill-registry plugin was not installed under its derived name")
+        return self.files[path].content.decode("utf-8")
 
     def contract_path(self):
         """The target the plugin reads, taken from the plugin instead of restated."""
-        source = self.PLUGIN.read_text(encoding="utf-8")
+        source = self.rendered_plugin()
         match = re.search(
             r'join\(\s*configDirectory\s*,\s*"opencode"\s*,\s*"([^"]+)"\s*\)', source
         )
@@ -1298,8 +1354,8 @@ class ShippedContentRenderTest(unittest.TestCase):
                 for item in adapter.render_command(cls.layout, command, orchestrator_name)
             ),
             *(item for mcp in loaded.mcp for item in adapter.render_mcp(cls.layout, mcp)),
-            *adapter.render_system_prompt(cls.layout, loaded.system_prompt),
-            *adapter.own_artifacts(cls.layout, orchestrator_name),
+            *adapter.render_system_prompt(cls.layout, loaded.system_prompt, IDENTITY),
+            *adapter.own_artifacts(cls.layout, orchestrator_name, IDENTITY),
         ]
 
     def test_no_two_artifacts_claim_the_same_address(self):
@@ -1652,7 +1708,7 @@ class PlaceholderRenderTest(unittest.TestCase):
             body="Skills live in {{skills_root}}.\n",
             source=PurePosixPath("system-prompt/AGENTS.md"),
         )
-        artifact = only(self.adapter.render_system_prompt(self.layout, item), FileArtifact)[0]
+        artifact = only(self.adapter.render_system_prompt(self.layout, item, IDENTITY), FileArtifact)[0]
         self.assertIn(self.skills, artifact.content.decode("utf-8"))
 
     def test_a_layout_without_skills_refuses_instead_of_writing_a_blank(self):

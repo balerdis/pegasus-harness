@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 from pathlib import Path, PurePosixPath
 
+from pegasus import cli
 from pegasus.adapters.opencode import Adapter
 from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
@@ -27,9 +28,14 @@ HOME = Path("/home/probe")
 ENVIRONMENT = Environment(home=HOME)
 CONFIG = Path("/home/probe/.config/probe")
 
+#: A real `Identity`, standing in for `Runtime.identity`: every test here
+#: builds a catalog the same way `cli.py`'s composition root does, never a
+#: literal invented for the test.
+IDENTITY = cli.default_identity()
+
 
 def build(content, adapter):
-    return catalog_module.build(content, adapter)
+    return catalog_module.build(content, adapter, IDENTITY)
 
 
 #: `render` now derives `orchestrator_name` unconditionally -- `own_artifacts`
@@ -78,8 +84,9 @@ class StubAdapter:
         self.agent_calls.append((agent.name, model))
         return []
 
-    def own_artifacts(self, layout, orchestrator_name):
+    def own_artifacts(self, layout, orchestrator_name, identity):
         self.own_artifacts_orchestrator_name = orchestrator_name
+        self.own_artifacts_identity = identity
         return list(self._own)
 
 
@@ -113,6 +120,34 @@ class BuildTest(unittest.TestCase):
         adapter = StubAdapter()
         build(_content(), adapter)
         self.assertEqual(adapter.own_artifacts_orchestrator_name, content_module.SESSION_STARTS_IN)
+
+    def test_own_artifacts_receives_the_identity_build_was_given(self):
+        """The identity an adapter's `own_artifacts` sees must be the exact
+        `Identity` `build` was called with -- a distribution's own, not a
+        constant this module could have reached for on its own. A `Runtime`
+        built for a fictional distribution stands in for `Runtime.identity`,
+        the same shape `test_cli.py`'s own distribution sweep uses."""
+        distribution_identity = cli.identity_module.parse(
+            json.dumps(
+                {
+                    "product_id": "darq-cli",
+                    "display_name": "Darq",
+                    "program_name": "darq",
+                    "version": "1.0.0",
+                    "wordmark_words": ["DARQ"],
+                    "release": {
+                        "asset_url_template": "https://example.invalid/darq/releases/download/{tag}/{asset}",
+                        "binary_asset": "darq",
+                        "latest_release_api_url": "https://example.invalid/darq/api/releases/latest",
+                        "release_page_url": "https://example.invalid/darq/releases",
+                        "install_base_url_default": "https://example.invalid/darq/releases/latest/download",
+                    },
+                }
+            ).encode("utf-8")
+        )
+        adapter = StubAdapter()
+        catalog_module.build(_content(), adapter, distribution_identity)
+        self.assertIs(adapter.own_artifacts_identity, distribution_identity)
 
     def test_targets_are_relative_to_the_configuration_root(self):
         artifact = FileArtifact(id="a", path=CONFIG / "skills/alpha/SKILL.md", content=b"body", executable=False)
@@ -158,7 +193,7 @@ class RenderModelOverrideTest(unittest.TestCase):
         manifest = CapabilityManifest(cli_id="probe", sub_agents=True)
         adapter = StubAdapter(manifest=manifest)
         catalog_module.render(
-            one_agent("probe-agent"), adapter, ENVIRONMENT, model_overrides={"probe-agent": "anthropic/x"}
+            one_agent("probe-agent"), adapter, ENVIRONMENT, IDENTITY, model_overrides={"probe-agent": "anthropic/x"}
         )
         # `one_agent` now also carries the default orchestrator agent `_content`
         # adds for `own_artifacts`'s sake; membership, not equality, is this
@@ -168,7 +203,7 @@ class RenderModelOverrideTest(unittest.TestCase):
     def test_an_agent_with_no_override_gets_none(self):
         manifest = CapabilityManifest(cli_id="probe", sub_agents=True)
         adapter = StubAdapter(manifest=manifest)
-        catalog_module.render(one_agent("probe-agent"), adapter, ENVIRONMENT)
+        catalog_module.render(one_agent("probe-agent"), adapter, ENVIRONMENT, IDENTITY)
         self.assertIn(("probe-agent", None), adapter.agent_calls)
 
     def test_build_never_forwards_a_model_override(self):

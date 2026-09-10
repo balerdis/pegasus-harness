@@ -42,7 +42,7 @@ function notify(state: "idle" | "blocked") {
   child.unref()
 }
 
-const PegasusOrchestratorNotifier: Plugin = async ({ client }) => ({
+const {{program_pascal_name}}OrchestratorNotifier: Plugin = async ({ client }) => ({
   event: async ({ event }: any) => {
     const state = eventState(event)
     if (!state) return
@@ -64,4 +64,4 @@ const PegasusOrchestratorNotifier: Plugin = async ({ client }) => ({
   },
 })
 
-export default PegasusOrchestratorNotifier
+export default {{program_pascal_name}}OrchestratorNotifier
