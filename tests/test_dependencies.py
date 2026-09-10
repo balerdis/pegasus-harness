@@ -383,7 +383,7 @@ class MaterializeNpmTest(unittest.TestCase):
     def test_package_json_names_itself_after_the_lockfiles_own_name_not_the_descriptors_stem(self):
         """The descriptor's file stem (``item.name``, here ``probe``) and the
         real, npm-generated lockfile's own root name need not agree -- the
-        shipped `playwright.md` descriptor and its `pegasus-playwright-mcp`
+        shipped `playwright.md` descriptor and its `playwright-mcp-root`
         lockfile are exactly such a pair. `package.json`'s own `name` has to
         come from the lockfile `npm ci` will check it against, not from the
         stem, or the two would disagree on any descriptor whose file is not

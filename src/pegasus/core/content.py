@@ -1189,11 +1189,21 @@ def _require_lockfile_pins(
     ``package`` and ``version`` alone -- it never reads the lockfile to build
     it -- so deriving that name from the descriptor's own file stem, as a
     naive synthesis would, only agrees with the lockfile by coincidence: a
-    lockfile whose real npm-generated root name is ``pegasus-playwright-mcp``
+    lockfile whose real npm-generated root name is ``playwright-mcp-root``
     would disagree with a descriptor named ``playwright.md``, exactly the
     mismatch `npm ci` exists to refuse. Returning the lockfile's own name
     here, for `package.json` to reuse verbatim, is what keeps the two in
     agreement by construction instead of by luck.
+
+    One consequence of reusing it verbatim: the name is whatever directory
+    `npm install` happened to run in, so it carries no meaning and must carry
+    no brand either. The shipped lockfile says `playwright-mcp-root` rather
+    than the engine's name it originally recorded, because a rebranded
+    distribution materializes this tree too and its `package.json` would
+    otherwise name a product the person never installed. Regenerating the
+    lockfile means running `npm install` in a directory named that, not
+    editing the name afterwards -- the whole point above is that the two files
+    agree because one is copied from the other.
     """
     try:
         document = json.loads(npm_lockfile)

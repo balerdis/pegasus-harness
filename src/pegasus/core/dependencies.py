@@ -302,7 +302,7 @@ def _package_json(item: Mcp) -> bytes:
     ``name`` is ``item.npm_package_name`` -- the shipped lockfile's own root
     name -- rather than something derived from ``item.name``, the descriptor's
     file stem: the two need not match (`playwright.md` ships a lockfile whose
-    root package is named `pegasus-playwright-mcp`), and `npm ci` checks this
+    root package is named `playwright-mcp-root`), and `npm ci` checks this
     field against the lockfile's own, so only the lockfile's own value is
     guaranteed to agree with it.
     """
