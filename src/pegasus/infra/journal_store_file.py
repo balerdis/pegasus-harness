@@ -18,6 +18,7 @@ entry that authorizes deleting ``/etc`` later.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from pegasus.core import codecs, journal as journal_module
@@ -78,8 +79,18 @@ class FileJournalStore:
         self._refuse_wrong_writer()
 
     def save(self, journal: Journal) -> None:
+        """Write the journal, stamped with the version of the binary writing it.
+
+        `pegasus_version` does not mean "the version that created this journal",
+        it means "the version that last wrote it". Only `empty()` used to set
+        it, so after the first install the field froze at whatever version
+        happened to run it and every upgrade since went unrecorded. Stamping it
+        here rather than in the core is deliberate: the running version is a
+        fact about the binary doing the writing, not about the journal as a
+        structure, and the store is the only thing that already knows it.
+        """
         self._refuse_wrong_writer()
-        content = self._serialize(journal)
+        content = self._serialize(replace(journal, pegasus_version=self._version))
         try:
             self._fs.make_dir(self._path.parent, mode=DATA_DIR_MODE)
             self._fs.write_atomic(self._path, content, mode=FILE_MODE)

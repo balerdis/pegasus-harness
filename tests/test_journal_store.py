@@ -207,6 +207,32 @@ class FileJournalStoreTest(unittest.TestCase):
             store(filesystem).save(journal_module.with_install(journal_module.empty(VERSION), outside))
         self.assertEqual(filesystem.files, {})
 
+    def test_saving_stamps_the_version_of_the_binary_doing_the_writing(self):
+        """The field names who wrote the journal last, not who created it.
+
+        Only `empty()` ever set it, so a journal created by one version and
+        then written by every upgrade after it went on naming the first one.
+        """
+        filesystem = FakeFileSystem()
+        path = journal_path(FakeFileSystem(), HOME)
+        stale = journal_module.to_dict(journal_module.empty("3.0.0"))
+        filesystem.files[path] = json.dumps(stale).encode("utf-8")
+        subject = store(filesystem)
+        subject.save(subject.load())
+        written = json.loads(filesystem.files[path].decode("utf-8"))
+        self.assertEqual(written["pegasus_version"], VERSION)
+
+    def test_stamping_the_version_leaves_the_rest_of_the_journal_alone(self):
+        filesystem = FakeFileSystem()
+        path = journal_path(FakeFileSystem(), HOME)
+        stale = journal_module.with_install(journal_module.empty("3.0.0"), install())
+        filesystem.files[path] = json.dumps(journal_module.to_dict(stale)).encode("utf-8")
+        subject = store(filesystem)
+        subject.save(subject.load())
+        reloaded = subject.load()
+        self.assertEqual(reloaded.pegasus_version, VERSION)
+        self.assertEqual(reloaded.installs, stale.installs)
+
     def test_saving_twice_replaces_rather_than_appends(self):
         filesystem = FakeFileSystem()
         subject = store(filesystem)
@@ -245,6 +271,14 @@ class FileJournalStoreOnRealDiskTest(unittest.TestCase):
                 ),
             ),
         )
+
+    def test_the_version_on_disk_names_the_binary_that_wrote_it_last(self):
+        """Two real binaries, one file: the second one has to leave its mark."""
+        older = FileJournalStore(self.filesystem, home=self.home, pegasus_version="3.0.0")
+        older.save(journal_module.with_install(journal_module.empty("3.0.0"), self.real_install()))
+        self.store.save(self.store.load())
+        written = json.loads(journal_path(self.filesystem, self.home).read_text(encoding="utf-8"))
+        self.assertEqual(written["pegasus_version"], VERSION)
 
     def test_an_absent_journal_reads_as_empty_without_creating_anything(self):
         self.assertEqual(self.store.load(), journal_module.empty(VERSION))
