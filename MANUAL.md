@@ -28,7 +28,7 @@ Si el plan encuentra una clave o un archivo tuyo en el destino, lo informa y lo 
 | Engram | Recuperar decisiones, progreso y resúmenes entre sesiones, con el protocolo de memoria persistente. | La memoria no puede sobreescribir la evidencia actual. |
 | Playwright | Probar una frontera de navegador cuando el proyecto lo necesita. | Requiere un navegador compatible instalado por separado; Pegasus no lo descarga. |
 | Context7 | Consultar documentación del proveedor de forma remota. | Es remoto, igual que Jira; confirmá el acceso a esa red por separado. |
-| Jira | Issues y páginas de Confluence de una instancia Atlassian, a través del servidor remoto propio de Atlassian. | Necesita una autorización única, `opencode mcp auth jira`, antes de que cualquier herramienta conteste, y nada más te lo va a avisar. No retiene ninguna herramienta: un agente que lo reciba puede crear, transicionar y editar, no sólo leer. |
+| Jira | El tracker de tu organización, a través del servidor remoto propio de Atlassian. Qué herramientas expone lo decide Atlassian, no Pegasus. | Necesita una autorización única, `opencode mcp auth jira`, antes de que cualquier herramienta conteste, y nada más te lo va a avisar. No retiene ninguna herramienta: lo que ese servidor permita, un agente que lo reciba lo puede hacer — crear, transicionar y editar, no sólo leer. |
 
 Instalá solo lo que el equipo vaya a usar: un servidor no pedido con `--mcp` no deja config ni dependencia huérfana.
 

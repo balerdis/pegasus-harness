@@ -1,14 +1,18 @@
 ---
 name: jira
-description: Jira issues and Confluence pages, through Atlassian's own remote server
+description: Atlassian's own remote server, for the issues and pages an organisation tracks
 distribution: remote
 endpoint: https://mcp.atlassian.com/v1/mcp
 ---
 
-# Jira Convention (issue tracker and wiki of record)
+# Jira Convention (the organisation's system of record)
 
-This server reaches Atlassian directly: Jira issues and, behind the same endpoint,
-Confluence pages. Other servers here also leave this machine — a Context7 query does,
+This server reaches Atlassian directly. What it exposes is Atlassian's to decide and
+can change without this file changing: treat the tool list you are actually offered as
+the answer, never this paragraph. What is fixed is the kind of place it reaches -- the
+one an organisation tracks its work in.
+
+Other servers here also leave this machine — a Context7 query does,
 a Playwright session does — but this is the only one that can *change a record other
 people read*. What a browser or a documentation lookup sends outward disappears; what
 this writes stays, under someone's name, in a place a team works from.
