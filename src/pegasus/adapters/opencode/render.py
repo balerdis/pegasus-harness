@@ -297,8 +297,12 @@ def _with_mcp_sections(
 
 
 MCP_VALUE: dict[Distribution, Any] = {
-    # No `headers`: this server needs no authentication, and a secret would
-    # never travel in a repository descriptor anyway.
+    # No `headers`: a remote server's authentication is the runtime's business,
+    # not the descriptor's. OpenCode owns the OAuth handshake -- a person runs
+    # `opencode mcp auth <key>` once and it keeps the token itself -- so a
+    # secret never has to travel in a repository descriptor, which is the only
+    # place it could not safely go. Not "needs none": the first remote server
+    # shipped here needed none, and this comment used to say so.
     Distribution.REMOTE: lambda item, layout: {"type": "remote", "url": item.endpoint, "enabled": True},
     # The command points at where the fetched program will land, not where
     # it is right now: `render` never fetches, so this is the same path

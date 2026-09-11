@@ -1538,6 +1538,7 @@ class ShippedContentRenderTest(unittest.TestCase):
                 "cbm*": True,
                 "context7*": True,
                 "engram*": True,
+                "jira*": True,
                 "playwright*": True,
             },
         )

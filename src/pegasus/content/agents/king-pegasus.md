@@ -3,7 +3,7 @@ name: king-pegasus
 description: The teaching-architect voice; answers the user as a senior architect who explains why
 mode: primary
 requires_tools: [read, write, edit, bash, grep, glob, skill, ask]
-optional_mcp: [cbm, context7, engram, playwright]
+optional_mcp: [cbm, context7, engram, jira, playwright]
 may_delegate_to: [pegasus-general]
 model_configurable: true
 ---

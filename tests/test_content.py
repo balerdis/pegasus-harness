@@ -1228,7 +1228,7 @@ class ShippedContentTest(unittest.TestCase):
 
     def test_mcp_servers_load(self):
         self.assertEqual(
-            [server.name for server in self.content.mcp], ["cbm", "context7", "engram", "playwright"]
+            [server.name for server in self.content.mcp], ["cbm", "context7", "engram", "jira", "playwright"]
         )
 
     def test_playwright_is_declared_by_exactly_the_agents_meant_to_reach_it(self):
@@ -1340,9 +1340,11 @@ class ShippedContentTest(unittest.TestCase):
         # declares context7 and playwright, but only because its own Direct
         # Work Threshold lets it resolve a small change on its own -- doing
         # that needs the same library documentation and page visibility any
-        # implementer would need, not a routing concern.
+        # implementer would need, not a routing concern. The same threshold is
+        # why it reaches jira too: resolving that small change itself means it
+        # needs the ticket that defines the change's scope.
         self.assertEqual(
-            set(orchestrator.optional_mcp), {"cbm", "context7", "engram", "playwright"}
+            set(orchestrator.optional_mcp), {"cbm", "context7", "engram", "jira", "playwright"}
         )
 
     def test_the_two_voices_that_face_the_user_can_reach_the_skills_and_ask(self):
@@ -1604,6 +1606,39 @@ class ShippedContentTest(unittest.TestCase):
             with self.subTest(agent=agent.name):
                 carries = "context7" in [s.name for s in agent.mcp_sections]
                 self.assertEqual(carries, agent.name in context7_agents)
+
+    def test_the_jira_agents_carry_the_shared_section_and_no_one_else_does(self):
+        """Exactly the `context7` set, and the criterion is what a phase's
+        scope is *made of*. These eight either answer a person directly or
+        implement against a scope that was argued somewhere outside the
+        repository, so the ticket can be the thing that settles a question.
+        Four of the five left out -- `sdd-propose`, `sdd-spec`, `sdd-tasks`,
+        `sdd-archive` -- work from artifacts an earlier phase of the same
+        cycle produced, so the scope already reached them in writing and a
+        tracker would only be a second, staler copy of it.
+
+        `sdd-init` is out for a different reason and the distinction is
+        worth keeping: it is the first phase, so there is no earlier artifact
+        it could be working from, and it does reach outward -- into the
+        codebase, to detect the stack. But what it reaches for is a fact
+        about this machine's source tree, and no issue tracker holds that.
+        It is excluded because nothing there answers its question, not
+        because it was handed its answer.
+        """
+        jira_agents = {
+            "sdd-apply",
+            "sdd-design",
+            "sdd-explore",
+            "sdd-verify",
+            "sdd-onboard",
+            "pegasus-general",
+            "king-pegasus",
+            "pegasus-orchestrator",
+        }
+        for agent in self.content.agents:
+            with self.subTest(agent=agent.name):
+                carries = "jira" in [s.name for s in agent.mcp_sections]
+                self.assertEqual(carries, agent.name in jira_agents)
 
     def test_the_cbm_section_is_shared_for_four_agents_and_overridden_for_three(self):
         """`sdd-apply`, `sdd-design`, `sdd-explore` and `pegasus-general` carry the

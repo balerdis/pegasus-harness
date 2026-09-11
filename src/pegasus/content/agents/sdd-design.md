@@ -3,7 +3,7 @@ name: sdd-design
 description: Technical design executor for one change; captures architecture decisions and the implementation approach
 mode: subagent
 requires_tools: [read, write, edit, grep, glob]
-optional_mcp: [cbm, context7, engram]
+optional_mcp: [cbm, context7, engram, jira]
 model_configurable: true
 ---
 

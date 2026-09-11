@@ -3,7 +3,7 @@ name: pegasus-general
 description: Generic worker with no phase contract; takes one narrow brief and returns one narrow finding
 mode: subagent
 requires_tools: [read, bash, grep, glob, write, edit]
-optional_mcp: [cbm, context7, engram, playwright]
+optional_mcp: [cbm, context7, engram, jira, playwright]
 may_delegate_to: [pegasus-general]
 model_configurable: true
 ---

@@ -453,7 +453,10 @@ class ShippedCatalogTest(unittest.TestCase):
         # and from `pegasus-general`'s own body, rather than inlined into either.
         # 22, not 21: `agent:pegasus-general` is the thirteenth agent's own
         # config-key entry, alongside its file.
-        self.assertEqual((len(files), len(keys)), (88, 22))
+        # 89, not 88: `_shared/mcp/jira-convention.md` is the fifth shipped
+        # MCP server's convention file.
+        # 23, not 22: `/mcp/jira` is that fifth server's settings key.
+        self.assertEqual((len(files), len(keys)), (89, 23))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:
