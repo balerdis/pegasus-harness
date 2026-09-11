@@ -76,6 +76,13 @@ endpoint: https://example.test/mcp
 Convention body.
 """
 
+#: The commonest fixture server: `probe-mcp` renamed to a real shipped id, so a
+#: test can reference its convention path, and reaching `probe-agent`, the agent
+#: nearly every test in this file writes. `reaches` is where a grant is declared
+#: now, so it is part of the constant rather than of each agent file.
+CONTEXT7 = None  # rebound below, once `reaching` is defined
+
+
 CHECKSUM = "sha256:" + "a" * 64
 
 DOWNLOAD_MCP = f"""---
@@ -137,6 +144,25 @@ NPM_LOCKFILE = f"""{{
   }}
 }}
 """
+
+
+def reaching(descriptor: str, *agents: str) -> str:
+    """The same descriptor, carrying a `reaches` list naming these agents.
+
+    A descriptor's `reaches` is required and must be non-empty, and it is
+    where a grant is declared now, so every fixture server needs one. Which
+    agents it names is the varying part, so it is spliced in here rather than
+    frozen into the constants above -- the constants stay the shape of the
+    server, and each test says who it reaches.
+    """
+    assert agents, "a descriptor reaching nobody is refused; name at least one agent"
+    line = "reaches: [" + ", ".join(agents) + "]\n"
+    # The first "\n---\n" is the closing marker: the opening one has no newline
+    # before it, sitting at offset zero.
+    return descriptor.replace("\n---\n", "\n" + line + "---\n", 1)
+
+
+CONTEXT7 = reaching(MCP.replace("probe-mcp", "context7"), "probe-agent")
 
 
 def write(root: Path, relative: str, text: str) -> Path:
@@ -242,11 +268,9 @@ class ZipRootTest(unittest.TestCase):
             {
                 "skills/alpha/SKILL.md": SKILL,
                 "skills/alpha/references/guide.md": "# Guide\n",
-                f"agents/{content.SESSION_STARTS_IN}.md": SESSION_START.replace(
-                    "mode: primary\n", "mode: primary\noptional_mcp: [probe-mcp]\n"
-                ),
+                f"agents/{content.SESSION_STARTS_IN}.md": SESSION_START,
                 "commands/probe-command.md": COMMAND,
-                "mcp/probe-mcp.md": NPM_MCP,
+                "mcp/probe-mcp.md": reaching(NPM_MCP, content.SESSION_STARTS_IN),
                 f"mcp/{NPM_LOCKFILE_NAME}": NPM_LOCKFILE,
                 "agents/mcp/probe-mcp.md": (
                     "## Probe\n\nFollow {{skills_root}}/_shared/mcp/probe-mcp-convention.md.\n"
@@ -304,10 +328,10 @@ class ZipRootTest(unittest.TestCase):
         write(
             root,
             f"agents/{content.SESSION_STARTS_IN}.md",
-            SESSION_START.replace("mode: primary\n", "mode: primary\noptional_mcp: [probe-mcp]\n"),
+            SESSION_START,
         )
         write(root, "commands/probe-command.md", COMMAND)
-        write(root, "mcp/probe-mcp.md", NPM_MCP)
+        write(root, "mcp/probe-mcp.md", reaching(NPM_MCP, content.SESSION_STARTS_IN))
         write(root, f"mcp/{NPM_LOCKFILE_NAME}", NPM_LOCKFILE)
         write(
             root,
@@ -372,11 +396,11 @@ class AgentTest(TemporaryContent):
             (agent.requires_tools, agent.optional_mcp, agent.may_delegate_to), ((), (), ())
         )
 
-    def test_optional_mcp_is_read(self):
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+    def test_optional_mcp_is_derived_from_the_descriptor_that_reaches_the_agent(self):
+        """Nothing in the agent file says `context7`; the descriptor does."""
+        write(self.root, "mcp/context7.md", CONTEXT7)
         agent = self.load_agent(
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\n"
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
             "See {{skills_root}}/_shared/mcp/context7-convention.md.\n"
         )
         self.assertEqual(agent.optional_mcp, ("context7",))
@@ -397,35 +421,74 @@ class AgentTest(TemporaryContent):
             self.load_agent("---\nname: probe-agent\ndescription: d\n---\n\nx\n")
 
 
-class OptionalMcpInvariantTest(TemporaryContent):
-    """An `optional_mcp` id has to name a server that actually ships.
+class ReachesKnownAgentsInvariantTest(TemporaryContent):
+    """Every name in a descriptor's `reaches` has to be an agent that ships.
 
-    Otherwise the agent would run believing tools might arrive from a server
-    that was never going to be installed under any configuration.
+    A misspelled name there cannot produce a phantom grant -- the inversion
+    simply keys it under an agent nobody looks up -- so what it produces is
+    quieter: the server reaches one agent fewer than its author wrote down,
+    and no other file in the tree is any different for it. Only a check
+    against the shipped agents can see that.
     """
 
-    def test_a_dangling_id_is_refused_naming_the_agent_file_and_the_id(self):
+    def test_a_name_no_agent_answers_to_is_refused_naming_the_descriptor(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", reaching(
+            MCP.replace("probe-mcp", "context7"), "ghost-agent"
+        ))
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("mcp/context7.md", message)
+        self.assertIn("ghost-agent", message)
+
+    def test_one_bad_name_beside_good_ones_is_still_refused(self):
+        """The likely shape of the typo: a list that mostly works."""
         write_session_start(self.root)
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [phantom]\n---\n\nx\n",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
+            "See {{skills_root}}/_shared/mcp/context7-convention.md.\n",
         )
+        write(self.root, "mcp/context7.md", reaching(
+            MCP.replace("probe-mcp", "context7"), "probe-agent", "probe-agnet"
+        ))
         with self.assertRaises(ContentError) as raised:
             content.load(self.root)
-        message = str(raised.exception)
-        self.assertIn("agents/probe-agent.md", message)
-        self.assertIn("phantom", message)
+        self.assertIn("probe-agnet", str(raised.exception))
 
-    def test_an_id_a_server_actually_declares_is_accepted(self):
+    def test_an_agent_that_declares_optional_mcp_itself_is_refused(self):
+        """The old direction must not quietly coexist with the new one.
+
+        A file left carrying `optional_mcp` would be read by nobody and change
+        nothing while looking exactly like a working declaration, so it is a
+        refusal that names the file and says where the key went.
+        """
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
         write(
             self.root,
             "agents/probe-agent.md",
             "---\nname: probe-agent\ndescription: d\nmode: primary\n"
             "optional_mcp: [context7]\n---\n\n"
+            "See {{skills_root}}/_shared/mcp/context7-convention.md.\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("agents/probe-agent.md", message)
+        self.assertIn("optional_mcp", message)
+        self.assertIn("reaches", message)
+        self.assertIn("content/mcp/", message)
+
+    def test_a_name_a_shipped_agent_answers_to_is_accepted(self):
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", CONTEXT7)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
             "See {{skills_root}}/_shared/mcp/context7-convention.md.\n",
         )
         loaded = content.load(self.root)
@@ -434,34 +497,53 @@ class OptionalMcpInvariantTest(TemporaryContent):
 
 
 class McpReachesAnAgentInvariantTest(TemporaryContent):
-    """A shipped server has to name at least one agent that grants it.
+    """A shipped server has to reach at least one agent: `reaches` non-empty.
 
-    The mirror of `OptionalMcpInvariantTest`: that one refuses an agent
-    declaring a server that does not exist. This one refuses the opposite
-    typo -- a server descriptor with no agent's `optional_mcp` ever updated to
-    name it, so `select_mcp` would filter it down to an empty set of
-    recipients under every possible `--mcp` choice. This is the exact shape
-    the shipped `playwright` server regressed to before `_require_mcp_reaches_an_agent`
-    existed: a descriptor, a README promise, and nothing that could ever use it.
+    Since the declaration changed direction this is very nearly the
+    declaration itself, which is the point -- it is also what makes `reaches`
+    *required* rather than merely parsed, because an absent key and an empty
+    list both arrive as `()`. The failure is unchanged: `select_mcp` would
+    filter such a server down to an empty set of recipients under every
+    possible `--mcp` choice, so choosing it fetches, configures and enables a
+    server that grants nothing. That is exactly the shape the shipped
+    `playwright` server regressed to: a descriptor, a README promise, and
+    nothing that could ever use it.
     """
 
-    def test_a_server_no_agent_declares_is_refused_naming_the_server_file(self):
+    def test_an_empty_reaches_is_refused_naming_the_server_file(self):
+        write_session_start(self.root)
+        write(
+            self.root,
+            "mcp/context7.md",
+            MCP.replace("probe-mcp", "context7").replace(
+                "\n---\n", "\nreaches: []\n---\n", 1
+            ),
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("mcp/context7.md", message)
+        self.assertIn("reaches", message)
+
+    def test_an_absent_reaches_is_refused_the_same_way(self):
+        """Absent and empty are the same state once parsed, so they are the
+        same refusal: a descriptor that forgot the key is not more excusable
+        than one that wrote it blank."""
         write_session_start(self.root)
         write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
         with self.assertRaises(ContentError) as raised:
             content.load(self.root)
         message = str(raised.exception)
         self.assertIn("mcp/context7.md", message)
-        self.assertIn("context7", message)
+        self.assertIn("reaches", message)
 
-    def test_a_server_at_least_one_agent_declares_is_accepted(self):
+    def test_a_server_that_reaches_at_least_one_agent_is_accepted(self):
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\n"
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
             "See {{skills_root}}/_shared/mcp/context7-convention.md.\n",
         )
         loaded = content.load(self.root)
@@ -469,24 +551,25 @@ class McpReachesAnAgentInvariantTest(TemporaryContent):
 
 
 class McpConventionReferenceInvariantTest(TemporaryContent):
-    """A declared server and a referenced convention have to name the same set.
+    """A granted server and a referenced convention have to name the same set.
 
-    The permission is derived from the declaration alone (`optional_mcp: [id]`
-    grants the wildcard, nothing else reads the descriptor), so nothing forces an
-    agent body to ever mention that the server has a usage convention at all --
-    and nothing stops a body from pointing at a convention for a server it never
-    declared, granting no permission at all. This invariant keeps both
-    directions travelling together instead of letting either one drift.
+    The permission is granted from the descriptor's `reaches` list alone --
+    naming an agent there grants the wildcard, nothing else is read -- so
+    nothing forces the agent's own prose to ever mention that the server has a
+    usage convention at all, and nothing stops that prose from pointing at a
+    convention for a server that never reaches it, granting no permission at
+    all. This invariant keeps both directions travelling together instead of
+    letting either one drift, and its messages name the descriptor, because
+    that is now the file a grant is added to or removed from.
     """
 
     def test_a_body_that_never_mentions_the_convention_path_is_refused(self):
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\nx\n",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n",
         )
         with self.assertRaises(ContentError) as raised:
             content.load(self.root)
@@ -497,25 +580,33 @@ class McpConventionReferenceInvariantTest(TemporaryContent):
 
     def test_a_body_that_references_the_convention_path_is_accepted(self):
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\n"
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
             "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
         )
         loaded = content.load(self.root)
         agent = next(a for a in loaded.agents if a.name == "probe-agent")
         self.assertEqual(agent.optional_mcp, ("context7",))
 
-    def test_a_body_that_references_a_convention_never_declared_is_refused(self):
-        """The reverse direction: a reference with no matching declaration grants
-        no permission, so the body would tell the agent to follow a convention
-        for tools it will never have.
+    def test_a_body_that_references_a_convention_never_granted_is_refused(self):
+        """The reverse direction: a reference with no matching grant hands the
+        agent nothing, so the body would tell it to follow a convention for
+        tools it will never have. The descriptor here reaches `other-agent`
+        only -- `probe-agent` references it anyway.
         """
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", reaching(
+            MCP.replace("probe-mcp", "context7"), "other-agent"
+        ))
+        write(
+            self.root,
+            "agents/other-agent.md",
+            "---\nname: other-agent\ndescription: d\nmode: primary\n---\n\n"
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
+        )
         write(
             self.root,
             "agents/probe-agent.md",
@@ -527,16 +618,22 @@ class McpConventionReferenceInvariantTest(TemporaryContent):
         message = str(raised.exception)
         self.assertIn("agents/probe-agent.md", message)
         self.assertIn("context7", message)
+        self.assertIn("mcp/context7.md", message)
 
     def test_both_directions_are_named_together_when_both_are_wrong(self):
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
-        write(self.root, "mcp/cbm.md", MCP.replace("probe-mcp", "cbm"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
+        write(self.root, "mcp/cbm.md", reaching(MCP.replace("probe-mcp", "cbm"), "other-agent"))
+        write(
+            self.root,
+            "agents/other-agent.md",
+            "---\nname: other-agent\ndescription: d\nmode: primary\n---\n\n"
+            "Follow {{skills_root}}/_shared/mcp/cbm-convention.md for tool order.\n",
+        )
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\n"
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
             "Follow {{skills_root}}/_shared/mcp/cbm-convention.md for tool order.\n",
         )
         with self.assertRaises(ContentError) as raised:
@@ -579,12 +676,11 @@ class AgentMcpSectionTest(TemporaryContent):
 
     def test_a_shared_section_is_attached_to_every_agent_that_declares_the_id(self):
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\nx\n",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n",
         )
         write(
             self.root,
@@ -597,13 +693,14 @@ class AgentMcpSectionTest(TemporaryContent):
 
     def test_an_override_replaces_the_shared_section_for_that_agent_only(self):
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", reaching(
+            MCP.replace("probe-mcp", "context7"), "other-agent", "probe-agent"
+        ))
         for name in ("probe-agent", "other-agent"):
             write(
                 self.root,
                 f"agents/{name}.md",
-                f"---\nname: {name}\ndescription: d\nmode: primary\n"
-                "optional_mcp: [context7]\n---\n\nx\n",
+                f"---\nname: {name}\ndescription: d\nmode: primary\n---\n\nx\n",
             )
         pointer = "{{skills_root}}/_shared/mcp/context7-convention.md"
         write(self.root, "agents/mcp/context7.md", f"Shared framing. Follow {pointer}.\n")
@@ -612,19 +709,27 @@ class AgentMcpSectionTest(TemporaryContent):
         self.assertIn("Special framing.", agents["probe-agent"].mcp_sections[0].body)
         self.assertIn("Shared framing.", agents["other-agent"].mcp_sections[0].body)
 
-    def test_an_override_for_an_agent_that_never_declared_the_id_is_refused(self):
+    def test_an_override_for_an_agent_the_server_never_reaches_is_refused(self):
         """Naming a real agent is not the same as naming a wired one.
 
-        An override that targets an agent who never put that id in its own
-        `optional_mcp` attaches to nothing: the resolution walks the agent's
-        declaration, so a file addressed to somebody who is not listening is
-        read, validated and then dropped. It is the likelier mistake than the
-        renamed agent the check above catches -- an author adds the framing and
-        forgets the declaration -- and it fails the same silent way, so it earns
-        the same refusal.
+        An override that targets an agent the server's `reaches` list never
+        names attaches to nothing: the resolution walks the agent's derived
+        grant, so a file addressed to somebody who is not listening is read,
+        validated and then dropped. It is the likelier mistake than the
+        renamed agent the check above catches -- an author adds the framing
+        and forgets the `reaches` entry -- and it fails the same silent way,
+        so it earns the same refusal.
         """
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", reaching(
+            MCP.replace("probe-mcp", "context7"), "other-agent"
+        ))
+        write(
+            self.root,
+            "agents/other-agent.md",
+            "---\nname: other-agent\ndescription: d\nmode: primary\n---\n\n"
+            "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
+        )
         write(
             self.root,
             "agents/probe-agent.md",
@@ -643,12 +748,11 @@ class AgentMcpSectionTest(TemporaryContent):
 
     def test_an_id_with_neither_shared_nor_override_carries_no_section(self):
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\n"
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
             "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
         )
         agent = self.load_agents()["probe-agent"]
@@ -656,12 +760,11 @@ class AgentMcpSectionTest(TemporaryContent):
 
     def test_the_mcp_subdirectory_is_never_read_as_an_agent(self):
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\n"
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
             "Follow {{skills_root}}/_shared/mcp/context7-convention.md for tool order.\n",
         )
         write(self.root, "agents/mcp/context7.md", "Shared text.\n")
@@ -678,7 +781,7 @@ class AgentMcpSectionTest(TemporaryContent):
 
     def test_an_override_naming_an_agent_that_does_not_exist_is_refused(self):
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
         write(self.root, "agents/mcp/context7@ghost-agent.md", "Ambient text.\n")
         with self.assertRaises(ContentError) as raised:
             content.load(self.root)
@@ -691,12 +794,11 @@ class AgentMcpSectionTest(TemporaryContent):
         agent body and into one shared file.
         """
         write_session_start(self.root)
-        write(self.root, "mcp/context7.md", MCP.replace("probe-mcp", "context7"))
+        write(self.root, "mcp/context7.md", CONTEXT7)
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [context7]\n---\n\nx\n",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\nx\n",
         )
         write(
             self.root,
@@ -927,14 +1029,13 @@ class CommandTest(TemporaryContent):
 
 class McpTest(TemporaryContent):
     def load_mcp(self, text, lockfile=NPM_LOCKFILE):
-        write(self.root, "mcp/probe-mcp.md", text)
+        write(self.root, "mcp/probe-mcp.md", reaching(text, "probe-agent"))
         write(self.root, f"mcp/{NPM_LOCKFILE_NAME}", lockfile)
         write_session_start(self.root)
         write(
             self.root,
             "agents/probe-agent.md",
-            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-            "optional_mcp: [probe-mcp]\n---\n\n"
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
             "See {{skills_root}}/_shared/mcp/probe-mcp-convention.md.\n",
         )
         return content.load(self.root).mcp[0]
@@ -1231,6 +1332,68 @@ class ShippedContentTest(unittest.TestCase):
             [server.name for server in self.content.mcp], ["cbm", "context7", "engram", "jira", "playwright"]
         )
 
+    def test_every_agents_grant_set_is_the_inverse_of_the_reaches_lists(self):
+        """The resolved mapping is the thing the inversion must not change.
+
+        `Agent.optional_mcp` is derived from the descriptors' `reaches`, and
+        every other test in this file that names a grant reads the derived
+        side. This is the one that pins the derivation itself: the two sides
+        of one relation, computed independently here and required to agree,
+        including the sort order everything downstream renders in.
+        """
+        self.assertTrue(self.content.agents, "this would pass vacuously with no agents")
+        self.assertTrue(self.content.mcp, "this would pass vacuously with no servers")
+        for agent in self.content.agents:
+            with self.subTest(agent=agent.name):
+                self.assertEqual(
+                    agent.optional_mcp,
+                    tuple(sorted(s.name for s in self.content.mcp if agent.name in s.reaches)),
+                )
+
+    def test_no_agent_file_still_carries_the_old_declaration(self):
+        """The two directions must not coexist. The loader refuses such a file,
+        so this can only fail by the front matter key being reintroduced under
+        a loader that stopped refusing it -- which is the pair worth guarding.
+        """
+        self.assertTrue(self.content.agents, "this would pass vacuously with no agents")
+        for agent in self.content.agents:
+            with self.subTest(agent=agent.name):
+                source = content.DEFAULT_ROOT
+                for part in agent.source.parts:
+                    source = source / part
+                fields, _ = content.split_frontmatter(source.read_text(), str(agent.source))
+                self.assertNotIn("optional_mcp", fields)
+                self.assertNotIn("reaches", fields)
+
+    def test_either_relation_key_in_an_agent_file_is_refused(self):
+        """Both spellings, because a refusal that holds in one direction only is
+        where the bug walks in.
+
+        `optional_mcp` is the key that moved. `reaches` is the key it moved to,
+        and writing it in the agent file is the likelier mistake once the
+        inversion lands -- an author who half-remembers "the key is `reaches`
+        now" writes it where the old one lived. Left accepted, that front
+        matter reads exactly like a working declaration and grants nothing:
+        the load is clean and the agent gets no server.
+        """
+        for key in ("optional_mcp", "reaches"):
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as raw:
+                    root = Path(raw)
+                    shutil.copytree(content.DEFAULT_ROOT, root / "content")
+                    victim = root / "content" / "agents" / "sdd-propose.md"
+                    victim.write_text(
+                        victim.read_text().replace(
+                            "mode: subagent\n", f"mode: subagent\n{key}: [context7]\n", 1
+                        )
+                    )
+                    with self.assertRaises(content.ContentError) as caught:
+                        content.load(root=root / "content")
+                    message = str(caught.exception)
+                    self.assertIn("agents/sdd-propose.md", message)
+                    self.assertIn(key, message)
+                    self.assertIn("content/mcp/", message)
+
     def test_playwright_is_declared_by_exactly_the_agents_meant_to_reach_it(self):
         """Regression guard for the bug `_require_mcp_reaches_an_agent` now
         refuses at load time: `playwright` shipped with a descriptor and a
@@ -1251,11 +1414,9 @@ class ShippedContentTest(unittest.TestCase):
         gaining browser reach should have to come and change this line, rather
         than the assertion quietly widening to fit.
         """
-        declares_playwright = {
-            agent.name for agent in self.content.agents if "playwright" in agent.optional_mcp
-        }
+        playwright = next(s for s in self.content.mcp if s.name == "playwright")
         self.assertEqual(
-            declares_playwright,
+            set(playwright.reaches),
             {
                 "sdd-apply",
                 "sdd-explore",
@@ -1343,8 +1504,12 @@ class ShippedContentTest(unittest.TestCase):
         # implementer would need, not a routing concern. The same threshold is
         # why it reaches jira too: resolving that small change itself means it
         # needs the ticket that defines the change's scope.
+        # Read off the descriptors, which is where a grant is declared: the
+        # set of servers whose `reaches` names this agent.
+        self.assertTrue(self.content.mcp, "this would pass vacuously with no servers")
         self.assertEqual(
-            set(orchestrator.optional_mcp), {"cbm", "context7", "engram", "jira", "playwright"}
+            {s.name for s in self.content.mcp if "pegasus-orchestrator" in s.reaches},
+            {"cbm", "context7", "engram", "jira", "playwright"},
         )
 
     def test_the_two_voices_that_face_the_user_can_reach_the_skills_and_ask(self):
@@ -1458,14 +1623,21 @@ class ShippedContentTest(unittest.TestCase):
         server and this fails until the voice declares it -- which is the
         decision, not an obstacle to it.
 
-        `optional_mcp` is a declaration of what the voice would use if the
-        server is there, not a demand that it be installed; selection stays the
-        user's. Before the reconversion it named `cbm` and `engram` only, so a
+        A grant is a declaration of what the voice would use if the server is
+        there, not a demand that it be installed; selection stays the user's.
+        Before the reconversion the voice held `cbm` and `engram` only, so a
         voice whose own Behavior says to "mention tools and resources" could not
         reach the server that holds current library documentation.
+
+        Asserted from the descriptor side, because that is where a grant is
+        written now: every shipped server's `reaches` has to name the voice.
+        The decision this forces is unchanged -- a new descriptor's author must
+        answer for it -- but the line they have to edit is now in the file they
+        are already writing.
         """
-        voice = next(a for a in self.content.agents if a.name == "king-pegasus")
-        self.assertEqual(set(voice.optional_mcp), {server.name for server in self.content.mcp})
+        self.assertTrue(self.content.mcp, "this would pass vacuously with no servers")
+        missing = sorted(s.name for s in self.content.mcp if "king-pegasus" not in s.reaches)
+        self.assertEqual(missing, [])
 
     def test_the_voice_carries_no_rule_that_contradicts_its_own_mandate(self):
         """Its body told this voice to apply what it explains and, four lines
@@ -1515,13 +1687,14 @@ class ShippedContentTest(unittest.TestCase):
     def test_every_agent_can_reach_memory(self):
         """Memory is ambient: an agent that fixes a bug must be able to record it.
 
-        Declared per agent rather than left to the system prompt, because the
-        declaration is what grants the tools. The renderer writes a deny
-        baseline for every agent, so one that does not name `engram` cannot
-        call `mem_save` at all -- however plainly the ambient section tells it
-        to. An instruction without the tool behind it is the failure this is
-        here to make impossible.
+        Granted per agent rather than left to the system prompt, because the
+        grant is what hands over the tools. The renderer writes a deny
+        baseline for every agent, so one `engram`'s `reaches` list omits
+        cannot call `mem_save` at all -- however plainly the ambient section
+        tells it to. An instruction without the tool behind it is the failure
+        this is here to make impossible.
         """
+        self.assertTrue(self.content.agents, "this would pass vacuously with no agents")
         self.assertEqual(
             {agent.name for agent in self.content.agents if "engram" not in agent.optional_mcp},
             set(),
@@ -2685,14 +2858,39 @@ class ContentErrorSitesTest(unittest.TestCase):
         "_require_the_session_start#0": (_via_load({"agents/alpha.md": _agent_text("alpha")}, "agents"), ""),
         "_require_the_session_start#1": (
             _via_load({_SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN, mode="subagent")}, _SESSION_START_FILE), ""),
-        "_require_known_optional_mcp#0": (
+        "_require_reaches_known_agents#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "mcp/context7.md": reaching(
+                        MCP.replace("probe-mcp", "context7"), "ghost-agent"
+                    ),
+                },
+                "mcp/context7.md",
+            ),
+            "",
+        ),
+        "_refuse_relation_keys_in_an_agent#0": (
             _via_load(
                 {
                     _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
                     "agents/probe-agent.md": "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-                    "optional_mcp: [phantom]\n---\n\nx\n",
+                    "optional_mcp: [context7]\n---\n\nx\n",
                 },
                 "agents/probe-agent.md",
+            ),
+            "",
+        ),
+        "_refuse_repeated_reaches#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "agents/probe-agent.md": _agent_text("probe-agent", mode="subagent"),
+                    "mcp/context7.md": reaching(
+                        MCP.replace("probe-mcp", "context7"), "probe-agent", "probe-agent"
+                    ),
+                },
+                "mcp/context7.md",
             ),
             "",
         ),
@@ -2710,9 +2908,11 @@ class ContentErrorSitesTest(unittest.TestCase):
             _via_load(
                 {
                     _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
-                    "mcp/context7.md": MCP.replace("probe-mcp", "context7"),
+                    "mcp/context7.md": reaching(
+                        MCP.replace("probe-mcp", "context7"), "probe-agent"
+                    ),
                     "agents/probe-agent.md": "---\nname: probe-agent\ndescription: d\nmode: primary\n"
-                    "optional_mcp: [context7]\n---\n\nx\n",
+                    "---\n\nx\n",
                 },
                 "agents/probe-agent.md",
             ),

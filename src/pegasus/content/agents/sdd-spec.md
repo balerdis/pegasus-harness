@@ -3,7 +3,6 @@ name: sdd-spec
 description: Specification executor for one change; writes delta specs with requirements and scenarios
 mode: subagent
 requires_tools: [read, write, edit, grep, glob]
-optional_mcp: [engram]
 model_configurable: true
 ---
 

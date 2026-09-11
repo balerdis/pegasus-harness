@@ -8,6 +8,7 @@ checksum: sha256:e5cba4cad6ca8254a85f45041fc8a831908d7d5cb64f98fc3f8eb70a5867179
 archive_members: [codebase-memory-mcp, LICENSE, install.sh, THIRD_PARTY_NOTICES.md]
 archive_executable: codebase-memory-mcp
 withheld_tools: [delete_project, ingest_traces]
+reaches: [king-pegasus, pegasus-general, pegasus-orchestrator, sdd-apply, sdd-design, sdd-explore, sdd-verify]
 ---
 
 # Codebase Memory Convention (reference documentation)

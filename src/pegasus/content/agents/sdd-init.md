@@ -3,7 +3,6 @@ name: sdd-init
 description: SDD initialization executor for one project; detects stack, resolves persistence backend, bootstraps context
 mode: subagent
 requires_tools: [read, write, edit, bash, grep, glob]
-optional_mcp: [engram]
 model_configurable: true
 ---
 

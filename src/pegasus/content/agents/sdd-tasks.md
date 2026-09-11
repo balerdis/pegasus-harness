@@ -3,7 +3,6 @@ name: sdd-tasks
 description: Task breakdown executor for one change; slices proposal, spec and design into ordered implementation tasks
 mode: subagent
 requires_tools: [read, write, edit, grep, glob]
-optional_mcp: [engram]
 model_configurable: true
 ---
 

@@ -189,7 +189,8 @@ class Agent:
 
     A tool that exists because an MCP server is installed is never in either list:
     it is named through `optional_mcp` instead, by the server's id rather than by
-    a tool name that only happens to be true today.
+    a tool name that only happens to be true today. `optional_mcp` is derived,
+    not declared -- see the field.
     """
 
     name: str
@@ -200,6 +201,22 @@ class Agent:
     requires_tools: tuple[str, ...] = ()
     optional_tools: tuple[str, ...] = ()
     optional_mcp: tuple[str, ...] = ()
+    """The mcp servers this agent may be granted, by server id, sorted.
+
+    **Derived, never authored.** An agent file carrying either `optional_mcp`
+    or `reaches` is refused at load time
+    (`_refuse_relation_keys_in_an_agent`): the
+    declaration lives in the other direction now, in the `reaches` list of
+    each descriptor under `content/mcp/`, and this field is the inverse of
+    those lists computed once in `_load_agents`. Sorted by server id, which
+    is what the alphabetical hand-written lists used to produce, so the
+    rendered output is unchanged by the move.
+
+    Everything downstream -- `select_mcp`, `_denied_mcp_tools`,
+    `mcp_sections` resolution, `render.py`, the whole adapter -- reads this
+    field exactly as it always did. Only the authoring direction changed.
+    """
+
     may_delegate_to: tuple[str, ...] = ()
     model_configurable: bool = False
     mcp_sections: tuple[McpSection, ...] = ()
@@ -222,19 +239,22 @@ class Agent:
     existing at all.
 
     `optional_mcp` means "a server Pegasus ships a descriptor and a
-    convention for, which the user chose": it is policed by
-    `_require_known_optional_mcp` (the id must name something this release
-    ships), `_require_mcp_convention_referenced` (the declared set of ids
-    must equal the set the agent's own body actually references) and the
-    reachability rule alongside them. A key in `granted_mcp` satisfies none
-    of that, by construction -- Pegasus never shipped a descriptor for it, so
-    there is no convention for any body to reference, and no id for
-    `_require_known_optional_mcp` to check against a catalog that was never
-    asked about it. Putting a user's own key into `optional_mcp` to reuse
-    that machinery would trip `_require_mcp_convention_referenced` the
-    instant no agent body mentions a server nobody described, and that
-    refusal would be *correct*: it exists to catch exactly an id that grants
-    a permission no prose ever tells an agent to use. That correctness is
+    convention for, which the user chose": it is derived from those
+    descriptors' `reaches` lists and policed by
+    `_require_reaches_known_agents` (every name in `reaches` must be a
+    shipped agent), `_require_mcp_convention_referenced` (the set of ids
+    reaching an agent must equal the set its own body actually references)
+    and the reachability rule alongside them. A key in `granted_mcp`
+    satisfies none of that, by construction -- Pegasus never shipped a
+    descriptor for it, so there is no convention for any body to reference,
+    and no `reaches` list it could ever appear in. Putting a user's own key
+    into `optional_mcp` is not even representable any more -- the field is
+    derived and an agent file declaring it is refused -- and the equivalent,
+    naming an agent in a `reaches` list for a server nobody described, would
+    trip `_require_mcp_convention_referenced` the instant no agent body
+    mentions it, and that refusal would be *correct*: it exists to catch
+    exactly an id that grants a permission no prose ever tells an agent to
+    use. That correctness is
     why this is a second field rather than a widening of the first -- the two
     invariant sets must keep reading `optional_mcp` only, forever, and this
     field must never be added to either check's input.
@@ -383,6 +403,28 @@ class Mcp:
     is decided at selection time -- the descriptor itself is written before
     any binding exists to qualify against.
     """
+    reaches: tuple[str, ...] = ()
+    """The agents this server is granted to, named by agent name.
+
+    The declaration lives here, on the server, rather than on each agent,
+    and the direction is the whole point. An agent file is engine-owned: a
+    distribution overlays extra content files onto this tree but must never
+    edit the files the engine ships. With the arrow pointing the other way --
+    every agent listing the servers it wanted -- shipping one more server
+    meant editing every agent file that should reach it, which a
+    distribution cannot do. Pointing it this way makes adding a server an
+    act of *adding files only*: one descriptor, one convention, one
+    `reaches` list, and nothing the engine owns is touched.
+
+    Required, and required to be non-empty -- a descriptor that reaches
+    nobody installs a server no selection can ever grant (see
+    `_require_mcp_reaches_an_agent`). Every name in it must be a shipped
+    agent (see `_require_reaches_known_agents`).
+
+    `Agent.optional_mcp` is the inverse of this field, computed once at load
+    time; nothing downstream reads `reaches` directly.
+    """
+
     bound_to: str | None = None
     """The key an installation already uses for this server, when it runs its own.
 
@@ -470,9 +512,9 @@ def load(root: ContentRoot = DEFAULT_ROOT) -> Content:
     """
     mcp = _load_mcp(root / "mcp", PurePosixPath("mcp"))
     agents = _load_agents(root / "agents", PurePosixPath("agents"), mcp)
-    _require_known_optional_mcp(agents, mcp)
-    _require_mcp_convention_referenced(agents)
-    _require_mcp_reaches_an_agent(agents, mcp)
+    _require_reaches_known_agents(agents, mcp)
+    _require_mcp_convention_referenced(agents, mcp)
+    _require_mcp_reaches_an_agent(mcp)
     system_prompt = _load_system_prompt(root / SYSTEM_PROMPT_DIR, PurePosixPath(SYSTEM_PROMPT_DIR))
     _require_known_system_prompt_mcp(system_prompt, mcp)
     return Content(
@@ -937,12 +979,14 @@ def _load_agents(
     shared, overrides = _load_agent_mcp_sections(
         directory / AGENT_MCP_DIR, relative_dir / AGENT_MCP_DIR, agent_names, known_mcp
     )
+    reached_by = _reached_by(mcp)
     agents = []
     for path in paths:
         fields, body, source = _descriptor(path, relative_dir)
         _refuse_derived_fields(fields, source)
+        _refuse_relation_keys_in_an_agent(fields, source)
         name = _stem(path)
-        optional_mcp = _names(fields, "optional_mcp", source)
+        optional_mcp = reached_by.get(name, ())
         mcp_sections = tuple(
             overrides[(mcp_id, name)] if (mcp_id, name) in overrides else shared[mcp_id]
             for mcp_id in optional_mcp
@@ -963,9 +1007,29 @@ def _load_agents(
                 mcp_sections=mcp_sections,
             )
         )
-    _require_every_override_is_wired(overrides, tuple(agents))
+    _require_every_override_is_wired(overrides, tuple(agents), mcp)
     _require_the_session_start(tuple(agents), relative_dir)
     return tuple(agents)
+
+
+def _reached_by(mcp: tuple[Mcp, ...]) -> dict[str, tuple[str, ...]]:
+    """Invert every descriptor's `reaches` into one agent-name -> server-ids map.
+
+    Built once for the whole directory rather than re-walked per agent, and
+    sorted by server id so the order is deterministic and reproduces exactly
+    what the alphabetical hand-written `optional_mcp` lists used to produce.
+
+    Names here are not validated against the shipped agents: a `reaches`
+    entry naming nothing is a real failure, but it is one
+    `_require_reaches_known_agents` reports against the descriptor that wrote
+    it, which is the file an author has to edit. Silently landing in this map
+    and reaching nobody is exactly what that invariant exists to prevent.
+    """
+    reached: dict[str, list[str]] = {}
+    for server in sorted(mcp, key=lambda item: item.name):
+        for agent_name in server.reaches:
+            reached.setdefault(agent_name, []).append(server.name)
+    return {name: tuple(ids) for name, ids in reached.items()}
 
 
 def _load_agent_mcp_sections(
@@ -987,7 +1051,7 @@ def _load_agent_mcp_sections(
     Both checks run the moment a file is read, before any agent even asks for
     it: a section for a server nothing ships, or an override for an agent that
     was renamed or removed, would otherwise sit in the tree looking wired in
-    and reach nobody -- the same silent failure `_require_known_optional_mcp`
+    and reach nobody -- the same silent failure `_require_reaches_known_agents`
     and `_require_the_session_start` each exist to turn into a load-time
     refusal instead.
 
@@ -1025,28 +1089,42 @@ def _load_agent_mcp_sections(
 
 
 def _require_every_override_is_wired(
-    overrides: dict[tuple[str, str], McpSection], agents: tuple[Agent, ...]
+    overrides: dict[tuple[str, str], McpSection],
+    agents: tuple[Agent, ...],
+    servers: tuple[Mcp, ...],
 ) -> None:
     """An override addressed to an agent that never declared the id reaches nobody.
 
     `_load_agent_mcp_sections` already refuses an override naming a server
     nothing ships and one naming an agent that does not exist. This is the
     third way the same file can be dead on arrival, and the likeliest of the
-    three: the agent is real and the server is real, but that agent never put
-    the id in its own `optional_mcp`, so the resolution -- which walks the
-    declaration, not the directory -- never looks the file up. An author who
-    writes the framing and forgets the declaration gets no error, no section,
-    and no way to tell that from having written the framing badly.
+    three: the agent is real and the server is real, but that server's
+    `reaches` list never names that agent, so the resolution -- which walks
+    the agent's derived `optional_mcp`, not the directory -- never looks the
+    file up. An author who writes the framing and forgets the grant gets no
+    error, no section, and no way to tell that from having written the
+    framing badly.
+
+    Still true under derivation, and still worth checking: `optional_mcp` is
+    now the inverse of the `reaches` lists rather than a hand-written line,
+    but an override file is not part of that relation at all -- it is a third
+    file naming a pair, and nothing about deriving the pair from one end
+    guarantees some *other* file spelled the same pair correctly. What
+    changed is only where the fix goes, so the message says so -- naming the
+    descriptor by its own `source`, the way `_require_mcp_convention_referenced`
+    does, rather than rebuilding that path from the id and trusting the two to
+    keep the same shape.
 
     It cannot be checked where the other two are: at that point no agent has
-    been parsed, so nothing knows what any of them declares.
+    been parsed, so nothing knows what any of them was granted.
     """
-    declared = {(mcp_id, agent.name) for agent in agents for mcp_id in agent.optional_mcp}
+    granted = {(mcp_id, agent.name) for agent in agents for mcp_id in agent.optional_mcp}
+    source_of = {server.name: server.source for server in servers}
     for (mcp_id, agent_name), section in sorted(overrides.items()):
-        if (mcp_id, agent_name) not in declared:
+        if (mcp_id, agent_name) not in granted:
             raise ContentError(
                 f"{section.source}: overrides the {mcp_id!r} section for {agent_name!r}, "
-                f"which does not declare {mcp_id!r} in its own optional_mcp"
+                f"which the 'reaches' list of {source_of[mcp_id]} does not name"
             )
 
 
@@ -1074,73 +1152,142 @@ def _require_the_session_start(agents: tuple[Agent, ...], relative_dir: PurePosi
         )
 
 
-def _require_known_optional_mcp(agents: tuple[Agent, ...], servers: tuple[Mcp, ...]) -> None:
-    """An `optional_mcp` id nothing provides is a typo that would ship as a
-    silently ungranted tool: the agent would run believing a server's tools
-    might arrive, and no installation could ever grant them. Checking here,
-    once, is what makes that typo a load-time refusal instead of a permission
-    nobody notices is missing.
+def _require_reaches_known_agents(agents: tuple[Agent, ...], servers: tuple[Mcp, ...]) -> None:
+    """A `reaches` entry naming no shipped agent is a typo that costs one
+    recipient, silently.
+
+    The typo this catches changed shape when the declaration changed
+    direction. It used to be an agent naming a server nothing ships -- a
+    permission the agent believed might arrive and never could. Now a
+    misspelled name in `reaches` cannot produce a phantom grant at all: the
+    inversion in `_reached_by` simply keys it under an agent that does not
+    exist, and nothing ever looks it up. The descriptor loads, the server
+    installs, every other name in the list works -- and the server reaches
+    one agent fewer than its author wrote down. Nothing else in the tree
+    would ever say so: there is no file the missing grant is absent from,
+    only a list that is one name shorter than intended. Checking here, once,
+    against the agents actually shipped, is the only thing standing between
+    that typo and a release.
     """
-    known = {server.name for server in servers}
-    for agent in agents:
-        unknown = [name for name in agent.optional_mcp if name not in known]
+    known = {agent.name for agent in agents}
+    for server in servers:
+        unknown = [name for name in server.reaches if name not in known]
         if unknown:
             raise ContentError(
-                f"{agent.source}: 'optional_mcp' names {', '.join(sorted(unknown))}, "
-                f"which no mcp server declares"
+                f"{server.source}: 'reaches' names {', '.join(sorted(unknown))}, "
+                f"which is not one of the shipped agents"
             )
 
 
-def _require_mcp_reaches_an_agent(agents: tuple[Agent, ...], servers: tuple[Mcp, ...]) -> None:
-    """A shipped server no agent declares is a permission nobody can ever grant.
+def _refuse_repeated_reaches(reaches: tuple[str, ...], source: PurePosixPath) -> None:
+    """A name written twice in one `reaches` list is refused, not collapsed.
 
-    The mirror of `_require_known_optional_mcp`, checked in the other
-    direction. That rule refuses an agent's `optional_mcp` naming a server
-    that does not exist -- a typo that would otherwise ship as a permission
-    the agent believes might arrive and never does. Left one-directional, the
-    opposite typo ships just as silently: a descriptor lands in `content/mcp/`
-    and no agent's `optional_mcp` is ever updated to name it.
+    `_reached_by` inverts these lists by appending, so a repeated name arrives
+    at its agent twice: the server id lands twice in `optional_mcp`, which puts
+    the same section twice in `mcp_sections` and the same withheld tools twice
+    in `denied_mcp_tools`. The rendered prompt then carries that server's whole
+    framing twice, which nothing downstream notices and no invariant catches.
 
-    `select_mcp` filters both `content.mcp` and every agent's `optional_mcp`
-    down to what the user chose, once, before any adapter renders. A server
-    no agent declares survives that filter with an empty set of recipients
-    for every choice a user could make -- there is no `--mcp` selection under
-    which it grants anything. Choosing it still fetches the server, writes it
-    into the user's runtime config, and turns it on: the failure is not a
-    missing file or a load error, it is a server that installs, configures,
-    and reaches nobody. This is not hypothetical -- it is exactly how the
-    Playwright MCP shipped: a descriptor, a README promise that confirming it
-    configures the server, and not one of the twelve shipped agents with
-    `playwright` in its `optional_mcp`. The one-directional version of this
-    check was live in the tree the whole time and had nothing to say about it.
+    De-duplicating quietly would hide the mistake instead of surfacing it, and
+    the mistake is the interesting part: nobody means to grant one agent the
+    same server twice. Refusing says so at the only moment anyone can still
+    ask what the author intended.
 
-    A tree with no agents at all chooses between nothing and is left alone,
-    the same leniency `_require_the_session_start` grants for the same
-    reason: with no agent to grant anything to, no server can be shown to
-    reach one or fail to.
+    This is not a rule about ordering. The authored order of `reaches` is
+    discarded already -- the inversion sorts by server id, so how the names sit
+    in the list changes nothing. What is refused is a name *appearing more than
+    once*, because that can only mean something other than what was written.
+
+    The hazard grew with the direction. Under the old one a duplicate had to be
+    written inside a single agent's list of five; `engram` now declares thirteen
+    names on one line, and every agent added later appends to it.
     """
-    if not agents:
-        return
-    declared = {name for agent in agents for name in agent.optional_mcp}
+    seen: set[str] = set()
+    repeated = sorted({name for name in reaches if name in seen or seen.add(name)})
+    if repeated:
+        raise ContentError(
+            f"{source}: 'reaches' names {', '.join(repeated)} more than once; "
+            f"a server reaches an agent or it does not"
+        )
+
+
+def _require_mcp_reaches_an_agent(servers: tuple[Mcp, ...]) -> None:
+    """A shipped server that reaches no agent is a permission nobody can ever grant.
+
+    Now that the declaration points this way, this check is very nearly the
+    declaration itself: it is `reaches` being empty, nothing more. That is a
+    demotion worth stating plainly -- it used to have to reconcile thirteen
+    agent files against five descriptors to notice, and the fact it can no
+    longer be surprised by anything is the point of the inversion, not a
+    reason to drop it. It is also what makes `reaches` *required* rather than
+    merely parsed: an absent key and an empty list both arrive here as `()`,
+    and both are refused in one place.
+
+    The failure it exists for is unchanged. `select_mcp` filters both
+    `content.mcp` and every agent's `optional_mcp` down to what the user
+    chose, once, before any adapter renders. A server that reaches nobody
+    survives that filter with an empty set of recipients for every choice a
+    user could make -- there is no `--mcp` selection under which it grants
+    anything. Choosing it still fetches the server, writes it into the user's
+    runtime config, and turns it on: the failure is not a missing file or a
+    load error, it is a server that installs, configures, and reaches nobody.
+    That is not hypothetical -- it is exactly how the Playwright MCP shipped:
+    a descriptor, a README promise that confirming it configures the server,
+    and not one of the twelve shipped agents granted it. Under the old
+    direction that state took a whole cross-file reconciliation to see; under
+    this one it is a blank line in the descriptor, which is the improvement.
+
+    The old leniency for a tree with no agents at all is gone, and its reason
+    went with it: it existed because the check read the agents, so with none
+    there was nothing to read. This check no longer reads them. A descriptor
+    with an empty `reaches` is malformed whatever else the tree contains, and
+    a tree with agents in it is not what makes that true.
+    """
     for server in servers:
-        if server.name not in declared:
+        if not server.reaches:
             raise ContentError(
-                f"{server.source}: no shipped agent's 'optional_mcp' names {server.name!r}, "
-                f"so choosing it would install a server that reaches nobody"
+                f"{server.source}: 'reaches' names no agent, so choosing this server "
+                f"would install one that reaches nobody"
             )
 
 
-def _require_mcp_convention_referenced(agents: tuple[Agent, ...]) -> None:
-    """A declared server and its convention reference have to travel together.
+def _require_mcp_convention_referenced(
+    agents: tuple[Agent, ...], servers: tuple[Mcp, ...]
+) -> None:
+    """A granted server and its convention reference have to travel together.
 
-    The permission is granted from the declaration alone: `optional_mcp: [id]`
-    hands the agent a server's tools with nothing else read from the descriptor.
-    Left one-directional, that makes two states representable that should not
-    be: a declared server whose convention the body never mentions, and a body
-    that points at a convention for a server it never declared -- an agent told
-    to follow a convention for tools it will never have. Both directions have to
-    agree, so the set of ids declared and the set of ids referenced are required
+    The permission is granted from the descriptor's `reaches` list alone:
+    naming an agent there hands it that server's tools, with nothing else read
+    from either file. Left one-directional, that makes two states
+    representable that should not be: a server that reaches an agent whose
+    body never mentions the convention, and a body that points at a convention
+    for a server that never reaches it -- an agent told to follow a convention
+    for tools it will never have. Both directions have to agree, so the set of
+    ids reaching an agent and the set of ids its prose references are required
     to be exactly equal.
+
+    What that buys on the *shipped* tree is narrower than the sentence above
+    sounds, and the gap is worth naming rather than leaving for a reader to
+    discover. No shipped agent body references a convention at all -- a test
+    forbids it, because that is exactly what moved out of twelve unconditional
+    prompts -- so `referenced` comes entirely from the sections, and the
+    sections are resolved from the grant. On shipped content the equality is
+    therefore satisfied the moment each shared or override section carries its
+    own pointer, and that is the one thing this check is really enforcing
+    there: drop the pointer from `agents/mcp/<id>.md` and it fires.
+
+    Both directions are live for a tree that does write a pointer inline,
+    which the loader supports and a distribution may well use, so neither is
+    dead code. But this invariant was not made stronger or weaker by the
+    inversion: it read a declared set before and reads a derived one now, and
+    the same one-sided softness on shipped content was already there when the
+    declaration lived in the agent file.
+
+    The two halves live in two files now, and the messages below say which:
+    a grant is added or removed in `content/mcp/<id>.md`, the pointer in the
+    agent's own body or its section under `agents/mcp/`. `servers` is threaded
+    in for exactly that -- so the error names the descriptor's real path
+    rather than one reconstructed here.
 
     "The body" here means the agent's own prose together with every section
     `mcp_sections` resolved for it: the pointer this invariant looks for now
@@ -1151,24 +1298,27 @@ def _require_mcp_convention_referenced(agents: tuple[Agent, ...]) -> None:
     did -- the two places are read together, never one to the exclusion of
     the other.
     """
+    sources = {server.name: str(server.source) for server in servers}
     for agent in agents:
-        declared = set(agent.optional_mcp)
+        granted = set(agent.optional_mcp)
         referenced = _referenced_mcp_ids(agent.body)
         for section in agent.mcp_sections:
             referenced |= _referenced_mcp_ids(section.body)
-        if declared == referenced:
+        if granted == referenced:
             continue
         problems = []
-        for server_id in sorted(declared - referenced):
+        for server_id in sorted(granted - referenced):
             expected = "{{skills_root}}/" + mcp_convention_path(server_id).as_posix()
+            where = sources.get(server_id, f"mcp/{server_id}.md")
             problems.append(
-                f"declares 'optional_mcp: [{server_id}]' but its body never references "
+                f"is named in the 'reaches' list of {where} but its body never references "
                 f"{expected!r}"
             )
-        for server_id in sorted(referenced - declared):
+        for server_id in sorted(referenced - granted):
             expected = "{{skills_root}}/" + mcp_convention_path(server_id).as_posix()
+            where = sources.get(server_id, f"mcp/{server_id}.md")
             problems.append(
-                f"references {expected!r} but never declares 'optional_mcp: [{server_id}]'"
+                f"references {expected!r} but the 'reaches' list of {where} does not name it"
             )
         raise ContentError(f"{agent.source}: " + "; ".join(problems))
 
@@ -1220,6 +1370,8 @@ def _load_mcp(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Mcp,
         archive_members, archive_executable = _archive_form(fields, distribution, source)
         argv = _names(fields, "argv", source)
         withheld_tools = _names(fields, "withheld_tools", source)
+        reaches = _names(fields, "reaches", source)
+        _refuse_repeated_reaches(reaches, source)
         servers.append(
             Mcp(
                 name=_stem(path),
@@ -1239,6 +1391,7 @@ def _load_mcp(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Mcp,
                 archive_executable=archive_executable,
                 argv=argv,
                 withheld_tools=withheld_tools,
+                reaches=reaches,
             )
         )
     return tuple(servers)
@@ -1461,7 +1614,7 @@ def _require_known_system_prompt_mcp(
 ) -> None:
     """An ambient section has to belong to a server this release ships.
 
-    The same invariant `_require_known_optional_mcp` holds for an agent's
+    The same invariant `_require_reaches_known_agents` holds for an agent's
     declaration, for the same reason: a section naming a server nobody ships
     would never be selected by any `--mcp` flag, so it would sit in the tree
     looking installed and reach nobody -- the failure being silent is exactly
@@ -1499,6 +1652,57 @@ def _refuse_derived_fields(fields: dict[str, Any], source: PurePosixPath) -> Non
         if key in fields:
             raise ContentError(
                 f"{source}: {key!r} is derived, not declared, and declaring it decides nothing"
+            )
+
+
+#: The two spellings of the agent-to-server relation, and what an agent file is
+#: told when it carries either. One table rather than one function per key: the
+#: rule is a single one -- an agent file does not declare which servers reach it
+#: -- and the two keys differ only in the history behind the sentence.
+#: `optional_mcp` used to live in an agent file and is now derived;
+#: `reaches` never lived there and is the descriptor's own key. Keeping them
+#: apart would have meant two near-identical functions whose only real
+#: difference was a clause, and would have let one direction be added,
+#: renamed or deleted without the other -- which is precisely how the
+#: half-guarded state below came to exist in the first place.
+_RELATION_KEYS_NOT_AN_AGENTS: dict[str, str] = {
+    "optional_mcp": (
+        "is no longer declared by an agent; it is derived from the 'reaches' list of "
+        "each server's own descriptor"
+    ),
+    "reaches": (
+        "belongs to a server's descriptor, not to an agent; it is the descriptor's "
+        "list of the agents that server reaches"
+    ),
+}
+
+
+def _refuse_relation_keys_in_an_agent(fields: dict[str, Any], source: PurePosixPath) -> None:
+    """Neither end of the agent-to-server relation is an agent file's to declare.
+
+    The relation is authored in exactly one place: each descriptor under
+    `content/mcp/` lists the agents it reaches, and `Agent.optional_mcp` is the
+    inverse of those lists, computed at load time. An agent file carrying
+    either key is therefore read by nobody and changes nothing, while looking
+    exactly like a working declaration -- the precise silent failure this
+    codebase keeps paying for.
+
+    Both spellings fail that way, and the second is the likelier mistake once
+    the inversion lands: an author who half-remembers "the key is `reaches`
+    now" writes it where the old key lived, gets a clean load, and gets no
+    grant. Refusing `optional_mcp` alone would have left the mirror of the
+    refusal wide open, and an invariant that holds in only one direction is
+    where the bug walks in -- that is the lesson this repository keeps
+    relearning, which is why the two live in one table read by one loop rather
+    than in two functions that could drift apart.
+
+    Each message names the file, says what the key really is, and names
+    `content/mcp/<id>.md` as the file to write it in.
+    """
+    for key, explanation in _RELATION_KEYS_NOT_AN_AGENTS.items():
+        if key in fields:
+            raise ContentError(
+                f"{source}: {key!r} {explanation}, so it is written in content/mcp/<id>.md"
             )
 
 

@@ -3,7 +3,6 @@ name: pegasus-orchestrator
 description: Coordinates Pegasus SDD work
 mode: primary
 requires_tools: [read, bash, grep, glob, write, edit, skill, ask]
-optional_mcp: [cbm, context7, engram, jira, playwright]
 may_delegate_to: [pegasus-general, sdd-explore, sdd-propose, sdd-spec, sdd-design, sdd-tasks, sdd-apply, sdd-verify, sdd-archive, sdd-init, sdd-onboard]
 model_configurable: true
 ---

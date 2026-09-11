@@ -3,7 +3,6 @@ name: sdd-propose
 description: Proposal executor for one change; turns exploration or direct input into a structured proposal
 mode: subagent
 requires_tools: [read, write, edit, grep, glob]
-optional_mcp: [engram]
 model_configurable: true
 ---
 

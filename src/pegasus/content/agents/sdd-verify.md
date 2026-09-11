@@ -3,7 +3,6 @@ name: sdd-verify
 description: Sole readiness authority for executable and configuration changes
 mode: subagent
 requires_tools: [read, write, bash]
-optional_mcp: [cbm, context7, engram, jira, playwright]
 may_delegate_to: [pegasus-general]
 model_configurable: true
 ---

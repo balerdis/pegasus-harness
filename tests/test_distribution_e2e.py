@@ -316,6 +316,19 @@ class DistributionOrchestratorRenameTest(unittest.TestCase):
         override = renamed_source / "content" / "agents" / "mcp" / "cbm@pegasus-orchestrator.md"
         override.rename(renamed_source / "content" / "agents" / "mcp" / "cbm@acme-orchestrator.md")
 
+        # An MCP grant is declared by the server, not the agent: each
+        # descriptor's `reaches` list names the agents it is granted to, by
+        # name. So a rename has to reach in there too -- exactly the residue
+        # `docs/arquitectura/arquitectura.md` records for a distribution that
+        # ships its own server: `reaches` names agents *after* whatever rename
+        # the distribution performs, never the engine's original names.
+        for descriptor in (renamed_source / "content" / "mcp").glob("*.md"):
+            text = descriptor.read_text(encoding="utf-8")
+            if "pegasus-orchestrator" in text:
+                descriptor.write_text(
+                    text.replace("pegasus-orchestrator", "acme-orchestrator"), encoding="utf-8"
+                )
+
         # 2. Build ACME from that renamed source.
         acme_identity = self.root / "acme-identity.json"
         acme_identity.write_text(json.dumps(ACME_IDENTITY_PAYLOAD), encoding="utf-8")

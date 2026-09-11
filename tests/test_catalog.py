@@ -336,6 +336,7 @@ class McpConventionNamespaceTest(unittest.TestCase):
             (mcp_dir / f"{server_id}.md").write_text(
                 f"---\nname: {server_id}\ndescription: Probe server\n"
                 f"distribution: remote\nendpoint: https://example.test/{server_id}\n"
+                f"reaches: [{content_module.SESSION_STARTS_IN}]\n"
                 f"---\n\n# {server_id} convention body\n",
                 encoding="utf-8",
             )
@@ -346,7 +347,7 @@ class McpConventionNamespaceTest(unittest.TestCase):
         # real release always has.
         (agents_dir / f"{content_module.SESSION_STARTS_IN}.md").write_text(
             f"---\nname: {content_module.SESSION_STARTS_IN}\ndescription: Probe orchestrator\n"
-            "mode: primary\noptional_mcp: [cbm, engram]\n---\n\nUses {{skills_root}}/_shared/mcp/cbm-convention.md "
+            "mode: primary\n---\n\nUses {{skills_root}}/_shared/mcp/cbm-convention.md "
             "and {{skills_root}}/_shared/mcp/engram-convention.md.\n",
             encoding="utf-8",
         )

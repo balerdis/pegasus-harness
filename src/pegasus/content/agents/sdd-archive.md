@@ -3,7 +3,6 @@ name: sdd-archive
 description: Archiving executor for one change; merges delta specs into main specs and moves the change to archive
 mode: subagent
 requires_tools: [read, write, edit, bash, glob]
-optional_mcp: [engram]
 model_configurable: true
 ---
 

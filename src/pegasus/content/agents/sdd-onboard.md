@@ -3,7 +3,6 @@ name: sdd-onboard
 description: Onboarding executor; guides a full SDD cycle, exploration to archive, on the user's real codebase
 mode: subagent
 requires_tools: [read, write, edit, bash, grep, glob]
-optional_mcp: [context7, engram, jira]
 model_configurable: true
 ---
 
