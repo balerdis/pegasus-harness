@@ -102,6 +102,28 @@ class InstallAndRetireTest(unittest.TestCase):
         self.assertEqual(set(recorded), {entry.id for entry in catalog.entries})
         self.assertEqual(recorded, {item.id: ownership.digest(item) for item in rendered})
 
+    def test_the_apply_patch_scope_plugin_lands_on_disk_and_is_claimed(self):
+        """A bundled plugin is only shipped if the journal admits to it.
+
+        Named here rather than left to the counts above because the failure it
+        guards against is silent in both directions: an asset the journal never
+        records is an asset `uninstall` leaves behind forever, and an asset that
+        never reaches disk is a plugin the runtime simply does not load. The
+        artifact is found by its suffix, not by a spelled-out filename -- the
+        installed name is derived from this distribution's identity.
+        """
+        matches = [
+            item
+            for item in self.artifacts
+            if isinstance(item, FileArtifact) and item.path.name.endswith("-apply-patch-scope.ts")
+        ]
+        self.assertEqual(len(matches), 1, "the apply_patch scoping plugin is not among the artifacts")
+        plugin = matches[0]
+
+        applied = self.install()
+        self.assertTrue(plugin.path.is_file(), plugin.path)
+        self.assertIn(plugin.id, {record.id for record in applied.records})
+
     def test_installing_twice_changes_nothing_the_second_time(self):
         """Every artifact is a collision the second time, including the appends."""
         self.install()

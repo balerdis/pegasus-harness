@@ -137,6 +137,7 @@ _RENAMED_ASSETS: dict[str, Any] = {
     "skill-registry.ts": lambda identity: f"{identity.program_name}-skill-registry.ts",
     "orchestrator-notifier.ts": lambda identity: f"{identity.program_name}-orchestrator-notifier.ts",
     "zellij-state.ts": lambda identity: f"{identity.program_name}-zellij-state.ts",
+    "apply-patch-scope.ts": lambda identity: f"{identity.program_name}-apply-patch-scope.ts",
 }
 
 
@@ -241,7 +242,7 @@ class Adapter:
         `identity` (threaded through `core.catalog` from `Runtime.identity`)
         is consulted the same way: every fixed "pegasus-*" name this method
         used to ship is now derived from it -- the skill-registry subtree and
-        its binary and module, the three local plugin files and the contract
+        its binary and module, the four local plugin files and the contract
         between the first and one of the second, and the notifier's own npm
         package name -- through `_installed_relative`, `_skill_registry_
         target` and the `program_name`/`display_name`/`program_module_name`/

@@ -618,6 +618,82 @@ class NoAgentNameLiteralInBundledTsAssetsTest(unittest.TestCase):
         )
 
 
+def bundled_runtime_assets() -> list[Path]:
+    """Every TypeScript/JavaScript asset an adapter bundles and ships verbatim.
+
+    Wider than `bundled_ts_assets()` above on purpose: a distribution's
+    rebranding substitutes `.md` and `.txt` only, so the body of any runtime
+    asset -- `.ts` or `.js` alike -- travels to every distribution exactly as
+    written here. The filename is derived from the installed identity; the text
+    inside it is not.
+    """
+    return sorted(
+        path
+        for path in (SOURCE / "adapters").rglob("*")
+        if path.suffix in {".ts", ".js"} and "__pycache__" not in path.parts
+    )
+
+
+#: The bundled runtime assets allowed to carry a brand fragment, each because
+#: what it carries is wire plumbing rather than a name shown to anyone:
+#:
+#: - `skill-registry.ts` reads the env var names `PEGASUS_SKILL_REGISTRY_BIN`
+#:   and `PEGASUS_SKILL_ROOTS`, the contract it shares with the installer. Both
+#:   sides must spell them the same way in every distribution, exactly like the
+#:   wire-format identifiers `NoProductIdentityOutsideCompositionRootTest`
+#:   exempts on the Python side.
+#: - `zellij-state.ts` addresses a state directory whose engine-branded name is
+#:   shared with tooling outside this repository; the asset says so itself.
+#:
+#: Listed here, and nowhere else, so that adding a new asset can never quietly
+#: join them: a `.ts` that ships a brand fragment without appearing here fails.
+BRAND_EXEMPT_RUNTIME_ASSETS = frozenset({"skill-registry.ts", "zellij-state.ts"})
+
+
+class NoBrandFragmentInBundledRuntimeAssetsTest(unittest.TestCase):
+    """A distribution that is not this one must not ship an asset that says so.
+
+    The `.ts`/`.js` assets are the one shipped body no rebranding rewrites, so a
+    brand fragment written into one travels verbatim into every distribution
+    built on this engine -- a plugin introducing itself under the wrong product
+    name to a person who never installed this one.
+
+    Written as one scan over every bundled runtime asset rather than as a check
+    on the newest one: a per-file guard is the enumerated mirror this project
+    keeps out, and it would protect only the asset whose author remembered to
+    add it.
+    """
+
+    def test_there_are_bundled_runtime_assets_to_scan(self):
+        self.assertTrue(bundled_runtime_assets(), "no .ts/.js assets found; this test would prove nothing")
+
+    def test_no_bundled_runtime_asset_carries_a_brand_fragment(self):
+        offenders = {}
+        for path in bundled_runtime_assets():
+            if path.name in BRAND_EXEMPT_RUNTIME_ASSETS:
+                continue
+            lowered = path.read_text(encoding="utf-8").lower()
+            found = sorted(fragment for fragment in BANNED_FRAGMENTS if fragment in lowered)
+            if found:
+                offenders[str(path.relative_to(SOURCE))] = found
+        self.assertEqual(
+            offenders,
+            {},
+            "a bundled runtime asset names a distribution's brand; its text ships verbatim "
+            "to every distribution, so say 'this product', 'the installer' or 'the runtime' "
+            f"instead: {offenders}",
+        )
+
+    def test_every_exemption_still_names_an_asset_that_exists(self):
+        names = {path.name for path in bundled_runtime_assets()}
+        self.assertTrue(names, "no .ts/.js assets found; this test would prove nothing")
+        self.assertEqual(
+            sorted(BRAND_EXEMPT_RUNTIME_ASSETS - names),
+            [],
+            "an exemption outlived the asset it was written for",
+        )
+
+
 def _owning_adapter(path: Path) -> str:
     """The adapter a file belongs to, or empty for the composition root itself."""
     relative = path.relative_to(ADAPTERS).parts

@@ -457,7 +457,11 @@ class ShippedCatalogTest(unittest.TestCase):
         # 89, not 88: `_shared/mcp/jira-convention.md` is the fifth shipped
         # MCP server's convention file.
         # 23, not 22: `/mcp/jira` is that fifth server's settings key.
-        self.assertEqual((len(files), len(keys)), (89, 23))
+        # 90, not 89: `apply-patch-scope.ts` is a sixth bundled OpenCode plugin,
+        # installed under this distribution's own derived name. It carries no
+        # settings key of its own -- the plugin directory is appended once, for
+        # every plugin at a time -- so the key count does not move with it.
+        self.assertEqual((len(files), len(keys)), (90, 23))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:

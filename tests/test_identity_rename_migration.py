@@ -135,12 +135,14 @@ class RenamingTheInstalledIdentityMigratesArtifactsTest(RealHomeTestCase):
         self.assertFalse((plugins / "acme-skill-registry.ts").exists())
         self.assertFalse((plugins / "acme-orchestrator-notifier.ts").exists())
         self.assertFalse((plugins / "acme-zellij-state.ts").exists())
+        self.assertFalse((plugins / "acme-apply-patch-scope.ts").exists())
 
     def test_the_new_identitys_local_plugins_exist(self):
         plugins = self.config / "plugins"
         self.assertTrue((plugins / "zenith-skill-registry.ts").is_file())
         self.assertTrue((plugins / "zenith-orchestrator-notifier.ts").is_file())
         self.assertTrue((plugins / "zenith-zellij-state.ts").is_file())
+        self.assertTrue((plugins / "zenith-apply-patch-scope.ts").is_file())
 
     def test_the_old_identitys_skill_registry_contract_is_gone(self):
         self.assertFalse((self.config / "acme-skill-registry.env").exists())

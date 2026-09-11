@@ -1053,9 +1053,10 @@ class OwnArtifactsTest(unittest.TestCase):
     def setUp(self):
         self.layout = Adapter().layout(ENVIRONMENT)
         self.artifacts = Adapter().own_artifacts(self.layout, ORCHESTRATOR, IDENTITY)
+        self.files = {item.path: item for item in only(self.artifacts, FileArtifact)}
 
     def test_ships_the_adapter_only_assets(self):
-        self.assertEqual(len(only(self.artifacts, FileArtifact)), 11)
+        self.assertEqual(len(only(self.artifacts, FileArtifact)), 12)
 
     def test_build_leftovers_are_excluded(self):
         self.assertEqual([item for item in self.artifacts if "__pycache__" in str(item.path)], [])
@@ -1144,6 +1145,22 @@ class OwnArtifactsTest(unittest.TestCase):
         content = notifier.content.decode("utf-8")
         self.assertIn('"king-pegasus-two"', content)
         self.assertNotIn("pegasus-orchestrator", content)
+
+    def test_the_apply_patch_scope_plugin_ships_under_the_derived_name(self):
+        """Like every other plugin this adapter bundles, its installed filename
+        is this distribution's own, never the source filename it ships as."""
+        paths = {item.path for item in only(self.artifacts, FileArtifact)}
+        self.assertIn(CONFIG / f"plugins/{IDENTITY.program_name}-apply-patch-scope.ts", paths)
+
+    def test_the_apply_patch_scope_plugin_declares_its_hook_and_guards_the_tool_id(self):
+        """The two facts that make the plugin do anything at all: it registers
+        on the one hook that writes the description sent with a tool definition,
+        and it touches nothing but `apply_patch`. A plugin that renders cleanly
+        while hooking nothing would pass every other test here."""
+        plugin = self.files[CONFIG / f"plugins/{IDENTITY.program_name}-apply-patch-scope.ts"]
+        source = plugin.content.decode("utf-8")
+        self.assertIn('"tool.definition"', source)
+        self.assertIn('input.toolID !== "apply_patch"', source)
 
     def test_the_notifier_npm_manifests_agree_on_a_lowercase_package_name(self):
         """npm rejects any uppercase character in `package.json`'s `name`
