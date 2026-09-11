@@ -8,6 +8,13 @@ unless something in this list names it. `mcp grant` is that lever: it records
 the key on the installation's journal entry and reapplies the rendered
 configuration so every agent's wildcard actually includes it.
 
+`figma` plays that "user's own server" role throughout this file, standing in
+for something Pegasus genuinely never heard of. It used to be `jira`, but
+`jira` shipped as a real descriptor (see `content/mcp/jira.md`) and nothing
+here failed -- the module's whole premise depends on its stand-in key being
+unknown to Pegasus, and `jira` quietly stopped being that. See
+`test_the_stand_in_key_is_not_a_shipped_server` below, which now pins it.
+
 Follows the same discipline as `test_cli_update.py`: real disk, a throwaway
 home, and the double only where a real filesystem condition cannot be
 produced.
@@ -20,7 +27,7 @@ from dataclasses import replace
 
 from pegasus import cli
 from pegasus.adapters import available
-from pegasus.core import codecs, journal as journal_module, pointer
+from pegasus.core import codecs, content as content_module, journal as journal_module, pointer
 from pegasus.core.types import Codec, Environment
 from real_home import RealHomeTestCase as _RealHomeTestCase
 
@@ -60,7 +67,7 @@ class RealHomeTestCase(_RealHomeTestCase):
         the CLI's own configuration -- a key under `/mcp` Pegasus never wrote."""
         layout = self.layout()
         document = codecs.loads(Codec.JSON, layout.settings_file.read_text(encoding="utf-8"))
-        document = pointer.set_at(document, f"/mcp/{key}", value or {"type": "local", "command": ["jira-server"]})
+        document = pointer.set_at(document, f"/mcp/{key}", value or {"type": "local", "command": ["figma-server"]})
         layout.settings_file.write_text(codecs.dumps(Codec.JSON, document), encoding="utf-8")
 
     def drop_mcp_bindings(self) -> None:
@@ -82,62 +89,62 @@ class GrantTest(RealHomeTestCase):
     def test_grant_refuses_an_undeclared_key_and_names_what_is_available(self):
         self.install()
         self.declare_own_mcp_server("figma")
-        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "linear")
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
-        self.assertIn("jira", report["error"])
+        self.assertIn("linear", report["error"])
         self.assertIn("figma", report["error"])
 
     def test_grant_refuses_when_nothing_is_declared(self):
         self.install()
-        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         self.assertNotEqual(code, 0)
-        self.assertIn("jira", report["error"])
+        self.assertIn("figma", report["error"])
 
     def test_granting_a_declared_key_succeeds(self):
         self.install()
-        self.declare_own_mcp_server("jira")
-        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         self.assertEqual(code, 0)
         self.assertEqual(report["action"], "grant")
-        self.assertEqual(report["key"], "jira")
-        self.assertIn("jira", report["granted"])
+        self.assertEqual(report["key"], "figma")
+        self.assertIn("figma", report["granted"])
 
     def test_granting_persists_to_the_journal(self):
         self.install()
-        self.declare_own_mcp_server("jira")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira")
-        self.assertIn("jira", self.installed().granted_mcp)
+        self.declare_own_mcp_server("figma")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma")
+        self.assertIn("figma", self.installed().granted_mcp)
 
     def test_granting_reapplies_the_rendered_agent_permission(self):
         """The whole point: an agent's rendered `permission` block must
         actually carry the grant, not just the journal."""
         self.install()
-        self.declare_own_mcp_server("jira")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         settings = self.settings()
         agents = settings.get("agent", {})
         self.assertTrue(agents, "expected at least one rendered agent")
         found_grant = any(
-            entry.get("permission", {}).get("jira*") == "allow" for entry in agents.values()
+            entry.get("permission", {}).get("figma*") == "allow" for entry in agents.values()
         )
-        self.assertTrue(found_grant, "no agent's rendered permission carries the jira grant")
+        self.assertTrue(found_grant, "no agent's rendered permission carries the figma grant")
 
     def test_grant_reports_a_restart_is_needed(self):
         self.install()
-        self.declare_own_mcp_server("jira")
-        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         self.assertEqual(code, 0)
         self.assertTrue(report.get("activation"))
 
     def test_grant_without_an_installation_is_refused(self):
         self.present()
-        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
 
     def test_grant_with_an_unknown_cli_is_refused(self):
-        code, report = self.run_cli("mcp", "grant", "--cli", "nonesuch", "jira")
+        code, report = self.run_cli("mcp", "grant", "--cli", "nonesuch", "figma")
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
 
@@ -152,34 +159,34 @@ class GrantTest(RealHomeTestCase):
 class RevokeTest(RealHomeTestCase):
     def test_revoking_a_never_granted_key_reports_already_revoked_at_exit_0(self):
         self.install()
-        code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "jira")
+        code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "figma")
         self.assertEqual(code, 0)
         self.assertEqual(report["status"], "already-revoked")
 
     def test_revoking_a_granted_key_removes_it(self):
         self.install()
-        self.declare_own_mcp_server("jira")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira")
-        code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma")
+        code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "figma")
         self.assertEqual(code, 0)
         self.assertEqual(report["status"], "revoked")
-        self.assertNotIn("jira", self.installed().granted_mcp)
+        self.assertNotIn("figma", self.installed().granted_mcp)
 
     def test_revoking_reapplies_the_rendered_permission(self):
         self.install()
-        self.declare_own_mcp_server("jira")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira")
-        self.run_cli("mcp", "revoke", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma")
+        self.run_cli("mcp", "revoke", "--cli", CLI, "figma")
         settings = self.settings()
         agents = settings.get("agent", {})
         found_grant = any(
-            entry.get("permission", {}).get("jira*") == "allow" for entry in agents.values()
+            entry.get("permission", {}).get("figma*") == "allow" for entry in agents.values()
         )
         self.assertFalse(found_grant, "revoked grant is still present in a rendered agent")
 
     def test_revoke_without_an_installation_is_refused(self):
         self.present()
-        code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "jira")
+        code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "figma")
         self.assertNotEqual(code, 0)
 
 
@@ -192,50 +199,50 @@ class StaleGrantDoesNotAbortAnUnrelatedInstallTest(RealHomeTestCase):
 
     def test_a_stale_grant_colliding_with_a_fresh_binding_is_dropped_not_aborted(self):
         self.install()
-        self.declare_own_mcp_server("jira-mcp")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira-mcp")
-        self.assertIn("jira-mcp", self.installed().granted_mcp)
+        self.declare_own_mcp_server("figma-mcp")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma-mcp")
+        self.assertIn("figma-mcp", self.installed().granted_mcp)
 
         # An unrelated install binds a shipped server ("cbm") under the exact
         # key string the earlier grant used. Nothing about this asks to grant
         # or revoke anything -- it is a plain --mcp selection.
-        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=jira-mcp")
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=figma-mcp")
         self.assertEqual(code, 0, report)
 
     def test_the_dropped_key_is_not_claimed_by_the_journal(self):
         self.install()
-        self.declare_own_mcp_server("jira-mcp")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira-mcp")
-        self.run_cli("install", "--cli", CLI, "--mcp", "cbm=jira-mcp")
-        self.assertNotIn("jira-mcp", self.installed().granted_mcp)
+        self.declare_own_mcp_server("figma-mcp")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma-mcp")
+        self.run_cli("install", "--cli", CLI, "--mcp", "cbm=figma-mcp")
+        self.assertNotIn("figma-mcp", self.installed().granted_mcp)
 
     def test_the_report_names_the_dropped_key(self):
         self.install()
-        self.declare_own_mcp_server("jira-mcp")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira-mcp")
-        _code, report = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=jira-mcp")
+        self.declare_own_mcp_server("figma-mcp")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma-mcp")
+        _code, report = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=figma-mcp")
         self.assertTrue(report.get("grant_warnings"))
-        self.assertTrue(any("jira-mcp" in warning for warning in report["grant_warnings"]))
+        self.assertTrue(any("figma-mcp" in warning for warning in report["grant_warnings"]))
 
     def test_an_explicit_same_invocation_collision_still_raises(self):
         """A key named explicitly in the very call that also binds it is a
         real contradiction, not a leftover -- `mcp grant` itself must still
         refuse it."""
-        self.install("--mcp", "cbm=jira-mcp")
-        self.declare_own_mcp_server("jira-mcp")
-        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "jira-mcp")
+        self.install("--mcp", "cbm=figma-mcp")
+        self.declare_own_mcp_server("figma-mcp")
+        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "figma-mcp")
         self.assertNotEqual(code, 0)
-        self.assertIn("jira-mcp", report["error"])
+        self.assertIn("figma-mcp", report["error"])
 
     def test_update_after_a_drop_is_a_no_op(self):
         self.install()
-        self.declare_own_mcp_server("jira-mcp")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira-mcp")
-        self.run_cli("install", "--cli", CLI, "--mcp", "cbm=jira-mcp")
-        self.assertNotIn("jira-mcp", self.installed().granted_mcp)
+        self.declare_own_mcp_server("figma-mcp")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma-mcp")
+        self.run_cli("install", "--cli", CLI, "--mcp", "cbm=figma-mcp")
+        self.assertNotIn("figma-mcp", self.installed().granted_mcp)
         code, report = self.run_cli("update", "--cli", CLI)
         self.assertEqual(code, 0, report)
-        self.assertNotIn("jira-mcp", self.installed().granted_mcp)
+        self.assertNotIn("figma-mcp", self.installed().granted_mcp)
         self.assertFalse(report.get("grant_warnings"))
 
 
@@ -249,20 +256,20 @@ class ListTest(RealHomeTestCase):
 
     def test_list_shows_a_declared_but_ungranted_key_as_available(self):
         self.install()
-        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("figma")
         code, report = self.run_cli("mcp", "list", "--cli", CLI)
         self.assertEqual(code, 0)
         self.assertEqual(report["granted"], [])
-        self.assertIn("jira", report["available"])
+        self.assertIn("figma", report["available"])
 
     def test_list_moves_a_granted_key_out_of_available(self):
         self.install()
-        self.declare_own_mcp_server("jira")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         code, report = self.run_cli("mcp", "list", "--cli", CLI)
         self.assertEqual(code, 0)
-        self.assertEqual(report["granted"], ["jira"])
-        self.assertNotIn("jira", report["available"])
+        self.assertEqual(report["granted"], ["figma"])
+        self.assertNotIn("figma", report["available"])
 
     def test_json_shape_always_carries_already_covered(self):
         self.install()
@@ -276,11 +283,11 @@ class ListTest(RealHomeTestCase):
         every declared, ungranted key -- the case this report already
         handled correctly before `already_covered` existed."""
         self.install()
-        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("linear")
         self.declare_own_mcp_server("figma")
         code, report = self.run_cli("mcp", "list", "--cli", CLI)
         self.assertEqual(code, 0)
-        self.assertEqual(sorted(report["available"]), ["figma", "jira"])
+        self.assertEqual(sorted(report["available"]), ["figma", "linear"])
         self.assertEqual(report["already_covered"], [])
 
     def test_a_shipped_id_this_install_chose_is_reported_as_already_covered(self):
@@ -289,10 +296,10 @@ class ListTest(RealHomeTestCase):
         `GrantTest.test_a_key_colliding_with_a_shipped_server_is_refused`)."""
         self.install("--mcp", "context7")
         self.declare_own_mcp_server("context7")
-        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("figma")
         code, report = self.run_cli("mcp", "list", "--cli", CLI)
         self.assertEqual(code, 0)
-        self.assertEqual(report["available"], ["jira"])
+        self.assertEqual(report["available"], ["figma"])
         self.assertEqual(report["already_covered"], ["context7"])
 
     def test_a_bound_key_this_install_resolved_is_reported_as_already_covered(self):
@@ -304,10 +311,10 @@ class ListTest(RealHomeTestCase):
         code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
         self.assertEqual(code, 0)
         self.declare_own_mcp_server("codebase-memory-mcp")
-        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("figma")
         code, report = self.run_cli("mcp", "list", "--cli", CLI)
         self.assertEqual(code, 0)
-        self.assertEqual(report["available"], ["jira"])
+        self.assertEqual(report["available"], ["figma"])
         self.assertEqual(report["already_covered"], ["codebase-memory-mcp"])
 
     def test_every_available_key_is_one_grant_actually_accepts(self):
@@ -323,11 +330,11 @@ class ListTest(RealHomeTestCase):
             "install", "--cli", CLI, "--mcp", "context7", "--mcp", "cbm=codebase-memory-mcp"
         )
         self.assertEqual(code, 0)
-        for key in ("context7", "codebase-memory-mcp", "jira", "figma"):
+        for key in ("context7", "codebase-memory-mcp", "linear", "figma"):
             self.declare_own_mcp_server(key)
         code, report = self.run_cli("mcp", "list", "--cli", CLI)
         self.assertEqual(code, 0)
-        self.assertEqual(sorted(report["available"]), ["figma", "jira"])
+        self.assertEqual(sorted(report["available"]), ["figma", "linear"])
         self.assertTrue(report["available"], "the fixture must offer something, or this proves nothing")
         for key in report["available"]:
             with self.subTest(key=key):
@@ -337,7 +344,7 @@ class ListTest(RealHomeTestCase):
 
     def test_every_available_key_is_one_grant_actually_accepts_even_with_an_unresolved_binding(self):
         """The same property proven above, but over an install carrying an
-        unresolved binding too -- the exact fixture that broke it: `jira`
+        unresolved binding too -- the exact fixture that broke it: `figma`
         has nothing to do with `cbm`'s dropped key, yet the old code let
         `mcp list` offer it while `mcp grant` refused every key outright.
         """
@@ -346,7 +353,7 @@ class ListTest(RealHomeTestCase):
         self.assertEqual(code, 0)
         self.drop_mcp_bindings()
         self.declare_own_mcp_server("codebase-memory-mcp")
-        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("figma")
         code, report = self.run_cli("mcp", "list", "--cli", CLI)
         self.assertEqual(code, 0)
         for key in report["available"]:
@@ -367,7 +374,7 @@ class UnresolvedBindingBlocksListTest(RealHomeTestCase):
         code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
         self.assertEqual(code, 0)
         self.drop_mcp_bindings()
-        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("figma")
         code, report = self.run_cli("mcp", "list", "--cli", CLI)
         self.assertEqual(code, 0)
         self.assertEqual(report["available"], [])
@@ -394,15 +401,15 @@ class UnresolvedBindingBlocksListTest(RealHomeTestCase):
         self.assertIsNone(report["blocked"])
 
     def test_a_key_with_nothing_to_do_with_the_broken_binding_is_still_refused(self):
-        """The property `mcp list` must never violate: `jira` is unrelated
+        """The property `mcp list` must never violate: `figma` is unrelated
         to `cbm`'s dropped key, yet `mcp grant` refuses it too -- so `mcp
         list` reporting it as available would be exactly the lie this fixes."""
         self.present()
         code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
         self.assertEqual(code, 0)
         self.drop_mcp_bindings()
-        self.declare_own_mcp_server("jira")
-        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        code, report = self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         self.assertNotEqual(code, 0)
         self.assertEqual(
             report["error"],
@@ -418,11 +425,11 @@ class UnresolvedBindingBlocksListTest(RealHomeTestCase):
         self.present()
         code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
         self.assertEqual(code, 0)
-        self.declare_own_mcp_server("jira")
-        code, _ = self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        code, _ = self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         self.assertEqual(code, 0)
         self.drop_mcp_bindings()
-        code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "jira")
+        code, report = self.run_cli("mcp", "revoke", "--cli", CLI, "figma")
         self.assertNotEqual(code, 0)
         self.assertEqual(
             report["error"],
@@ -434,7 +441,7 @@ class UnresolvedBindingBlocksListTest(RealHomeTestCase):
         code, _ = self.run_cli("install", "--cli", CLI, "--mcp", "cbm=codebase-memory-mcp")
         self.assertEqual(code, 0)
         self.drop_mcp_bindings()
-        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("figma")
         context = self.runtime()
         cli.main(["mcp", "list", "--cli", CLI], runtime=context)
         out = context.out.getvalue()
@@ -445,15 +452,15 @@ class UnresolvedBindingBlocksListTest(RealHomeTestCase):
 class UpdateReappliesGrantsTest(RealHomeTestCase):
     def test_update_reapplies_the_recorded_grant_with_no_flags(self):
         self.install()
-        self.declare_own_mcp_server("jira")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         code, report = self.run_cli("update", "--cli", CLI)
         self.assertEqual(code, 0)
-        self.assertIn("jira", self.installed().granted_mcp)
+        self.assertIn("figma", self.installed().granted_mcp)
         settings = self.settings()
         agents = settings.get("agent", {})
         found_grant = any(
-            entry.get("permission", {}).get("jira*") == "allow" for entry in agents.values()
+            entry.get("permission", {}).get("figma*") == "allow" for entry in agents.values()
         )
         self.assertTrue(found_grant, "update did not reapply the recorded grant")
 
@@ -461,13 +468,13 @@ class UpdateReappliesGrantsTest(RealHomeTestCase):
 class DoctorReportsGrantedTest(RealHomeTestCase):
     def test_doctor_reports_granted_keys_distinctly_from_bound(self):
         self.install()
-        self.declare_own_mcp_server("jira")
-        self.run_cli("mcp", "grant", "--cli", CLI, "jira")
+        self.declare_own_mcp_server("figma")
+        self.run_cli("mcp", "grant", "--cli", CLI, "figma")
         code, report = self.run_cli("doctor")
         self.assertEqual(code, 0)
         entry = next(item for item in report["clis"] if item["cli"] == CLI)
-        self.assertIn("jira", entry["mcp_granted"])
-        self.assertNotIn("jira", [b["id"] for b in entry.get("mcp_bound", [])])
+        self.assertIn("figma", entry["mcp_granted"])
+        self.assertNotIn("figma", [b["id"] for b in entry.get("mcp_bound", [])])
 
     def test_doctor_reports_no_granted_keys_when_none_are_granted(self):
         self.install()
@@ -479,16 +486,16 @@ class DoctorReportsGrantedTest(RealHomeTestCase):
 class ProseTest(RealHomeTestCase):
     def test_grant_reads_as_prose(self):
         self.install()
-        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("figma")
         context = self.runtime()
-        cli.main(["mcp", "grant", "--cli", CLI, "jira"], runtime=context)
-        self.assertIn("jira", context.out.getvalue())
+        cli.main(["mcp", "grant", "--cli", CLI, "figma"], runtime=context)
+        self.assertIn("figma", context.out.getvalue())
 
     def test_revoke_reads_as_prose(self):
         self.install()
         context = self.runtime()
-        cli.main(["mcp", "revoke", "--cli", CLI, "jira"], runtime=context)
-        self.assertIn("jira", context.out.getvalue())
+        cli.main(["mcp", "revoke", "--cli", CLI, "figma"], runtime=context)
+        self.assertIn("figma", context.out.getvalue())
 
     def test_list_reads_as_prose(self):
         self.install()
@@ -508,7 +515,7 @@ class ProseTest(RealHomeTestCase):
 
     def test_list_prose_says_nothing_extra_with_nothing_already_covered(self):
         self.install()
-        self.declare_own_mcp_server("jira")
+        self.declare_own_mcp_server("figma")
         context = self.runtime()
         cli.main(["mcp", "list", "--cli", CLI], runtime=context)
         self.assertNotIn("Already covered", context.out.getvalue())
@@ -517,6 +524,22 @@ class ProseTest(RealHomeTestCase):
         code, report = self.run_cli("mcp")
         self.assertNotEqual(code, 0)
         self.assertEqual(report["status"], "failed")
+
+
+class StandInKeyIsNotShippedTest(RealHomeTestCase):
+    def test_the_stand_in_key_is_not_a_shipped_server(self):
+        """This module's entire premise is that `figma` -- the key every test
+        above declares and grants as "a server the user administers" -- is a
+        server Pegasus has never heard of. `jira` used to play that role and
+        stopped without anything here failing: it shipped a real descriptor
+        (`content/mcp/jira.md`) and every test above kept passing anyway,
+        because none of them ever chose `jira` as a shipped server. Derived
+        from `content.load()` rather than a hardcoded list, so this actually
+        catches the day `figma` ships too, instead of only asserting a
+        string literal never changed.
+        """
+        shipped = {server.name for server in content_module.load().mcp}
+        self.assertNotIn("figma", shipped)
 
 
 if __name__ == "__main__":
