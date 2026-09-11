@@ -20,27 +20,30 @@ pegasus install --cli opencode --dry-run --mcp <id>
 
 Si el plan encuentra una clave o un archivo tuyo en el destino, lo informa y lo preserva: no lo adopta como si fuera de Pegasus. El payload de OpenCode queda bajo `~/.config/opencode/` (o el `XDG_CONFIG_HOME` que tengas seteado): las skills en `skills/`, los comandos en `commands/`, el system prompt de Pegasus como `pegasus-AGENTS.md` (el nombre lleva el prefijo del binario instalado, `pegasus` en esta distribución; otra distribución del mismo motor lo instala con su propio nombre), y los agentes declarados dentro de `opencode.json` — OpenCode no los materializa como archivos aparte. Después de un apply exitoso, cerrá y reiniciá OpenCode para que cargue la configuración nueva.
 
-## Qué hacen los cuatro MCPs opcionales
+## Qué hacen los cinco MCPs opcionales
 
 | MCP | Uso práctico | Decisión |
 | --- | --- | --- |
 | CBM (`codebase-memory-mcp`) | Buscar estructura, callers, flujos e impacto de código. | Es inteligencia de código; no prueba comportamiento. |
 | Engram | Recuperar decisiones, progreso y resúmenes entre sesiones, con el protocolo de memoria persistente. | La memoria no puede sobreescribir la evidencia actual. |
 | Playwright | Probar una frontera de navegador cuando el proyecto lo necesita. | Requiere un navegador compatible instalado por separado; Pegasus no lo descarga. |
-| Context7 | Consultar documentación del proveedor de forma remota. | Es el único servidor remoto embarcado; confirmalo por separado. |
+| Context7 | Consultar documentación del proveedor de forma remota. | Es remoto, igual que Jira; confirmá el acceso a esa red por separado. |
+| Jira | Issues y páginas de Confluence de una instancia Atlassian, a través del servidor remoto propio de Atlassian. | Necesita una autorización única, `opencode mcp auth jira`, antes de que cualquier herramienta conteste, y nada más te lo va a avisar. No retiene ninguna herramienta: un agente que lo reciba puede crear, transicionar y editar, no sólo leer. |
 
 Instalá solo lo que el equipo vaya a usar: un servidor no pedido con `--mcp` no deja config ni dependencia huérfana.
 
 ## Dar acceso a un MCP que vos mismo administrás
 
-Pegasus renderiza cada agente con una base que niega todo (`{"*": false}`) más una lista de los servidores que él mismo instala. Un MCP que instalaste y administrás por tu cuenta (Jira, Figma, o cualquier otro) queda fuera de esa lista aunque figure en tu `opencode.json`: OpenCode combina el bloque de permisos propio del agente al final, así que si Pegasus no le abre la puerta a esa clave, ningún agente puede usarla, sin importar qué diga tu configuración general.
+Pegasus renderiza cada agente con una base que niega todo (`{"*": false}`) más una lista de los servidores que él mismo instala. Un MCP que instalaste y administrás por tu cuenta (Sentry, Figma, o cualquier otro) queda fuera de esa lista aunque figure en tu `opencode.json`: OpenCode combina el bloque de permisos propio del agente al final, así que si Pegasus no le abre la puerta a esa clave, ningún agente puede usarla, sin importar qué diga tu configuración general.
+
+Si ya administrás tu propia clave `jira` con `mcp grant` (alcanza a los trece agentes) y más adelante un `install`/`update` selecciona el `jira` que Pegasus embarca (que sólo alcanza a los ocho agentes que llevan Context7), la colisión no aborta nada: `grant_mcp` descarta en silencio el grant que venías arrastrando, por considerarlo redundante, y tu alcance baja de trece agentes a ocho sin más aviso que el `grant_warnings` del report.
 
 `pegasus mcp` es la palanca para eso. A diferencia de los MCPs que Pegasus instala, acá no hay elección por agente: la clave se otorga a todos los agentes por igual, porque hacerlo agente por agente volvería tediosa la tarea de sumar un MCP más.
 
 ```sh
-pegasus mcp grant --cli opencode jira-mcp
+pegasus mcp grant --cli opencode sentry-mcp
 pegasus mcp list --cli opencode
-pegasus mcp revoke --cli opencode jira-mcp
+pegasus mcp revoke --cli opencode sentry-mcp
 ```
 
 `grant` rechaza una clave que tu propia configuración de OpenCode no declara bajo `mcp` — nombra ahí mismo cuáles sí declara, para que un error de tipeo no termine en un permiso que nadie nota que falta. `revoke` sobre una clave que nunca otorgaste no es un error: informa que ya estaba en ese estado y sale en `0`. `list` muestra lo que está otorgado ahora, y de las claves que tu configuración declara y todavía no otorgaste, cuáles `grant` aceptaría tal como está la instalación — nunca una que `grant` fuera a rechazar. Una clave declarada que Pegasus ya alcanza por agente (un servidor propio de esta instalación, o una clave ya ligada) se muestra aparte, marcada como ya cubierta, en vez de desaparecer del listado sin explicación.
