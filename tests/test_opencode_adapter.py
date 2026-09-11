@@ -440,7 +440,7 @@ class AgentRenderTest(unittest.TestCase):
                 "read": "allow",
                 "edit": "allow",
                 "context7*": "allow",
-                "external_directory": {"*": "deny", f"{CONFIG.as_posix()}/skills/*": "allow"},
+                "external_directory": {"*": "ask", f"{CONFIG.as_posix()}/skills/*": "allow"},
                 "task": {"*": "deny", "explore": "allow"},
             },
         )
@@ -448,14 +448,13 @@ class AgentRenderTest(unittest.TestCase):
     def test_a_reader_is_allowed_out_to_the_config_directory_and_nowhere_else(self):
         """Reading a path outside the project worktree is a permission of its own.
 
-        `read`, `grep` and `glob` each call the runtime's own
-        `assertExternalDirectory` before they ask for their named permission,
-        and that asks under the separate name `external_directory`. Permission
-        names are matched by wildcard and resolved to the last match, so the
-        deny baseline this map opens with matches that name too -- and denies
-        it outright, with no prompt, which is fatal in a sub-agent that has
-        nobody to prompt. Every path Pegasus itself hands an agent (a phase
-        agent's own SKILL.md, the `_shared` conventions) lives under the
+        `read`, `grep`, `glob`, `edit`, `write` and `bash` each call the
+        runtime's own `assertExternalDirectory` before they ask for their
+        named permission, and that asks under the separate name
+        `external_directory`. Permission names are matched by wildcard and
+        resolved to the last match, so the baseline this map opens with
+        matches that name too. Every path Pegasus itself hands an agent (a
+        phase agent's own SKILL.md, the `_shared` conventions) lives under the
         config directory and outside every worktree, so without this grant the
         whole lazy-loading contract is unreadable by construction. The grant is
         a pattern rather than a bare `allow` so that it opens exactly the
@@ -463,32 +462,50 @@ class AgentRenderTest(unittest.TestCase):
         """
         agent = self.agent(requires_tools=("read",))
         rule = self.value(agent)["permission"]["external_directory"]
-        self.assertEqual(rule, {"*": "deny", f"{CONFIG.as_posix()}/skills/*": "allow"})
+        self.assertEqual(rule, {"*": "ask", f"{CONFIG.as_posix()}/skills/*": "allow"})
+
+    def test_a_subagents_external_directory_baseline_is_ask_not_deny(self):
+        """Reported from real use: a sub-agent (`sdd-verify`) pointed a `bash`
+        working directory outside its worktree and was refused outright, with
+        no prompt, even though its own `bash` permission was `allow`.
+
+        The baseline used to split by `item.mode` -- `"deny"` for a
+        sub-agent, `"ask"` for a primary -- on the reasoning that a sub-agent
+        has nobody to prompt, so a clean refusal beats a hang. That reasoning
+        does not hold: the runtime's own `ask()` returns a `DeniedError` the
+        instant it sees a configured `"deny"`, before it would ever publish a
+        prompt, and an approval only ever concatenates onto the *end* of the
+        same rule list -- so for a directory only one sub-agent's session
+        ever touches, no earlier approval exists to out-rank that `"deny"`,
+        and the refusal becomes permanent for the life of the runtime, not a
+        one-time no. `"ask"` for every agent, sub-agent included, is what
+        keeps the door open for a person to approve it instead.
+        """
+        agent = self.agent(requires_tools=("read",), mode=AgentMode.SUBAGENT)
+        rule = self.value(agent)["permission"]["external_directory"]
+        self.assertEqual(rule, {"*": "ask", f"{CONFIG.as_posix()}/skills/*": "allow"})
 
     def test_a_primary_readers_external_directory_baseline_is_ask_not_deny(self):
         """A primary agent has a person present to answer a prompt, and even
-        carries the `ask` tool itself -- unlike a subagent, denying it outright
-        would refuse a request the person could have simply approved. Leaving
-        the baseline unset here would work too, since the runtime's own
-        default for this name is `ask`, but writing it explicitly keeps the
-        boundary a property of this entry, the same reason the subagent's
-        `deny` is written rather than left to the outer baseline.
+        carries the `ask` tool itself. Leaving the baseline unset here would
+        work too, since the runtime's own default for this name is `ask`, but
+        writing it explicitly keeps the boundary a property of this entry.
         """
         agent = self.agent(requires_tools=("read",), mode=AgentMode.PRIMARY)
         rule = self.value(agent)["permission"]["external_directory"]
         self.assertEqual(rule, {"*": "ask", f"{CONFIG.as_posix()}/skills/*": "allow"})
 
     def test_the_grant_refuses_every_other_path_outside_the_worktree(self):
-        """The exception carries its own refusal.
+        """The exception carries its own baseline.
 
-        The outer baseline already denies this name, so an agent could not
-        reach `~/.ssh` or `/etc` either way -- but the boundary this entry
-        exists to draw should be readable in the entry itself, not inferred
-        from the absence of a rule two keys above.
+        Not `"deny"` any more (see `test_a_subagents_external_directory_baseline_is_ask_not_deny`),
+        but the boundary this entry exists to draw should still be readable
+        in the entry itself, not inferred from the absence of a rule two keys
+        above.
         """
         rule = self.value(self.agent(requires_tools=("read",)))["permission"]["external_directory"]
-        self.assertEqual(rule["*"], "deny")
-        self.assertEqual(next(iter(rule)), "*", "the refusal must precede the one path it excepts")
+        self.assertEqual(rule["*"], "ask")
+        self.assertEqual(next(iter(rule)), "*", "the baseline must precede the one path it excepts")
 
     def test_the_settings_file_is_not_something_a_shipped_agent_may_read(self):
         """The config directory holds the settings file, and the settings file
@@ -499,18 +516,70 @@ class AgentRenderTest(unittest.TestCase):
         rule = self.value(self.agent(requires_tools=("read",)))["permission"]["external_directory"]
         self.assertNotIn(f"{CONFIG.as_posix()}/*", rule)
 
-    def test_grep_and_glob_earn_the_same_grant_read_does(self):
+    def test_grep_glob_edit_write_and_bash_earn_the_same_grant_read_does(self):
         """They ask under the same permission name, for the same reason."""
-        for tool in ("grep", "glob"):
+        for tool in ("grep", "glob", "edit", "write", "bash"):
             with self.subTest(tool=tool):
                 permission = self.value(self.agent(requires_tools=(tool,)))["permission"]
                 self.assertIn("external_directory", permission)
 
-    def test_an_agent_that_reads_nothing_is_granted_no_way_out(self):
-        """Declaring nothing keeps meaning nothing: only the three tools that
-        actually ask under this name can earn it."""
-        permission = self.value(self.agent(requires_tools=("bash",)))["permission"]
+    def test_an_agent_that_touches_no_path_at_all_is_granted_no_way_out(self):
+        """Declaring nothing keeps meaning nothing: only a tool that actually
+        asks under this name can earn it -- `skill` and `ask` never do."""
+        permission = self.value(self.agent(requires_tools=("skill",)))["permission"]
         self.assertNotIn("external_directory", permission)
+
+    def test_a_subagent_with_bash_and_no_read_still_earns_the_grant(self):
+        """The bug reported from real use: a sub-agent declaring `bash` and
+        `write` but no `read` used to render no `external_directory` key at
+        all, falling through to the outer `"*": "deny"` baseline -- worse than
+        the `"ask"` it should have gotten, since `bash` genuinely does call
+        `assertExternalDirectory` in the runtime.
+        """
+        permission = self.value(
+            self.agent(requires_tools=("bash", "write"), mode=AgentMode.SUBAGENT)
+        )["permission"]
+        self.assertIn("external_directory", permission)
+        self.assertEqual(permission["external_directory"]["*"], "ask")
+
+    def test_a_granted_directory_is_allowed_after_the_baseline_and_the_skills_exception(self):
+        agent = self.agent(requires_tools=("read",), granted_directories=("/home/probe/worktrees/extra",))
+        rule = self.value(agent)["permission"]["external_directory"]
+        self.assertEqual(
+            rule,
+            {
+                "*": "ask",
+                f"{CONFIG.as_posix()}/skills/*": "allow",
+                "/home/probe/worktrees/extra/*": "allow",
+            },
+        )
+        keys = list(rule)
+        self.assertEqual(keys[0], "*")
+        self.assertEqual(keys[-1], "/home/probe/worktrees/extra/*", "order is what makes a grant win")
+
+    def test_a_granted_directory_reaches_a_subagent_too(self):
+        """A working directory a sub-agent needs is exactly the case this
+        mechanism exists for -- see `sdd-verify`'s own report."""
+        agent = self.agent(
+            requires_tools=("bash",), mode=AgentMode.SUBAGENT, granted_directories=("/home/probe/worktrees/extra",)
+        )
+        rule = self.value(agent)["permission"]["external_directory"]
+        self.assertEqual(rule["/home/probe/worktrees/extra/*"], "allow")
+
+    def test_a_granted_directory_earns_the_key_even_for_an_agent_that_would_not_otherwise_trigger_it(self):
+        """A directory the person explicitly granted must reach an agent that
+        only, say, writes -- `skill` alone would render no `external_directory`
+        key at all otherwise."""
+        agent = self.agent(requires_tools=("skill",), granted_directories=("/home/probe/worktrees/extra",))
+        permission = self.value(agent)["permission"]
+        self.assertIn("external_directory", permission)
+        self.assertEqual(permission["external_directory"]["*"], "ask")
+        self.assertEqual(permission["external_directory"]["/home/probe/worktrees/extra/*"], "allow")
+
+    def test_no_granted_directories_means_no_extra_entries(self):
+        agent = self.agent(requires_tools=("read",))
+        rule = self.value(agent)["permission"]["external_directory"]
+        self.assertEqual(rule, {"*": "ask", f"{CONFIG.as_posix()}/skills/*": "allow"})
 
     def test_the_permission_deny_baseline_is_written_before_anything_it_would_lose_to(self):
         """Same resolution rule as `_tools`: the runtime keeps the *last*
@@ -1397,37 +1466,30 @@ class ShippedContentRenderTest(unittest.TestCase):
             for path in (self.layout.settings_file, self.layout.config_dir / "prompts"):
                 self.assertNotIn(f"{path.as_posix()}/*", rule, agent.name)
 
-    def test_a_primary_agent_that_reads_outside_the_worktree_is_asked_not_denied(self):
-        """A primary agent has a person in the loop and even carries `ask`
-        itself, so the runtime's own default for this name -- `ask`, not
-        `deny` -- is the right one to leave standing for it. A subagent has
-        nobody to prompt, so it keeps the outright refusal.
+    def test_every_shipped_agent_that_touches_a_path_is_asked_not_denied(self):
+        """Every agent, primary or sub-agent alike, gets `"ask"` for a path
+        outside its worktree -- never `"deny"`, which the runtime resolves as
+        an irreversible refusal rather than a one-time no (see
+        `test_a_subagents_external_directory_baseline_is_ask_not_deny` in
+        `AgentRenderTest`, and `_permission`'s own docstring).
         """
         readers = [
             agent
             for agent in self.loaded.agents
-            if set(render_module.READS_OUTSIDE_THE_WORKTREE) & {*agent.requires_tools, *agent.optional_tools}
+            if set(render_module.EXTERNAL_DIRECTORY_TOOLS) & {*agent.requires_tools, *agent.optional_tools}
         ]
-        self.assertTrue(readers, "fixture drifted: no shipped agent reads outside the worktree any more")
+        self.assertTrue(readers, "fixture drifted: no shipped agent touches a path outside the worktree any more")
         primaries = [agent for agent in readers if agent.mode is AgentMode.PRIMARY]
         subagents = [agent for agent in readers if agent.mode is AgentMode.SUBAGENT]
-        self.assertTrue(primaries, "fixture drifted: no shipped primary agent reads outside the worktree")
-        self.assertTrue(subagents, "fixture drifted: no shipped subagent reads outside the worktree")
-        for agent in primaries:
+        self.assertTrue(primaries, "fixture drifted: no shipped primary agent touches a path outside the worktree")
+        self.assertTrue(subagents, "fixture drifted: no shipped subagent touches a path outside the worktree")
+        for agent in readers:
             value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
             rule = value["permission"]["external_directory"]
             self.assertEqual(rule["*"], "ask", agent.name)
             self.assertEqual(rule[f"{self.layout.skills_dir.as_posix()}/*"], "allow", agent.name)
-        for agent in subagents:
-            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
-            rule = value["permission"]["external_directory"]
-            self.assertEqual(rule["*"], "deny", agent.name)
-            self.assertEqual(rule[f"{self.layout.skills_dir.as_posix()}/*"], "allow", agent.name)
-        for agent in readers:
-            value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
             self.assertEqual(value["permission"]["*"], "deny", agent.name)
             for path in (self.layout.settings_file, self.layout.config_dir / "prompts"):
-                rule = value["permission"]["external_directory"]
                 self.assertNotIn(f"{path.as_posix()}/*", rule, agent.name)
 
     def test_no_shipped_agent_that_declares_write_renders_an_orphaned_write_permission(self):

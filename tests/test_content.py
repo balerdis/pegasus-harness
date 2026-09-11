@@ -2110,6 +2110,177 @@ class GrantMcpTest(unittest.TestCase):
                     self.assertEqual(agent.granted_mcp, (spelling,))
 
 
+class GrantDirectoriesTest(unittest.TestCase):
+    """`grant_directories` hands a working directory the person administers
+    to every agent's `external_directory` permission uniformly -- the same
+    shape `grant_mcp` already established, for a fact Pegasus cannot know on
+    its own.
+    """
+
+    def setUp(self):
+        self.config_dir = Path("/home/probe/.config/opencode")
+        self.agent_a = content.Agent(
+            name="agent-a",
+            description="Agent A",
+            body="x",
+            mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/agent-a.md"),
+        )
+        self.agent_b = content.Agent(
+            name="agent-b",
+            description="Agent B",
+            body="x",
+            mode=AgentMode.SUBAGENT,
+            source=PurePosixPath("agents/agent-b.md"),
+        )
+        self.content = content.Content(agents=(self.agent_a, self.agent_b))
+
+    def test_every_agent_gets_the_grant_uniformly(self):
+        granted = content.grant_directories(self.content, ["/home/probe/worktrees/extra"], config_dir=self.config_dir)
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_directories, ("/home/probe/worktrees/extra",))
+
+    def test_a_subagent_receives_the_grant_too(self):
+        """Unlike `grant_mcp`, a directory grant has no per-agent shape to
+        preserve -- both a primary and a sub-agent may need a working
+        directory of their own."""
+        granted = content.grant_directories(self.content, ["/srv/worktrees/extra"], config_dir=self.config_dir)
+        agent_b = next(a for a in granted.agents if a.name == "agent-b")
+        self.assertEqual(agent_b.granted_directories, ("/srv/worktrees/extra",))
+
+    def test_granting_nothing_leaves_every_agent_with_no_grant(self):
+        granted = content.grant_directories(self.content, [], config_dir=self.config_dir)
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_directories, ())
+
+    def test_is_pure_the_input_content_is_unchanged(self):
+        before_agents = self.content.agents
+        content.grant_directories(self.content, ["/home/probe/worktrees/extra"], config_dir=self.config_dir)
+        self.assertEqual(self.content.agents, before_agents)
+        self.assertEqual(self.agent_a.granted_directories, ())
+
+    def test_a_relative_path_is_refused(self):
+        with self.assertRaises(ContentError) as raised:
+            content.grant_directories(self.content, ["relative/path"], config_dir=self.config_dir)
+        self.assertIn("relative/path", str(raised.exception))
+
+    def test_a_path_that_climbs_with_dot_dot_is_refused(self):
+        with self.assertRaises(ContentError) as raised:
+            content.grant_directories(self.content, ["/home/probe/../etc"], config_dir=self.config_dir)
+        self.assertIn("..", str(raised.exception))
+
+    def test_the_filesystem_root_is_refused(self):
+        """`*` crosses `/` in the runtime's own glob matching, so granting
+        `/` would render `/*`, a pattern that matches every absolute path
+        there is -- a second, wide-open baseline with the opposite value."""
+        with self.assertRaises(ContentError) as raised:
+            content.grant_directories(self.content, ["/"], config_dir=self.config_dir)
+        self.assertIn("filesystem root", str(raised.exception))
+
+    def test_the_cli_configuration_directory_itself_is_refused(self):
+        with self.assertRaises(ContentError) as raised:
+            content.grant_directories(self.content, [str(self.config_dir)], config_dir=self.config_dir)
+        self.assertIn("configuration directory", str(raised.exception))
+
+    def test_an_ancestor_of_the_configuration_directory_is_refused(self):
+        """The product already grants only the skills subtree beneath the
+        configuration directory, deliberately, and not the configuration
+        directory itself -- widening that back open through a directory
+        grant would reopen exactly that door."""
+        with self.assertRaises(ContentError) as raised:
+            content.grant_directories(self.content, [str(self.config_dir.parent)], config_dir=self.config_dir)
+        self.assertIn("configuration directory", str(raised.exception))
+
+    def test_a_directory_inside_the_configuration_directory_but_not_an_ancestor_is_not_refused(self):
+        """Only the configuration directory and its ancestors are refused --
+        a subtree beside `skills` inside it is not this check's concern."""
+        granted = content.grant_directories(
+            self.content, [str(self.config_dir / "some-other-subtree")], config_dir=self.config_dir
+        )
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_directories, (f"{self.config_dir.as_posix()}/some-other-subtree",))
+
+    def test_a_directory_outside_the_home_is_not_refused(self):
+        """Deliberately not checked against the person's home the way every
+        other path this codebase owns is -- a legitimate working directory
+        can sit anywhere on the machine."""
+        granted = content.grant_directories(self.content, ["/srv/worktrees/extra"], config_dir=self.config_dir)
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_directories, ("/srv/worktrees/extra",))
+
+    def test_a_directory_containing_a_glob_metacharacter_is_refused(self):
+        """The runtime's own glob matching lets `*` cross `/`: a granted
+        directory containing one becomes a permission rule verbatim, and
+        `/*` alone -- see `test_the_filesystem_root_is_refused` -- already
+        shows what a wide-open one of those looks like. Refused on every
+        metacharacter the matcher special-cases, not only `*`."""
+        for spelling in ("/srv/*", "/*", "/srv/wor?k", "/srv/[work]", "/srv/wor[k]"):
+            with self.subTest(spelling=spelling):
+                with self.assertRaises(ContentError) as raised:
+                    content.grant_directories(self.content, [spelling], config_dir=self.config_dir)
+                self.assertIn(spelling, str(raised.exception))
+
+    def test_a_directory_free_of_glob_metacharacters_still_works(self):
+        granted = content.grant_directories(
+            self.content, ["/srv/worktrees/extra-1"], config_dir=self.config_dir
+        )
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_directories, ("/srv/worktrees/extra-1",))
+
+    def test_only_a_directory_one_level_down_from_root_renders_a_narrow_pattern_mutation_guardian(self):
+        """Mutation guardian for the docstring's own former claim -- that no
+        single path besides `/` could render a wide-open pattern. `/*` is
+        exactly that: if the glob-metacharacter refusal above were ever
+        removed, this would stop raising and the guardian would catch it. An
+        ordinary directory unrelated to `config_dir`, by contrast, is not
+        refused and renders only its own narrow pattern."""
+        with self.assertRaises(ContentError):
+            content.grant_directories(self.content, ["/*"], config_dir=self.config_dir)
+        granted = content.grant_directories(self.content, ["/srv/work"], config_dir=self.config_dir)
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_directories, ("/srv/work",))
+
+    def test_the_pegasus_data_directory_itself_is_refused(self):
+        data_dir = Path("/home/probe/.local/share/pegasus-harness")
+        with self.assertRaises(ContentError) as raised:
+            content.grant_directories(
+                self.content, [str(data_dir)], config_dir=self.config_dir, data_dir=data_dir
+            )
+        self.assertIn("data directory", str(raised.exception))
+
+    def test_an_ancestor_of_the_pegasus_data_directory_is_refused(self):
+        data_dir = Path("/home/probe/.local/share/pegasus-harness")
+        with self.assertRaises(ContentError) as raised:
+            content.grant_directories(
+                self.content, [str(data_dir.parent)], config_dir=self.config_dir, data_dir=data_dir
+            )
+        self.assertIn("data directory", str(raised.exception))
+
+    def test_a_directory_beside_the_pegasus_data_directory_is_not_refused(self):
+        data_dir = Path("/home/probe/.local/share/pegasus-harness")
+        granted = content.grant_directories(
+            self.content, ["/home/probe/.local/share/other-app"], config_dir=self.config_dir, data_dir=data_dir
+        )
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_directories, ("/home/probe/.local/share/other-app",))
+
+    def test_data_dir_is_optional_and_skips_that_refusal_when_absent(self):
+        """A caller with no `FileSystem` port to ask -- most of this test
+        class -- must not be forced to supply one just to grant an ordinary
+        directory that happens to share no relation with any data dir."""
+        granted = content.grant_directories(self.content, ["/srv/worktrees/extra"], config_dir=self.config_dir)
+        for agent in granted.agents:
+            self.assertEqual(agent.granted_directories, ("/srv/worktrees/extra",))
+
+    def test_equivalent_spellings_normalize_to_the_same_stored_form(self):
+        base = "/home/probe/worktrees/extra"
+        for spelling in (f"{base}/", f"{base}//", base.rsplit("/", 1)[0] + "/./" + base.rsplit("/", 1)[1]):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(
+                    content.validate_granted_directory(spelling, config_dir=self.config_dir), base
+                )
+
+
 class SelectMcpShippedContentTest(unittest.TestCase):
     """`select_mcp` conditionality proven against the real shipped tree, not a
     fixture stand-in -- the fixture in `SelectMcpTest` proves the mechanism
@@ -2362,6 +2533,75 @@ def _run_grant_mcp_collision(root: Path) -> tuple[None, str]:
     raise AssertionError("a colliding mcp key was accepted")
 
 
+def _run_grant_directories_empty(root: Path) -> tuple[None, str]:
+    try:
+        content.grant_directories(content.Content(), [""], config_dir=Path("/home/probe/.config/opencode"))
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("an empty directory path was accepted")
+
+
+def _run_grant_directories_relative(root: Path) -> tuple[None, str]:
+    try:
+        content.grant_directories(
+            content.Content(), ["relative/path"], config_dir=Path("/home/probe/.config/opencode")
+        )
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("a relative directory path was accepted")
+
+
+def _run_grant_directories_dotdot(root: Path) -> tuple[None, str]:
+    try:
+        content.grant_directories(
+            content.Content(), ["/home/probe/tmp/../../etc"], config_dir=Path("/home/probe/.config/opencode")
+        )
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("a directory path climbing with '..' was accepted")
+
+
+def _run_grant_directories_root(root: Path) -> tuple[None, str]:
+    try:
+        content.grant_directories(content.Content(), ["/"], config_dir=Path("/home/probe/.config/opencode"))
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("granting the filesystem root was accepted")
+
+
+def _run_grant_directories_config_ancestor(root: Path) -> tuple[None, str]:
+    try:
+        content.grant_directories(
+            content.Content(), ["/home/probe/.config"], config_dir=Path("/home/probe/.config/opencode")
+        )
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("an ancestor of the CLI's configuration directory was accepted")
+
+
+def _run_grant_directories_glob_metacharacter(root: Path) -> tuple[None, str]:
+    try:
+        content.grant_directories(
+            content.Content(), ["/srv/*"], config_dir=Path("/home/probe/.config/opencode")
+        )
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("a directory path containing a glob metacharacter was accepted")
+
+
+def _run_grant_directories_data_dir_ancestor(root: Path) -> tuple[None, str]:
+    try:
+        content.grant_directories(
+            content.Content(),
+            ["/home/probe/.local/share"],
+            config_dir=Path("/home/probe/.config/opencode"),
+            data_dir=Path("/home/probe/.local/share/pegasus-harness"),
+        )
+    except ContentError as error:
+        return None, str(error)
+    raise AssertionError("an ancestor of the product's own data directory was accepted")
+
+
 class ContentErrorSitesTest(unittest.TestCase):
     """Table test over every `raise ContentError` site in `content.py`, from
     an AST walk rather than a hand-kept list -- the `test_architecture.py`
@@ -2605,6 +2845,42 @@ class ContentErrorSitesTest(unittest.TestCase):
         "_flag#0": (_session_start_case('model_configurable: "false"\n'), ""),
         "_names#0": (_session_start_case("requires_tools: bash\n"), ""),
         "_names#1": (_session_start_case('requires_tools: [""]\n'), ""),
+        "validate_granted_directory#0": (
+            _run_grant_directories_empty,
+            "Refuses an empty granted-directory path, not a file on disk, so no path applies.",
+        ),
+        "validate_granted_directory#1": (
+            _run_grant_directories_relative,
+            "Refuses a relative granted-directory path, not a file on disk, so no path "
+            "applies; the message already names the offending path.",
+        ),
+        "validate_granted_directory#2": (
+            _run_grant_directories_dotdot,
+            "Refuses a granted-directory path that climbs with '..', not a file on disk, "
+            "so no path applies; the message already names the offending path.",
+        ),
+        "validate_granted_directory#3": (
+            _run_grant_directories_glob_metacharacter,
+            "Refuses a granted-directory path containing a glob metacharacter, not a "
+            "file on disk, so no path applies; the message already names the offending "
+            "path.",
+        ),
+        "validate_granted_directory#4": (
+            _run_grant_directories_root,
+            "Refuses granting the filesystem root, not a file on disk, so no path applies; "
+            "the message already names the offending path.",
+        ),
+        "validate_granted_directory#5": (
+            _run_grant_directories_config_ancestor,
+            "Refuses an ancestor of the CLI's own configuration directory, not a file on "
+            "disk, so no path applies; the message already names the offending path.",
+        ),
+        "validate_granted_directory#6": (
+            _run_grant_directories_data_dir_ancestor,
+            "Refuses this product's own data directory (or an ancestor of it), not a "
+            "file on disk, so no path applies; the message already names the offending "
+            "path.",
+        ),
     }
 
     def _temp_root(self) -> Path:

@@ -355,6 +355,30 @@ def _parser(identity: Identity) -> argparse.ArgumentParser:
     )
     mcp_list_parser.add_argument("--cli", required=True)
     mcp_list_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    directory = commands.add_parser(
+        "directory", help="grant or revoke a working directory outside the worktree, for every agent"
+    )
+    directory.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    directory_commands = directory.add_subparsers(dest="directory_command")
+
+    directory_grant_parser = directory_commands.add_parser(
+        "grant", help="grant a directory of your own choosing to every agent, and reapply"
+    )
+    directory_grant_parser.add_argument("--cli", required=True)
+    directory_grant_parser.add_argument("path")
+    directory_grant_parser.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
+
+    directory_revoke_parser = directory_commands.add_parser(
+        "revoke", help="revoke a previously granted directory, and reapply"
+    )
+    directory_revoke_parser.add_argument("--cli", required=True)
+    directory_revoke_parser.add_argument("path")
+    directory_revoke_parser.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
     return parser
 
 
@@ -421,6 +445,7 @@ def install(
     dry_run: bool = False,
     mcp: list[str] | None = None,
     granted: list[str] | None = None,
+    granted_directories: list[str] | None = None,
     on_progress: Callable[["Progress"], None] | None = None,
 ) -> dict[str, Any]:
     """Place Pegasus into one CLI's configuration, and report what happened.
@@ -440,6 +465,12 @@ def install(
     every `install` names its whole selection explicitly on the command
     line, but there is no `--grant` flag on `install` for a grant to go
     silent about, so a plain reinstall must not read as "revoke everything".
+
+    `granted_directories` follows the identical rule, for
+    `Install.granted_directories`/`directory_grant`/`directory_revoke`: given,
+    it replaces the whole set; left `None`, a plain reinstall carries the
+    previous install's set forward unchanged rather than silently revoking
+    every working directory the person declared.
     """
     adapter = _adapter(cli_id)
     environment = runtime.environment
@@ -562,6 +593,21 @@ def install(
         f"if that is not what you wanted"
         for key in dropped_grants
     ]
+    # Same default-carries-forward rule `granted_keys` above already applies
+    # to `granted_mcp`, for `granted_directories`. No collision to drop here:
+    # see `content.grant_directories`'s own docstring for why a directory
+    # grant shares no namespace with anything else this install renders.
+    directory_keys = (
+        tuple(granted_directories)
+        if granted_directories is not None
+        else (installed.granted_directories if installed is not None else ())
+    )
+    try:
+        content = content_module.grant_directories(
+            content, directory_keys, config_dir=layout.config_dir, data_dir=runtime.filesystem.data_dir(runtime.home)
+        )
+    except content_module.ContentError as error:
+        raise CommandError(str(error)) from error
     _require_node_if_needed(content, runtime, installed)
     # Asked before anything is written, so an adapter that cannot answer costs a
     # message instead of a traceback over a finished installation.
@@ -811,6 +857,7 @@ def install(
         # root, because that is what a report should read like; the journal
         # records absolute paths, so they are joined back on here.
         tuple(placed.config_dir / relative for relative in stale.pruned),
+        granted_directories=directory_keys,
     )
     try:
         store.save(journal_module.with_install(journal, merged))
@@ -901,7 +948,8 @@ def update(
     a bare `install` call defaults to "carry the previous install forward"
     and this *is* that previous install, so passing it through here keeps
     the two call sites saying the same thing for the same reason rather than
-    one relying on a default the other cannot rely on.
+    one relying on a default the other cannot rely on. `granted_directories`
+    is passed through for the identical reason.
     """
     adapter = _adapter(cli_id)
     installed = journal_module.install_for(journal_store(runtime).load(), adapter.id)
@@ -915,7 +963,13 @@ def update(
             _unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
         )
     return install(
-        cli_id, runtime, dry_run=dry_run, mcp=selection, granted=list(installed.granted_mcp), on_progress=on_progress
+        cli_id,
+        runtime,
+        dry_run=dry_run,
+        mcp=selection,
+        granted=list(installed.granted_mcp),
+        granted_directories=list(installed.granted_directories),
+        on_progress=on_progress,
     )
 
 
@@ -1369,6 +1423,7 @@ def _merged(
     version: str,
     created_dirs: tuple[Path, ...] = (),
     pruned_dirs: tuple[Path, ...] = (),
+    granted_directories: tuple[str, ...] = (),
 ) -> Install:
     """Add what this run placed to what earlier runs already owned.
 
@@ -1411,6 +1466,8 @@ def _merged(
     forward -- and it is simply recorded here, replaced outright the same way
     ``mcp_bindings`` is, since it is likewise a fact about this run's own
     final choice rather than an artifact with an identity to merge.
+    ``granted_directories`` is threaded in and recorded the identical way,
+    for `Install.granted_directories`.
 
     ``created_dirs`` is merged the same way ``entries`` is above, union rather
     than replacement: a directory an earlier install created and this run
@@ -1457,6 +1514,7 @@ def _merged(
         links=previous.links if previous is not None else (),
         mcp_bindings={server.name: server.bound_to for server in content.mcp if server.is_bound},
         granted_mcp=tuple(granted_mcp),
+        granted_directories=tuple(granted_directories),
         created_dirs=_recorded_dirs(previous, created_dirs, pruned_dirs),
     )
 
@@ -1941,6 +1999,104 @@ def mcp_list(cli_id: str, runtime: Runtime) -> dict[str, Any]:
     }
 
 
+def _directory(arguments, runtime: Runtime) -> dict[str, Any]:
+    if arguments.directory_command == "grant":
+        return directory_grant(arguments.cli, arguments.path, runtime)
+    if arguments.directory_command == "revoke":
+        return directory_revoke(arguments.cli, arguments.path, runtime)
+    raise CommandError("directory needs a subcommand: grant or revoke")
+
+
+def directory_grant(cli_id: str, path: str, runtime: Runtime) -> dict[str, Any]:
+    """Grant a working directory of the person's own choosing to every
+    agent's `external_directory` permission, and reapply so the grant
+    actually reaches the rendered configuration.
+
+    Mirrors `mcp_grant`'s shape exactly: a plain function an agent or another
+    program can call directly, with `_directory` doing only the argparse
+    unpacking, and the actual write delegated to `install` the same way
+    `mcp_grant` delegates to it rather than placing artifacts a second time.
+
+    Unlike `mcp_grant`, there is no CLI-declared set to check the path
+    against first -- a working directory is never declared anywhere in the
+    CLI's own configuration the way an MCP server key is, so there is no
+    typo class to catch before the fact. The only refusal here is
+    `content.validate_granted_directory`'s own validation (absolute, free of
+    `..` and of glob metacharacters, not the filesystem root, not the CLI's
+    own configuration directory or Pegasus's own data directory, nor an
+    ancestor of either) -- surfaced as a `CommandError` the moment it raises.
+
+    The path is normalized through that same validation *before* it is
+    stored or reported, not only when `install` renders it: `render.py`
+    writes `f"{path}/*": "allow"` from whatever string sits in the journal,
+    so the journal, the rendered permission, this report, and whatever a
+    person later types to `directory revoke` all have to agree on one
+    spelling of the same directory, or a trailing slash or a repeated `/`
+    silently produces two directories where the person meant one.
+    """
+    adapter = _adapter(cli_id)
+    installed = journal_module.install_for(journal_store(runtime).load(), adapter.id)
+    if installed is None:
+        raise CommandError(f"{adapter.id} has nothing installed; run install first")
+    layout = adapter.layout(runtime.environment)
+    try:
+        normalized = content_module.validate_granted_directory(
+            path, config_dir=layout.config_dir, data_dir=runtime.filesystem.data_dir(runtime.home)
+        )
+    except content_module.ContentError as error:
+        raise CommandError(str(error)) from error
+    granted = tuple(sorted(set(installed.granted_directories) | {normalized}))
+    selection, unresolved = _mcp_update_selection(installed, display_name=runtime.identity.display_name)
+    if unresolved:
+        raise CommandError(
+            _unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
+        )
+    report = install(
+        cli_id, runtime, mcp=selection, granted=list(installed.granted_mcp), granted_directories=list(granted)
+    )
+    return {
+        **report, "action": "grant", "path": normalized, "granted_directories": list(granted), "status": "granted"
+    }
+
+
+def directory_revoke(cli_id: str, path: str, runtime: Runtime) -> dict[str, Any]:
+    """Remove a granted directory, and reapply. Revoking one never granted is
+    success, not an error -- the same `mcp_revoke` precedent.
+
+    The argument is normalized through `content.validate_granted_directory`
+    before it is compared against `installed.granted_directories` -- see
+    `directory_grant`'s own docstring for why the journal only ever holds
+    the normalized spelling. Without this, a directory granted as
+    `/srv/work/` and revoked as `/srv/work` (or the reverse) would compare
+    unequal, report `already-revoked`, and leave the grant rendered.
+    """
+    adapter = _adapter(cli_id)
+    installed = journal_module.install_for(journal_store(runtime).load(), adapter.id)
+    if installed is None:
+        raise CommandError(f"{adapter.id} has nothing installed; run install first")
+    layout = adapter.layout(runtime.environment)
+    try:
+        normalized = content_module.validate_granted_directory(
+            path, config_dir=layout.config_dir, data_dir=runtime.filesystem.data_dir(runtime.home)
+        )
+    except content_module.ContentError as error:
+        raise CommandError(str(error)) from error
+    if normalized not in installed.granted_directories:
+        return {"action": "revoke", "cli": cli_id, "path": normalized, "status": "already-revoked"}
+    granted = tuple(sorted(set(installed.granted_directories) - {normalized}))
+    selection, unresolved = _mcp_update_selection(installed, display_name=runtime.identity.display_name)
+    if unresolved:
+        raise CommandError(
+            _unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
+        )
+    report = install(
+        cli_id, runtime, mcp=selection, granted=list(installed.granted_mcp), granted_directories=list(granted)
+    )
+    return {
+        **report, "action": "revoke", "path": normalized, "granted_directories": list(granted), "status": "revoked"
+    }
+
+
 def _per_agent_mcp_keys_for(installed, *, display_name: str) -> tuple[frozenset[str], list[str]]:
     """`content_module.per_agent_mcp_keys`, computed against the content this
     installation's own recorded `--mcp` selection would produce, alongside
@@ -2198,6 +2354,12 @@ def _health(
     # shipped for it at all.
     health["mcp_granted"] = sorted(install.granted_mcp)
 
+    # Its own key, the same reasoning as `mcp_granted` just above, for a
+    # different fact the journal alone knows: a directory a person granted
+    # through `pegasus directory grant` is invisible anywhere else `doctor`
+    # already reports, since it names no artifact, no server, and no binding.
+    health["directories_granted"] = sorted(install.granted_directories)
+
     if start_mcp_servers:
         health["mcp_servers"] = [
             {"id": check.id, "status": check.status, "detail": check.detail}
@@ -2422,6 +2584,7 @@ COMMANDS = {
     "restore": _restore,
     "models": _models,
     "mcp": _mcp,
+    "directory": _directory,
 }
 
 
@@ -2836,6 +2999,8 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
         return _models_prose(report)
     if command == "mcp":
         return _mcp_prose(report)
+    if command == "directory":
+        return _directory_prose(report)
 
     pruned = report.get("pruned") or []
     lines = [
@@ -2892,6 +3057,19 @@ def _mcp_prose(report: dict[str, Any]) -> str:
             )
         return "\n".join(lines)
     return "mcp: nothing to report."
+
+
+def _directory_prose(report: dict[str, Any]) -> str:
+    action = report.get("action")
+    if action == "grant":
+        line = f"{report['cli']}: granted {report['path']} to every agent."
+        return "\n".join(_and_activation([line], report))
+    if action == "revoke":
+        if report.get("status") == "already-revoked":
+            return f"{report['cli']}: {report['path']} was not granted; nothing to do."
+        line = f"{report['cli']}: revoked {report['path']}."
+        return "\n".join(_and_activation([line], report))
+    return "directory: nothing to report."
 
 
 def _and_activation(lines: list[str], report: dict[str, Any]) -> list[str]:

@@ -59,12 +59,34 @@ TOOL_NAME: dict[str, str] = {
     "ask": "question",
 }
 
-# The three the runtime makes ask for `external_directory` before they ask for
-# their own name -- `read`, `grep` and `glob` each call `assertExternalDirectory`
-# against their target first. Spelled in Pegasus's own tool vocabulary, which is
-# what an agent declares; `write` and `edit` are absent because the runtime does
-# not gate them this way.
-READS_OUTSIDE_THE_WORKTREE = frozenset({"read", "grep", "glob"})
+# Every Pegasus tool name whose runtime counterpart asks the runtime's own
+# `external_directory` permission against its target before it asks for its
+# own permission name. Verified by reading the runtime's own source rather
+# than assumed -- most of the six call `assertExternalDirectory` directly
+# (`read`, `grep`, `glob`, `edit`, `write`), but `bash` does not: its own
+# runtime counterpart (`packages/opencode/src/tool/shell.ts`) calls
+# `ctx.ask({permission: "external_directory", ...})` itself instead, which
+# reaches the identical permission name by a different path. This constant
+# used to hold only `read`, `grep` and `glob`; `edit`, `write` and `bash` were
+# added afterward as a correction going forward, once reading the runtime's
+# source directly (rather than assuming it from the first three) showed the
+# set was incomplete -- not because any of the three previously missing was
+# ever observed to fail against the catalog this codebase ships today. See
+# `content/agents/sdd-verify.md`'s own `requires_tools` for why: it already
+# declared `bash` and `write` alongside `read`, so it always carried this key
+# regardless of which of the three the constant above named, and comparing
+# the rendered `opencode.json` for the catalog before and after this widening
+# shows not one byte of difference. The gap this widening closes is for an
+# agent this codebase does not yet ship -- one that declares `edit`, `write`
+# or `bash` without `read` -- which the old, narrower set would have sent to
+# the outer `"*": "deny"` baseline with no `external_directory` key at all.
+# The runtime also gates two tools that are not names Pegasus renders at all
+# -- `apply_patch` and `lsp` -- which is why they are absent here rather than
+# mapped to something: there is no Pegasus tool name for either. `skill` and
+# `ask` stay absent too, but for the opposite reason: neither reads, writes
+# or executes a path at all, so neither runtime counterpart has a target to
+# ask `external_directory` about.
+EXTERNAL_DIRECTORY_TOOLS = frozenset({"read", "grep", "glob", "edit", "write", "bash"})
 
 PERMISSION_NAME: dict[str, str] = {
     "read": "read",
@@ -477,41 +499,75 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     it, yet the deny baseline still reaches it. Granting a tool is not granting
     every path it can be pointed at -- the runtime asks separately, under this
     name, the moment a target sits outside the project worktree -- and a
-    baseline that says `*` says this too. That baseline splits by `item.mode`,
-    though, rather than reading `"deny"` for every agent: a sub-agent has
-    nobody to prompt, so `"deny"` is right for it -- the runtime refuses before
-    it would ever publish a prompt, so writing anything softer there would just
-    trade a clean refusal for a hang. A primary agent has a person on the other
-    end of the session, and even carries the `ask` tool itself, so it keeps
-    `"ask"` -- the runtime's own unmatched-rule default for this name, made
-    explicit here for the same reason the sub-agent's `"deny"` is written out
-    rather than left to the outer baseline (see below). This is also why only
-    the two of these need the split at all: a person's own approval of an
-    `ask` prompt is recorded instance-wide, not per session, so it reaches
-    every sub-agent's session too and outranks that sub-agent's own `"deny"`
-    the moment it is given -- a primary session asking once is what lets a
-    sub-agent's tighter default stay tight without ever starving a genuine
-    need. Every path Pegasus hands an agent -- a phase agent's own SKILL.md,
-    the `_shared` conventions each prompt defers its detail to -- lives under
-    the skills directory, which is outside every worktree, so the lazy-loading
-    contract is unreadable by construction without this. The grant is scoped to
-    that directory and not to the config directory above it, even though both
-    sit outside the worktree: the settings file is the config directory's own
-    resident, and it carries whatever a server the user administers was
-    configured with. Nothing shipped needs to read it, so nothing shipped is
-    allowed to. It is earned rather than given, too -- only the three tools that
-    actually ask under this name bring it, so declaring nothing keeps meaning
-    nothing.
+    baseline that says `*` says this too.
+
+    That inner baseline used to split by `item.mode`: `"deny"` for a
+    sub-agent, `"ask"` for a primary. Reported wrong from real use -- a
+    sub-agent (`sdd-verify`) was pointed at a working directory outside its
+    worktree and refused outright, with no prompt, even though its own `bash`
+    permission was `allow`. The reasoning behind the split was that a
+    sub-agent has nobody to prompt, so a clean, immediate refusal beats a
+    hang. That is not what a config-level `"deny"` actually does, though: the
+    runtime's own `ask()` returns a `DeniedError` the instant it sees one,
+    before it would ever publish a prompt, and an approval only ever
+    concatenates onto the *end* of that same rule list -- so a `"deny"` can
+    only be beaten by an approval that already exists, granted earlier by
+    another session that happened to ask about the exact same path. For a
+    directory only one sub-agent's session ever touches, no session asks
+    first, so no approval to out-rank it is ever created -- `"deny"` there is
+    not "refuse this once", it is "make asking about this path impossible for
+    the rest of the runtime's life", with no session, restart, or person able
+    to reverse it. (On the newer engine the two engines both ship, V2, a
+    configured `"deny"` is checked *before* any approval is even consulted,
+    so there the refusal is absolute regardless of what anyone approved --
+    which only makes writing `"deny"` here worse, never safer.) The runtime's
+    own agents do not carry this split either: they all default to `"ask"`
+    (`packages/opencode/src/agent/agent.ts`). So every agent, sub-agent
+    included, now gets `"ask"` -- a sub-agent has nobody in its own session to
+    answer the prompt, but `"ask"` still leaves the door open for a person to
+    approve it from wherever they can (a primary session naming the same
+    path, or a future surface that lists pending asks), which is exactly the
+    difference between a refusal and a refusal that can never be undone. With
+    both modes now resolving to the same value, the split itself carries no
+    information any more, so `item.mode` no longer has a say here at all --
+    `AgentMode` is still imported for `MODE_NAME` above, just not read by this
+    function any more.
+
+    Every path Pegasus hands an agent -- a phase agent's own SKILL.md, the
+    `_shared` conventions each prompt defers its detail to -- lives under the
+    skills directory, which is outside every worktree, so the lazy-loading
+    contract is unreadable by construction without this. The grant is scoped
+    to that directory and not to the config directory above it, even though
+    both sit outside the worktree: the settings file is the config
+    directory's own resident, and it carries whatever a server the user
+    administers was configured with. Nothing shipped needs to read it, so
+    nothing shipped is allowed to. It is earned rather than given, too -- only
+    a tool that actually asks under this name (`EXTERNAL_DIRECTORY_TOOLS`
+    above) brings it, so declaring nothing keeps meaning nothing -- except for
+    `item.granted_directories` just below, which brings it on its own.
+
+    `item.granted_directories` -- paths the person declared through
+    `pegasus directory grant`, the same shape `Install.granted_mcp` already
+    established for a fact Pegasus cannot know on its own -- are written into
+    this same map, one `f"{path}/*": "allow"` entry per granted directory,
+    after the baseline and the skills exception. Order is the only thing that
+    makes them win (the runtime keeps the *last* rule matching both name and
+    target), and it is why they are written last rather than folded into the
+    dict literal below. They reach every agent, primary or sub-agent alike --
+    a working directory a sub-agent needs is exactly the case this whole
+    mechanism exists for -- and they earn the `external_directory` key on
+    their own even for an agent whose declared tools would not otherwise
+    trigger it, since a directory the person explicitly granted must still
+    reach an agent that, say, only writes.
 
     The inner baseline is the same shape `task` uses, and writing it out is
-    deliberate even where the outer baseline already covers this name (the
-    sub-agent case: both say `"deny"`): the runtime flattens every key of this
-    map into one ordered rule list and keeps the last rule matching both name
-    and target, so an unlisted path outside the worktree already falls to
-    whichever baseline applies. Writing the refusal (or, for a primary agent,
-    the explicit `"ask"`) where the exception lives makes the boundary a
-    property of this entry rather than an inference across two, which is what
-    lets a test assert it directly.
+    deliberate even though the outer baseline already denies this name too:
+    the runtime flattens every key of this map into one ordered rule list and
+    keeps the last rule matching both name and target, so an unlisted path
+    outside the worktree already falls to the outer baseline regardless.
+    Writing `"ask"` where the exception lives makes the boundary a property
+    of this entry rather than an inference across two, which is what lets a
+    test assert it directly.
     """
     names = (*item.requires_tools, *item.optional_tools)
     unknown = [name for name in names if name not in PERMISSION_NAME]
@@ -533,9 +589,12 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     # `external_directory` below since neither of those shares this
     # namespace and their own position is unaffected by it either way.
     granted.update({name: "deny" for name in item.denied_mcp_tools})
-    if any(name in READS_OUTSIDE_THE_WORKTREE for name in names):
-        baseline = "ask" if item.mode is AgentMode.PRIMARY else "deny"
-        granted["external_directory"] = {"*": baseline, f"{layout.skills_dir.as_posix()}/*": "allow"}
+    if any(name in EXTERNAL_DIRECTORY_TOOLS for name in names) or item.granted_directories:
+        granted["external_directory"] = {
+            "*": "ask",
+            f"{layout.skills_dir.as_posix()}/*": "allow",
+            **{f"{path}/*": "allow" for path in item.granted_directories},
+        }
     granted["task"] = {"*": "deny", **{name: "allow" for name in item.may_delegate_to}}
     return {"*": "deny", **granted}
 

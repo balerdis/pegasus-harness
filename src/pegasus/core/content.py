@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from enum import Enum
 from importlib.resources import files as _package_files
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from pegasus.core import frontmatter, placeholders
@@ -245,6 +245,30 @@ class Agent:
     choice was made. It sets this field identically on every agent -- the
     repository owner's explicit decision, made because a per-agent grant
     would make adding one more MCP server tedious in a way nobody wants."""
+
+    granted_directories: tuple[str, ...] = ()
+    """Absolute paths the person declared through `pegasus directory grant`,
+    for a runtime's own `external_directory` permission -- the same problem
+    `granted_mcp` already solves, for a different fact Pegasus cannot know on
+    its own.
+
+    Every rendered agent's `external_directory` map opens with a baseline
+    that reaches every path on the machine except the skills directory this
+    installation writes into. A working directory an agent legitimately needs
+    -- a linked worktree elsewhere, a scratch tree outside the project -- is
+    invisible to that map by construction: Pegasus never heard of it, and the
+    runtime's own settings file cannot add an exception either, because
+    Pegasus claims the agent's whole rendered entry and the next
+    `install`/`update` overwrites whatever a person edited in by hand. This
+    field is the supported way to hand an agent its own directory instead --
+    a fact the person declares once, that survives every reinstall the same
+    way `granted_mcp` already does.
+
+    `grant_directories` is the only writer, set identically on every agent
+    for the same reason `grant_mcp` is: a per-agent path would make granting
+    one more directory as tedious as granting one more MCP server was before
+    that field existed, and the repository owner's decision here is the same
+    one made there."""
 
     denied_mcp_tools: tuple[str, ...] = ()
     """Fully-qualified tool names a wildcard grant of this agent's servers
@@ -720,6 +744,164 @@ def grant_mcp(
     return (
         replace(content, agents=tuple(replace(agent, granted_mcp=kept) for agent in content.agents)),
         dropped,
+    )
+
+
+#: Characters the runtime's own glob-to-regex translation gives special
+#: meaning to inside a permission rule name. `*` and `?` are confirmed by
+#: `_SERVER_KEY` above, for the identical reason -- a granted directory
+#: reaches `f"{path}/*": "allow"` exactly as verbatim as a bound server key
+#: reaches its own rule. `[` and `]` are not confirmed the same way, but a
+#: value that lands in a permission rule unexamined is exactly the place to
+#: refuse more than the runtime is proven to special-case rather than less:
+#: rejecting a bracket a real path was never going to contain costs nothing,
+#: and guessing wrong in the other direction costs a permission escape.
+_DIRECTORY_GLOB_METACHARACTERS = frozenset("*?[]")
+
+
+def validate_granted_directory(raw: Any, *, config_dir: Path, data_dir: Path | None = None) -> str:
+    """Refuse anything that could not safely become an
+    `f"{path}/*": "allow"` entry in a rendered `external_directory` map, and
+    return the one normalized spelling every caller must agree to persist.
+
+    The one place every granted directory -- typed fresh through `pegasus
+    directory grant`, or replayed from a journal by `update`/`directory
+    revoke`, neither of which ever asks the CLI-level checks again -- is
+    forced through, the same discipline `grant_mcp` already applies to a
+    key's shape for the same reason: a value that reaches a permission rule
+    verbatim must be safe on its own, not merely safe the one time a person
+    typed it.
+
+    Absolute and free of `..`, the same two structural checks
+    `journal._contained` already makes for every other path this codebase
+    persists -- judged by shape alone, never by resolving anything against a
+    disk this module never touches.
+
+    Free of every glob metacharacter the runtime's own pattern matching
+    treats specially (`_DIRECTORY_GLOB_METACHARACTERS`, above) -- `*` above
+    all: the runtime's glob-to-regex translation lets `*` cross `/`, so a
+    granted directory that itself contains `*` can widen the single
+    `f"{path}/*": "allow"` entry this function's caller writes into a rule
+    that reaches far more than the one directory the person meant to name.
+    `/` alone is refused by the identical fact stated as its own case just
+    below, because a bare `/` carries no metacharacter for this check to
+    catch on its own.
+
+    `/` is refused by name: `*` crosses `/` in the runtime's own glob
+    matching, so `f"{path}/*"` for `path == "/"` renders `"/*"`, a pattern
+    that matches every absolute path there is -- not a working directory
+    grant at that point, but a second, wide-open deny baseline with the
+    opposite value.
+
+    The CLI's own configuration directory, and any path that is an ancestor
+    of it, are refused for a narrower reason: that directory holds the
+    settings file with whatever the person configured of their own servers,
+    and `_permission` above already grants only the skills subtree beneath
+    it, deliberately, rather than the configuration directory that contains
+    it -- see its own docstring. Granting an ancestor of that directory would
+    reopen exactly the exception this product already decided against, only
+    through a different door. A directory *inside* the configuration
+    directory that is not one of its ancestors -- some other subtree beside
+    skills -- is not refused here: nothing about this check claims to know
+    every such subtree's purpose, only that the configuration directory
+    itself, and anything wide enough to contain it, must stay closed.
+
+    Pegasus's own data directory -- `data_dir`, where `FileJournalStore`
+    keeps this journal itself -- is refused the identical way, for the
+    identical shape of reason: `write` on that directory is `write` on the
+    journal `uninstall` later reads uncritically to decide what it may
+    delete. Granting it (or an ancestor of it) to every agent turns an
+    ordinary file write into arbitrary deletion at the next `uninstall`,
+    which is a worse outcome than anything the configuration-directory
+    refusal above guards against, not a smaller version of it. `data_dir` is
+    optional -- `None` when a caller has no journal-store context to ask,
+    `validate_granted_directory` used directly from a unit test, say -- and
+    the check is simply skipped then, the same way the config-directory
+    check already requires its own caller to supply `config_dir`. No other
+    directory on the machine is refused this way: the two closed here are
+    closed because Pegasus itself depends on them staying intact, not
+    because either is otherwise sensitive, and widening this list to
+    "anything that looks important" would refuse the very thing this field
+    exists to grant.
+
+    Deliberately not checked against the person's home directory the way
+    `journal._contained` checks every other path this codebase owns: a
+    legitimate working directory -- a linked worktree, a scratch tree a
+    tool writes into -- can sit anywhere on the machine, outside the home
+    entirely, and refusing that here would refuse the very thing this field
+    exists to grant.
+
+    The path returned is always `Path(raw).as_posix()` -- the one normalized
+    spelling `pathlib` collapses a trailing slash, a repeated `/`, and a bare
+    `.` component down to. Every caller that persists a granted directory --
+    the journal, the render, `directory grant`'s own report, `directory
+    revoke`'s own comparison -- must persist and compare this return value
+    and never the raw string a person typed, or two equivalent spellings of
+    the same directory silently fail to match each other.
+    """
+    if not isinstance(raw, str) or not raw:
+        raise ContentError("cannot grant a directory: a granted directory needs a non-empty path")
+    path = Path(raw)
+    if not path.is_absolute():
+        raise ContentError(f"cannot grant {raw!r}: a granted directory must be an absolute path")
+    if ".." in path.parts:
+        raise ContentError(f"cannot grant {raw!r}: a granted directory must not climb out of itself with '..'")
+    found = sorted(_DIRECTORY_GLOB_METACHARACTERS.intersection(raw))
+    if found:
+        raise ContentError(
+            f"cannot grant {raw!r}: it contains {''.join(found)!r}, a character the runtime's own glob "
+            f"matching treats specially in a permission rule -- a granted directory reaches a rendered "
+            f"rule verbatim, so a metacharacter here could widen the grant far past the one directory "
+            f"this was meant to name"
+        )
+    if path == Path(path.anchor):
+        raise ContentError(
+            f"cannot grant {raw!r}: granting the filesystem root would concede every path there is, "
+            f"since a runtime whose glob patterns cross '/' resolves '/*' as matching everything"
+        )
+    if config_dir == path or config_dir.is_relative_to(path):
+        raise ContentError(
+            f"cannot grant {raw!r}: it is the CLI's own configuration directory, or an ancestor of "
+            f"it -- that directory holds the settings file with whatever the person configured of "
+            f"their own servers, and this product already grants only the skills subtree beneath it, "
+            f"on purpose, not the configuration directory that contains it; granting an ancestor here "
+            f"would reopen exactly that door"
+        )
+    if data_dir is not None and (data_dir == path or data_dir.is_relative_to(path)):
+        raise ContentError(
+            f"cannot grant {raw!r}: it is this product's own data directory, or an ancestor of it -- "
+            f"that directory holds the journal that `uninstall` reads to decide what it may delete, "
+            f"and granting write access to it would let an agent's own write turn into arbitrary "
+            f"deletion at the next uninstall"
+        )
+    return path.as_posix()
+
+
+def grant_directories(
+    content: Content, paths: Iterable[str], *, config_dir: Path, data_dir: Path | None = None
+) -> Content:
+    """Grant a fixed set of directories, of the person's own choosing, to
+    every agent's `external_directory` permission.
+
+    Mirrors `grant_mcp`'s own shape: applied once here, before anything is
+    rendered, so every adapter renders the grant without ever knowing a
+    choice was made, and set identically on every agent for the reason
+    `Agent.granted_directories` documents. Unlike `grant_mcp`, there is no
+    collision to refuse -- a granted directory shares no namespace with
+    anything Pegasus already renders per-agent -- so every path this call
+    validates is simply carried onto every agent, in the order given.
+
+    Each path is validated by `validate_granted_directory`, imported by
+    `journal` rather than restated there, so the two can never drift apart
+    about what a safe directory grant looks like. That import is why the name
+    carries no leading underscore: a rule two modules share is part of this
+    one's interface, whatever its first character would otherwise claim.
+    """
+    validated = tuple(
+        validate_granted_directory(raw, config_dir=config_dir, data_dir=data_dir) for raw in paths
+    )
+    return replace(
+        content, agents=tuple(replace(agent, granted_directories=validated) for agent in content.agents)
     )
 
 

@@ -51,6 +51,21 @@ Lo mismo está disponible desde la TUI (`pegasus`, sin argumentos), en el menú 
 
 Si más adelante un `install` liga un servidor propio de Pegasus (`--mcp id=<clave>`) bajo la misma cadena que una clave que ya habías otorgado, esa clave otorgada queda redundante y el `install` la descarta en vez de fallar — el servidor sigue siendo alcanzable a través de los agentes que ahora lo declaran. El comando avisa qué clave descartó; si no era lo que querías, volvé a otorgarla con `pegasus mcp grant`.
 
+## Dar acceso a un directorio de trabajo propio
+
+OpenCode pregunta por un permiso separado, `external_directory`, apenas una herramienta de archivo o `bash` apunta a algo fuera del worktree del proyecto. Cada agente que Pegasus instala ya trae la excepción que necesita para leer sus propias skills, pero un directorio que vos necesitás — un worktree enlazado, un árbol de scratch fuera del repo — es un dato que Pegasus no puede conocer de antemano, y no hay forma de agregarlo a mano: Pegasus reclama la entrada completa de cada agente en `opencode.json`, así que una excepción escrita a mano la pisa el próximo `install`/`update`.
+
+```sh
+pegasus directory grant --cli opencode /home/vos/worktrees/otro-repo
+pegasus directory revoke --cli opencode /home/vos/worktrees/otro-repo
+```
+
+`grant` acepta cualquier ruta absoluta que no sea la raíz del filesystem (`/`), no contenga un metacarácter de glob (`*`, `?`, `[`, `]`), y no sea el directorio de configuración de OpenCode, el directorio de datos propio de Pegasus (donde vive su journal), ni un ancestro de cualquiera de los dos. El de configuración guarda tus propios servidores; el de datos guarda el registro que `uninstall` usa para decidir qué borrar, así que darle escritura a un agente ahí equivaldría a dejarlo decidir qué se borra en la próxima desinstalación. Fuera de esas restricciones, una ruta relativa o con `..` también se rechaza; el resto se acepta, incluida una ruta fuera de tu home. La ruta se normaliza antes de guardarse (una barra final o `//` repetidas colapsan a la misma forma), así que `grant`/`revoke` con distinta grafía de la misma ruta se reconocen entre sí. `revoke` sobre una ruta que nunca otorgaste no es un error: informa que ya estaba en ese estado y sale en `0`.
+
+A diferencia de un MCP propio, un directorio otorgado alcanza a **todo** agente, primario o sub-agente por igual — no hay recorte por agente que preservar, así que no hace falta. Los dos reaplican la configuración renderizada al terminar, igual que `pegasus mcp grant`, así que el cambio ya queda escrito en `opencode.json` y sobrevive a cada `install`/`update` posterior sin que haga falta repetirlo. Como con cualquier cambio a los agentes, hace falta reiniciar OpenCode para que lo lea.
+
+Este permiso se renderiza como `"ask"`, no como un otorgamiento silencioso: cada vez que un agente lo necesite, OpenCode va a preguntar. La excepción es una corrida no interactiva con `--auto`, `--yolo`, o el flag del runtime que saltea permisos -- ahí el pedido se publica y se auto-aprueba solo, sub-agentes incluidos, así que bajo esos flags el efecto práctico es el mismo que un `allow`.
+
 ## Usarlo todos los días
 
 1. Abrí OpenCode dentro del repositorio en el que vas a trabajar.

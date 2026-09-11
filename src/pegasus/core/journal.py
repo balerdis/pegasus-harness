@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from pegasus.core.content import _SERVER_KEY
+from pegasus.core.content import _SERVER_KEY, ContentError, validate_granted_directory
 
 SCHEMA = "pegasus-harness/journal/v4"
 KINDS = frozenset({"file", "config-key", "dependency-tree"})
@@ -185,6 +185,24 @@ class Install:
     and never confused with a tuple that legitimately holds nothing because
     this install grants no server of its own."""
 
+    granted_directories: tuple[str, ...] = ()
+    """Absolute paths this installation was told to expose, per `Agent.granted_directories`.
+
+    Per-installation the same way `granted_mcp` is: two installs of the same
+    Pegasus version, on two machines, grant different working directories to
+    their agents, and neither has any way to know what the other grants. Kept
+    as plain strings rather than `Path` -- unlike every other path this
+    journal holds, a granted directory is never required to sit inside the
+    target's `home`, so `_contained` cannot validate it, and a `Path` here
+    would invite exactly that mismatched expectation.
+
+    Additive, the same discipline `granted_mcp` follows: a journal written
+    before this field existed carries no `granted_directories` key at all,
+    and that must load exactly as cleanly as one that carries it, with the
+    resulting install carrying an empty tuple -- never an invented key, never
+    a crash, and never confused with a tuple that legitimately holds nothing
+    because this install grants no directory of its own."""
+
 
 @dataclass(frozen=True)
 class Journal:
@@ -242,6 +260,8 @@ def _install_to_dict(install: Install) -> dict[str, Any]:
         payload["mcp_bindings"] = dict(install.mcp_bindings)
     if install.granted_mcp:
         payload["granted_mcp"] = list(install.granted_mcp)
+    if install.granted_directories:
+        payload["granted_directories"] = list(install.granted_directories)
     if install.created_dirs:
         payload["created_dirs"] = [str(path) for path in install.created_dirs]
     return payload
@@ -263,8 +283,17 @@ def _record_to_dict(entry: Record) -> dict[str, Any]:
     return payload
 
 
-def from_dict(payload: Any, home: Path) -> Journal:
-    """Parse and validate. A journal that fails here owns nothing."""
+def from_dict(payload: Any, home: Path, *, data_dir: Path | None = None) -> Journal:
+    """Parse and validate. A journal that fails here owns nothing.
+
+    `data_dir` is optional and defaults to `None`: most callers here -- every
+    test that never grants a directory, and every one that only cares whether
+    a hand-edited `granted_directories` entry survives structurally -- have
+    no `FileSystem` port to ask where Pegasus's own data directory is, and
+    `None` simply skips that one extra refusal in
+    `content.validate_granted_directory`. `FileJournalStore.load`, the real
+    production path, always has a `FileSystem` port and always supplies it.
+    """
     if not isinstance(payload, dict):
         raise JournalError("the journal must be an object")
     schema = payload.get("schema")
@@ -277,7 +306,7 @@ def from_dict(payload: Any, home: Path) -> Journal:
     raw_installs = payload.get("installs", [])
     if not isinstance(raw_installs, list):
         raise JournalError("installs must be a list")
-    installs = tuple(_install_from_dict(item, home) for item in raw_installs)
+    installs = tuple(_install_from_dict(item, home, data_dir) for item in raw_installs)
 
     seen: set[str] = set()
     for install in installs:
@@ -288,7 +317,7 @@ def from_dict(payload: Any, home: Path) -> Journal:
     return Journal(pegasus_version=version, installs=installs, schema=schema)
 
 
-def _install_from_dict(payload: Any, home: Path) -> Install:
+def _install_from_dict(payload: Any, home: Path, data_dir: Path | None) -> Install:
     if not isinstance(payload, dict):
         raise JournalError("each install must be an object")
     cli = payload.get("cli")
@@ -304,6 +333,9 @@ def _install_from_dict(payload: Any, home: Path) -> Install:
         links=tuple(_link_from_dict(item, cli) for item in payload.get("links", [])),
         mcp_bindings=_mcp_bindings_from_dict(payload.get("mcp_bindings"), cli),
         granted_mcp=_granted_mcp_from_dict(payload.get("granted_mcp"), cli),
+        granted_directories=_granted_directories_from_dict(
+            payload.get("granted_directories"), config_dir, cli, data_dir=data_dir
+        ),
         created_dirs=_created_dirs_from_dict(payload.get("created_dirs"), home, cli),
     )
 
@@ -355,6 +387,40 @@ def _granted_mcp_from_dict(value: Any, cli: str) -> tuple[str, ...]:
                 f"`grant_mcp`, so the journal can only be a hand edit or corrupted"
             )
     return tuple(value)
+
+
+def _granted_directories_from_dict(
+    value: Any, config_dir: Path, cli: str, *, data_dir: Path | None = None
+) -> tuple[str, ...]:
+    """Absent means a journal from before this field existed -- an empty
+    tuple, not an error and not a fabricated grant. Present, it must be a
+    list of paths that pass `content.validate_granted_directory` exactly as
+    written -- imported rather than restated, the same discipline
+    `_granted_mcp_from_dict` already follows for `_SERVER_KEY`, so the two can
+    never drift apart about what a safe directory grant looks like. A path
+    that could never have come from `directory grant` -- because that
+    validation would have refused it -- can only be a hand edit or a
+    corrupted write, and letting it back in here would replay the exact
+    escalation the validation exists to stop, straight through `update` or
+    `directory revoke`, neither of which ever asks the CLI-level checks
+    again.
+
+    `data_dir` is threaded through from `from_dict`, which gets it from
+    whatever caller can actually answer "where does Pegasus keep its own
+    data" -- `FileJournalStore`, which owns a `FileSystem` port, in every
+    real load. `None` here only when a caller has no such context to give;
+    see `validate_granted_directory`'s own docstring for what that skips.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise JournalError(f"{cli}: granted_directories must be a list")
+    try:
+        return tuple(
+            validate_granted_directory(item, config_dir=config_dir, data_dir=data_dir) for item in value
+        )
+    except ContentError as error:
+        raise JournalError(f"{cli}: granted_directories entry is invalid: {error}") from error
 
 
 def _created_dirs_from_dict(value: Any, home: Path, cli: str) -> tuple[Path, ...]:

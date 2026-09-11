@@ -71,9 +71,12 @@ class FileJournalStore:
         except (UnicodeDecodeError, codecs.CodecError) as error:
             raise JournalStoreError(f"the journal at {self._path} is not readable JSON: {error}") from error
         try:
-            return journal_module.from_dict(payload, self._home)
+            return journal_module.from_dict(payload, self._home, data_dir=self._fs.data_dir(self._home))
         except JournalError as error:
-            raise JournalStoreError(f"the journal at {self._path} is malformed: {error}") from error
+            raise JournalStoreError(
+                f"the journal at {self._path} is malformed ({error}); "
+                f"fix the offending field by hand or restore an earlier generation"
+            ) from error
 
     def ensure_writable(self) -> None:
         self._refuse_wrong_writer()
@@ -111,7 +114,7 @@ class FileJournalStore:
         """
         payload = journal_module.to_dict(journal)
         try:
-            journal_module.from_dict(payload, self._home)
+            journal_module.from_dict(payload, self._home, data_dir=self._fs.data_dir(self._home))
         except JournalError as error:
             raise JournalStoreError(f"refusing to store an invalid journal: {error}") from error
         return codecs.dumps(Codec.JSON, payload).encode("utf-8")

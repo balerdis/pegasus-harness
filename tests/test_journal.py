@@ -9,6 +9,7 @@ from pegasus.core.journal import Install, Journal, JournalError, Link, Record
 
 HOME = Path("/home/probe")
 CONFIG = HOME / ".config" / "opencode"
+DATA_DIR = HOME / ".local" / "share" / "pegasus-harness"
 AT = "2026-08-14T00:00:00+00:00"
 
 
@@ -51,7 +52,15 @@ def dependency_record(**overrides) -> Record:
     return Record(**fields)
 
 
-def install(*entries, cli="opencode", links=(), mcp_bindings=None, granted_mcp=None, created_dirs=None) -> Install:
+def install(
+    *entries,
+    cli="opencode",
+    links=(),
+    mcp_bindings=None,
+    granted_mcp=None,
+    created_dirs=None,
+    granted_directories=None,
+) -> Install:
     return Install(
         cli=cli,
         installed_at=AT,
@@ -62,6 +71,7 @@ def install(*entries, cli="opencode", links=(), mcp_bindings=None, granted_mcp=N
         mcp_bindings=dict(mcp_bindings) if mcp_bindings else {},
         granted_mcp=tuple(granted_mcp) if granted_mcp else (),
         created_dirs=tuple(created_dirs) if created_dirs else (),
+        granted_directories=tuple(granted_directories) if granted_directories else (),
     )
 
 
@@ -190,6 +200,28 @@ class RoundTripTest(unittest.TestCase):
         self.assertNotIn("created_dirs", payload["installs"][0])
         parsed = journal_module.from_dict(payload, HOME)
         self.assertEqual(parsed.installs[0].created_dirs, ())
+
+    def test_granted_directories_survives_serialization(self):
+        journal = Journal(
+            pegasus_version="4.0.0",
+            installs=(install(record(), granted_directories=("/home/probe/worktrees/extra",)),),
+        )
+        payload = journal_module.to_dict(journal)
+        self.assertEqual(journal_module.from_dict(payload, HOME), journal)
+
+    def test_an_install_with_no_granted_directories_omits_the_key(self):
+        payload = journal_module.to_dict(self.journal)
+        self.assertNotIn("granted_directories", payload["installs"][0])
+
+    def test_a_journal_from_before_granted_directories_existed_still_loads(self):
+        """A journal written before this field existed has no
+        `granted_directories` key at all -- that must load exactly as cleanly
+        as one that carries it, and the resulting install must carry an empty
+        tuple rather than raise or invent a key."""
+        payload = journal_module.to_dict(self.journal)
+        self.assertNotIn("granted_directories", payload["installs"][0])
+        parsed = journal_module.from_dict(payload, HOME)
+        self.assertEqual(parsed.installs[0].granted_directories, ())
 
 
 class ValidationTest(unittest.TestCase):
@@ -384,6 +416,96 @@ class ValidationTest(unittest.TestCase):
                 payload["installs"][0]["granted_mcp"] = [spelling]
                 parsed = journal_module.from_dict(payload, HOME)
                 self.assertEqual(parsed.installs[0].granted_mcp, (spelling,))
+
+    def test_granted_directories_must_be_a_list(self):
+        payload = self.payload()
+        payload["installs"][0]["granted_directories"] = {"a": True}
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("opencode", str(raised.exception))
+
+    def test_granted_directories_relative_entries_are_refused(self):
+        payload = self.payload()
+        payload["installs"][0]["granted_directories"] = ["worktrees/extra"]
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("worktrees/extra", str(raised.exception))
+
+    def test_granted_directories_entries_that_climb_with_dot_dot_are_refused(self):
+        payload = self.payload()
+        payload["installs"][0]["granted_directories"] = ["/home/probe/worktrees/../../etc"]
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("..", str(raised.exception))
+
+    def test_granted_directories_root_is_refused(self):
+        payload = self.payload()
+        payload["installs"][0]["granted_directories"] = ["/"]
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("filesystem root", str(raised.exception))
+
+    def test_granted_directories_the_configuration_directory_and_its_ancestors_are_refused(self):
+        """The same escalation `content.grant_directories` refuses at grant
+        time must also be refused on replay -- a hand-edited or corrupted
+        journal must not be able to smuggle the settings directory past a
+        check that only ever runs once, at the moment a person types
+        `directory grant`."""
+        for candidate in (str(CONFIG), str(CONFIG.parent), "/home/probe"):
+            with self.subTest(candidate=candidate):
+                payload = self.payload()
+                payload["installs"][0]["granted_directories"] = [candidate]
+                with self.assertRaises(JournalError) as raised:
+                    journal_module.from_dict(payload, HOME)
+                self.assertIn("configuration directory", str(raised.exception))
+
+    def test_granted_directories_outside_the_home_still_load(self):
+        """Deliberately not checked against `home` the way every other path
+        this journal holds is -- a legitimate working directory can sit
+        anywhere on the machine."""
+        payload = self.payload()
+        payload["installs"][0]["granted_directories"] = ["/srv/worktrees/extra"]
+        parsed = journal_module.from_dict(payload, HOME)
+        self.assertEqual(parsed.installs[0].granted_directories, ("/srv/worktrees/extra",))
+
+    def test_granted_directories_the_pegasus_data_directory_and_its_ancestors_are_refused_when_data_dir_is_given(
+        self,
+    ):
+        """The same replay-escalation guard `config_dir` already gets must
+        also cover Pegasus's own data directory -- a hand-edited journal
+        must not be able to smuggle write access to the journal's own home
+        past a check that only ever runs once, at the moment a person types
+        `directory grant`."""
+        for candidate in (str(DATA_DIR), str(DATA_DIR.parent)):
+            with self.subTest(candidate=candidate):
+                payload = self.payload()
+                payload["installs"][0]["granted_directories"] = [candidate]
+                with self.assertRaises(JournalError) as raised:
+                    journal_module.from_dict(payload, HOME, data_dir=DATA_DIR)
+                self.assertIn("data directory", str(raised.exception))
+
+    def test_granted_directories_the_pegasus_data_directory_still_loads_without_data_dir(self):
+        """`data_dir` is optional: a caller with no `FileSystem` port to ask
+        -- most callers of `from_dict` in this suite -- gets the structural
+        checks only, not this one extra refusal."""
+        payload = self.payload()
+        payload["installs"][0]["granted_directories"] = [str(DATA_DIR)]
+        parsed = journal_module.from_dict(payload, HOME)
+        self.assertEqual(parsed.installs[0].granted_directories, (str(DATA_DIR),))
+
+    def test_granted_directories_beside_the_pegasus_data_directory_still_load(self):
+        payload = self.payload()
+        sibling = str(DATA_DIR.parent / "other-app")
+        payload["installs"][0]["granted_directories"] = [sibling]
+        parsed = journal_module.from_dict(payload, HOME, data_dir=DATA_DIR)
+        self.assertEqual(parsed.installs[0].granted_directories, (sibling,))
+
+    def test_granted_directories_error_names_the_field(self):
+        payload = self.payload()
+        payload["installs"][0]["granted_directories"] = ["/"]
+        with self.assertRaises(JournalError) as raised:
+            journal_module.from_dict(payload, HOME)
+        self.assertIn("granted_directories", str(raised.exception))
 
     def test_a_config_key_entry_needs_a_pointer(self):
         payload = self.payload()
