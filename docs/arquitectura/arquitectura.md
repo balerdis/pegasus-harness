@@ -1302,6 +1302,24 @@ Un paso `unchanged` ya carga las dos mitades de la respuesta, así que el regist
 
 Lo contesta el parser y nada más: no abre un home, no lee un journal, no resuelve un adapter. El número es del binario y no de ninguna instalación suya, y una máquina con la instalación rota es exactamente donde tiene que seguir funcionando. Sólo antes del subcomando, a diferencia de `--json`: `--json` modifica un reporte y va donde va el comando que modifica, y una consulta de versión no modifica nada.
 
+### Enmendar el texto del runtime, no sólo agregar el propio
+
+Hasta acá los plugins que este producto embarca agregaban comportamiento suyo: un registro de skills, un notificador, un reporte de estado. Ninguno tocaba lo que el runtime le dice al modelo. Esta es una línea nueva y conviene declararla como tal, con su motivo y con su límite.
+
+El motivo es un caso real. El runtime pliega `edit`, `write` y `apply_patch` sobre un único permiso `edit` para decidir qué herramientas manda, y el comodín del mapa `tools` renderizado no lo alcanza porque ese filtro compara por clave exacta. Conceder `edit` entrega `apply_patch`, y **no hay forma de negarla** sin negar la edición entera. Su descripción abre con un imperativo —«Use the `apply_patch` tool to edit files»— y un modelo lo trató como instrucción de prioridad de desarrollador que supera al prompt de sistema: se negó a editar un archivo en otro host por SSH aunque la persona lo autorizara explícitamente, y siguió negándose después de que el prompt compartido dijera lo contrario. Su propia explicación fue la que señaló la salida: lo que lo obliga es el texto que llega **con las definiciones de herramientas**, no el que llega como prompt.
+
+`tool.definition` es el único gancho que escribe en ese mismo canal. Se dispara donde se arma la descripción que viaja al modelo, y lo que el plugin deja en `output.description` es lo que efectivamente se manda.
+
+**El límite, que es la parte que importa:** esto se usa cuando el texto del runtime contradice lo que el producto necesita **y no existe palanca de permisos**. No es una licencia para reescribir a gusto lo que el runtime dice. Un permiso que se puede denegar se deniega; una herramienta que se puede no conceder no se concede; recién cuando las dos están cerradas —como acá, donde la herramienta viaja atada a un permiso que sí queremos— se enmienda el texto.
+
+Y se **agrega**, no se reemplaza. Cortar la frase imperativa exigiría acertarle a un texto del runtime que puede cambiar: el día que lo reescriban, el reemplazo dejaría de aplicar **en silencio** y parecería que el defecto volvió. Un agregado sigue siendo cierto diga lo que diga el resto de la descripción.
+
+Hexagonalmente no hay nada nuevo: un plugin es un artefacto del runtime y vive donde ya vivían los otros, en `adapters/opencode/assets/plugins/`. El core no sabe que existe, y otro CLI traerá los suyos o ninguno. Lo que sí es nuevo es que una distribución hereda esta postura junto con el motor, sin decidirla por su cuenta.
+
+Una trampa propia de este formato: el rebrandeo de una distribución sustituye sólo `.md` y `.txt`, así que el cuerpo de un `.ts` viaja tal cual. El nombre del archivo sí se deriva de la identidad; el texto de adentro no puede nombrar la marca del motor, o una distribución embarcaría un plugin que se presenta con el nombre equivocado.
+
+---
+
 ---
 
 ## Identidad de producto y raíz de composición
