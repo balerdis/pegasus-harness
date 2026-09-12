@@ -7,12 +7,16 @@ runs against a fake.
 from __future__ import annotations
 
 import json
+import os
+import stat
+import tempfile
 import unittest
 from pathlib import Path
 
 from fakes import FakeFileSystem
 from pegasus.core import model_assignments as model_assignments_module
 from pegasus.core.types import ModelAssignment
+from pegasus.infra.fs_posix import PosixFileSystem
 from pegasus.infra.model_assignment_store_file import FileModelAssignmentStore, model_assignment_path
 from pegasus.ports.filesystem import FileSystemError
 from pegasus.ports.model_assignment_store import ModelAssignmentStore, ModelAssignmentStoreError
@@ -127,3 +131,33 @@ class FileModelAssignmentStoreTest(unittest.TestCase):
 
         with self.assertRaises(ModelAssignmentStoreError):
             store(Unwritable()).save(model_assignments_module.empty())
+
+
+class FileModelAssignmentStoreOnRealDiskTest(unittest.TestCase):
+    """The fake proves the policy; this proves the two halves actually compose."""
+
+    def setUp(self):
+        if os.geteuid() == 0:
+            self.skipTest("the store refuses to write as root, which is the behaviour under test elsewhere")
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.home = Path(self.directory.name)
+        self.filesystem = PosixFileSystem(product_id="pegasus-harness")
+        self.store = FileModelAssignmentStore(self.filesystem, home=self.home)
+
+    def test_an_absent_file_reads_as_empty_without_creating_anything(self):
+        self.assertEqual(self.store.load(), model_assignments_module.empty())
+        self.assertFalse(model_assignment_path(self.filesystem, self.home).exists())
+
+    def test_assignments_survive_a_round_trip_through_the_real_filesystem(self):
+        original = model_assignments_module.with_assignment(
+            model_assignments_module.empty(), "opencode", "sdd-apply", ASSIGNMENT
+        )
+        self.store.save(original)
+        self.assertEqual(self.store.load(), original)
+
+    def test_the_stored_file_and_its_directory_are_private(self):
+        self.store.save(model_assignments_module.empty())
+        stored = model_assignment_path(self.filesystem, self.home)
+        self.assertEqual(stat.S_IMODE(stored.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(stored.parent.stat().st_mode), 0o700)

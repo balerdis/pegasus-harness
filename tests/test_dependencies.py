@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import io
 import json
+import stat
 import tarfile
+import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 
@@ -12,6 +14,7 @@ from fakes import FakeDownloader, FakeFileSystem, FakeNpmInstaller
 from pegasus.core import dependencies
 from pegasus.core import ownership
 from pegasus.core.content import Distribution, Mcp
+from pegasus.infra.fs_posix import PosixFileSystem
 
 DEPENDENCIES_DIR = Path("/home/probe/.local/share/pegasus-harness/mcp")
 AT = "2026-08-14T00:00:00+00:00"
@@ -453,3 +456,66 @@ class MaterializeNpmTest(unittest.TestCase):
         item = npm_server(distribution=Distribution.REMOTE, version=None, package=None, integrity=None, entry=None)
         with self.assertRaises(dependencies.MaterializeError):
             self.materialize(item, FakeNpmInstaller())
+
+
+class MaterializeOnRealDiskTest(unittest.TestCase):
+    """The fake proves the policy -- what gets written, verified and refused;
+    this proves the bytes and modes `write_atomic` places actually land as
+    real files. Fetching and `npm ci` stay doubled (`FakeDownloader`,
+    `FakeNpmInstaller` -- a network and a package manager are not what this
+    debt is about), only the destination filesystem is real.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.dependencies_dir = Path(self.directory.name) / "mcp"
+        self.filesystem = PosixFileSystem(product_id="pegasus-harness")
+
+    def test_a_downloaded_binary_lands_on_disk_with_its_executable_mode(self):
+        item, content = download_server()
+        downloader = FakeDownloader({item.endpoint: content})
+        dependencies.materialize(self.filesystem, downloader, self.dependencies_dir, item, at=AT)
+        target = dependencies.binary_path(self.dependencies_dir, item)
+        self.assertEqual(target.read_bytes(), content)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+
+    def test_archive_members_land_on_disk_each_with_their_own_declared_mode(self):
+        item, archive = archive_server()
+        downloader = FakeDownloader({item.endpoint: archive})
+        dependencies.materialize(self.filesystem, downloader, self.dependencies_dir, item, at=AT)
+        target = dependencies.target_dir(self.dependencies_dir, item)
+        self.assertEqual((target / "probe").read_bytes(), b"the real program bytes")
+        self.assertEqual(stat.S_IMODE((target / "probe").stat().st_mode), 0o755)
+        self.assertEqual((target / "README.md").read_bytes(), b"read me")
+        self.assertEqual(stat.S_IMODE((target / "README.md").stat().st_mode), 0o644)
+
+    def test_a_failed_write_partway_through_an_archive_leaves_no_tree_on_disk(self):
+        """`_clean_up` calls `remove_dir`/`list_dir` on the target -- real
+        directory-tree removal is exactly the kind of thing a dict-backed
+        fake cannot mis-model in a way this would catch, so this is the one
+        place worth proving it against a real, partially written tree."""
+        item, archive = archive_server()
+        downloader = FakeDownloader({item.endpoint: archive})
+        target = dependencies.target_dir(self.dependencies_dir, item)
+        real_write_atomic = self.filesystem.write_atomic
+
+        def failing_write(path, content, *, mode=0o644):
+            if path.name == "README.md":
+                raise dependencies.FileSystemError("disk full")
+            return real_write_atomic(path, content, mode=mode)
+
+        self.filesystem.write_atomic = failing_write
+        with self.assertRaises(dependencies.MaterializeError):
+            dependencies.materialize(self.filesystem, downloader, self.dependencies_dir, item, at=AT)
+        self.assertFalse(target.exists())
+
+    def test_an_npm_install_writes_its_lockfile_and_manifest_to_real_files(self):
+        item = npm_server()
+        installer = FakeNpmInstaller()
+        dependencies.materialize_npm(
+            self.filesystem, installer, self.dependencies_dir, item, node_present=True, at=AT
+        )
+        target = dependencies.target_dir(self.dependencies_dir, item)
+        self.assertEqual((target / "package-lock.json").read_bytes(), item.npm_lockfile)
+        self.assertEqual(json.loads((target / "package.json").read_bytes())["name"], item.npm_package_name)
