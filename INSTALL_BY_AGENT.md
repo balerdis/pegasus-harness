@@ -365,5 +365,10 @@ Si hace falta deshacer algo, usá únicamente `pegasus restore` (vuelve a la gen
 `pegasus uninstall --cli opencode` (retira sólo lo que el journal reclama como propio). No borres
 configuración ajena a mano.
 
+No le prometas a la persona que una edición suya sobre un archivo instalado se preserva: no se
+preserva. Antes de afirmar qué sobrevive a un `install`, `update` o `uninstall`, leé
+[Limitaciones aceptadas](docs/arquitectura/arquitectura.md#limitaciones-aceptadas), que trae el
+alcance exacto del aviso `overwritten`, sus dos huecos y la ventana de `pegasus restore`.
+
 La instalación manual canónica está en [INSTALL.md](INSTALL.md); [README.md](README.md) presenta
 ambas rutas y [MANUAL.md](MANUAL.md) explica el control de modelo y proveedor de la persona.

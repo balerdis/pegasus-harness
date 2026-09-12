@@ -73,62 +73,7 @@ Un rollback no borra contenido del usuario que viva en una direccion que Pegasus
 
 ## Limitaciones conocidas
 
-Lo que sigue describe comportamiento real, no deuda hipotetica. Esta aca para que nadie
-tenga que leer el codigo para enterarse.
-
-### Una edicion a mano sobre un artifact de Pegasus se pierde en el proximo `install`, y en `uninstall`
-
-Hasta que la huella dejo de ser permiso, este contrato prometia que un artifact tocado por el
-usuario no se actualizaba ni se removia. Ya no es asi, y la promesa se retiro de la tabla en vez
-de seguir sostenida:
-
-- Si editaste a mano un archivo que Pegasus instalo —una skill, un comando, el system prompt—,
-  el proximo `install` o `update` lo **reescribe con la version del release**, sin preguntar.
-- `uninstall` lo **borra**, igual que si no lo hubieras tocado.
-- Lo mismo vale para una clave de configuracion que Pegasus posee dentro de `opencode.json`.
-
-Al instalar no es silencioso: el plan ya tuvo que leer la direccion para decidir si hacia falta
-escribirla, asi que compara lo que encontro contra la huella que el journal registro, y lo que
-discrepa se informa aparte bajo `overwritten` — tanto en `--dry-run` como en la corrida real
-(`Plan.overwritten`, `src/pegasus/core/planner.py`). Un `--dry-run` antes de aplicar es la forma
-de enterarse **antes** de gastar la edicion.
-
-Dos huecos en ese aviso, y conviene saberlos. Un item agregado a una lista queda afuera a
-proposito: se lo localiza por huella, asi que un valor que discrepa no se encuentra, y "alguien
-edito el nuestro" es indistinguible de "alguien borro el nuestro y agrego el suyo". Y `uninstall`
-no tiene un aviso equivalente: borra cada direccion reclamada e informa el id que saco, sin decir
-si lo que habia ahi era nuestro o tuyo.
-
-La recuperacion es el snapshot, no el journal: `install`, `update` y `uninstall` copian cada
-direccion antes de escribirla, y `pegasus restore [generacion]` devuelve los bytes y el modo
-exactos previos a ese comando. La ventana es finita —la retencion guarda **5 generaciones**
-(`RETAIN_GENERATIONS`, `src/pegasus/cli.py`)—, asi que si desde entonces corrieron mas comandos
-que los que esa retencion alcanza, el contenido original no existe en ningun lado.
-
-Dos consecuencias practicas, para quien quiera conservar un cambio propio: no se edita un
-artifact instalado esperando que sobreviva, y si de todos modos hace falta, se guarda una copia
-fuera del directorio de configuracion del CLI. El camino soportado para cambiar el contenido que
-se distribuye es construir una distribucion propia con su propio contenido, no editar el
-resultado de una instalacion.
-
-El razonamiento detras de esta politica —por que se separo "recuperar" de "pisar", y que hueco
-cubre exactamente el snapshot— esta en la unidad 9 de
-[docs/arquitectura/arquitectura.md](arquitectura/arquitectura.md).
-
-### Las listas de este documento se mantienen a mano, y ya se atrasaron
-
-"Control para releases" exige demostrar que la lista distribuida coincide con la inclusion
-aprobada, pero nada deriva esa lista del arbol: las enumeraciones de MCPs y de plugins de la
-seccion "Inclusion aprobada" se escriben y se actualizan a mano. Ya fallo: este documento nombro
-tres servidores MCP mientras el contenido embarcaba cinco, y omitio dos plugins que se instalan,
-durante varios releases que igual se publicaron. Un gate que se cumple leyendo el mismo
-documento que deberia auditar no es un gate.
-
-Lo que cerraria esto es una verificacion que derive las listas del arbol —los descriptores de
-`src/pegasus/content/mcp/` y los assets de
-`src/pegasus/adapters/opencode/assets/plugins/`— y falle cuando difieran de lo aprobado acá.
-**Hoy no existe.** Hasta que exista, cada release que agregue o saque un servidor o un plugin
-tiene que actualizar este documento en el mismo cambio, y la revision tiene que mirarlo.
+Este documento ya no las repite: viven en un solo lugar, junto con su motivo. Una edicion a mano sobre un artifact de Pegasus no sobrevive al proximo `install` y `uninstall` la borra, los `append` quedan fuera del aviso `overwritten` por construccion y `uninstall` no tiene aviso equivalente — el porque de cada una y la recuperacion por snapshot, con su ventana de cinco generaciones, estan en [Limitaciones aceptadas](arquitectura/arquitectura.md#limitaciones-aceptadas). Que las listas de "Inclusion aprobada" se mantengan a mano no es una decision sino algo que falta —una verificacion que las derive del arbol—, asi que figura en [Deudas sin unidad asignada](arquitectura/arquitectura.md#deudas-sin-unidad-asignada) con lo que hay que hacer en cada release hasta que exista.
 
 ## Control para releases
 
@@ -143,4 +88,4 @@ Antes de publicar, el release tiene que poder demostrar:
 - `tui.json`, configuración/salida TUI, `judgment-day`, la referencia de transporte de deployment y todo item no incluido quedan fuera de la distribucion.
 - El rollback no elimina contenido que Pegasus no posea.
 
-Dos de estos puntos hoy se demuestran a mano y no por una prueba: la coincidencia de la lista distribuida con la inclusion aprobada, y la de los plugins. Eso esta anotado como limitacion mas abajo.
+Dos de estos puntos hoy se demuestran a mano y no por una prueba: la coincidencia de la lista distribuida con la inclusion aprobada, y la de los plugins. Eso esta anotado como deuda en [Deudas sin unidad asignada](arquitectura/arquitectura.md#deudas-sin-unidad-asignada).

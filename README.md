@@ -74,6 +74,12 @@ La ruta asistida por agente empieza en [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md
 Para el uso diario, seguí [MANUAL.md](MANUAL.md). Para el diseño hexagonal, los puertos y las
 decisiones detrás de esta versión, consultá [docs/arquitectura/arquitectura.md](docs/arquitectura/arquitectura.md).
 
+Lo que el producto hace así a propósito y no va a cambiar —entre otras cosas, que una edición tuya
+sobre un archivo instalado no sobreviva al próximo `install`— está en
+[Limitaciones aceptadas](docs/arquitectura/arquitectura.md#limitaciones-aceptadas), cada una con su
+motivo y con qué podés hacer al respecto. Lo que todavía está por decidirse o por hacerse, en
+[Deudas sin unidad asignada](docs/arquitectura/arquitectura.md#deudas-sin-unidad-asignada).
+
 ## Licencia
 
 Pegasus Harness se distribuye bajo la [licencia MIT](LICENSE).

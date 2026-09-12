@@ -278,6 +278,11 @@ playwright needs Node to install, and node is not on PATH; installing Node is th
 responsibility, so change the selection or make node available before retrying
 ```
 
+Esa tabla dice qué se preserva; lo que no, está en
+[Limitaciones aceptadas](docs/arquitectura/arquitectura.md#limitaciones-aceptadas): un archivo que
+Pegasus instaló y vos editaste después se reescribe y se borra como cualquier otro, y ahí está el
+motivo, el alcance del aviso `overwritten` y la ventana de recuperación de `pegasus restore`.
+
 Para el uso diario, seguí [MANUAL.md](MANUAL.md). Para la política de ownership y rollback, consultá
 [docs/arquitectura/arquitectura.md](docs/arquitectura/arquitectura.md). Si un agente te asiste, usá
 [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md) antes de recibir comandos de instalación.
