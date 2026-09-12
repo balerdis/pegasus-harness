@@ -172,13 +172,23 @@ no asumas que una shell de login comparte el mismo PATH que la sesión del agent
 command -v opencode
 ```
 
-Pedile a la persona una decisión explícita por cada MCP que quiera instalar; hoy el único servidor
-remoto embarcado en el contenido es `context7`. Traducí cada decisión a `--mcp <id>` (instalar) o a la
-ausencia del flag (no instalar) -- no hay `--confirm`/`--decline` en v5, un servidor no nombrado
-simplemente no se instala:
+Pedile a la persona una decisión explícita por cada MCP que quiera instalar. El contenido embarca
+cinco, y no son intercambiables entre sí: nombrale los cinco, con lo que cada uno necesita antes de
+servir para algo.
+
+| id | Qué es | Cómo se distribuye | Qué hay que saber antes de elegirlo |
+| --- | --- | --- | --- |
+| `cbm` | Grafo de la estructura del código: símbolos, callers, impacto. | `download` (binario de release, `sha256` fijo) | Si la persona ya lo corre por su cuenta, atalo en vez de instalarlo (ver abajo). |
+| `engram` | Memoria persistente entre sesiones. | `download` (binario de release, `sha256` fijo) | -- |
+| `playwright` | Maneja un navegador real contra una página real. | `npm` (tarball con `integrity` y lockfile propio) | Necesita Node para instalarse (ver "Preflight de Node") y un navegador compatible ya instalado; Pegasus no descarga navegadores. |
+| `context7` | Documentación al día de librerías y CLIs de terceros. | `remote` (endpoint HTTPS) | Sale de la máquina: confirmá que esa red esté permitida. |
+| `jira` | El tracker de la organización, a través del servidor remoto propio de Atlassian. | `remote` (endpoint HTTPS) | Dos cosas, las dos hay que decirlas antes de instalarlo. **(1)** Necesita una autorización única que Pegasus no puede hacer por nadie: bajo OpenCode, `opencode mcp auth jira`, corrida por la persona. Hasta que eso pase, toda herramienta de ese servidor falla igual y reinstalarlo no cambia nada. **(2)** No retiene ninguna herramienta: lo que Atlassian permita bajo esa cuenta, un agente que reciba el servidor lo puede hacer — crear, transicionar y editar tickets, no sólo leerlos. |
+
+Traducí cada decisión a `--mcp <id>` (instalar) o a la ausencia del flag (no instalar) -- no hay
+`--confirm`/`--decline` en v5, un servidor no nombrado simplemente no se instala:
 
 ```sh
-pegasus install --cli opencode --dry-run --mcp context7
+pegasus install --cli opencode --dry-run --mcp context7 --mcp jira
 ```
 
 Si la persona ya corre uno de estos servidores por su cuenta bajo una clave propia, no lo instales de
@@ -186,8 +196,8 @@ nuevo: usá `--mcp <id>=<clave>` (por ejemplo `--mcp cbm=codebase-memory-mcp`). 
 la convención y los permisos del servidor, sin descargar nada ni tocar la configuración de mcp para
 ese id -- es lo que corresponde cuando la persona dice "eso ya lo tengo corriendo yo".
 
-**Preflight de Node:** si alguno de los servidores elegidos se distribuye por npm -- hoy, sólo
-`playwright` -- e `install` no encuentra `node` en el PATH, se niega antes de escribir nada,
+**Preflight de Node:** si alguno de los servidores elegidos se distribuye por npm -- de los cinco,
+sólo `playwright` -- e `install` no encuentra `node` en el PATH, se niega antes de escribir nada,
 *incluso en `--dry-run`*, con:
 
 ```
@@ -203,11 +213,17 @@ materializado no dispara esto: no hay nada que buscar, así que no hace falta No
 Mostrale el plan a la persona antes de aplicar. Recién con su confirmación, repetí el mismo comando sin
 `--dry-run`.
 
+Si la selección incluyó `jira`, decile que falta un paso que sólo puede dar ella, y que el reporte de
+`install` no lo cubre: correr `opencode mcp auth jira` una vez. Un `install` exitoso deja el servidor
+configurado y alcanzable por los agentes, pero sin esa autorización ninguna de sus herramientas
+contesta. No lo hagas vos y no lo des por hecho: si más adelante ese servidor falla, nombrá ese
+comando como la causa probable en vez de reinstalar.
+
 ## Dar acceso a un MCP que la persona administra por su cuenta
 
 Esto es distinto de todo lo anterior: `--mcp <id>` y `--mcp <id>=<clave>` son para servidores que
 Pegasus conoce, con descriptor propio. Si la persona instaló y administra un MCP que Pegasus nunca
-vio -- Jira, Figma, o cualquier otro -- ese servidor puede figurar en su `opencode.json` y seguir
+vio -- Sentry, Figma, o cualquier otro -- ese servidor puede figurar en su `opencode.json` y seguir
 siendo invisible para todos los agentes: Pegasus renderiza cada agente con una base que niega todo, y
 un servidor no nombrado en esa base no se abre aunque exista en la configuración general de OpenCode.
 

@@ -40,7 +40,13 @@ Pegasus distribuye un payload seleccionado para OpenCode, no un home directory d
 - comandos para SDD, contexto, handoff, creación y registro de skills;
 - el orquestador de Pegasus y sus roles de implementación/verificación;
 - skills reutilizables y sus referencias;
-- plugins locales seleccionados e integraciones opcionales CBM, Engram, Playwright y Context7 cuando se confirman.
+- plugins locales seleccionados e integraciones opcionales cuando se confirman: CBM, Engram, Playwright, Context7 y Jira. Son cinco y se eligen de a uno — un servidor que no pedís no se instala, y no deja configuración ni dependencia huérfana.
+
+Jira es el que conviene leer antes de elegirlo: llega al servidor remoto propio de Atlassian, necesita
+una autorización única por fuera de Pegasus (`opencode mcp auth jira`) antes de que cualquier
+herramienta conteste, y no retiene ninguna — lo que esa cuenta permita en Atlassian, un agente que
+reciba el servidor lo puede hacer, incluido crear, transicionar y editar tickets. [MANUAL.md](MANUAL.md)
+lo detalla junto con los otros cuatro.
 
 ## Cómo encaja el flujo
 
@@ -56,7 +62,8 @@ instalación existente. Si instalaste con `install.sh` de la sección anterior, 
 ese script instala Node y OpenCode antes de llegar a `pegasus`. Si vas a confirmar CBM, verificá que
 `codebase-memory-mcp --version` y `codebase-memory-mcp --help` respondan desde el ejecutable local.
 Playwright necesita un navegador compatible instalado por separado antes del apply; Pegasus no
-descarga navegadores.
+descarga navegadores. Context7 y Jira son remotos: no descargan nada, pero necesitan salida a la red,
+y Jira además su autorización única (`opencode mcp auth jira`), que Pegasus no puede hacer por vos.
 
 Pegasus no configura credenciales, proveedor ni modelo: usá `/connect` para las credenciales del proveedor y `/models` para elegir el modelo.
 
