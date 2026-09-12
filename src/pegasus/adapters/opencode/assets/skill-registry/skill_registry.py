@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the portable Pegasus skill index with only Python's standard library."""
+"""Build the portable skill index with only Python's standard library."""
 from __future__ import annotations
 
 import argparse

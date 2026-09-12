@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -635,19 +636,35 @@ def bundled_runtime_assets() -> list[Path]:
 
 
 #: The bundled runtime assets allowed to carry a brand fragment, each because
-#: what it carries is wire plumbing rather than a name shown to anyone:
+#: what it carries is wire plumbing rather than a name shown to anyone.
 #:
-#: - `skill-registry.ts` reads the env var names `PEGASUS_SKILL_REGISTRY_BIN`
-#:   and `PEGASUS_SKILL_ROOTS`, the contract it shares with the installer. Both
-#:   sides must spell them the same way in every distribution, exactly like the
-#:   wire-format identifiers `NoProductIdentityOutsideCompositionRootTest`
-#:   exempts on the Python side.
-#: - `zellij-state.ts` addresses a state directory whose engine-branded name is
-#:   shared with tooling outside this repository; the asset says so itself.
+#: Keyed by the file's full path relative to `SOURCE`, never by bare
+#: filename. `bundled_runtime_assets()` scans every `.ts`/`.js` anywhere
+#: under `adapters/` -- not just under one adapter's `assets/` tree -- so a
+#: basename-only exemption would clear *any* `.ts`/`.js` sharing one of these
+#: two names, dropped into *any* adapter, at *any* depth, without that file
+#: having earned the exemption on its own merits. The full path is the one
+#: spelling that names the exact file this exemption was written for, and no
+#: other:
+#:
+#: - `adapters/opencode/assets/plugins/skill-registry.ts` reads the env var
+#:   names `PEGASUS_SKILL_REGISTRY_BIN` and `PEGASUS_SKILL_ROOTS`, the
+#:   contract it shares with the installer. Both sides must spell them the
+#:   same way in every distribution, exactly like the wire-format identifiers
+#:   `NoProductIdentityOutsideCompositionRootTest` exempts on the Python side.
+#: - `adapters/opencode/assets/plugins/zellij-state.ts` addresses a state
+#:   directory whose engine-branded name is shared with tooling outside this
+#:   repository; the asset says so itself.
 #:
 #: Listed here, and nowhere else, so that adding a new asset can never quietly
-#: join them: a `.ts` that ships a brand fragment without appearing here fails.
-BRAND_EXEMPT_RUNTIME_ASSETS = frozenset({"skill-registry.ts", "zellij-state.ts"})
+#: join them: a `.ts` that ships a brand fragment without appearing here, at
+#: this exact path, fails.
+BRAND_EXEMPT_RUNTIME_ASSETS = frozenset(
+    {
+        "adapters/opencode/assets/plugins/skill-registry.ts",
+        "adapters/opencode/assets/plugins/zellij-state.ts",
+    }
+)
 
 
 class NoBrandFragmentInBundledRuntimeAssetsTest(unittest.TestCase):
@@ -670,12 +687,22 @@ class NoBrandFragmentInBundledRuntimeAssetsTest(unittest.TestCase):
     def test_no_bundled_runtime_asset_carries_a_brand_fragment(self):
         offenders = {}
         for path in bundled_runtime_assets():
-            if path.name in BRAND_EXEMPT_RUNTIME_ASSETS:
+            relative = str(path.relative_to(SOURCE))
+            if relative in BRAND_EXEMPT_RUNTIME_ASSETS:
                 continue
-            lowered = path.read_text(encoding="utf-8").lower()
+            try:
+                lowered = path.read_text(encoding="utf-8").lower()
+            except UnicodeDecodeError as error:
+                print(
+                    f"NoBrandFragmentInBundledRuntimeAssetsTest: skipped {path} -- not "
+                    f"decodable as UTF-8 text ({error}); a binary asset cannot carry a brand "
+                    "fragment in a form this scan can read.",
+                    file=sys.stderr,
+                )
+                continue
             found = sorted(fragment for fragment in BANNED_FRAGMENTS if fragment in lowered)
             if found:
-                offenders[str(path.relative_to(SOURCE))] = found
+                offenders[relative] = found
         self.assertEqual(
             offenders,
             {},
@@ -685,13 +712,220 @@ class NoBrandFragmentInBundledRuntimeAssetsTest(unittest.TestCase):
         )
 
     def test_every_exemption_still_names_an_asset_that_exists(self):
-        names = {path.name for path in bundled_runtime_assets()}
-        self.assertTrue(names, "no .ts/.js assets found; this test would prove nothing")
+        """Each entry in `BRAND_EXEMPT_RUNTIME_ASSETS` must name one exact file,
+        at that exact path, that `bundled_runtime_assets()` actually finds
+        today -- not merely a filename that happens to appear *somewhere*
+        under `adapters/`. A basename-only check here is exactly what would
+        let a brand-new `.ts` in an unrelated adapter subdirectory ride in on
+        this exemption for free; comparing full relative paths closes that
+        gap."""
+        paths = {str(path.relative_to(SOURCE)) for path in bundled_runtime_assets()}
+        self.assertTrue(paths, "no .ts/.js assets found; this test would prove nothing")
         self.assertEqual(
-            sorted(BRAND_EXEMPT_RUNTIME_ASSETS - names),
+            sorted(BRAND_EXEMPT_RUNTIME_ASSETS - paths),
             [],
-            "an exemption outlived the asset it was written for",
+            "an exemption outlived the asset it was written for, or was never spelled as the "
+            "exact path of a real file -- remove it",
         )
+
+
+def verbatim_adapter_assets() -> list[Path]:
+    """Every file an adapter bundles under its own `assets/` tree whose body
+    ships unchanged into every distribution built on this engine.
+
+    Rebranding a distribution substitutes text in `.md` and `.txt` files only
+    -- this repository's own product-identity rule. The body of anything else
+    an adapter bundles under `assets/` -- `.py`, `.ts`, `.js`, `.json`, or any
+    other file added later -- travels verbatim, so a brand fragment written
+    into one of those ships, unrebranded, into every distribution. Wider than
+    `bundled_runtime_assets()` above (which only ever looked at `.ts`/`.js`
+    anywhere under `adapters/`): derived from the tree itself, by suffix
+    exclusion rather than an enumerated allowlist of extensions, so a new
+    asset group or a new file type joins the scan without anyone remembering
+    to widen it -- and scoped to `assets/` specifically, since that is the
+    one subtree an adapter ships of its own that installs onto a user's
+    machine; `render.py`, `layout.py` and the rest of an adapter's own source
+    are Pegasus's engine code, not a bundled asset, and are covered by
+    `NoProductIdentityOutsideCompositionRootTest` instead.
+    """
+    return sorted(
+        path
+        for assets_root in ADAPTERS.glob("*/assets")
+        for path in assets_root.rglob("*")
+        if path.is_file()
+        and path.suffix not in {".md", ".txt"}
+        and "__pycache__" not in path.parts
+    )
+
+
+def _engine_brand_fragments() -> tuple[str, ...]:
+    """The brand fragments this engine's own `identity.json` actually names,
+    lower-cased, read through `identity.parse()` rather than copied as a
+    literal -- so renaming this engine's own brand keeps this guardian valid
+    without a second edit anywhere in the test suite.
+
+    Deliberately narrower than `brand_fragments.BANNED_FRAGMENTS`, which also
+    bans `"harness"` and the maintainer's own GitHub handle `"balerdis"` for a
+    wider, unrelated concern (nothing a generated installer or journal may
+    ever say). This derives only `program_name` and `display_name` -- the two
+    fields `_asset_facts` in `adapters/opencode/adapter.py` actually threads
+    into a bundled asset as placeholders -- because those two are exactly
+    what "names the engine brand in a verbatim asset body" means here.
+    """
+    from pegasus.core import identity as identity_module
+
+    identity = identity_module.parse((SOURCE / "identity.json").read_bytes())
+    return tuple(sorted({identity.program_name.lower(), identity.display_name.lower()}))
+
+
+def _brand_offenders(path: Path, fragments: tuple[str, ...]) -> list[str]:
+    """Every brand fragment appearing as literal text in `path`.
+
+    A plain case-insensitive substring search, deliberately: none of the
+    placeholders a bundled asset may use (`{{program_name}}`,
+    `{{display_name}}`, `{{program_module_name}}`, `{{program_pascal_name}}`,
+    `{{program_npm_name}}`, `{{orchestrator}}` -- see `core.placeholders`)
+    contains a derived brand fragment as a substring of its own spelling, so a
+    file that only ever asks for the placeholder never matches here; only a
+    hardcoded copy of the brand itself does.
+
+    `verbatim_adapter_assets()` finds every file under `assets/` by suffix
+    exclusion, not by an allowlist of text-shaped extensions -- so the day a
+    binary (an icon, a font) lands under `assets/`, it reaches here too. A
+    binary cannot carry a brand fragment in a form this scan can read, so
+    skipping it is correct; skipping it *silently* is not -- that silent skip
+    is exactly the defect DARQ's own leak scanner carried until today, where
+    an undecodable file vanished from the scan with nothing to show for it.
+    So a decode failure is reported to stderr (visible in the suite's own
+    output) and treated as "found nothing", never as a raised exception that
+    would take the whole suite down for a reason unrelated to what this test
+    watches.
+    """
+    try:
+        lowered = path.read_text(encoding="utf-8").lower()
+    except UnicodeDecodeError as error:
+        print(
+            f"NoEngineBrandInVerbatimAssetBodiesTest: skipped {path} -- not decodable as "
+            f"UTF-8 text ({error}); a binary asset cannot carry a brand fragment in a form "
+            "this scan can read.",
+            file=sys.stderr,
+        )
+        return []
+    return sorted(fragment for fragment in fragments if fragment in lowered)
+
+
+#: Verbatim `assets/` files allowed to carry an engine brand fragment, each
+#: because what it carries is wire plumbing -- an identifier shared with
+#: something outside this repository, or with a running plugin's own
+#: environment contract -- rather than a name shown to anyone.
+#:
+#: Keyed by the file's full path relative to `SOURCE` (e.g.
+#: `"adapters/opencode/assets/plugins/skill-registry.ts"`), never by bare
+#: filename. A basename-only exemption would clear *any* file sharing that
+#: name in *any* adapter's `assets/` tree, at any depth -- a brand-new file
+#: called `assets.json` dropped into an unrelated subdirectory would ride in
+#: on this list for free, having earned nothing. The full path is the one
+#: spelling that names the exact file this exemption was written for, and no
+#: other:
+#:
+#: - `adapters/opencode/assets/plugins/skill-registry.ts` reads the env var
+#:   names `PEGASUS_SKILL_REGISTRY_BIN` and `PEGASUS_SKILL_ROOTS`: a contract
+#:   it shares with `adapter.py::_skill_registry_contract`, which must spell
+#:   them identically in every distribution -- the same wire-plumbing
+#:   treatment `PRODUCT_IDENTITY_ALLOWLIST` already gives those two names on
+#:   the Python side.
+#: - `adapters/opencode/assets/plugins/zellij-state.ts` addresses a state
+#:   directory (`pegasus-zellij-state`) whose engine-branded name is shared
+#:   with tooling outside this repository; the asset says so itself, in the
+#:   comment `NoBrandFragmentInBundledRuntimeAssetsTest` already exempts it
+#:   for.
+#: - `adapters/opencode/assets/registry/assets.json`'s
+#:   `"schema": "pegasus-registry-assets/v3"` is a versioned schema
+#:   identifier, of the same family as the `SCHEMA` constants in
+#:   `core/journal.py` and `core/catalog.py`, stable by definition across
+#:   every distribution built on the same engine; the distribution declares
+#:   it in its own protected tokens, and deriving it from `identity.json`
+#:   would make it diverge between distributions without anyone reading it.
+#:
+#: Listed here, and nowhere else, so a new asset can never quietly join them:
+#: one that ships a brand fragment without appearing here, at this exact
+#: path, fails the scan.
+VERBATIM_ASSET_BRAND_EXEMPTIONS = frozenset(
+    {
+        "adapters/opencode/assets/plugins/skill-registry.ts",
+        "adapters/opencode/assets/plugins/zellij-state.ts",
+        "adapters/opencode/assets/registry/assets.json",
+    }
+)
+
+
+class NoEngineBrandInVerbatimAssetBodiesTest(unittest.TestCase):
+    """The residue DARQ carried for five releases as an accepted defect,
+    never a fixed one: `skill_registry.py` said "Pegasus skill index" in its
+    module docstring, and because that file ships verbatim -- no rebrand step
+    ever rewrites a `.py` body -- the literal reached every distribution
+    built on this engine, including one that is not called Pegasus at all.
+    Nothing on the engine side watched for it; only DARQ saw the symptom, and
+    recorded it as accepted rather than reporting it upstream as a defect.
+
+    This is that watcher, on the engine side, where the fix belongs. It does
+    not forbid an asset from naming the running product -- `{{program_name}}`
+    and its siblings from `core.placeholders` are exactly the correct way to
+    do that -- only a hardcoded copy of the brand as this engine's own
+    `identity.json` literally spells it, appearing as ordinary text in a file
+    whose body no rebrand step ever rewrites.
+    """
+
+    def test_there_are_verbatim_assets_to_scan(self):
+        self.assertTrue(
+            verbatim_adapter_assets(),
+            "no non-.md/.txt files found under adapters/*/assets/ -- scan target drifted",
+        )
+
+    def test_no_verbatim_asset_names_the_engine_brand(self):
+        fragments = _engine_brand_fragments()
+        offenders = {
+            str(path.relative_to(SOURCE)): found
+            for path in verbatim_adapter_assets()
+            if str(path.relative_to(SOURCE)) not in VERBATIM_ASSET_BRAND_EXEMPTIONS
+            for found in [_brand_offenders(path, fragments)]
+            if found
+        }
+        self.assertEqual(
+            offenders,
+            {},
+            "a verbatim asset names the engine brand; its body ships unchanged into every "
+            "distribution built on this engine -- use a neutral description, or fill in "
+            "{{program_name}}/{{display_name}}/{{program_module_name}}/{{program_pascal_name}}/"
+            f"{{program_npm_name}}/{{orchestrator}} instead: {offenders}",
+        )
+
+    def test_every_exemption_still_names_an_asset_that_exists(self):
+        """Each entry in `VERBATIM_ASSET_BRAND_EXEMPTIONS` must name one exact
+        file, at that exact path, that `verbatim_adapter_assets()` actually
+        finds today -- not merely a filename that happens to appear
+        *somewhere* under `adapters/*/assets/`. A basename-only check here
+        is exactly what let a brand-new `assets.json` in an unrelated
+        subdirectory ride in on this exemption for free; comparing full
+        relative paths closes that gap."""
+        paths = {str(path.relative_to(SOURCE)) for path in verbatim_adapter_assets()}
+        self.assertTrue(paths, "no verbatim assets found; this test would prove nothing")
+        self.assertEqual(
+            sorted(VERBATIM_ASSET_BRAND_EXEMPTIONS - paths),
+            [],
+            "an exemption outlived the asset it was written for, or was never spelled as the "
+            "exact path of a real file -- remove it",
+        )
+
+    def test_a_literal_brand_fragment_is_flagged(self):
+        fragments = _engine_brand_fragments()
+        probe = _write_probe(self, '"""Build the portable Pegasus skill index."""\n')
+        self.assertEqual(_brand_offenders(probe, fragments), ["pegasus"])
+
+    def test_a_placeholder_use_is_not_flagged(self):
+        fragments = _engine_brand_fragments()
+        probe = _write_probe(self, '"""Build the portable {{program_name}} skill index."""\n')
+        self.assertEqual(_brand_offenders(probe, fragments), [])
 
 
 def _owning_adapter(path: Path) -> str:
