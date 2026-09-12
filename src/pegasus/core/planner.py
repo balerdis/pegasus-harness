@@ -1000,6 +1000,58 @@ def _prune_empty_directories(
     return tuple(result)
 
 
+def empty_directories_never_pruned(
+    filesystem: FileSystem, config_dir: Path, created: tuple[Path, ...]
+) -> tuple[str, ...]:
+    """Every directory under ``config_dir`` that is empty right now and that
+    `_prune_empty_directories` would never remove — because its ascent stops
+    the instant it reaches a directory absent from ``created`` (`created_dirs`
+    is exactly what that ascent checks membership against; see its own
+    docstring for the pre-5.28.0 case that leaves it permanently empty for a
+    whole install).
+
+    This is a report, not a preview of a removal: nothing here is deleted, or
+    ever will be by this call. Ownership is not claimed either way — a
+    directory named here is not asserted to be one Pegasus made and lost track
+    of, only that pruning, as it exists today, will never reach it. It could
+    just as well be a sentinel some other program left meaningful; what it
+    provably does not hold is someone else's *content*, which is the one thing
+    naming an empty path can say without guessing whose the directory itself
+    is.
+
+    Walked depth-first from ``config_dir``, which is itself never a candidate
+    — the same exclusion `_prune_empty_directories` applies to its own
+    ``root``. A symlink anywhere in the walk stops descending into it, the
+    same caution `_free_of_symlinks` applies before a real removal: this
+    never removes anything, but reporting a path reached only through a link
+    as if it sat under ``config_dir`` would misname where it actually is.
+
+    This is `doctor`'s own walk, and `doctor` degrades rather than dying —
+    a path this cannot probe (a permission bit denying it, say) is skipped
+    silently rather than raised: calling this must never be the reason a
+    diagnostic tool fails outright over one directory it could not read.
+    """
+    created_dirs = set(created)
+    found: list[Path] = []
+
+    def visit(path: Path) -> None:
+        try:
+            if filesystem.is_symlink(path):
+                return
+            names = filesystem.list_dir(path)
+        except FileSystemError:
+            return  # a file, or unreadable -- neither is an empty directory
+        if not names:
+            if path != config_dir and path not in created_dirs:
+                found.append(path)
+            return
+        for name in names:
+            visit(path / name)
+
+    visit(config_dir)
+    return tuple(sorted(str(path) for path in found))
+
+
 def _free_of_symlinks(filesystem: FileSystem, candidate: Path) -> bool:
     """Whether every component of ``candidate``'s absolute path, from the
     filesystem root down through ``candidate`` itself, is a real directory.

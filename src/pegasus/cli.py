@@ -2260,20 +2260,51 @@ def doctor(runtime: Runtime, *, start_mcp_servers: bool = False) -> dict[str, An
     """
     environment = runtime.environment
     registry = available()
-    journal = journal_store(runtime).load()
-    return {
+    store = journal_store(runtime)
+    journal_error: dict[str, Any] | None = None
+    try:
+        journal = store.load()
+    except JournalStoreError as error:
+        # A malformed journal must not take the rest of the diagnosis down
+        # with it. `doctor` is exactly the tool somebody reaches for because
+        # something looks wrong -- an unreadable journal is one of the things
+        # that can be wrong, and it is the one case where every other command
+        # refuses outright. Falling back to an *empty* journal here would
+        # make every CLI read as "not installed", which is not the same fact
+        # as "we could not check" -- the same distinction `_granted_directories_from_dict`
+        # protects on the way in, kept here on the way out.
+        journal = None
+        journal_error = {"path": str(store.path), "error": str(error)}
+    report: dict[str, Any] = {
         "pegasus_version": runtime.identity.version,
         "clis": [
             _health(registry.get(cli_id), environment, journal, runtime, start_mcp_servers=start_mcp_servers)
             for cli_id in registry.ids()
         ],
     }
+    if journal_error is not None:
+        report["journal_error"] = journal_error
+    return report
 
 
 def _health(
     adapter, environment: Environment, journal, runtime: Runtime, *, start_mcp_servers: bool = False
 ) -> dict[str, Any]:
     detection = adapter.detect(environment)
+    if journal is None:
+        # Nothing below this point can be answered without the journal, and
+        # guessing would misreport one fact as another: `pegasus_installed:
+        # false` claims "nothing is here", when the truth is "its own record
+        # could not be read" -- a different fact, and doctor's whole job is
+        # not to blur the two together.
+        return {
+            "cli": adapter.id,
+            "display_name": adapter.display_name,
+            "tier": adapter.tier().value,
+            "detected": bool(detection.installed or detection.config_found),
+            "config_dir": str(detection.config_dir) if detection.config_dir else None,
+            "journal_unreadable": True,
+        }
     install = journal_module.install_for(journal, adapter.id)
     health: dict[str, Any] = {
         "cli": adapter.id,
@@ -2359,6 +2390,16 @@ def _health(
     # through `pegasus directory grant` is invisible anywhere else `doctor`
     # already reports, since it names no artifact, no server, and no binding.
     health["directories_granted"] = sorted(install.granted_directories)
+
+    # Named only when there is something to name: an install whose pruning
+    # already reaches everything empty under it has nothing here to say, and
+    # a report that always carried this key regardless would be one more
+    # section a reader has to learn to skim past.
+    orphaned = planner.empty_directories_never_pruned(
+        runtime.filesystem, install.config_dir, install.created_dirs
+    )
+    if orphaned:
+        health["unprunable_empty_directories"] = list(orphaned)
 
     if start_mcp_servers:
         health["mcp_servers"] = [
@@ -2934,7 +2975,13 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
 
     command = report["command"]
     if command == "doctor":
-        return "\n".join(_cli_prose(entry, identity=identity) for entry in report["clis"])
+        lines = [_cli_prose(entry, identity=identity) for entry in report["clis"]]
+        if report.get("journal_error"):
+            lines.append(report["journal_error"]["error"])
+            lines.append(
+                f"That earlier generation is what `{identity.program_name} restore` reads back."
+            )
+        return "\n".join(lines)
     if command == "restore":
         lines = [
             f"generation {report['generation']}: wrote back {len(report['written'])}, "
@@ -2955,6 +3002,12 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
                 else f"Would be overwritten, because {identity.display_name} owns these and you had changed them:"
             )
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["overwritten"])
+            if not planned:
+                lines.append(
+                    f"`{identity.program_name} restore` can bring back what was just overwritten; "
+                    f"`--dry-run` would have shown this list before anything was touched. "
+                    f"Up to {RETAIN_GENERATIONS} generations are kept, oldest dropped first."
+                )
         if report["skipped"]:
             lines.append("Left alone because something was already there:")
             lines.extend(f"  {item['id']} → {item['target']}" for item in report["skipped"])
@@ -3009,6 +3062,10 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
     ]
     if report["unaccounted"]:
         lines.append(f"Could not be accounted for: {', '.join(report['unaccounted'])}")
+    lines.append(
+        f"`{identity.program_name} restore` can put this back exactly as it was before; "
+        f"up to {RETAIN_GENERATIONS} generations are kept, oldest dropped first."
+    )
     return "\n".join(_and_retention(_and_activation(lines, report), report))
 
 
@@ -3107,6 +3164,11 @@ def _cli_prose(entry: dict[str, Any], *, identity: Identity | None = None) -> st
     identity = identity if identity is not None else default_identity()
     if not entry["detected"]:
         return f"{entry['display_name']}: not found on this machine."
+    if entry.get("journal_unreadable"):
+        return (
+            f"{entry['display_name']}: present at {entry['config_dir']}, but {identity.display_name}'s own "
+            f"record of what it installed could not be read, so nothing more can be said about it."
+        )
     if not entry["pegasus_installed"]:
         return f"{entry['display_name']}: present at {entry['config_dir']}, {identity.display_name} not installed."
     line = f"{entry['display_name']}: {entry['artifacts']} artifacts installed at {entry['config_dir']}."
@@ -3144,4 +3206,12 @@ def _cli_prose(entry: dict[str, Any], *, identity: Identity | None = None) -> st
             )
         else:
             line += "\n  No MCP servers configured."
+    if entry.get("unprunable_empty_directories"):
+        paths = entry["unprunable_empty_directories"]
+        n = len(paths)
+        line += (
+            f"\n  {n} empty director{'y' if n == 1 else 'ies'} under the configuration directory that this "
+            f"installation cannot confirm as its own, and so never prunes:"
+        )
+        line += "".join(f"\n    {path}" for path in paths)
     return line

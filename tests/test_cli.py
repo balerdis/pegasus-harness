@@ -705,6 +705,32 @@ class OverwrittenReportTest(RealHomeTestCase):
         _, printed = self.run_prose("install", "--cli", CLI)
         self.assertIn("Overwritten", printed)
 
+    def test_the_overwritten_report_names_restore_as_the_way_back(self):
+        """The snapshot `restore` reads back is the only thing that protects
+        a hand edit `install`/`update` just overwrote -- and that protection
+        is worthless if nobody reading the report knows it exists."""
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        self.hand_edit_one_file()
+        _, printed = self.run_prose("install", "--cli", CLI)
+        self.assertIn("restore", printed)
+        self.assertIn("--dry-run", printed)
+        self.assertIn(str(cli.RETAIN_GENERATIONS), printed)
+
+    def test_restore_actually_recovers_what_the_overwritten_report_names(self):
+        """The text is only honest if `restore` really does what it claims."""
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+        _edited, target = self.hand_edit_one_file()
+        hand_written = target.read_bytes()
+        self.run_cli("install", "--cli", CLI)
+        self.assertNotEqual(target.read_bytes(), hand_written)
+
+        code, _report = self.run_cli("restore", "2")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(target.read_bytes(), hand_written)
+
 
 class DriftReconciliationTest(RealHomeTestCase):
     """A run that writes nothing still has to leave the journal telling the truth.
@@ -1475,6 +1501,35 @@ class UninstallTest(RealHomeTestCase):
         self.assertTrue(preexisting.exists())
         self.assertNotIn("a-directory-the-person-already-had", report["pruned"])
 
+    def test_uninstall_prose_names_restore_as_the_way_back(self):
+        """`uninstall` deletes without asking whose edit it is losing; the
+        only recourse is `restore`, so the report must say so, generation
+        limit included."""
+        self.install()
+        _, printed = self.run_prose("uninstall", "--cli", CLI)
+        self.assertIn("restore", printed)
+        self.assertIn(str(cli.RETAIN_GENERATIONS), printed)
+
+    def test_restore_actually_recovers_what_uninstall_names(self):
+        """The text is only honest if `restore` really does put things back
+        exactly as they were before `uninstall`."""
+        self.install()
+        before = {
+            path: path.read_bytes() for path in self.layout().config_dir.rglob("*") if path.is_file()
+        }
+        code, _report = self.run_cli("uninstall", "--cli", CLI)
+        self.assertEqual(code, 0)
+
+        # `restore` with no argument targets the most recent readable
+        # generation, which is the one `uninstall` itself just took.
+        code, _ = self.run_cli("restore")
+
+        self.assertEqual(code, 0)
+        after = {
+            path: path.read_bytes() for path in self.layout().config_dir.rglob("*") if path.is_file()
+        }
+        self.assertEqual(after, before)
+
     def test_uninstalling_leaves_no_empty_directory_behind(self):
         """The integration-level mirror of `PruneEmptyDirectoriesTest`'s own
         guardian assertion in `test_planner.py`: whatever this CLI's real
@@ -1717,12 +1772,151 @@ class DoctorTest(RealHomeTestCase):
         self.run_cli("doctor")
         self.assertEqual(self.snapshot(), before)
 
-    def test_doctor_reports_a_damaged_journal_instead_of_pretending_nothing_is_installed(self):
+    def test_doctor_reports_a_damaged_journal_instead_of_dying(self):
+        """Every other command refuses outright against an unreadable
+        journal — that refusal is the fail-closed behaviour a hand-edit bug
+        or a corrupted write deserves. `doctor` is the one command a person
+        or an agent reaches for *because* something looks wrong, and it must
+        not die the same way: it is read-only, so degrading gracefully here
+        can never lose anything the way it would for a command that writes.
+        """
         self.install()
         self.store().path.write_bytes(b"{ not json")
         code, report = self.run_cli("doctor")
-        self.assertNotEqual(code, 0)
-        self.assertEqual(report["status"], "failed")
+        self.assertEqual(code, 0)
+        self.assertNotIn("status", report)
+
+    def test_doctor_names_the_malformed_journals_own_path_and_complaint(self):
+        self.install()
+        self.store().path.write_bytes(b"{ not json")
+        _, report = self.run_cli("doctor")
+        self.assertEqual(report["journal_error"]["path"], str(self.store().path))
+        self.assertIn("not readable JSON", report["journal_error"]["error"])
+
+    def test_doctor_still_reports_what_it_can_affirm_without_the_journal(self):
+        """The binary version needs no journal at all, and detection reads
+        the real filesystem, not the journal -- both survive a journal that
+        cannot be read."""
+        self.install()
+        self.store().path.write_bytes(b"{ not json")
+        _, report = self.run_cli("doctor")
+        self.assertEqual(report["pegasus_version"], pegasus.__version__)
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertTrue(entry["detected"])
+        self.assertIsNotNone(entry["config_dir"])
+
+    def test_doctor_never_claims_not_installed_when_it_cannot_tell(self):
+        """`pegasus_installed: false` is a claim that nothing is there. A
+        journal that cannot be read makes that claim untrue -- it might well
+        be installed -- so the per-CLI entry must say "unreadable", never
+        fabricate "not installed" in its place."""
+        self.install()
+        self.store().path.write_bytes(b"{ not json")
+        _, report = self.run_cli("doctor")
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertTrue(entry["journal_unreadable"])
+        self.assertNotIn("pegasus_installed", entry)
+
+    def test_doctor_json_carries_the_malformed_journal_under_its_own_key(self):
+        """Following the pattern `mcp_granted` and `directories_granted`
+        already set: a machine-readable consumer gets its own key rather
+        than having to parse a sentence for the same fact."""
+        self.install()
+        self.store().path.write_bytes(b"{ not json")
+        _, report = self.run_cli("doctor")
+        self.assertIn("journal_error", report)
+        self.assertIn("path", report["journal_error"])
+        self.assertIn("error", report["journal_error"])
+
+    def test_doctor_prose_names_both_ways_back_from_a_malformed_journal(self):
+        self.install()
+        self.store().path.write_bytes(b"{ not json")
+        _, printed = self.run_prose("doctor")
+        self.assertIn("not readable JSON", printed)
+        self.assertIn("restore", printed)
+
+    def test_a_healthy_journal_carries_no_journal_error_key(self):
+        """No section anybody has to learn to ignore: absent when there is
+        nothing wrong to report, the same discipline `unaccounted` and
+        `pruned` already follow elsewhere in these reports."""
+        self.install()
+        _, report = self.run_cli("doctor")
+        self.assertNotIn("journal_error", report)
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertNotIn("journal_unreadable", entry)
+
+
+class UnprunableEmptyDirectoryReportTest(RealHomeTestCase):
+    """P5: `created_dirs` empty for a whole pre-5.28.0 install means pruning
+    can never reach anything under it, forever -- and `doctor` used to say
+    nothing about the empty directories that leaves behind. It still never
+    prunes them here; it only names them, without claiming they are
+    Pegasus's own to reclaim.
+    """
+
+    def install(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI)
+
+    def plant_untracked_empty_directory(self, name: str = "leftover-from-an-old-install") -> Path:
+        """A directory `created_dirs` never recorded -- the exact shape a
+        pre-5.28.0 install leaves behind, without needing an actual old
+        release to reproduce it."""
+        directory = self.layout().config_dir / name
+        directory.mkdir()
+        return directory
+
+    def test_doctor_names_an_untracked_empty_directory(self):
+        self.install()
+        directory = self.plant_untracked_empty_directory()
+        _, report = self.run_cli("doctor")
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertIn(str(directory), entry["unprunable_empty_directories"])
+
+    def test_an_install_with_no_empty_directories_names_none(self):
+        self.install()
+        _, report = self.run_cli("doctor")
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertNotIn("unprunable_empty_directories", entry)
+
+    def test_a_directory_tracked_in_created_dirs_is_not_named_even_if_empty(self):
+        """A directory pruning *can* reach is not the P5 debt: it will be
+        taken back the next time something empties it out via `uninstall`,
+        so naming it here would be noise, not the gap this report exists
+        to close."""
+        self.install()
+        tracked = next(iter(journal_module.install_for(self.store().load(), CLI).created_dirs))
+        for child in list(tracked.iterdir()):
+            if child.is_file():
+                child.unlink()
+            else:
+                import shutil
+
+                shutil.rmtree(child)
+        _, report = self.run_cli("doctor")
+        entry = next(item for item in report["clis"] if item["cli"] == CLI)
+        self.assertNotIn(str(tracked), entry.get("unprunable_empty_directories", []))
+
+    def test_doctor_never_writes_or_removes_the_directories_it_names(self):
+        self.install()
+        directory = self.plant_untracked_empty_directory()
+        self.run_cli("doctor")
+        self.assertTrue(directory.exists())
+
+    def test_doctor_prose_is_descriptive_not_accusatory(self):
+        """No claim of ownership, no promise of a future cleanup -- only
+        that this install cannot confirm the directory as its own, and so
+        never prunes it."""
+        self.install()
+        self.plant_untracked_empty_directory()
+        _, printed = self.run_prose("doctor")
+        self.assertIn("cannot confirm", printed)
+        self.assertIn("never prunes", printed)
+
+    def test_doctor_prose_says_nothing_when_there_is_nothing_to_name(self):
+        self.install()
+        _, printed = self.run_prose("doctor")
+        self.assertNotIn("empty director", printed)
 
 
 class SnapshotTest(RealHomeTestCase):
