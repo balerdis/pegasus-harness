@@ -2963,6 +2963,16 @@ class ContentErrorSitesTest(unittest.TestCase):
             ),
             "",
         ),
+        "_refuse_unknown_fields#0": (
+            _via_load(
+                {"mcp/probe-mcp.md": MCP.replace(
+                    "endpoint: https://example.test/mcp\n",
+                    "endpoint: https://example.test/mcp\nwitheld_tools: [dangerous]\n",
+                )},
+                "mcp/probe-mcp.md",
+            ),
+            "",
+        ),
         "_download_form#0": (
             _via_load({"mcp/probe-mcp.md": DOWNLOAD_MCP.replace(CHECKSUM, "sha256:not-hex")}, "mcp/probe-mcp.md"), ""),
         "_archive_form#0": (
@@ -3236,6 +3246,156 @@ class WithheldMcpToolsTest(unittest.TestCase):
         selected = content.select_mcp(with_untouched, ["cbm"])
         other = next(a for a in selected.agents if a.name == "other-agent")
         self.assertEqual(other.denied_mcp_tools, ())
+
+
+class ClosedFrontMatterVocabularyTest(TemporaryContent):
+    """A front matter key outside a content type's declared vocabulary is a
+    typo or an invented field, and either one is silently dropped without
+    `_refuse_unknown_fields`. The concrete cost this closes: a `withheld_tools`
+    typo leaves the real field empty, so a server that looks like it retains
+    its dangerous tools actually grants every one of them.
+    """
+
+    def test_mcp_typo_in_withheld_tools_is_refused_and_named(self):
+        write_session_start(self.root)
+        write(
+            self.root,
+            "mcp/probe-mcp.md",
+            reaching(
+                MCP.replace(
+                    "endpoint: https://example.test/mcp\n",
+                    "endpoint: https://example.test/mcp\nwitheld_tools: [dangerous_delete]\n",
+                ),
+                "probe-agent",
+            ),
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("witheld_tools", message)
+        self.assertIn("withheld_tools", message)
+        self.assertIn("mcp/probe-mcp.md", message)
+
+    def test_mcp_invented_field_is_refused(self):
+        write_session_start(self.root)
+        write(
+            self.root,
+            "mcp/probe-mcp.md",
+            reaching(
+                MCP.replace(
+                    "endpoint: https://example.test/mcp\n",
+                    "endpoint: https://example.test/mcp\ntotally_invented: yes\n",
+                ),
+                "probe-agent",
+            ),
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        self.assertIn("totally_invented", str(raised.exception))
+
+    def test_agent_invented_field_is_refused(self):
+        write_session_start(self.root)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\ntotally_invented: yes\n---\n\nx\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        self.assertIn("totally_invented", str(raised.exception))
+
+    def test_skill_invented_field_is_refused(self):
+        write(self.root, "skills/alpha/SKILL.md", SKILL.replace("---\n\n", "totally_invented: yes\n---\n\n", 1))
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        self.assertIn("totally_invented", str(raised.exception))
+
+    def test_command_invented_field_is_refused(self):
+        write(
+            self.root,
+            "commands/probe-command.md",
+            COMMAND.replace("---\n\n", "totally_invented: yes\n---\n\n", 1),
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        self.assertIn("totally_invented", str(raised.exception))
+
+    def test_system_prompt_mcp_section_invented_field_is_refused(self):
+        """`system-prompt/mcp/<id>.md` reads only `name`; anything else is invented."""
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", CONTEXT7)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
+            "See {{skills_root}}/_shared/mcp/context7-convention.md.\n",
+        )
+        write(self.root, "system-prompt/AGENTS.md", "# Rules\n\nBe careful.\n")
+        write(
+            self.root,
+            "system-prompt/mcp/context7.md",
+            "---\nname: context7\ntotally_invented: yes\n---\n\nAmbient rules.\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("totally_invented", message)
+        self.assertIn("system-prompt/mcp/context7.md", message)
+
+    def test_agent_mcp_section_invented_field_is_refused(self):
+        """`agents/mcp/<id>.md` reads no field at all today; any key is invented."""
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", CONTEXT7)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
+            "See {{skills_root}}/_shared/mcp/context7-convention.md.\n",
+        )
+        write(
+            self.root,
+            "agents/mcp/context7.md",
+            "---\ntotally_invented: yes\n---\n\nAmbient text.\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("totally_invented", message)
+        self.assertIn("agents/mcp/context7.md", message)
+
+    def test_agent_mcp_override_invented_field_is_refused(self):
+        """`agents/mcp/<id>@<agent>.md` shares the same empty vocabulary."""
+        write_session_start(self.root)
+        write(self.root, "mcp/context7.md", CONTEXT7)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n---\n\n"
+            "See {{skills_root}}/_shared/mcp/context7-convention.md.\n",
+        )
+        write(
+            self.root,
+            "agents/mcp/context7@probe-agent.md",
+            "---\ntotally_invented: yes\n---\n\nAmbient text.\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("totally_invented", message)
+        self.assertIn("agents/mcp/context7@probe-agent.md", message)
+
+    def test_system_prompt_invented_field_is_refused(self):
+        """`system-prompt/AGENTS.md` reads no field out of its own front matter."""
+        write(
+            self.root,
+            "system-prompt/AGENTS.md",
+            "---\ntotally_invented: yes\n---\n\n# Rules\n\nBe careful.\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("totally_invented", message)
+        self.assertIn("system-prompt/AGENTS.md", message)
 
 
 if __name__ == "__main__":

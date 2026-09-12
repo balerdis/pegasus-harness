@@ -947,6 +947,26 @@ def grant_directories(
     )
 
 
+#: Every front matter key a skill's `SKILL.md` may declare. `license`,
+#: `metadata`, `compatibility`, `disable-model-invocation` and
+#: `user-invocable` are not read by this loader -- nothing here consumes them
+#: today -- but every skill this project ships already carries at least one
+#: of them, so refusing them as unknown would refuse the project's own
+#: shipped content. Accepted and ignored, same as an adapter that reads its
+#: own subset of a shared descriptor.
+_SKILL_FIELDS = frozenset(
+    {
+        "name",
+        "description",
+        "license",
+        "metadata",
+        "compatibility",
+        "disable-model-invocation",
+        "user-invocable",
+    }
+)
+
+
 def _load_skills(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Skill, ...]:
     skills = []
     for item in _subdirectories(directory):
@@ -957,6 +977,7 @@ def _load_skills(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[S
             raise ContentError(f"{item_relative}: a skill directory needs a {SKILL_FILE}")
         fields, _ = split_frontmatter(descriptor.read_text(encoding="utf-8"), str(source))
         _require_name(fields, item.name, source)
+        _refuse_unknown_fields(fields, _SKILL_FIELDS, source, kind="skill")
         assets = _assets(item)
         _refuse_verbatim_placeholders(assets, source)
         skills.append(
@@ -968,6 +989,24 @@ def _load_skills(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[S
             )
         )
     return tuple(skills)
+
+
+#: Every front matter key an agent descriptor may declare. `optional_mcp` and
+#: `reaches` are deliberately absent -- `_refuse_relation_keys_in_an_agent`
+#: already refuses them with a message naming where they belong instead of
+#: calling them merely unknown -- and `default` and `hidden` are absent for
+#: the same reason, refused first by `_refuse_derived_fields`.
+_AGENT_FIELDS = frozenset(
+    {
+        "name",
+        "description",
+        "mode",
+        "requires_tools",
+        "optional_tools",
+        "may_delegate_to",
+        "model_configurable",
+    }
+)
 
 
 def _load_agents(
@@ -985,6 +1024,7 @@ def _load_agents(
         fields, body, source = _descriptor(path, relative_dir)
         _refuse_derived_fields(fields, source)
         _refuse_relation_keys_in_an_agent(fields, source)
+        _refuse_unknown_fields(fields, _AGENT_FIELDS, source, kind="agent")
         name = _stem(path)
         optional_mcp = reached_by.get(name, ())
         mcp_sections = tuple(
@@ -1032,6 +1072,16 @@ def _reached_by(mcp: tuple[Mcp, ...]) -> dict[str, tuple[str, ...]]:
     return {name: tuple(ids) for name, ids in reached.items()}
 
 
+#: An agent-side ambient section carries no front matter at all today: the id
+#: it belongs to and the agent it may override come from the filename
+#: (`<id>.md`, `<id>@<agent>.md`), never from a declared field, and nothing in
+#: `_load_agent_mcp_sections` reads a key out of one. The empty set is the
+#: measured fact, not a placeholder waiting for a field to justify it -- a
+#: file that starts declaring one now is inventing it, the same as any other
+#: unknown key.
+_AGENT_MCP_SECTION_FIELDS: frozenset[str] = frozenset()
+
+
 def _load_agent_mcp_sections(
     directory: ContentRoot,
     relative_dir: PurePosixPath,
@@ -1072,7 +1122,8 @@ def _load_agent_mcp_sections(
             raise ContentError(
                 f"{source}: is an agent section for {mcp_id!r}, which no mcp server declares"
             )
-        _, body = split_frontmatter(path.read_text(encoding="utf-8"), str(source))
+        fields, body = split_frontmatter(path.read_text(encoding="utf-8"), str(source))
+        _refuse_unknown_fields(fields, _AGENT_MCP_SECTION_FIELDS, source, kind="agent mcp section")
         _require_known_placeholders(body, source)
         section = McpSection(name=mcp_id, body=body, source=source)
         if match is None:
@@ -1323,10 +1374,15 @@ def _require_mcp_convention_referenced(
         raise ContentError(f"{agent.source}: " + "; ".join(problems))
 
 
+#: Every front matter key a command descriptor may declare.
+_COMMAND_FIELDS = frozenset({"name", "description", "runs_as", "execution"})
+
+
 def _load_commands(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Command, ...]:
     commands = []
     for path in _markdown_files(directory):
         fields, body, source = _descriptor(path, relative_dir)
+        _refuse_unknown_fields(fields, _COMMAND_FIELDS, source, kind="command")
         commands.append(
             Command(
                 name=_stem(path),
@@ -1356,6 +1412,13 @@ from a copy-pasted descriptor is a refusal, not a value nothing ever reads.
 
 _ALL_FORM_FIELDS = frozenset(name for names in _FORM_FIELDS.values() for name in names)
 
+#: Every field common to an MCP descriptor regardless of its distribution
+#: form. The full closed vocabulary for a given descriptor is this set union
+#: `_FORM_FIELDS[distribution]` -- never `_ALL_FORM_FIELDS`, which would
+#: accept another form's fields once `_refuse_foreign_form_fields` had already
+#: refused them for a worse reason.
+_MCP_COMMON_FIELDS = frozenset({"name", "description", "distribution", "endpoint", "withheld_tools", "reaches"})
+
 
 def _load_mcp(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Mcp, ...]:
     servers = []
@@ -1363,6 +1426,9 @@ def _load_mcp(directory: ContentRoot, relative_dir: PurePosixPath) -> tuple[Mcp,
         fields, body, source = _descriptor(path, relative_dir)
         distribution = _choice(fields, "distribution", Distribution, source)
         _refuse_foreign_form_fields(fields, distribution, source)
+        _refuse_unknown_fields(
+            fields, _MCP_COMMON_FIELDS | frozenset(_FORM_FIELDS[distribution]), source, kind="mcp"
+        )
         version, checksum = _download_form(fields, distribution, source)
         package, npm_version, integrity, entry, npm_lockfile, npm_package_name = _npm_form(
             fields, distribution, directory, source
@@ -1573,6 +1639,13 @@ def _require_lockfile_pins(
     return root_name
 
 
+#: `AGENTS.md` reads no field out of its own front matter -- `_load_system_prompt`
+#: has always discarded whatever `split_frontmatter` returned and used only the
+#: body. The empty set says that plainly instead of leaving it unsaid: this file
+#: has no vocabulary to invent a field into, so none is accepted.
+_SYSTEM_PROMPT_FIELDS: frozenset[str] = frozenset()
+
+
 def _load_system_prompt(directory: ContentRoot, relative_dir: PurePosixPath) -> SystemPrompt | None:
     files = _markdown_files(directory)
     if not files:
@@ -1582,7 +1655,8 @@ def _load_system_prompt(directory: ContentRoot, relative_dir: PurePosixPath) -> 
             f"{relative_dir}: exactly one system prompt is allowed, found {len(files)}"
         )
     source = relative_dir / files[0].name
-    _, body = split_frontmatter(files[0].read_text(encoding="utf-8"), str(source))
+    fields, body = split_frontmatter(files[0].read_text(encoding="utf-8"), str(source))
+    _refuse_unknown_fields(fields, _SYSTEM_PROMPT_FIELDS, source, kind="system prompt")
     _require_known_placeholders(body, source)
     return SystemPrompt(
         body=body,
@@ -1591,6 +1665,14 @@ def _load_system_prompt(directory: ContentRoot, relative_dir: PurePosixPath) -> 
             directory / SYSTEM_PROMPT_MCP_DIR, relative_dir / SYSTEM_PROMPT_MCP_DIR
         ),
     )
+
+
+#: A system-prompt ambient section reads exactly one field: `name`, checked
+#: against its own filename by `_descriptor` before this function ever sees
+#: it. Nothing else is read out of one -- the shipped `system-prompt/mcp/`
+#: tree carries `name` and nothing more, and that is the whole vocabulary,
+#: not an arbitrary subset of it.
+_SYSTEM_PROMPT_MCP_SECTION_FIELDS = frozenset({"name"})
 
 
 def _load_mcp_sections(
@@ -1604,7 +1686,10 @@ def _load_mcp_sections(
     """
     sections = []
     for path in _markdown_files(directory):
-        _, body, source = _descriptor(path, relative_dir)
+        fields, body, source = _descriptor(path, relative_dir)
+        _refuse_unknown_fields(
+            fields, _SYSTEM_PROMPT_MCP_SECTION_FIELDS, source, kind="system prompt mcp section"
+        )
         sections.append(McpSection(name=_stem(path), body=body, source=source))
     return tuple(sections)
 
@@ -1707,12 +1792,23 @@ def _refuse_relation_keys_in_an_agent(fields: dict[str, Any], source: PurePosixP
 
 
 def _require_known_placeholders(body: str, source: PurePosixPath) -> None:
-    """A placeholder nobody promised to answer would ship as literal braces."""
-    unknown = placeholders.unknown_in(body)
+    """A placeholder nobody promised to answer would ship as literal braces.
+
+    Checked against `placeholders.BODY_NAMES`, not the full vocabulary: a body
+    is filled by `render.facts`, which only ever answers that set. The other
+    names (`orchestrator`, `program_name`, and the rest) are answered only for
+    an asset an adapter bundles of its own, never for a body, so using one here
+    is refused now, while this file still has a name -- not two commands later
+    when install fills the body and finds nothing to answer it.
+    """
+    unknown = placeholders.unknown_in(body, placeholders.BODY_NAMES)
     if unknown:
         named = ", ".join(repr(name) for name in unknown)
-        allowed = ", ".join(sorted(placeholders.NAMES))
-        raise ContentError(f"{source}: unknown placeholder {named}; expected one of {allowed}")
+        allowed = ", ".join(sorted(placeholders.BODY_NAMES))
+        raise ContentError(
+            f"{source}: unknown placeholder {named}; a content body may use one of {allowed}; "
+            "the rest are answered only for the assets an adapter bundles of its own"
+        )
     if placeholders.malformed_in(body):
         raise ContentError(f"{source}: a '{{{{' that names nothing would ship as literal braces")
 
@@ -1791,6 +1887,37 @@ def _stem(path: ContentRoot) -> str:
     knows the name ends in `.md`, so trimming it is enough.
     """
     return PurePosixPath(path.name).stem
+
+
+def _refuse_unknown_fields(
+    fields: dict[str, Any], allowed: frozenset[str], source: PurePosixPath, *, kind: str
+) -> None:
+    """A front matter key outside a content type's closed vocabulary is a
+    refusal, named at the file that carries it.
+
+    Silently dropping an unrecognized key is how a typo like `witheld_tools`
+    ends up meaning nothing: the loader never sees it, the field it was meant
+    to fill stays empty, and the descriptor looks like it declared something
+    it never did. Naming the file, the unknown key, and the valid ones puts
+    the fix in the same place the mistake was made.
+
+    Deliberately runs after any type-specific check that already produces a
+    sharper message for the same key -- a field that belongs to a different
+    MCP distribution form, say, is a clearer story than "unknown field", and
+    this check only ever sees what those did not already refuse.
+    """
+    stray = sorted(set(fields) - allowed)
+    if stray:
+        named = ", ".join(repr(key) for key in stray)
+        # An empty vocabulary is a real answer, not a missing one: several kinds
+        # read nothing from their front matter and derive everything from the
+        # file name. Saying so beats trailing off after "valid fields are".
+        valid = (
+            f"valid fields are {', '.join(sorted(allowed))}"
+            if allowed
+            else "this kind reads no front matter field at all"
+        )
+        raise ContentError(f"{source}: unknown {kind} field {named}; {valid}")
 
 
 def _require_name(fields: dict[str, Any], expected: str, source: PurePosixPath) -> None:
