@@ -113,7 +113,13 @@ Tiene sentido correrlo después de instalar servidores MCP, o cuando un cliente 
 - `pegasus restore [generación]` vuelve al estado exacto anterior a un comando (o a una generación puntual del historial de snapshots).
 - `pegasus uninstall --cli opencode` retira solo lo que el journal reclama como propio.
 
-El journal vive en `$XDG_DATA_HOME/pegasus-harness/journal-v4.json` (o `~/.local/share/pegasus-harness/journal-v4.json`), en un directorio `0700` con el archivo en `0600`. Un ítem que editaste vos, o que ya no puede probarse como propio de Pegasus, se preserva: nunca uses `restore` ni `uninstall` para borrar configuración que ya era tuya.
+El journal vive en `$XDG_DATA_HOME/pegasus-harness/journal-v4.json` (o `~/.local/share/pegasus-harness/journal-v4.json`), en un directorio `0700` con el archivo en `0600`. Lo que decide qué se toca es **el journal y nada más**: un archivo que Pegasus nunca creó no se toca nunca, y uno que el journal reclama se retira aunque vos lo hayas editado después. Nunca uses `restore` ni `uninstall` para borrar configuración que ya era tuya.
+
+### Limitación conocida: una edición tuya sobre un artefacto de Pegasus no sobrevive
+
+Si editaste a mano un archivo que Pegasus instaló, el próximo `install` o `update` lo sobreescribe y `uninstall` lo borra. La huella dejó de ser permiso: pertenecer al journal alcanza. En `install` y `update` al menos te enterás — el reporte lo cuenta como `overwritten`, y `--dry-run` te lo adelanta antes de escribir nada; en `uninstall` no hay aviso equivalente.
+
+Lo que te recupera es el snapshot: `pegasus restore` vuelve al estado exacto anterior al comando, con **cinco generaciones** de historial y no más. Si necesitás que un cambio tuyo sobreviva, no lo hagas sobre un archivo de Pegasus.
 
 ## Próximo paso
 
