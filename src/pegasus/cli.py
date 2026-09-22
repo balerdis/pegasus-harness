@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import zipfile
@@ -1457,6 +1458,59 @@ def _manual_upgrade_command(destination: Path, release: upgrade_module.ReleaseSo
     )
 
 
+_NUMERIC_VERSION = re.compile(r"\A\d+(\.\d+)*\Z")
+r"""The one shape `_numeric_version_key` can order: one or more dot-separated
+runs of digits, nothing else -- `"6.0.0"`, `"2024.03"`, `"10"`. `SAFE_VERSION`
+(`pegasus.core.identity`) is far wider than this on purpose, because
+`identity.version` is not semver -- a distribution may call its version
+`"beta"`, `"1.0-rc2"`, or anything else `SAFE_VERSION` allows. None of those
+match here, and that is intentional: this pattern exists to tell `upgrade`
+apart the one shape where "which is newer" can be decided from every other
+shape where it cannot."""
+
+
+def _numeric_version_key(version: str) -> tuple[int, ...] | None:
+    """`version` as a tuple of ints for ordering, or `None` when it is not
+    the pure `_NUMERIC_VERSION` shape.
+
+    `None` is not "assume equal" or "assume newer" anywhere this is used --
+    every caller treats it as "no comparison is possible", full stop.
+    """
+    if not _NUMERIC_VERSION.match(version):
+        return None
+    return tuple(int(part) for part in version.split("."))
+
+
+def _is_older(candidate_version: str, reference_version: str) -> bool:
+    """Whether `candidate_version` is provably older than `reference_version`.
+
+    Comparable versions are exactly the ones `_numeric_version_key` accepts:
+    pure dot-separated digit runs, the same shape semver's numeric core uses,
+    padded on the right with zeros so `"6.0"` and `"6.0.0"` compare equal
+    rather than one looking shorter than the other.
+
+    Everything else -- a letter anywhere (`"beta"`), a hyphen or plus
+    (`"1.0-rc2"`, `"1.0+build5"`), or any other `SAFE_VERSION`-legal shape
+    that is not pure digits-and-dots -- is not comparable, and this returns
+    `False` for it rather than guessing. `identity.version` is deliberately
+    not semver (see `SAFE_VERSION`'s own docstring), so a distribution's
+    `"2024.03"` and a hotfix branch's `"1.0-rc2"` are both legitimate
+    versions with no defined order between arbitrary pairs of them. Refusing
+    an upgrade on a guess would be worse than the defect this exists to fix:
+    it would block every non-numeric distribution's upgrades outright rather
+    than catch the one case that is actually provable -- a numeric release
+    that is provably behind.
+    """
+    candidate_key = _numeric_version_key(candidate_version)
+    reference_key = _numeric_version_key(reference_version)
+    if candidate_key is None or reference_key is None:
+        return False
+    length = max(len(candidate_key), len(reference_key))
+    padded_candidate = candidate_key + (0,) * (length - len(candidate_key))
+    padded_reference = reference_key + (0,) * (length - len(reference_key))
+    return padded_candidate < padded_reference
+
+
 def _fetch_latest_version(runtime: Runtime) -> str:
     """The newest published release's version, fetched fresh -- never the
     cache `check_for_update` reads and writes.
@@ -1501,7 +1555,10 @@ def upgrade(
     running from an installed executable at all; the destination is not
     writable; the destination is owned by someone else; the network cannot
     be reached to learn the newest published version; already at that
-    version. Only past every one of those does this fetch anything -- the
+    version; the newest published release is provably older than the one
+    already running (see `_is_older` for exactly what "provably" means here
+    -- when it cannot be proven, this does not refuse, the same as any other
+    new tag). Only past every one of those does this fetch anything -- the
     checksum first, then the binary, verified against it
     (`upgrade_module.fetch_and_verify`; "verified" there means
     checksum-matched, not authenticated -- see that module's own docstring
@@ -1547,6 +1604,17 @@ def upgrade(
         # the newest release did not fail to upgrade; there was simply
         # nothing left to do.
         return {"status": "already-current", "version": current_version, "destination": str(destination)}
+    if _is_older(latest_version, current_version):
+        # Caught here, before `dry_run` is even consulted: proposing a
+        # downgrade in a plan is the same defect wearing a different status.
+        # This is what actually happened to the real distribution that
+        # measured this defect -- a binary at 6.0.0 whose repository's
+        # `latest` release was tagged 2.0.0.
+        raise CommandError(
+            f"the newest published release ({latest_version}) is older than the version already running "
+            f"({current_version}); upgrade refuses to install something older than what is already here. "
+            f"If you want {latest_version} anyway, {_manual_upgrade_command(destination, runtime.identity.release)}."
+        )
     if dry_run:
         return {
             "status": "planned",

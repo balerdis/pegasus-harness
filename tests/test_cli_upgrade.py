@@ -298,6 +298,76 @@ class AlreadyCurrentTest(UpgradeTestCase):
         self.assertNotIn("failed", prose.lower())
 
 
+class OlderPublishedReleaseTest(UpgradeTestCase):
+    """Regression for the second real-world defect: a distribution whose
+    GitHub `latest` release pointed at a tag older than the binary already
+    running. `upgrade` used to treat "not equal" as "newer" unconditionally,
+    so it downloaded and installed that older release with no warning at
+    all. Both `current_version` and `latest_version` here are pure
+    dot-separated digit runs (`"6.0.0"` and `"2.0.0"`), which is the one
+    shape `_numeric_version_key` can order -- see its own docstring."""
+
+    def test_refuses_before_any_fetch(self):
+        downloader = upgrade_downloader(version="2.0.0")
+        filesystem = self.make_filesystem()
+        runtime = self.runtime(downloader=downloader, filesystem=filesystem)
+        with self.assertRaises(cli.CommandError) as caught:
+            cli.upgrade(runtime)
+        message = str(caught.exception)
+        self.assertIn(CURRENT_VERSION, message)
+        self.assertIn("2.0.0", message)
+        # Only the release document itself was ever fetched -- the refusal
+        # happens before `fetch_and_verify` touches the checksum or binary.
+        release = cli.default_identity().release
+        self.assertNotIn(upgrade_module.checksum_url("2.0.0", release), downloader.calls)
+        self.assertNotIn(upgrade_module.binary_url("2.0.0", release), downloader.calls)
+
+    def test_names_a_manual_replacement_command(self):
+        downloader = upgrade_downloader(version="2.0.0")
+        runtime = self.runtime(downloader=downloader)
+        with self.assertRaises(cli.CommandError) as caught:
+            cli.upgrade(runtime)
+        self.assertIn(str(self.destination), str(caught.exception))
+
+    def test_does_not_touch_the_destination(self):
+        downloader = upgrade_downloader(version="2.0.0")
+        filesystem = self.make_filesystem()
+        runtime = self.runtime(downloader=downloader, filesystem=filesystem)
+        with self.assertRaises(cli.CommandError):
+            cli.upgrade(runtime)
+        self.assertEqual(filesystem.files[self.destination], b"old bytes")
+        self.assertEqual(filesystem.writes, [])
+
+    def test_dry_run_refuses_too_instead_of_proposing_the_downgrade(self):
+        downloader = upgrade_downloader(version="2.0.0")
+        runtime = self.runtime(downloader=downloader)
+        with self.assertRaises(cli.CommandError):
+            cli.upgrade(runtime, dry_run=True)
+
+
+class NonComparableOlderLookingVersionProceedsTest(UpgradeTestCase):
+    """`SAFE_VERSION` allows shapes `_numeric_version_key` cannot order at
+    all -- `"beta"`, `"1.0-rc2"`. `upgrade` cannot prove those go backwards,
+    so it must not refuse them: it proceeds exactly as it did before this
+    defect was noticed, the same as any other new tag."""
+
+    def test_a_non_numeric_tag_is_not_treated_as_a_downgrade(self):
+        downloader = upgrade_downloader(version="beta")
+        filesystem = self.make_filesystem()
+        runtime = self.runtime(downloader=downloader, filesystem=filesystem)
+        report = cli.upgrade(runtime)
+        self.assertEqual(report["status"], "upgraded")
+        self.assertEqual(report["new_version"], "beta")
+
+    def test_a_hyphenated_pre_release_tag_is_not_treated_as_a_downgrade(self):
+        downloader = upgrade_downloader(version="1.0-rc2")
+        filesystem = self.make_filesystem()
+        runtime = self.runtime(downloader=downloader, filesystem=filesystem)
+        report = cli.upgrade(runtime)
+        self.assertEqual(report["status"], "upgraded")
+        self.assertEqual(report["new_version"], "1.0-rc2")
+
+
 class UnreachableNetworkTest(UpgradeTestCase):
     def test_refuses_plainly_rather_than_claiming_nothing_new(self):
         filesystem = self.make_filesystem()
