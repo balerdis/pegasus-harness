@@ -484,6 +484,19 @@ class CliWiringTest(UpgradeTestCase):
         self.assertIn(NEWER_VERSION, prose)
         self.assertIn("restart", prose.lower())
 
+    def test_prose_names_update_as_the_remaining_step(self):
+        # `upgrade` replaces only the binary. Everything `update` writes --
+        # agents, skills, commands, prompts -- was rendered by the previous
+        # version and stays that way until `update` runs again. A person who
+        # stops after `upgrade` believing they are fully done is exactly the
+        # gap this defect measured: updating 2.0.0 -> 6.0.0 and then running
+        # `update --cli opencode` still found 3 artifacts to refresh.
+        runtime = self.runtime()
+        report = cli.upgrade(runtime)
+        prose = cli.prose_for({"schema": cli.SCHEMA, "command": "upgrade", **report})
+        self.assertIn("update", prose.lower())
+        self.assertIn(report["program_name"], prose)
+
     def test_a_refusal_reports_failed_status_through_safe_report(self):
         runtime = self.runtime(downloader=FakeDownloader({}))
         code = cli.main(["upgrade", "--json"], runtime=runtime)

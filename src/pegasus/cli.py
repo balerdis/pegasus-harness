@@ -3943,7 +3943,11 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
         return (
             f"Replaced {report['destination']}: {report['old_version']} -> {report['new_version']}. "
             f"Restart {report['program_name']} to run the new version -- this process is still "
-            f"running {report['old_version']}."
+            f"running {report['old_version']}. This only replaced the program itself: whatever is "
+            f"already on disk for each CLI -- agents, skills, commands, prompts -- was written by "
+            f"{report['old_version']} and stays that way until you run "
+            f"`{report['program_name']} update --cli <cli>` for it; not every upgrade changes those "
+            f"artifacts, so only `update` can tell you whether this one did."
         )
     if command == "models":
         return _models_prose(report)
