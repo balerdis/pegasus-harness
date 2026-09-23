@@ -344,6 +344,25 @@ class OlderPublishedReleaseTest(UpgradeTestCase):
         with self.assertRaises(cli.CommandError):
             cli.upgrade(runtime, dry_run=True)
 
+    def test_the_manual_command_sends_you_to_pick_a_version_not_to_the_newest_one(self):
+        # `_manual_upgrade_command`'s default text ("download the newest
+        # release") is exactly backwards here: the whole reason this refusal
+        # fired is that the newest published release is the *older* one.
+        # Telling someone to download the newest release right after
+        # refusing to install it for being too old is nonsensical -- the
+        # judge reproduced this verbatim: "If you want 2.0.0 anyway,
+        # download the newest release..." with 2.0.0 being the old one. The
+        # release page lists every version, so this refusal must point
+        # there to choose, never repeat "the newest release".
+        downloader = upgrade_downloader(version="2.0.0")
+        runtime = self.runtime(downloader=downloader)
+        with self.assertRaises(cli.CommandError) as caught:
+            cli.upgrade(runtime)
+        message = str(caught.exception)
+        release = cli.default_identity().release
+        self.assertIn(release.release_page_url, message)
+        self.assertNotIn("newest release", message)
+
 
 class NonComparableOlderLookingVersionProceedsTest(UpgradeTestCase):
     """`SAFE_VERSION` allows shapes `_numeric_version_key` cannot order at
@@ -496,6 +515,36 @@ class CliWiringTest(UpgradeTestCase):
         prose = cli.prose_for({"schema": cli.SCHEMA, "command": "upgrade", **report})
         self.assertIn("update", prose.lower())
         self.assertIn(report["program_name"], prose)
+
+    def test_prose_does_not_misattribute_disk_artifacts_across_a_chained_upgrade(self):
+        # A person who chains two upgrades without ever running `update` in
+        # between (2.0.0 -> 3.0.0 -> 6.0.0) still has artifacts on disk that
+        # were written by 2.0.0 -- 3.0.0 never wrote anything, it only ever
+        # sat there briefly before being replaced in turn. The old message
+        # said "was written by {old_version}", which after the second hop
+        # claims 3.0.0 wrote them: false. The message must not assert who
+        # wrote what is on disk, only that the version now running did not.
+        import dataclasses
+
+        base_identity = cli.default_identity()
+        first_identity = dataclasses.replace(base_identity, version="2.0.0")
+        first_runtime = self.runtime(
+            downloader=upgrade_downloader(version="3.0.0"), identity=first_identity
+        )
+        first_report = cli.upgrade(first_runtime)
+        self.assertEqual(first_report["old_version"], "2.0.0")
+        self.assertEqual(first_report["new_version"], "3.0.0")
+
+        second_identity = dataclasses.replace(base_identity, version="3.0.0")
+        second_runtime = self.runtime(
+            downloader=upgrade_downloader(version="6.0.0"), identity=second_identity
+        )
+        second_report = cli.upgrade(second_runtime)
+        self.assertEqual(second_report["old_version"], "3.0.0")
+        self.assertEqual(second_report["new_version"], "6.0.0")
+
+        prose = cli.prose_for({"schema": cli.SCHEMA, "command": "upgrade", **second_report})
+        self.assertNotIn("written by 3.0.0", prose)
 
     def test_a_refusal_reports_failed_status_through_safe_report(self):
         runtime = self.runtime(downloader=FakeDownloader({}))

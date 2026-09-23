@@ -1449,10 +1449,28 @@ def _running_binary_path(runtime: Runtime) -> Path | None:
     return Path(os.path.realpath(candidate))
 
 
-def _manual_upgrade_command(destination: Path, release: upgrade_module.ReleaseSource) -> str:
+def _manual_upgrade_command(
+    destination: Path, release: upgrade_module.ReleaseSource, *, choose_version: bool = False
+) -> str:
+    """The manual fallback for a refusal that will not install anything
+    itself.
+
+    `choose_version` exists for exactly one caller: the downgrade refusal.
+    That refusal fires because the newest published release is the *older*
+    one, so telling that person to "download the newest release" would send
+    them straight back to the version they were just refused -- the release
+    page lists every version, so this points there to pick one instead of
+    repeating "the newest release". The other two refusals (unwritable
+    destination, wrong owner) have no such conflict -- the newest release is
+    exactly what they would want -- so they keep the original wording.
+    """
+    source = (
+        f"visit {release.release_page_url} and pick whichever release you actually want"
+        if choose_version
+        else f"download the newest release from {release.release_page_url}"
+    )
     return (
-        f"download the newest release from {release.release_page_url}, "
-        f"verify it against its published {release.binary_asset}.sha256, then place it over "
+        f"{source}, verify it against its published {release.binary_asset}.sha256, then place it over "
         f"{destination} yourself (as whichever user can write there -- root or sudo, if that is "
         f"what installed it)"
     )
@@ -1613,7 +1631,8 @@ def upgrade(
         raise CommandError(
             f"the newest published release ({latest_version}) is older than the version already running "
             f"({current_version}); upgrade refuses to install something older than what is already here. "
-            f"If you want {latest_version} anyway, {_manual_upgrade_command(destination, runtime.identity.release)}."
+            f"If you want {latest_version} anyway, "
+            f"{_manual_upgrade_command(destination, runtime.identity.release, choose_version=True)}."
         )
     if dry_run:
         return {
@@ -3944,8 +3963,8 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
             f"Replaced {report['destination']}: {report['old_version']} -> {report['new_version']}. "
             f"Restart {report['program_name']} to run the new version -- this process is still "
             f"running {report['old_version']}. This only replaced the program itself: whatever is "
-            f"already on disk for each CLI -- agents, skills, commands, prompts -- was written by "
-            f"{report['old_version']} and stays that way until you run "
+            f"already on disk for each CLI -- agents, skills, commands, prompts -- was not written by "
+            f"{report['new_version']} and stays that way until you run "
             f"`{report['program_name']} update --cli <cli>` for it; not every upgrade changes those "
             f"artifacts, so only `update` can tell you whether this one did."
         )
