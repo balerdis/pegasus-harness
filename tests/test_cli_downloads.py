@@ -157,6 +157,38 @@ class InstallDownloadTest(RealHomeTestCase):
 
 
 @patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
+class DryRunDownloadTest(RealHomeTestCase):
+    """`update --dry-run` must predict `update`'s own real run.
+
+    A `download` server already materialized at the version and checksum
+    this release still asks for costs no fetch on a real `update` -- it is
+    reported as `unchanged`, alongside every catalog artifact that needed no
+    write (see `install`'s `"unchanged"` key). `plan` never sees a
+    `dependency-tree` at all (it is materialized outside the catalog
+    pipeline entirely), so a dry run that only reads `plan.unchanged` counts
+    every artifact except this one, and its total falls one short of what
+    the very next real run reports for the identical, untouched install.
+    """
+
+    def test_a_kept_dependency_is_previewed_as_unchanged(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        _, dry_report = self.run_cli("update", "--cli", CLI, "--dry-run")
+        self.assertIn(
+            "dependency:probe", [item["id"] for item in dry_report["unchanged"]]
+        )
+
+    def test_the_dry_run_total_matches_the_next_real_run(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        _, dry_report = self.run_cli("update", "--cli", CLI, "--dry-run")
+        _, real_report = self.run_cli("update", "--cli", CLI)
+        self.assertEqual(len(dry_report["created"]), len(real_report["created"]))
+        self.assertEqual(len(dry_report["updated"]), len(real_report["updated"]))
+        self.assertEqual(len(dry_report["unchanged"]), len(real_report["unchanged"]))
+
+
+@patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
 class UninstallDownloadTest(RealHomeTestCase):
     def test_uninstalling_removes_the_whole_materialized_tree(self, _load):
         self.present()

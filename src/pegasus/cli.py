@@ -757,13 +757,23 @@ def install(
     )
 
     if dry_run:
+        # A `download`/`npm` server has no artifact for `plan` to have
+        # decided the fate of -- it is materialized outside the catalog
+        # pipeline entirely, and only a real run's `_materialize_dependencies`
+        # would otherwise have anything to say about it (see
+        # `_previewed_dependencies`'s own docstring). Read-only, so a dry
+        # run costs no fetch either.
+        kept_dependencies, previewed_dependencies = _previewed_dependencies(
+            runtime, layout, content, installed
+        )
         return {
             "cli": adapter.id,
             "status": "planned",
             "activation": activation,
-            "created": [_placed(step) for step in plan.creations],
+            "created": [_placed(step) for step in plan.creations] + list(previewed_dependencies),
             "updated": [_placed(step) for step in plan.updates],
-            "unchanged": [_placed(step) for step in plan.unchanged],
+            "unchanged": [_placed(step) for step in plan.unchanged]
+            + [_recorded(record) for record in kept_dependencies],
             "overwritten": [_placed(step) for step in plan.overwritten],
             "skipped": [_left(step) for step in plan.collisions],
             "retired": [_recorded(record) for record in retirements],
@@ -1955,6 +1965,54 @@ def _prospective_dependency_targets(
             continue
         targets.add(dependencies_module.target_dir(layout.dependencies_dir, item))
     return targets
+
+
+def _previewed_dependencies(
+    runtime: Runtime, layout, content: content_module.Content, installed: Install | None
+) -> tuple[tuple[Record, ...], tuple[dict[str, Any], ...]]:
+    """What `_materialize_dependencies` would report, without fetching a byte.
+
+    A `download` or `npm` server is materialized outside the catalog
+    pipeline entirely (see this module's own docstring), so `plan` never
+    produces a `Step` for one and a dry run that only reads `plan.unchanged`
+    /`plan.creations` never counts it at all -- the render this preview
+    fixes. `_kept_dependency` already answers the one question that
+    matters, read-only: is what this release still asks for already on
+    disk. Reused here rather than re-derived, the same way
+    `_prospective_dependency_targets` reuses it, so the three can never
+    quietly disagree about what "already there" means.
+
+    Returns ``(kept, previewed)``: ``kept`` are journal entries a real run
+    would leave untouched, reported exactly the way `_materialize_dependencies`'s
+    own `kept` return is -- alongside `plan.unchanged` in the report, never
+    counted as a write. ``previewed`` is not a `Record`: nothing has been
+    fetched, so there is no digest yet to attach to one, only the id and
+    target this run already knows without reaching the network -- the same
+    two fields `_recorded` would have read off a real one. `install`'s real
+    (non-dry) run reports every server it actually fetches as `created`,
+    never `updated`, regardless of whether the journal already held an
+    entry under that id (see its own `created_ids`) -- this mirrors that
+    same, single bucket, so a dry run predicts the real run it precedes
+    rather than a more careful categorization the real run does not make.
+    """
+    owned = {entry.id: entry for entry in (installed.entries if installed else ())}
+    kept: list[Record] = []
+    previewed: list[dict[str, Any]] = []
+    for item in content.mcp:
+        if not _materializes(item):
+            continue
+        existing = _kept_dependency(runtime, owned, item)
+        if existing is not None:
+            kept.append(existing)
+            continue
+        previewed.append(
+            {
+                "id": f"dependency:{item.name}",
+                "kind": "dependency-tree",
+                "target": str(dependencies_module.target_dir(layout.dependencies_dir, item)),
+            }
+        )
+    return tuple(kept), tuple(previewed)
 
 
 def _materialize_dependencies(
@@ -3877,15 +3935,25 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
     """
     identity = identity if identity is not None else default_identity()
     if report.get("status") == "failed":
+        # Joined with ": ", never ". " -- every `CommandError` in this
+        # codebase starts lowercase on purpose, so it can be chained after
+        # whatever composes it (see `CommandError`'s own docstring), and a
+        # `CommandError` can start with a filesystem path (see `upgrade`'s
+        # writability refusal). A period would leave a capital sentence
+        # butting into a lowercase one; fixing that by upper-casing
+        # `report['error']`'s first character would corrupt a path that
+        # happened to start with a lowercase segment. A colon reads as one
+        # sentence continuing into its own reason, exactly what these are,
+        # without ever touching the message it is prefixed to.
         if report.get("rolled_back"):
-            return f"The installation was undone. {report['error']}"
+            return f"The installation was undone: {report['error']}"
         # Claiming nothing changed is only honest when nothing did. A command
         # that got partway through says how far, because the whole point of
         # this output is that a number in it can be trusted.
         changed = len(report.get("written", ())) + len(report.get("removed", ()))
         if changed:
-            return f"Stopped after changing {changed}. {report['error']}"
-        return f"Nothing was changed. {report['error']}"
+            return f"Stopped after changing {changed}: {report['error']}"
+        return f"Nothing was changed: {report['error']}"
 
     command = report["command"]
     if command == "doctor":

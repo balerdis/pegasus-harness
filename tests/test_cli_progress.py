@@ -150,12 +150,19 @@ class DependencyProgressTest(RealHomeTestCase):
     include it rather than counting only artifacts."""
 
     def test_a_freshly_fetched_dependency_is_one_more_unit_in_the_total(self, _load):
+        # `dry["created"]` already counts the `download` server itself -- a
+        # dry run previews it (see `_previewed_dependencies`) exactly as the
+        # real run below reports it, so `placements` here already is "every
+        # catalog artifact plus the one dependency", and the real total adds
+        # only the two fixed units on top of that, the same as a plain
+        # install with nothing to fetch (see
+        # `test_the_total_accounts_for_the_snapshot_and_the_journal_write`).
         self.present()
         dry = cli.install(CLI, self.runtime(), dry_run=True, mcp=["probe"])
         placements = len(dry["created"]) + len(dry["updated"])
         events = []
         cli.install(CLI, self.runtime(), mcp=["probe"], on_progress=events.append)
-        self.assertEqual(events[0].total, placements + 1 + 2)
+        self.assertEqual(events[0].total, placements + 2)
 
     def test_the_dependency_phase_names_the_server(self, _load):
         self.present()

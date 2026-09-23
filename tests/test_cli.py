@@ -2475,3 +2475,48 @@ class _Stream:
 
     def isatty(self) -> bool:
         return self._terminal
+
+
+class FailurePrefixCompositionTest(unittest.TestCase):
+    """`_prose` prefixes a failed command's own `CommandError` text with a
+    sentence of its own -- "Nothing was changed", "Stopped after changing
+    N", "The installation was undone" -- and every `CommandError` in this
+    codebase starts lowercase on purpose, so it can be chained after
+    whatever composes it (see `CommandError`'s own docstring). Composing
+    the two with ". " leaves a capital sentence butting straight into a
+    lowercase one, which reads as a typo. This is not one message's
+    problem: it is what happens to *any* `CommandError` placed after that
+    prefix, `upgrade`'s and `mcp`'s among them.
+
+    The prefix's own punctuation is what has to change, not the message: a
+    `CommandError` can (and does) start with a filesystem path -- see
+    `upgrade`'s own writability refusal -- and upper-casing an arbitrary
+    first character would corrupt one that happened to start with a
+    lowercase path segment.
+    """
+
+    def test_a_refusal_with_nothing_written_reads_as_one_sentence(self):
+        report = {"status": "failed", "error": "chose unknown mcp server(s) context7,playwright"}
+        prose = cli._prose(report)
+        self.assertNotRegex(prose, r"\.\s+[a-z]")
+        self.assertIn("chose unknown mcp server(s) context7,playwright", prose)
+
+    def test_a_refusal_beginning_with_a_path_is_not_corrupted(self):
+        message = "/opt/pegasus/pegasus is not writable by this process; upgrade refuses to download anything"
+        report = {"status": "failed", "error": message}
+        prose = cli._prose(report)
+        self.assertIn(message, prose)
+
+    def test_a_partial_failure_also_reads_as_one_sentence(self):
+        report = {
+            "status": "failed",
+            "error": "the journal could not be written",
+            "written": ["a", "b"],
+        }
+        prose = cli._prose(report)
+        self.assertNotRegex(prose, r"\.\s+[a-z]")
+
+    def test_a_rolled_back_failure_also_reads_as_one_sentence(self):
+        report = {"status": "failed", "rolled_back": True, "error": "retiring context7 failed"}
+        prose = cli._prose(report)
+        self.assertNotRegex(prose, r"\.\s+[a-z]")
