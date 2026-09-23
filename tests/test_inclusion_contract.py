@@ -66,6 +66,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DOC_PATH = _REPO_ROOT / "docs" / "contrato-inclusion-artifacts.md"
 _MCP_DIR = _REPO_ROOT / "src" / "pegasus" / "content" / "mcp"
 _PLUGINS_DIR = _REPO_ROOT / "src" / "pegasus" / "adapters" / "opencode" / "assets" / "plugins"
+_SKILLS_DIR = _REPO_ROOT / "src" / "pegasus" / "content" / "skills"
+
+#: `_shared/` is not a skill: it carries no independent trigger and nothing
+#: ever loads it by name the way a command or an agent loads a real skill --
+#: it is the fragment library the other skills' bodies pull from. Excluding
+#: it here is the same shape of exclusion `_mcp_server_ids` already makes for
+#: `playwright-package-lock.json`: a real entry under the directory that is
+#: not the kind of thing this contract enumerates.
+_NOT_A_SKILL = frozenset({"_shared"})
 
 _SECTION_HEADING = "## Inclusion aprobada"
 _FILE_EXTENSIONS = (".md", ".ts", ".js")
@@ -102,6 +111,29 @@ def _doc_named_mcp_ids(section: str, known_ids: frozenset[str]) -> frozenset[str
     return frozenset(token for token in _BACKTICK.findall(section) if token in known_ids)
 
 
+def _skill_names() -> frozenset[str]:
+    """Skill names the tree defines: every subdirectory of
+    `src/pegasus/content/skills/` except `_shared`, which is not a skill --
+    see `_NOT_A_SKILL`."""
+    return frozenset(
+        path.name for path in _SKILLS_DIR.iterdir() if path.is_dir() and path.name not in _NOT_A_SKILL
+    )
+
+
+def _doc_named_skill_names(section: str, known_names: frozenset[str]) -> frozenset[str]:
+    """Backtick tokens in the section equal to a known skill name.
+
+    Matched the same way `_doc_named_mcp_ids` matches a server id: by exact
+    equality against a name derived from the tree, never a hardcoded list,
+    so a skill that is renamed or removed on disk without the document
+    following can never go unnoticed. This is also what keeps a prose token
+    that happens to share a plugin's or MCP server's spelling from being
+    double-counted here -- a name only counts as a skill if it is also a
+    real directory under `content/skills/`.
+    """
+    return frozenset(token for token in _BACKTICK.findall(section) if token in known_names)
+
+
 def _doc_plugin_bullets(section: str) -> list[tuple[str, str | None]]:
     """Each `- \\`source\\`` or `- \\`source\\` -> \\`target\\`` bullet line in the
     section, as (source, target-or-None), restricted to tokens that look
@@ -132,6 +164,7 @@ class InclusionContractTest(unittest.TestCase):
         self.section = _inclusion_section(self.doc_text)
         self.tree_mcp_ids = _mcp_server_ids()
         self.tree_plugin_files = _plugin_files()
+        self.tree_skill_names = _skill_names()
 
     def test_mcp_servers_in_tree_and_contract_match(self):
         """Every MCP server the tree defines is named in the contract, and
@@ -143,6 +176,23 @@ class InclusionContractTest(unittest.TestCase):
         """Every plugin file the tree ships is named in the contract, and
         every plugin filename the contract names exists in the tree."""
         self.assertEqual(self.tree_plugin_files, _doc_named_plugin_files(self.section))
+
+    def test_skills_in_tree_and_contract_match(self):
+        """Every skill the tree ships is named in the contract, and every
+        skill name the contract names exists in the tree -- both directions
+        of the mirror rule, the same as the MCP servers and the plugins.
+
+        The document used to describe skills by category and exception
+        ("Todos los Core y SDD", "excepto los que comienzan con `sergio-`")
+        instead of naming them, which is exactly the shape that let the MCP
+        list drift before this file existed: prose nobody compares to the
+        tree. Enumerating every name explicitly, backtick-quoted, is what
+        lets this test hold the two sides against each other the same way it
+        already does for MCP servers and plugins.
+        """
+        self.assertEqual(
+            self.tree_skill_names, _doc_named_skill_names(self.section, self.tree_skill_names)
+        )
 
     def test_contract_renaming_claim_matches_renamed_assets(self):
         """For each plugin file, whether the contract describes it as
