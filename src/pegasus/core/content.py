@@ -536,6 +536,7 @@ def load(root: ContentRoot = DEFAULT_ROOT) -> Content:
     mcp = _load_mcp(root / "mcp", PurePosixPath("mcp"))
     agents = _load_agents(root / "agents", PurePosixPath("agents"), mcp)
     _require_reaches_known_agents(agents, mcp)
+    _require_delegates_to_known_agents(agents)
     _require_mcp_convention_referenced(agents, mcp)
     _require_mcp_reaches_an_agent(mcp)
     system_prompt = _load_system_prompt(root / SYSTEM_PROMPT_DIR, PurePosixPath(SYSTEM_PROMPT_DIR))
@@ -1252,6 +1253,38 @@ def _require_reaches_known_agents(agents: tuple[Agent, ...], servers: tuple[Mcp,
         if unknown:
             raise ContentError(
                 f"{server.source}: 'reaches' names {', '.join(sorted(unknown))}, "
+                f"which is not one of the shipped agents"
+            )
+
+
+def _require_delegates_to_known_agents(agents: tuple[Agent, ...]) -> None:
+    """A `may_delegate_to` entry naming no shipped agent is a typo that costs
+    the delegation it was written to allow, silently.
+
+    The field is not documentation: `render._permission` turns it into the
+    `task` permission directly, as `{"*": "deny"}` plus one `allow` per name.
+    A misspelling does two things at once and announces neither. It writes an
+    `allow` for an agent that does not exist, which nothing will ever look
+    up, and it leaves the agent the author meant on the deny baseline -- the
+    delegation simply stops working, with no file in the tree the absence
+    shows up in.
+
+    This is exactly the shape `_require_reaches_known_agents` already closes
+    for `Mcp.reaches`, the other field whose hand-typed names become
+    permissions, so it is held to the same standard at load time rather than
+    left to a test that only exercises the content this repository ships.
+
+    An agent naming itself is not refused: `core/catalog.py`
+    (`_delegation_targets`) already treats self-naming as a real delegation
+    another agent's brief can target through that agent's own fan-out, and
+    nothing here has reason to disagree with that.
+    """
+    known = {agent.name for agent in agents}
+    for agent in agents:
+        unknown = [name for name in agent.may_delegate_to if name not in known]
+        if unknown:
+            raise ContentError(
+                f"{agent.source}: 'may_delegate_to' names {', '.join(sorted(unknown))}, "
                 f"which is not one of the shipped agents"
             )
 

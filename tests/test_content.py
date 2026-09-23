@@ -420,9 +420,10 @@ class AgentTest(TemporaryContent):
 
     def test_delegation_list_is_read(self):
         agent = self.load_agent(
-            "---\nname: probe-agent\ndescription: d\nmode: primary\nmay_delegate_to: [explore, general]\n---\n\nx\n"
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            f"may_delegate_to: [probe-agent, {content.SESSION_STARTS_IN}]\n---\n\nx\n"
         )
-        self.assertEqual(agent.may_delegate_to, ("explore", "general"))
+        self.assertEqual(agent.may_delegate_to, ("probe-agent", content.SESSION_STARTS_IN))
 
     def test_unknown_mode_is_rejected(self):
         with self.assertRaises(ContentError) as raised:
@@ -507,6 +508,74 @@ class ReachesKnownAgentsInvariantTest(TemporaryContent):
         loaded = content.load(self.root)
         agent = next(a for a in loaded.agents if a.name == "probe-agent")
         self.assertEqual(agent.optional_mcp, ("context7",))
+
+
+class DelegatesToKnownAgentsInvariantTest(TemporaryContent):
+    """Every name in an agent's `may_delegate_to` has to be a shipped agent.
+
+    The typo this catches is the same shape `_require_reaches_known_agents`
+    catches for `reaches`, and the runtime cost is the same too:
+    `render._permission` turns `may_delegate_to` directly into the `task`
+    permission, `{"*": "deny"}` plus one `allow` per name, so a misspelled
+    target writes an `allow` nothing ever looks up and leaves the agent the
+    author meant to name on the deny baseline. No other file in the tree is
+    any different for it -- only a check against the shipped agents can see
+    the missing grant.
+    """
+
+    def test_a_name_no_agent_answers_to_is_refused_naming_the_descriptor(self):
+        write_session_start(self.root)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "may_delegate_to: [ghost-agent]\n---\n\nx\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        message = str(raised.exception)
+        self.assertIn("agents/probe-agent.md", message)
+        self.assertIn("ghost-agent", message)
+
+    def test_one_bad_name_beside_good_ones_is_still_refused(self):
+        """The likely shape of the typo: a list that mostly works."""
+        write_session_start(self.root)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            f"may_delegate_to: [{content.SESSION_STARTS_IN}, probe-agnet]\n---\n\nx\n",
+        )
+        with self.assertRaises(ContentError) as raised:
+            content.load(self.root)
+        self.assertIn("probe-agnet", str(raised.exception))
+
+    def test_a_name_a_shipped_agent_answers_to_is_accepted(self):
+        write_session_start(self.root)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            f"may_delegate_to: [{content.SESSION_STARTS_IN}]\n---\n\nx\n",
+        )
+        loaded = content.load(self.root)
+        agent = next(a for a in loaded.agents if a.name == "probe-agent")
+        self.assertEqual(agent.may_delegate_to, (content.SESSION_STARTS_IN,))
+
+    def test_an_agent_naming_itself_is_accepted(self):
+        """`core/catalog.py` affirms self-naming is a real delegation: an
+        agent's own `may_delegate_to` fan-out is a target another agent's
+        brief can still point through, so it must not be refused here."""
+        write_session_start(self.root)
+        write(
+            self.root,
+            "agents/probe-agent.md",
+            "---\nname: probe-agent\ndescription: d\nmode: primary\n"
+            "may_delegate_to: [probe-agent]\n---\n\nx\n",
+        )
+        loaded = content.load(self.root)
+        agent = next(a for a in loaded.agents if a.name == "probe-agent")
+        self.assertEqual(agent.may_delegate_to, ("probe-agent",))
 
 
 class McpReachesAnAgentInvariantTest(TemporaryContent):
@@ -3003,6 +3072,18 @@ class ContentErrorSitesTest(unittest.TestCase):
                     ),
                 },
                 "mcp/context7.md",
+            ),
+            "",
+        ),
+        "_require_delegates_to_known_agents#0": (
+            _via_load(
+                {
+                    _SESSION_START_FILE: _agent_text(content.SESSION_STARTS_IN),
+                    "agents/probe-agent.md": _agent_text(
+                        "probe-agent", extra="may_delegate_to: [ghost-agent]\n"
+                    ),
+                },
+                "agents/probe-agent.md",
             ),
             "",
         ),
