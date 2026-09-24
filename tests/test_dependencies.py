@@ -64,6 +64,15 @@ class _RaisingDownloader:
     for proving what `materialize` does with a `DownloaderError`'s own text,
     rather than the fixed shape `FakeDownloader` raises for an unregistered
     URL.
+
+    The message passed in is deliberately just the bare cause, never a
+    string shaped like `HttpDownloader`'s own -- `ports.downloader` makes no
+    promise that a `DownloaderError`'s text contains the URL, so a test
+    double standing in for *any* implementation of the port must not lean on
+    the one concrete adapter's formatting. If `materialize` still names the
+    URL in what it raises, that is because `materialize` added it itself
+    from `item.endpoint`, which is the only thing this test is allowed to
+    prove.
     """
 
     def __init__(self, message: str):
@@ -159,20 +168,29 @@ class MaterializeTest(unittest.TestCase):
         """The incident this guards against: a menu screen only 80 columns
         wide showed `could not fetch <a long GitHub release URL>` and cut off
         before the one word (`error`) that actually said what went wrong. The
-        endpoint here is exactly that shape -- long enough that, if the
-        reason were still placed after it the way it used to be, it would
-        fall past column 80 and never reach the screen at all.
+        endpoint here is exactly that shape -- long enough that, if the URL
+        were still placed before the reason the way it used to be, the
+        reason would fall past column 80 and never reach the screen at all.
+
+        The double raises *only* the cause, with no URL anywhere in its
+        text -- unlike `HttpDownloader`, which happens to fold the URL in
+        too. Proving the URL still shows up below, and that the reason still
+        leads, with a double this bare is what shows the ordering and the
+        URL are `materialize`'s own doing, not something it is borrowing
+        from whatever text a particular adapter's exception happens to
+        contain.
         """
         long_endpoint = (
             "https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.10.8/cbm-linux-x64"
         )
         item, _ = download_server(endpoint=long_endpoint)
         reason = "HTTP Error 404: Not Found"
-        downloader = _RaisingDownloader(f"{reason} (fetching {long_endpoint})")
+        downloader = _RaisingDownloader(reason)
         with self.assertRaises(dependencies.MaterializeError) as raised:
             self.materialize(item, downloader)
         message = str(raised.exception)
         self.assertIn(reason, message[:80])
+        self.assertIn(long_endpoint, message)
 
     def test_a_remote_server_is_refused_rather_than_fetched(self):
         item, content = download_server(distribution=Distribution.REMOTE, version=None, checksum=None)

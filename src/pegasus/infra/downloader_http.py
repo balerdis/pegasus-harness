@@ -67,7 +67,15 @@ class HttpDownloader:
             # derive from `OSError` or `ValueError`, so `urlopen` raising one
             # would otherwise escape this boundary as a raw, undocumented
             # exception instead of the `DownloaderError` callers expect.
-            raise DownloaderError(f"{error} (fetching {url})") from error
+            #
+            # The message carries only `error` -- `ports.downloader` makes no
+            # promise that `DownloaderError`'s text contains `url`, so this
+            # adapter does not add it: every caller already has `url` (it is
+            # what it passed in) and adds it itself if its own message needs
+            # it. Folding it in here too would let a caller lean on this
+            # adapter's own formatting instead of the port's actual contract,
+            # and would print it twice for a caller that does add it.
+            raise DownloaderError(str(error)) from error
 
 
 def _content_length(response) -> int | None:

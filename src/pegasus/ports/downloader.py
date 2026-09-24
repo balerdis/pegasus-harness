@@ -13,7 +13,14 @@ from typing import Callable, Protocol, runtime_checkable
 
 
 class DownloaderError(Exception):
-    """The bytes at a URL could not be fetched."""
+    """The bytes at a URL could not be fetched.
+
+    This says nothing about what the exception's own text contains -- in
+    particular, it never promises the URL is in there. A caller that needs
+    the URL in its own error already has it (it is what it passed to
+    `fetch`) and must add it itself, rather than reading it back out of this
+    exception's message.
+    """
 
 
 @runtime_checkable

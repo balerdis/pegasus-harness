@@ -49,6 +49,13 @@ class _RaisingDownloader:
     for proving what `fetch_and_verify` does with a `DownloaderError`'s own
     text, rather than the fixed shape `FakeDownloader` raises for an
     unregistered URL.
+
+    The message is deliberately just the bare cause, never a string shaped
+    like `HttpDownloader`'s own -- `ports.downloader` makes no promise that a
+    `DownloaderError`'s text contains the URL, so a double standing in for
+    *any* implementation of the port must not lean on one concrete adapter's
+    formatting. Any URL that shows up in what `fetch_and_verify` raises has
+    to be `fetch_and_verify`'s own doing.
     """
 
     def __init__(self, message: str):
@@ -175,11 +182,12 @@ class FetchAndVerifyTest(unittest.TestCase):
         long_version = "10.20.30-institutional-build"
         reason = "HTTP Error 403: Forbidden"
         long_url = upgrade.checksum_url(long_version, long_named_release)
-        downloader = _RaisingDownloader(f"{reason} (fetching {long_url})")
+        downloader = _RaisingDownloader(reason)
         with self.assertRaises(upgrade.UpgradeError) as raised:
             upgrade.fetch_and_verify(downloader, long_version, long_named_release)
         message = str(raised.exception)
         self.assertIn(reason, message[:80])
+        self.assertIn(long_url, message)
 
     def test_a_binary_fetch_failure_puts_the_reason_in_the_first_eighty_characters(self):
         long_named_release = ReleaseSource(
@@ -198,12 +206,13 @@ class FetchAndVerifyTest(unittest.TestCase):
             def fetch(self, url, *, timeout_seconds=None, on_progress=None):
                 if url == checksum_url:
                     return sha256sum_line(b"whatever")
-                raise DownloaderError(f"{reason} (fetching {binary_url})")
+                raise DownloaderError(reason)
 
         with self.assertRaises(upgrade.UpgradeError) as raised:
             upgrade.fetch_and_verify(_ChecksumThenFailingDownloader(), long_version, long_named_release)
         message = str(raised.exception)
         self.assertIn(reason, message[:80])
+        self.assertIn(binary_url, message)
 
     def test_a_non_utf8_checksum_body_raises_a_clean_upgrade_error(self):
         """A malformed checksum asset must refuse cleanly, exactly like an

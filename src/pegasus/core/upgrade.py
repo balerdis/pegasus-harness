@@ -104,18 +104,20 @@ def fetch_and_verify(downloader: Downloader, version: str, release: ReleaseSourc
     Writes nothing -- placing the verified bytes anywhere is
     :func:`replace_binary`'s job, never this function's.
     """
+    checksum = checksum_url(version, release)
+    binary = binary_url(version, release)
     try:
-        checksum_document = downloader.fetch(checksum_url(version, release))
+        checksum_document = downloader.fetch(checksum)
     except DownloaderError as error:
         raise UpgradeError(
-            f"could not fetch the checksum: {error} (for {release.binary_asset} {version})"
+            f"could not fetch the checksum: {error} (for {release.binary_asset} {version} at {checksum})"
         ) from error
     expected = _expected_digest(checksum_document)
     try:
-        fetched = downloader.fetch(binary_url(version, release))
+        fetched = downloader.fetch(binary)
     except DownloaderError as error:
         raise UpgradeError(
-            f"could not fetch the binary: {error} (for {release.binary_asset} {version})"
+            f"could not fetch the binary: {error} (for {release.binary_asset} {version} at {binary})"
         ) from error
     digest = ownership.digest_of_bytes(fetched)
     if digest != expected:

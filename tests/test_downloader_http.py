@@ -75,12 +75,17 @@ class FetchWithoutACallbackTest(unittest.TestCase):
             with self.assertRaises(DownloaderError):
                 downloader.fetch(URL)
 
-    def test_the_underlying_reason_comes_before_the_url_not_after(self):
-        """A long URL pushed the one word that mattered (the reason) off the
-        right edge of an 80-column menu screen -- see the incident this
-        guards against in `test_dependencies.py`. The reason has to lead so a
-        truncated view still shows it, and the URL must still be there for
-        whoever needs to diagnose further.
+    def test_the_message_is_the_bare_reason_the_url_is_not_folded_in(self):
+        """The incident this used to guard against directly (a long URL
+        pushing the one word that mattered -- the reason -- past column 80
+        of a menu screen, see `test_dependencies.py`) is now guarded at the
+        callers that build a user-facing message (`materialize`,
+        `fetch_and_verify`): they already know the URL they asked for and
+        add it themselves. `ports.downloader` makes no promise that
+        `DownloaderError`'s text contains the URL, so this adapter does not
+        add it either -- doing so would let a caller lean on this one
+        concrete adapter's formatting, and would print the URL twice for a
+        caller that adds its own.
         """
         long_url = "https://example.test/releases/download/v1.0.0/" + "segment/" * 10 + "asset"
         with patch(
@@ -90,10 +95,7 @@ class FetchWithoutACallbackTest(unittest.TestCase):
             downloader = HttpDownloader()
             with self.assertRaises(DownloaderError) as raised:
                 downloader.fetch(long_url)
-        message = str(raised.exception)
-        self.assertIn(long_url, message)
-        self.assertIn("Connection refused", message)
-        self.assertLess(message.index("Connection refused"), message.index(long_url))
+        self.assertEqual(str(raised.exception), "Connection refused")
 
 
 class FetchWithACallbackTest(unittest.TestCase):
