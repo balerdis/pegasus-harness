@@ -28,6 +28,7 @@ import io
 import json
 import os
 import stat
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -2475,6 +2476,87 @@ class _Stream:
 
     def isatty(self) -> bool:
         return self._terminal
+
+
+class _BlockCurses:
+    """A `sys.meta_path` finder that makes `import curses` fail exactly the
+    way it does on a Python built without the `_curses` extension: a real
+    `ModuleNotFoundError` naming `_curses`, not a stand-in exception -- see
+    `tests/test_cli_without_curses.py` for the full-process version of the
+    same fault, reproduced there via subprocess instead of module patching."""
+
+    def find_spec(self, name, path=None, target=None):
+        if name == "curses" or name.startswith("curses."):
+            raise ModuleNotFoundError("No module named '_curses'", name="_curses")
+        return None
+
+
+class MissingCursesTest(unittest.TestCase):
+    """The one place `main()` opens the TUI: what it does when `curses` --
+    imported lazily, on purpose, so every other command stays unaffected --
+    turns out not to exist on this interpreter."""
+
+    def _forget_tui_app(self):
+        """`pegasus.tui.app` (and `curses` itself) must be re-imported for the
+        blocked finder to have anything to intercept; a module already
+        cached in `sys.modules` from an earlier test would make this test
+        vacuous."""
+        removed = {
+            name: module
+            for name, module in sys.modules.items()
+            if name == "curses" or name.startswith("curses.")
+            or name == "pegasus.tui.app" or name.startswith("pegasus.tui.app.")
+        }
+        for name in removed:
+            del sys.modules[name]
+        self.addCleanup(sys.modules.update, removed)
+
+    def test_reports_an_honest_message_instead_of_a_traceback(self):
+        self._forget_tui_app()
+        finder = _BlockCurses()
+        cli.sys.meta_path.insert(0, finder)
+        self.addCleanup(cli.sys.meta_path.remove, finder)
+
+        out = io.StringIO()
+        runtime = replace(cli.default_runtime(out), out=out)
+        with mock.patch.object(cli, "_attached_to_a_terminal", return_value=True):
+            code = cli.main([], runtime=runtime)
+
+        self.assertEqual(code, cli.FAILED)
+        message = out.getvalue()
+        self.assertIn("_curses", message)
+        self.assertIn(runtime.identity.program_name, message)
+        self.assertNotIn("Traceback", message)
+
+    def test_an_unrelated_missing_module_is_not_swallowed(self):
+        """Only `_curses` gets the honest rewrite -- any other
+        `ModuleNotFoundError` raised while importing the TUI is a real bug
+        and must still surface as itself."""
+        self._forget_tui_app()
+
+        class _BlockSomethingElse:
+            def find_spec(self, name, path=None, target=None):
+                if name == "pegasus.tui.app":
+                    raise ModuleNotFoundError("No module named 'nonexistent_thing'", name="nonexistent_thing")
+                return None
+
+        finder = _BlockSomethingElse()
+        cli.sys.meta_path.insert(0, finder)
+        self.addCleanup(cli.sys.meta_path.remove, finder)
+
+        runtime = cli.default_runtime(io.StringIO())
+        with mock.patch.object(cli, "_attached_to_a_terminal", return_value=True):
+            with self.assertRaises(ModuleNotFoundError) as raised:
+                cli.main([], runtime=runtime)
+        self.assertEqual(raised.exception.name, "nonexistent_thing")
+
+    def test_missing_curses_message_names_cause_meaning_and_remedy(self):
+        identity = cli.default_identity()
+        message = cli._missing_curses_message(identity)
+        self.assertIn("_curses", message)
+        self.assertIn("ncurses", message)
+        self.assertIn(identity.program_name, message)
+        self.assertTrue(message[0].islower())
 
 
 class FailurePrefixCompositionTest(unittest.TestCase):

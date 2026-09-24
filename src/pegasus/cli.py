@@ -63,7 +63,6 @@ from pegasus.ports.mcp_process import MCPProcess
 from pegasus.ports.model_assignment_store import ModelAssignmentStoreError
 from pegasus.ports.npm_installer import NpmInstaller
 from pegasus.ports.snapshot_store import SnapshotStoreError
-from pegasus.tui import app as tui_app
 
 NODE_BINARY = "node"
 
@@ -184,6 +183,19 @@ def main(argv: list[str] | None = None, *, runtime: Runtime | None = None) -> in
         # read it, so the usage line is still the honest answer -- and it is
         # what a script that called this by mistake needs to see.
         if _attached_to_a_terminal():
+            # Imported here, not at module level: `pegasus.tui.app` imports
+            # `curses`, which does not exist on every Python (see its own
+            # entry point's docstring) -- every other command on this CLI
+            # must keep working on such a build, and would not if importing
+            # this module ran the moment `pegasus.cli` itself was loaded.
+            try:
+                from pegasus.tui import app as tui_app
+            except ModuleNotFoundError as error:
+                if error.name != "_curses":
+                    raise
+                runtime.out.write(_missing_curses_message(runtime.identity) + "\n")
+                return FAILED
+
             tui_app.main()
             return OK
         parser.print_usage(runtime.out)
@@ -3585,6 +3597,26 @@ def _attached_to_a_terminal() -> bool:
         return sys.stdin.isatty() and sys.stdout.isatty()
     except ValueError:
         return False
+
+
+def _missing_curses_message(identity: Identity) -> str:
+    """What to say instead of a `ModuleNotFoundError` traceback when the menu's
+    own `curses` import fails because `_curses` was never built.
+
+    A real report: a hand-built Python 3.12 compiled without the ncurses
+    development headers has no `_curses` extension module at all, which is
+    exactly the shape `ModuleNotFoundError` this catches names. Every other
+    command still runs without it -- only the menu needs a real terminal
+    screen -- so this names the cause, what it means, and the way out,
+    instead of a traceback that looks like the whole program is broken.
+    """
+    return (
+        f"{identity.program_name}'s menu needs curses, and this python has no _curses "
+        "extension module -- usually a python built without the ncurses development "
+        "headers present at build time. every other command still works; rebuild "
+        f"python with ncurses support to use the menu, or run `{identity.program_name} "
+        "<command>` directly instead"
+    )
 
 
 COMMANDS = {
