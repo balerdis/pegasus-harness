@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from brand_fragments import BANNED_FRAGMENTS
+from test_cli_identity_sweep import ACME_IDENTITY
 
 SOURCE = Path(__file__).resolve().parents[1] / "src" / "pegasus"
 ADAPTERS = SOURCE / "adapters"
@@ -406,9 +407,51 @@ def _fold_string_concat(node: ast.AST) -> str | None:
     return None
 
 
-def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
+def _this_engine_identity():
+    """This repository's own packaged identity, parsed the same way the
+    running product would read it -- never copied as a literal, for the same
+    reason `_engine_brand_fragments()` above reads it instead of hardcoding
+    "pegasus"/"harness"."""
+    from pegasus.core import identity as identity_module
+
+    return identity_module.parse((SOURCE / "identity.json").read_bytes())
+
+
+def _product_identity_fragments(identity) -> tuple[str, ...]:
+    """The full vocabulary `NoProductIdentityOutsideCompositionRootTest` watches
+    for: `BANNED_FRAGMENTS` unioned with whatever `identity` itself names --
+    `product_id`, `display_name`, `program_name`, and every `wordmark_words`
+    entry, all lower-cased.
+
+    Before this, the guardian matched against `BANNED_FRAGMENTS` alone -- a
+    tuple typed by hand to spell Pegasus's own brand. That made the guardian
+    correct for this repository only by coincidence: its author and this
+    engine's identity happen to agree. A fork whose `identity.json` names a
+    different product was left watching for a brand it does not have, and
+    blind to the one it does -- exactly the hole this function closes by
+    deriving the identity half from `identity.parse()` instead of a second
+    hand-typed copy.
+
+    The union keeps `BANNED_FRAGMENTS` rather than replacing it: `"balerdis"`
+    is the maintainer's own handle, never a product's identity, and
+    `"pegasus"`/`"harness"` stay valuable in a fork too -- they catch
+    upstream's own brand arriving through a transport (e.g. a cherry-picked
+    commit), which no fork's own identity would ever name.
+    """
+    derived = {identity.product_id.lower(), identity.display_name.lower(), identity.program_name.lower()}
+    derived.update(word.lower() for word in identity.wordmark_words)
+    return tuple(sorted(set(BANNED_FRAGMENTS) | derived))
+
+
+def _product_identity_offenders(path: Path, fragments: tuple[str, ...] | None = None) -> list[tuple[int, str]]:
     """Every non-prose string constant in `path` that names a distribution,
     outside `PRODUCT_IDENTITY_ALLOWLIST`.
+
+    `fragments` defaults to this engine's own vocabulary (`BANNED_FRAGMENTS`
+    plus its own `identity.json`, see `_product_identity_fragments`) so every
+    existing caller keeps scanning for exactly what it always has; a caller
+    proving the guardian tracks a *different* identity passes one in
+    explicitly instead.
 
     "Prose" is anything written as a bare statement -- a module, class, or
     function docstring, or the same convention applied to a module-level or
@@ -421,6 +464,8 @@ def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
     read (`pegasus.__version__`) are not scanned at all -- structurally, they
     are never `ast.Constant` string nodes in the first place.
     """
+    if fragments is None:
+        fragments = _product_identity_fragments(_this_engine_identity())
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source)
     prose = {
@@ -463,7 +508,7 @@ def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
                     if descendant is not node:
                         consumed.add(id(descendant))
                 if folded not in PRODUCT_IDENTITY_ALLOWLIST and any(
-                    name in folded.lower() for name in BANNED_FRAGMENTS
+                    name in folded.lower() for name in fragments
                 ):
                     found.append((node.lineno, folded))
                 continue
@@ -476,7 +521,7 @@ def _product_identity_offenders(path: Path) -> list[tuple[int, str]]:
         if node.value in PRODUCT_IDENTITY_ALLOWLIST:
             continue
         lowered = node.value.lower()
-        if any(name in lowered for name in BANNED_FRAGMENTS):
+        if any(name in lowered for name in fragments):
             found.append((node.lineno, node.value))
     return sorted(found)
 
@@ -493,10 +538,11 @@ class NoProductIdentityOutsideCompositionRootTest(unittest.TestCase):
         self.assertTrue(product_identity_modules(), "no modules found in the product-identity scan packages")
 
     def test_no_agnostic_module_names_a_product_identity(self):
+        fragments = _product_identity_fragments(_this_engine_identity())
         offenders = [
             f"{path.relative_to(SOURCE)}:{number} {text!r}"
             for path in product_identity_modules()
-            for number, text in _product_identity_offenders(path)
+            for number, text in _product_identity_offenders(path, fragments)
         ]
         self.assertEqual(
             offenders,
@@ -563,6 +609,36 @@ class NoProductIdentityOutsideCompositionRootTest(unittest.TestCase):
         `asset="pegasus"`, no longer blanket-exempted."""
         probe = _write_probe(self, 'asset = "pegasus"\n')
         self.assertEqual([text for _, text in _product_identity_offenders(probe)], ["pegasus"])
+
+    def test_the_watched_fragments_change_with_the_identity_they_are_derived_from(self):
+        """Regression for the defect a fork of this engine exposed:
+        `BANNED_FRAGMENTS` used to be the guardian's entire vocabulary, typed
+        by hand, and it happens to spell Pegasus's own brand -- true for this
+        repository only by coincidence. `ACME_IDENTITY` (from
+        `test_cli_identity_sweep`, the suite's existing fictional identity,
+        also used by `test_cli.py::DistributionVersionFlagTest`) names a
+        product this repository is not; if the fragments this guardian
+        watches for were still a hand-typed literal, feeding it a different
+        identity would change nothing. They must change.
+        """
+        acme_fragments = _product_identity_fragments(ACME_IDENTITY)
+        engine_fragments = _product_identity_fragments(_this_engine_identity())
+        self.assertIn("acme", acme_fragments)
+        self.assertNotIn("acme", engine_fragments)
+        # BANNED_FRAGMENTS survives the union regardless of which identity is
+        # fed in -- "balerdis" names the maintainer, not a product, and
+        # "pegasus"/"harness" stay valuable in a fork as upstream's own brand.
+        self.assertTrue(set(BANNED_FRAGMENTS).issubset(acme_fragments))
+
+    def test_a_forks_own_brand_literal_is_flagged_once_its_identity_is_fed_in(self):
+        """The measurement that motivated this fix: with `ACME_IDENTITY`'s own
+        fragments, a literal naming ACME's brand is caught -- proof that the
+        hole the fork found (a distribution whose brand is not "pegasus" goes
+        unwatched) is closed. Regressing `_product_identity_fragments` back to
+        returning `BANNED_FRAGMENTS` unchanged makes this fail again."""
+        probe = _write_probe(self, 'name = "Acme"\n')
+        offenders = _product_identity_offenders(probe, fragments=_product_identity_fragments(ACME_IDENTITY))
+        self.assertEqual([text for _, text in offenders], ["Acme"])
 
 
 def bundled_ts_assets() -> list[Path]:
