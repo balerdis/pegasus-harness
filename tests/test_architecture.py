@@ -443,7 +443,11 @@ def _product_identity_fragments(identity) -> tuple[str, ...]:
     return tuple(sorted(set(BANNED_FRAGMENTS) | derived))
 
 
-def _product_identity_offenders(path: Path, fragments: tuple[str, ...] | None = None) -> list[tuple[int, str]]:
+def _product_identity_offenders(
+    path: Path,
+    fragments: tuple[str, ...] | None = None,
+    package_name: str | None = None,
+) -> list[tuple[int, str]]:
     """Every non-prose string constant in `path` that names a distribution,
     outside `PRODUCT_IDENTITY_ALLOWLIST`.
 
@@ -452,6 +456,20 @@ def _product_identity_offenders(path: Path, fragments: tuple[str, ...] | None = 
     existing caller keeps scanning for exactly what it always has; a caller
     proving the guardian tracks a *different* identity passes one in
     explicitly instead.
+
+    `package_name` defaults to `SOURCE.name` -- the actual importable Python
+    package this scan is reading (`"pegasus"` in this repository, whatever a
+    fork's own `SOURCE` points at in its copy of this file). This is
+    deliberately *not* derived from `identity.json`: `product_id`,
+    `display_name`, `program_name` and `wordmark_words` all describe the
+    *distribution's brand*, a fact a user reads, while a package's importable
+    name is a build-time fact nothing in `identity.json` promises to match --
+    a fork could rename its brand to "darq" while its package stays spelled
+    differently, or vice versa. `SOURCE.name` is the one property that is
+    *always* correct here, by construction: whoever forks this file already
+    has to repoint `SOURCE` at their own renamed package for every other rule
+    in this module to scan the right tree, and that single edit is enough to
+    keep this exemption correct too, with no second one anywhere else.
 
     "Prose" is anything written as a bare statement -- a module, class, or
     function docstring, or the same convention applied to a module-level or
@@ -466,6 +484,8 @@ def _product_identity_offenders(path: Path, fragments: tuple[str, ...] | None = 
     """
     if fragments is None:
         fragments = _product_identity_fragments(_this_engine_identity())
+    if package_name is None:
+        package_name = SOURCE.name
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source)
     prose = {
@@ -475,11 +495,12 @@ def _product_identity_offenders(path: Path, fragments: tuple[str, ...] | None = 
         and isinstance(node.value, ast.Constant)
         and isinstance(node.value.value, str)
     }
-    # The one legitimate use of the bare literal "pegasus": the argument to a
-    # packaging resource lookup (`_package_files("pegasus")` in `core/content.py`,
-    # or the `importlib.resources.files("pegasus")` spelling it wraps) -- never a
-    # bare exact-match string anywhere else. Narrower than a blanket allowlist
-    # entry, which would also exempt the same literal used as, say, an asset name.
+    # The one legitimate use of the bare literal naming the scanned package:
+    # the argument to a packaging resource lookup (`_package_files("pegasus")`
+    # in `core/content.py`, or the `importlib.resources.files("pegasus")`
+    # spelling it wraps) -- never a bare exact-match string anywhere else.
+    # Narrower than a blanket allowlist entry, which would also exempt the
+    # same literal used as, say, an asset name.
     package_lookup_args = {
         id(arg)
         for node in ast.walk(tree)
@@ -489,7 +510,7 @@ def _product_identity_offenders(path: Path, fragments: tuple[str, ...] | None = 
             or (isinstance(node.func, ast.Attribute) and node.func.attr == "files")
         )
         for arg in node.args
-        if isinstance(arg, ast.Constant) and arg.value == "pegasus"
+        if isinstance(arg, ast.Constant) and arg.value == package_name
     }
     found = []
     # Adjacent literal concatenation, f-strings, dict values, class attributes
@@ -639,6 +660,34 @@ class NoProductIdentityOutsideCompositionRootTest(unittest.TestCase):
         probe = _write_probe(self, 'name = "Acme"\n')
         offenders = _product_identity_offenders(probe, fragments=_product_identity_fragments(ACME_IDENTITY))
         self.assertEqual([text for _, text in offenders], ["Acme"])
+
+    def test_the_package_lookup_exemption_tracks_the_scanned_packages_own_name(self):
+        """Regression for the second half of the same defect: the
+        `_package_files(...)`/`importlib.resources.files(...)` exemption used
+        to compare its argument against the hand-typed literal `"pegasus"` --
+        correct for this repository only because its own Python package
+        happens to be spelled that way. This engine ships as a full fork with
+        its own package renamed (not merely its brand), and a forked
+        `core/content.py` calls `_package_files("<its own package name>")` for
+        exactly the same legitimate reason this repository calls
+        `_package_files("pegasus")`. Once that fork's own name is a watched
+        fragment (which `_product_identity_fragments` now makes it, see the
+        fix above), a still-hardcoded `"pegasus"` comparison here would flag
+        that legitimate call as an offender -- breaking the fork's suite the
+        moment this fix's other half was transported into it.
+        """
+        probe = _write_probe(self, 'root = _package_files("darq")\n')
+        offenders = _product_identity_offenders(probe, fragments=("darq",), package_name="darq")
+        self.assertEqual(offenders, [])
+
+    def test_the_package_lookup_exemption_does_not_blanket_exempt_every_package_name(self):
+        """The exemption is scoped to the package actually being scanned, not
+        to every string that shows up as a `_package_files(...)` argument --
+        this is what proves the fix reads `package_name`, not just widens the
+        exemption to always pass."""
+        probe = _write_probe(self, 'root = _package_files("darq")\n')
+        offenders = _product_identity_offenders(probe, fragments=("darq",), package_name="pegasus")
+        self.assertEqual([text for _, text in offenders], ["darq"])
 
 
 def bundled_ts_assets() -> list[Path]:
