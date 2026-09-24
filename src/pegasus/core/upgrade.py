@@ -108,13 +108,15 @@ def fetch_and_verify(downloader: Downloader, version: str, release: ReleaseSourc
         checksum_document = downloader.fetch(checksum_url(version, release))
     except DownloaderError as error:
         raise UpgradeError(
-            f"could not fetch the checksum for {release.binary_asset} {version}: {error}"
+            f"could not fetch the checksum: {error} (for {release.binary_asset} {version})"
         ) from error
     expected = _expected_digest(checksum_document)
     try:
         fetched = downloader.fetch(binary_url(version, release))
     except DownloaderError as error:
-        raise UpgradeError(f"could not fetch {release.binary_asset} {version}: {error}") from error
+        raise UpgradeError(
+            f"could not fetch the binary: {error} (for {release.binary_asset} {version})"
+        ) from error
     digest = ownership.digest_of_bytes(fetched)
     if digest != expected:
         raise UpgradeError(

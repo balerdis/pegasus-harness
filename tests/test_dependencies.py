@@ -15,6 +15,7 @@ from pegasus.core import dependencies
 from pegasus.core import ownership
 from pegasus.core.content import Distribution, Mcp
 from pegasus.infra.fs_posix import PosixFileSystem
+from pegasus.ports.downloader import DownloaderError
 from real_home import _scratch_root
 
 DEPENDENCIES_DIR = Path("/home/probe/.local/share/pegasus-harness/mcp")
@@ -56,6 +57,20 @@ def download_server(**overrides) -> Mcp:
     )
     fields.update(overrides)
     return Mcp(**fields), content
+
+
+class _RaisingDownloader:
+    """A downloader whose `fetch` always fails with a caller-chosen message --
+    for proving what `materialize` does with a `DownloaderError`'s own text,
+    rather than the fixed shape `FakeDownloader` raises for an unregistered
+    URL.
+    """
+
+    def __init__(self, message: str):
+        self._message = message
+
+    def fetch(self, url, *, timeout_seconds=None, on_progress=None):
+        raise DownloaderError(self._message)
 
 
 class TargetPathTest(unittest.TestCase):
@@ -139,6 +154,25 @@ class MaterializeTest(unittest.TestCase):
             self.materialize(item, downloader)
         self.assertIn(item.name, str(raised.exception))
         self.assertIn(item.endpoint, str(raised.exception))
+
+    def test_a_fetch_failure_puts_the_reason_in_the_first_eighty_characters(self):
+        """The incident this guards against: a menu screen only 80 columns
+        wide showed `could not fetch <a long GitHub release URL>` and cut off
+        before the one word (`error`) that actually said what went wrong. The
+        endpoint here is exactly that shape -- long enough that, if the
+        reason were still placed after it the way it used to be, it would
+        fall past column 80 and never reach the screen at all.
+        """
+        long_endpoint = (
+            "https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.10.8/cbm-linux-x64"
+        )
+        item, _ = download_server(endpoint=long_endpoint)
+        reason = "HTTP Error 404: Not Found"
+        downloader = _RaisingDownloader(f"{reason} (fetching {long_endpoint})")
+        with self.assertRaises(dependencies.MaterializeError) as raised:
+            self.materialize(item, downloader)
+        message = str(raised.exception)
+        self.assertIn(reason, message[:80])
 
     def test_a_remote_server_is_refused_rather_than_fetched(self):
         item, content = download_server(distribution=Distribution.REMOTE, version=None, checksum=None)

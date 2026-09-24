@@ -75,6 +75,26 @@ class FetchWithoutACallbackTest(unittest.TestCase):
             with self.assertRaises(DownloaderError):
                 downloader.fetch(URL)
 
+    def test_the_underlying_reason_comes_before_the_url_not_after(self):
+        """A long URL pushed the one word that mattered (the reason) off the
+        right edge of an 80-column menu screen -- see the incident this
+        guards against in `test_dependencies.py`. The reason has to lead so a
+        truncated view still shows it, and the URL must still be there for
+        whoever needs to diagnose further.
+        """
+        long_url = "https://example.test/releases/download/v1.0.0/" + "segment/" * 10 + "asset"
+        with patch(
+            "pegasus.infra.downloader_http.urllib.request.urlopen",
+            side_effect=OSError("Connection refused"),
+        ):
+            downloader = HttpDownloader()
+            with self.assertRaises(DownloaderError) as raised:
+                downloader.fetch(long_url)
+        message = str(raised.exception)
+        self.assertIn(long_url, message)
+        self.assertIn("Connection refused", message)
+        self.assertLess(message.index("Connection refused"), message.index(long_url))
+
 
 class FetchWithACallbackTest(unittest.TestCase):
     def test_bytes_downloaded_increase_across_calls_and_the_total_is_correct(self):

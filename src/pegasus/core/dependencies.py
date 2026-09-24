@@ -118,7 +118,7 @@ def materialize(
     try:
         fetched = downloader.fetch(item.endpoint, on_progress=on_progress)
     except DownloaderError as error:
-        raise MaterializeError(f"{item.name}: could not fetch {item.endpoint}: {error}") from error
+        raise MaterializeError(f"{item.name}: could not fetch: {error}") from error
     digest = ownership.digest_of_bytes(fetched)
     if digest != item.checksum:
         raise MaterializeError(

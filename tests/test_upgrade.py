@@ -44,6 +44,20 @@ def sha256sum_line(content: bytes, filename: str = "pegasus") -> bytes:
     return f"{digest}  {filename}\n".encode("utf-8")
 
 
+class _RaisingDownloader:
+    """A downloader whose `fetch` always fails with a caller-chosen message --
+    for proving what `fetch_and_verify` does with a `DownloaderError`'s own
+    text, rather than the fixed shape `FakeDownloader` raises for an
+    unregistered URL.
+    """
+
+    def __init__(self, message: str):
+        self._message = message
+
+    def fetch(self, url, *, timeout_seconds=None, on_progress=None):
+        raise DownloaderError(self._message)
+
+
 class NoDefaultReleaseSourceTest(unittest.TestCase):
     """A silent fallback to Pegasus's own release must be *unrepresentable*,
     not merely unlikely -- so the module-level constant it would fall back to
@@ -145,6 +159,51 @@ class FetchAndVerifyTest(unittest.TestCase):
         )
         with self.assertRaises(upgrade.UpgradeError):
             upgrade.fetch_and_verify(downloader, VERSION, PEGASUS_RELEASE)
+
+    def test_a_checksum_fetch_failure_puts_the_reason_in_the_first_eighty_characters(self):
+        """Same incident as `test_dependencies.py`'s own version of this test:
+        a long-named release (a fork with a longer product name than
+        `pegasus`/`darq`) must never let its own name push the actual reason
+        past the width of a real terminal."""
+        long_named_release = ReleaseSource(
+            asset_url_template="https://example.test/releases/download/{tag}/{asset}",
+            binary_asset="codebase-memory-mcp-institutional-edition",
+            latest_release_api_url="https://api.github.com/repos/example/repo/releases/latest",
+            release_page_url="https://example.test/releases",
+            install_base_url_default="https://example.test/releases/latest/download",
+        )
+        long_version = "10.20.30-institutional-build"
+        reason = "HTTP Error 403: Forbidden"
+        long_url = upgrade.checksum_url(long_version, long_named_release)
+        downloader = _RaisingDownloader(f"{reason} (fetching {long_url})")
+        with self.assertRaises(upgrade.UpgradeError) as raised:
+            upgrade.fetch_and_verify(downloader, long_version, long_named_release)
+        message = str(raised.exception)
+        self.assertIn(reason, message[:80])
+
+    def test_a_binary_fetch_failure_puts_the_reason_in_the_first_eighty_characters(self):
+        long_named_release = ReleaseSource(
+            asset_url_template="https://example.test/releases/download/{tag}/{asset}",
+            binary_asset="codebase-memory-mcp-institutional-edition",
+            latest_release_api_url="https://api.github.com/repos/example/repo/releases/latest",
+            release_page_url="https://example.test/releases",
+            install_base_url_default="https://example.test/releases/latest/download",
+        )
+        long_version = "10.20.30-institutional-build"
+        reason = "HTTP Error 403: Forbidden"
+        checksum_url = upgrade.checksum_url(long_version, long_named_release)
+        binary_url = upgrade.binary_url(long_version, long_named_release)
+
+        class _ChecksumThenFailingDownloader:
+            def fetch(self, url, *, timeout_seconds=None, on_progress=None):
+                if url == checksum_url:
+                    return sha256sum_line(b"whatever")
+                raise DownloaderError(f"{reason} (fetching {binary_url})")
+
+        with self.assertRaises(upgrade.UpgradeError) as raised:
+            upgrade.fetch_and_verify(_ChecksumThenFailingDownloader(), long_version, long_named_release)
+        message = str(raised.exception)
+        self.assertIn(reason, message[:80])
 
     def test_a_non_utf8_checksum_body_raises_a_clean_upgrade_error(self):
         """A malformed checksum asset must refuse cleanly, exactly like an

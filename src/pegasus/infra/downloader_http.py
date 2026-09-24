@@ -67,7 +67,7 @@ class HttpDownloader:
             # derive from `OSError` or `ValueError`, so `urlopen` raising one
             # would otherwise escape this boundary as a raw, undocumented
             # exception instead of the `DownloaderError` callers expect.
-            raise DownloaderError(f"cannot fetch {url}: {error}") from error
+            raise DownloaderError(f"{error} (fetching {url})") from error
 
 
 def _content_length(response) -> int | None:
