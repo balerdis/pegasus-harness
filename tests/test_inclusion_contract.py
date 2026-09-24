@@ -53,6 +53,45 @@ This is strict enough that adding a plugin or an MCP descriptor to the tree
 without touching the document flips the test red (mutations 1 and 2 below),
 and lenient enough that rewording the surrounding prose, or moving a bullet,
 never does.
+
+The direction the "in known_ids" / "in known_names" filters cannot see, and
+how the figures close most of it
+-----------------------------------------------------------------------------
+For MCP server ids and skill names, a backtick token in the section only
+counts as naming one if it is EQUAL to an id or a name the tree already has
+(`_doc_named_mcp_ids`, `_doc_named_skill_names`). That filter is required --
+without it, prose fragments like `` `download` ``, `` `npm` ``, `` `remote` ``,
+a path, or the skills bullet that deliberately names two retired skills would
+all be mistaken for artifacts -- but it has a cost: a name the document still
+mentions after the tree has stopped shipping it is discarded before either
+side of the `assertEqual` is built, so both sides shrink together and the
+comparison never notices. Plugin filenames do not have this problem, because
+`_doc_named_plugin_files` recognizes a name by its `.ts`/`.js` extension
+alone, never by checking it against the tree first -- so a plugin bullet
+naming a file the tree does not have already fails today, with no help
+needed.
+
+`_mcp_server_ids`, `_plugin_files`, and `_skill_names` return the sizes the
+section spells out by hand as Spanish number words ("cinco" servers, "seis"
+plugins, "veinticuatro" skills). `SpellsOutTheDerivedCounts` below compares
+each one, converted to its Spanish word, against what the section says. This
+closes the MCP-id and skill-name gap for the ordinary case that bit this
+document before: removing a real, named item from the tree without touching
+the document now changes a count the test reads, so it fails even though the
+set comparison above would have stayed green.
+
+What is left over, and stays left over: a document that names every real id
+or skill AND ONE MORE that never existed passes both mechanisms at once. The
+count is unaffected -- it comes from the tree, not from how many names the
+prose happens to list -- and the invented name is discarded by the same
+`in known_ids` / `in known_names` filter described above, on both sides of
+the `assertEqual`, before anything is compared. Nothing in this file claims
+to catch that case; it cannot, without either abandoning the filter (and
+going blind to `` `download` ``-shaped prose instead) or parsing the section
+as a literal enumerated list rather than free-form Markdown, which is exactly
+the "reimplement the category by hand" trap this document already rejected
+for skills. Measured directly in `SpellsOutTheDerivedCounts.test_an_invented_
+name_alongside_every_real_one_is_not_caught`.
 """
 from __future__ import annotations
 
@@ -81,6 +120,55 @@ _FILE_EXTENSIONS = (".md", ".ts", ".js")
 
 _BACKTICK = re.compile(r"`([^`]+)`")
 _BULLET_LINE = re.compile(r"^\s*-\s*`([^`]+)`(?:\s*→\s*`([^`]+)`)?", re.MULTILINE)
+
+#: The Spanish cardinal word for every count this document's prose might ever
+#: need to spell out. A fixed table, not a number-to-words algorithm: this
+#: section only ever states small counts of shipped artifacts, and a table
+#: that raises loudly on whatever it does not cover is safer than a formula
+#: that would keep silently producing SOME word for a count nobody reviewed
+#: the wording for -- "veintiuno" apocopates to "veintiún" before a masculine
+#: noun in some constructions, and that is exactly the kind of call a human
+#: should make once, on purpose, rather than a formula deciding for them.
+#: Extend it by hand, and re-read the sentence it feeds, if a count ever
+#: needs to grow past thirty.
+_NUMBER_WORDS_ES: dict[int, str] = {
+    0: "cero", 1: "uno", 2: "dos", 3: "tres", 4: "cuatro", 5: "cinco",
+    6: "seis", 7: "siete", 8: "ocho", 9: "nueve", 10: "diez",
+    11: "once", 12: "doce", 13: "trece", 14: "catorce", 15: "quince",
+    16: "dieciséis", 17: "diecisiete", 18: "dieciocho", 19: "diecinueve",
+    20: "veinte", 21: "veintiuno", 22: "veintidós", 23: "veintitrés",
+    24: "veinticuatro", 25: "veinticinco", 26: "veintiséis", 27: "veintisiete",
+    28: "veintiocho", 29: "veintinueve", 30: "treinta",
+}
+
+#: The three sentences that spell out a count by hand, each with the number
+#: word as its one capture group.
+_MCP_COUNT_PATTERN = re.compile(r"[Ll]os (\w+) servidores MCP que el contenido embarca")
+_PLUGIN_COUNT_PATTERN = re.compile(r"[Ll]os (\w+) plugins locales aprobados")
+_SKILL_COUNT_PATTERN = re.compile(r"`src/pegasus/content/skills/`, (\w+) en total")
+
+
+def _spanish_word_for_count(n: int) -> str:
+    """The Spanish cardinal word for `n`, or a loud failure -- never a silent
+    empty string -- if `n` falls outside `_NUMBER_WORDS_ES`."""
+    try:
+        return _NUMBER_WORDS_ES[n]
+    except KeyError as exc:
+        raise AssertionError(
+            f"no Spanish word mapped for count {n}; extend _NUMBER_WORDS_ES "
+            "by hand (and re-check the sentence it feeds) instead of "
+            "guessing a word for it"
+        ) from exc
+
+
+def _doc_stated_count(pattern: re.Pattern[str], doc_text: str) -> str:
+    """The number word one of the count sentences spells out, read from the
+    whole document (these sentences live inside "Inclusion aprobada" but
+    nothing about them depends on that section boundary)."""
+    match = pattern.search(doc_text)
+    if match is None:
+        raise AssertionError(f"no sentence in the document matches {pattern.pattern!r}")
+    return match.group(1)
 
 
 def _inclusion_section(doc_text: str) -> str:
@@ -211,6 +299,69 @@ class InclusionContractTest(unittest.TestCase):
                     f"{plugin_file}: contract says renamed={described_as_renamed}, "
                     f"_RENAMED_ASSETS says renamed={actually_renamed}",
                 )
+
+
+class SpellsOutTheDerivedCounts(unittest.TestCase):
+    """The three counts the document types by hand -- "cinco" MCP servers,
+    "seis" plugins, "veinticuatro" skills -- have to be the Spanish word for
+    what the tree actually has, not a number somebody typed once and never
+    revisited.
+
+    This is what closes, for MCP server ids and skill names, the direction
+    `test_mcp_servers_in_tree_and_contract_match` and
+    `test_skills_in_tree_and_contract_match` cannot see on their own: those
+    two only compare a backtick token against the tree if the token already
+    equals something the tree has, so a name the document keeps after the
+    tree drops it is filtered out of both sides before the comparison runs.
+    Removing a real, named server or skill from the tree without touching the
+    document leaves the set comparison green but makes the tree's count and
+    the document's spelled-out word disagree -- which is exactly the mutation
+    tests below.
+    """
+
+    def setUp(self):
+        self.doc_text = _DOC_PATH.read_text(encoding="utf-8")
+
+    def test_mcp_count_in_doc_matches_the_tree(self):
+        self.assertEqual(
+            _spanish_word_for_count(len(_mcp_server_ids())),
+            _doc_stated_count(_MCP_COUNT_PATTERN, self.doc_text),
+        )
+
+    def test_plugin_count_in_doc_matches_the_tree(self):
+        self.assertEqual(
+            _spanish_word_for_count(len(_plugin_files())),
+            _doc_stated_count(_PLUGIN_COUNT_PATTERN, self.doc_text),
+        )
+
+    def test_skill_count_in_doc_matches_the_tree(self):
+        self.assertEqual(
+            _spanish_word_for_count(len(_skill_names())),
+            _doc_stated_count(_SKILL_COUNT_PATTERN, self.doc_text),
+        )
+
+    def test_an_invented_name_alongside_every_real_one_is_not_caught(self):
+        """The residue the module docstring declares, measured rather than
+        assumed: naming every real MCP id plus one that never existed passes
+        both the set comparison and the count comparison, because the
+        invented token is discarded by the same `in known_ids` filter on
+        both sides before anything is compared, and the count comes from the
+        tree, never from how many names the prose lists.
+
+        This test does not touch the real document -- it reconstructs just
+        enough of the section, in isolation, to demonstrate the gap without
+        depending on today's exact prose surviving unedited."""
+        known_ids = _mcp_server_ids()
+        section = (
+            "Los cinco servidores MCP que el contenido embarca son "
+            + ", ".join(f"`{name}`" for name in sorted(known_ids))
+            + " y tambien `este-id-nunca-existio`."
+        )
+        self.assertEqual(known_ids, _doc_named_mcp_ids(section, known_ids))
+        self.assertEqual(
+            _spanish_word_for_count(len(known_ids)),
+            _doc_stated_count(_MCP_COUNT_PATTERN, section),
+        )
 
 
 if __name__ == "__main__":
