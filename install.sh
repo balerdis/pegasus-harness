@@ -483,20 +483,36 @@ detectar_clis() {
 PRODUCTO_PRESENTE=0
 PRODUCTO_VERSION=''
 PRODUCTO_RUTA=''
+# Si el binario está ahí pero contestar "--version" le dio un estado
+# distinto de 0 -- reportado de verdad: un Python 3.12 compilado a mano sin
+# el módulo _curses hace que TODO comando del producto, incluido "--version",
+# termine en un traceback de Python y salida distinta de cero. Antes el
+# "|| true" del probe se comía ese estado, así que un binario que no arranca
+# se leía exactamente igual que uno sano -- ver el comentario de
+# detectar_node sobre por qué el "|| true" existe, y por qué no alcanza para
+# distinguir "contestó algo raro" de "se negó a contestar".
+PRODUCTO_ROTO=0
 
 detectar_producto() {
-  # Ver el comentario en detectar_node: por qué no "| head -1", y por qué "|| true".
-  local salida_completa
+  # Ver el comentario en detectar_node: por qué no "| head -1". Acá, a
+  # diferencia de detectar_node y detectar_clis, el estado de salida SÍ se
+  # necesita -- no sólo la salida -- así que en vez de "|| true" (que lo
+  # descarta) se lo captura aparte: un probe que se niega a contestar (exit
+  # distinto de 0) es una respuesta distinta de uno que contesta cualquier
+  # cosa, y sólo capturando el estado se puede distinguir una de la otra.
+  local salida_completa estado_salida
   if command -v "$PRODUCT_PROGRAM_NAME" >/dev/null 2>&1; then
     PRODUCTO_PRESENTE=1
     PRODUCTO_RUTA=$(command -v "$PRODUCT_PROGRAM_NAME")
-    salida_completa=$("$PRODUCT_PROGRAM_NAME" --version 2>&1) || true
+    salida_completa=$("$PRODUCT_PROGRAM_NAME" --version 2>&1) && estado_salida=0 || estado_salida=$?
     PRODUCTO_VERSION=${salida_completa%%$'\n'*}
+    ((estado_salida == 0)) || PRODUCTO_ROTO=1
   elif [[ -x "$BIN_DIR/$PRODUCT_PROGRAM_NAME" ]]; then
     PRODUCTO_PRESENTE=1
     PRODUCTO_RUTA="$BIN_DIR/$PRODUCT_PROGRAM_NAME"
-    salida_completa=$("$BIN_DIR/$PRODUCT_PROGRAM_NAME" --version 2>&1) || true
+    salida_completa=$("$BIN_DIR/$PRODUCT_PROGRAM_NAME" --version 2>&1) && estado_salida=0 || estado_salida=$?
     PRODUCTO_VERSION=${salida_completa%%$'\n'*}
+    ((estado_salida == 0)) || PRODUCTO_ROTO=1
   else
     PRODUCTO_PRESENTE=0
     PRODUCTO_VERSION=''
@@ -621,7 +637,15 @@ FALTA_ALGO=0
 calcular_faltantes() {
   ((NODE_PRESENTE)) && FALTA_NODE=0 || FALTA_NODE=1
   ((CLI_PRESENTE[$CLI_ELEGIDO])) && FALTA_CLI=0 || FALTA_CLI=1
-  ((PRODUCTO_PRESENTE)) && FALTA_PRODUCTO=0 || FALTA_PRODUCTO=1
+  # Presente pero roto (ver PRODUCTO_ROTO, arriba) cuenta como faltante: hay
+  # un binario en el camino, pero no es uno que sirva, y el mismo mecanismo
+  # que instala uno ausente (instalar_producto, más abajo) es lo que
+  # reemplaza uno que no arranca -- no hace falta un camino aparte.
+  if ((PRODUCTO_PRESENTE)) && ! ((PRODUCTO_ROTO)); then
+    FALTA_PRODUCTO=0
+  else
+    FALTA_PRODUCTO=1
+  fi
   if ((FALTA_NODE || FALTA_CLI || FALTA_PRODUCTO)); then
     FALTA_ALGO=1
   else
@@ -780,7 +804,11 @@ mostrar_preflight() {
     algo_para_instalar=1
   fi
   if ((FALTA_PRODUCTO)); then
-    info "el binario $PRODUCT_PROGRAM_NAME, en $BIN_DIR"
+    if ((PRODUCTO_ROTO)); then
+      info "el binario $PRODUCT_PROGRAM_NAME de nuevo, en $BIN_DIR (el que hay en $PRODUCTO_RUTA no arranca)"
+    else
+      info "el binario $PRODUCT_PROGRAM_NAME, en $BIN_DIR"
+    fi
     algo_para_instalar=1
   fi
   if ((PERSISTIR_PATH_RC)); then
@@ -792,7 +820,19 @@ mostrar_preflight() {
   local algo_presente=0
   ((NODE_PRESENTE)) && { ok "node $NODE_VERSION"; algo_presente=1; }
   ((CLI_PRESENTE[$CLI_ELEGIDO])) && { ok "$CLI_ELEGIDO ${CLI_VERSION[$CLI_ELEGIDO]}"; algo_presente=1; }
-  ((PRODUCTO_PRESENTE)) && { ok "$PRODUCT_PROGRAM_NAME $PRODUCTO_VERSION ($PRODUCTO_RUTA)"; algo_presente=1; }
+  if ((PRODUCTO_PRESENTE)); then
+    if ((PRODUCTO_ROTO)); then
+      # No "ok": un binario que no arranca no es un chequeo que haya pasado.
+      # Se muestra lo que contestó -- la misma disciplina de "se informa lo
+      # que dijo" que detectar_node documenta -- pero nombrando sin vueltas
+      # que no arranca, en vez de dejar que la primera línea de un traceback
+      # se lea como si fuera un número de versión.
+      info "$PRODUCT_PROGRAM_NAME encontrado en $PRODUCTO_RUTA, pero no arranca: $PRODUCTO_VERSION"
+    else
+      ok "$PRODUCT_PROGRAM_NAME $PRODUCTO_VERSION ($PRODUCTO_RUTA)"
+    fi
+    algo_presente=1
+  fi
   ((algo_presente)) || info 'nada todavía'
 
   titulo 'PATH'

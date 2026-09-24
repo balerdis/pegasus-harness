@@ -417,6 +417,92 @@ class VerifyExitCodeMeansViableTest(InstallScriptTestCase):
         self.assertEqual(before, after)
 
 
+class BrokenProductBinaryTest(InstallScriptTestCase):
+    """Real user report: a `pegasus` on PATH that answers `--version` with a
+    Python traceback and a non-zero exit -- a hand-built interpreter missing
+    the `_curses` extension makes every `pegasus` invocation fail this way
+    (see `tests/test_cli_without_curses.py`), so `detectar_producto` has to
+    treat "found, but does not run" as its own case, distinct from both
+    "absent" and "found and healthy".
+
+    Before the fix, `salida_completa=$(...) || true` discarded the exit
+    status, so the traceback's first line was read as if it were a genuine
+    version string: `PRODUCTO_PRESENTE=1`, `FALTA_PRODUCTO=0`, "Ya presente"
+    listed the binary as `ok` with the traceback as its "version", and "Se
+    instalará" concluded `nada: ya está todo instalado` -- an install that
+    cannot run reported as fully installed, then launched again at the end.
+    """
+
+    _BROKEN_PEGASUS = (
+        'if [ "$1" = "--version" ] || [ "$1" = "-V" ]; then\n'
+        '  printf "Traceback (most recent call last):\\n"\n'
+        '  printf "ModuleNotFoundError: No module named \'"\'"\'_curses\'"\'"\'\\n" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+    )
+
+    def _stub_everything_present_but_broken_pegasus(self):
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("curl", CURL_STUB_SUCCEEDS)
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub("opencode", 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        self.stub("pegasus", self._BROKEN_PEGASUS)
+
+    def test_report_distinguishes_broken_from_healthy(self):
+        self._stub_everything_present_but_broken_pegasus()
+
+        result = self.run_install("--verify")
+
+        self.assertIn("no arranca", result.stdout)
+
+    def test_broken_binary_is_not_reported_as_a_healthy_install(self):
+        """The traceback's first line must never be printed as if it were a
+        real version string next to a healthy `ok` mark."""
+        self._stub_everything_present_but_broken_pegasus()
+
+        result = self.run_install("--verify")
+
+        self.assertNotIn("✔ pegasus Traceback", result.stdout)
+
+    def test_se_instalara_does_not_claim_nothing_to_do(self):
+        """Node and OpenCode are genuinely present and pegasus is genuinely
+        on PATH, so before the fix nothing looked missing at all. A broken
+        pegasus is still something this run needs to act on -- "Se instalará"
+        must not conclude there is nothing to do."""
+        self._stub_everything_present_but_broken_pegasus()
+
+        result = self.run_install("--verify")
+
+        instalara = result.stdout.split("=== Se instalará ===", 1)[1].split("=== Ya presente ===", 1)[0]
+        self.assertNotIn("nada: ya está todo instalado", instalara)
+        self.assertIn("pegasus", instalara)
+
+    def test_no_run_actually_replaces_a_broken_binary(self):
+        """Not just the report: `--no-run` (which really installs, see
+        `NoRunReallyInstallsTest` above) must really overwrite a `pegasus`
+        that is on PATH but broken, the same as it would one that is
+        missing -- `FALTA_PRODUCTO` is what `instalar_producto` gates on."""
+        self.stub("python3", 'case "$2" in\n  *sys.exit*) exit 0 ;;\n  *) echo "3.12.4" ;;\nesac\n')
+        self.stub("node", 'echo "v20.11.0"\n')
+        self.stub("opencode", 'if [ "$1" = "--version" ]; then echo "opencode 1.18.25"; exit 0; fi\n')
+        bin_dir = self.home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        broken = bin_dir / "pegasus"
+        broken.write_text("#!/bin/sh\n" + self._BROKEN_PEGASUS, encoding="utf-8")
+        broken.chmod(broken.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        fixture_dir = Path(self.tmp.name) / "fixture"
+        base_url = _make_release_fixture(fixture_dir, content=b"#!/bin/sh\necho fake-pegasus-fixed\n")
+
+        result = self.run_install(
+            "--no-run", "--yes",
+            extra_env={"PEGASUS_INSTALL_BASE_URL": base_url},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(broken.read_text(encoding="utf-8"), "#!/bin/sh\necho fake-pegasus-fixed\n")
+
+
 class VerifyIgnoresNoRunTest(InstallScriptTestCase):
     def test_verify_short_circuits_before_no_run_would_matter(self):
         """--verify never installs anything, with or without --no-run alongside
