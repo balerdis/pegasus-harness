@@ -2500,7 +2500,32 @@ class MissingCursesTest(unittest.TestCase):
         """`pegasus.tui.app` (and `curses` itself) must be re-imported for the
         blocked finder to have anything to intercept; a module already
         cached in `sys.modules` from an earlier test would make this test
-        vacuous."""
+        vacuous.
+
+        `sys.modules` alone is not enough: on a real machine (this one has a
+        working `_curses`), some earlier test already imported
+        `pegasus.tui.app` for real, and a successful `import a.b.c` also sets
+        `b.c` as an attribute on module `a.b` -- so `from pegasus.tui import
+        app` would read that stale, fully-real attribute straight off the
+        `pegasus.tui` package and never touch `sys.modules` or a single
+        meta-path finder at all. The first version of this test missed
+        exactly that: it let a real `tui_app.main()` run in-process, with no
+        real terminal underneath it, wrecking the test process's own stdout
+        with raw curses escape codes. `pegasus.tui.app`'s own attribute is
+        cleared here too, so the import machinery is forced to run for
+        real."""
+        tui_package = sys.modules.get("pegasus.tui")
+        had_app_attribute = tui_package is not None and hasattr(tui_package, "app")
+        previous_app_attribute = getattr(tui_package, "app", None) if had_app_attribute else None
+        if had_app_attribute:
+            delattr(tui_package, "app")
+
+        def _restore_app_attribute():
+            if had_app_attribute:
+                tui_package.app = previous_app_attribute
+
+        self.addCleanup(_restore_app_attribute)
+
         removed = {
             name: module
             for name, module in sys.modules.items()
