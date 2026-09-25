@@ -51,7 +51,9 @@ Ask in this order and stop at the first fact that is true:
   report, and no record.
 - **FTD** when the change is decided enough to apply, needs no reviewable contract, and does need
   continuity, a checklist, durable evidence or a handoff. Ask until the scope is closed, then confirm
-  once before writing.
+  once before writing. How it runs — its record, evidence and close — is `_shared/ftd-procedure.md`,
+  read only on this route; if it is missing or unreadable, keep the checklist and its evidence in your
+  reply.
 - **SDD** when someone absent from the implementation must review a contract or a decision before
   code; when others build against its spec, API, authorization or data model; when others will
   execute its ordered units; or when it was asked for.

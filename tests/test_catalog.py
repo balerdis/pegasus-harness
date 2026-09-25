@@ -570,7 +570,12 @@ class ShippedCatalogTest(unittest.TestCase):
         # `implementation-craft.md` and `flow-applicability.md` in that same
         # lazy-loaded home. No settings key of its own, for the same reason
         # every other reference in that list has none.
-        self.assertEqual((len(files), len(keys)), (98, 27))
+        # 99, not 98: `_shared/ftd-procedure.md` says how an FTD runs -- the
+        # record, its evidence rules and how it closes -- once
+        # `_shared/flow-applicability.md` has routed work there. It is read only
+        # on that route, through the ladder's single pointer, so it is one more
+        # lazy-loaded file and, like the rest of that home, no config entry.
+        self.assertEqual((len(files), len(keys)), (99, 27))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:

@@ -286,7 +286,7 @@
         "needs_continuity": true
       },
       "route": "ftd",
-      "decided_by": "**FTD** when the change is decided enough to apply, needs no reviewable contract, and does need continuity, a checklist, durable evidence or a handoff. Ask until the scope is closed, then confirm once before writing.",
+      "decided_by": "**FTD** when the change is decided enough to apply, needs no reviewable contract, and does need continuity, a checklist, durable evidence or a handoff. Ask until the scope is closed, then confirm once before writing. How it runs — its record, evidence and close — is `_shared/ftd-procedure.md`, read only on this route; if it is missing or unreadable, keep the checklist and its evidence in your reply.",
       "surface": "medium"
     },
     {
