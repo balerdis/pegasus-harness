@@ -262,7 +262,7 @@
         "needs_continuity": false
       },
       "route": "l0",
-      "decided_by": "**Large but already decided.** A dependency upgrade with known fallout, a mechanical migration, a cross-cutting rename or a refactor whose behaviour the tests already state is **FTD** however many files it touches; one trivial operation repeated across many files stays **L0**.",
+      "decided_by": "**One trivial operation across many files** stays **L0**.",
       "surface": "large"
     },
     {
@@ -382,7 +382,7 @@
         "needs_continuity": true
       },
       "route": "ftd",
-      "decided_by": "**Large but already decided.** A dependency upgrade with known fallout, a mechanical migration, a cross-cutting rename or a refactor whose behaviour the tests already state is **FTD** however many files it touches; one trivial operation repeated across many files stays **L0**.",
+      "decided_by": "**Large but already decided.** A dependency upgrade with known fallout, a mechanical migration, a cross-cutting rename or a refactor whose behaviour the tests already state is **FTD** however many files it touches.",
       "surface": "large"
     },
     {

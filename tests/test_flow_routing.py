@@ -63,10 +63,15 @@ PROMOTIONS_SECTION = "Promotions"
 DECISION_SECTIONS = (ORDER_SECTION, ROUTES_SECTION, AMBIGUOUS_SECTION, PROMOTIONS_SECTION)
 
 #: Declared residue: the clauses that resolve to no route of their own, keyed
-#: by their bold lead. "A bug fix with an unclear cause" orders the work --
-#: investigate first -- and hands the route back to the facts once the cause is
-#: confirmed, so the cases citing it can only be checked for coherence, never
-#: for agreeing with a route the clause does not name.
+#: by their bold lead -- and it is exactly one. "A bug fix with an unclear
+#: cause" is routeless because it orders the work rather than resolving it:
+#: investigate first, then hand the route back to the facts once the cause is
+#: confirmed, when the fix can be any of L0, FTD or SDD. So the cases citing it
+#: can only be checked for coherence, never for agreeing with a route the
+#: clause does not name. `TraceabilityTest` holds this set EQUAL to the
+#: routeless clauses computed from the file and pins it to this one entry: a
+#: second routeless clause, or a second entry here, fails until someone edits
+#: the pin on purpose.
 ROUTELESS_CLAUSES = frozenset({"A bug fix with an unclear cause."})
 
 _ITEM = re.compile(r"^(?:- |\d+\. )")
@@ -75,7 +80,6 @@ _FIRST_BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _LEAD = re.compile(r"^\*\*([^*]+)\*\*")
 _WORD = re.compile(r"[A-Za-z0-9]+")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
-_NEGATION = re.compile(r"\b(?:not|never|instead)\b")
 _SDD = re.compile(r"\bSDD\b")
 
 
@@ -179,6 +183,16 @@ def bold_routes(clause: str) -> set[str]:
     return {span.lower() for span in _FIRST_BOLD.findall(clause) if span.lower() in ROUTES}
 
 
+def routeless_leads(text: str) -> frozenset[str]:
+    """The lead (or the whole text, without one) of every clause outside the
+    promotions that resolves to no bold route -- computed from the file."""
+    return frozenset(
+        lead(clause) or clause
+        for clause, section in clauses(text).items()
+        if section != PROMOTIONS_SECTION and not bold_routes(clause)
+    )
+
+
 def promotion(clause: str) -> tuple[str, set[str]] | None:
     """`(origin, targets)` from a `**origin → targets**` lead, or None."""
     if "→" not in lead(clause):
@@ -187,42 +201,79 @@ def promotion(clause: str) -> tuple[str, set[str]] | None:
     return origin.strip().lower(), {word.lower() for word in _WORD.findall(targets) if word.lower() in ROUTES}
 
 
-def sdd_sentences(text: str) -> list[str]:
-    """Every sentence, in any decision section, that sends work to SDD -- with its subject.
+#: What v7 moved from SDD to FTD, by stem: a decision or a trade-off to settle,
+#: crossing sessions, a record that outlives the session, durable evidence,
+#: continuity, a handoff.
+FTD_STEMS = re.compile(
+    r"trade|decision|decid|session|record|outliv|surviv|durab|continu|hand-?\s?off", re.IGNORECASE
+)
+_DECISION_STEM = re.compile(r"decision|decid", re.IGNORECASE)
 
-    - A step of the decision order whose route is SDD: the whole step.
-    - The SDD route's clause: all of it.
-    - A promotion whose targets include SDD: the sentence its lead opens.
-    - Anywhere else: a sentence that names SDD without negating it ("not",
-      "never", "instead"), prefixed by the item's lead when that lead is a
-      sentence of its own -- an ambiguous case names its subject there, and
-      the sentence that resolves it to SDD only says "it".
+#: Closed world: every block -- a list item or a paragraph -- of a decision
+#: section in which SDD meets one of `FTD_STEMS`, pinned as written. Blocks, not
+#: sentences: an ambiguous case names its subject in its bold lead, and a
+#: sentence-level scan would miss the same claim spread over two sentences.
+#: Every entry today either is the reviewable-contract definition or negates
+#: the SDD reading; any new co-occurrence fails whatever its grammar, and a
+#: legitimate rewording is a deliberate edit here.
+#:
+#: Declared residue: the unit is a block, and a block ends at a blank line, so
+#: a claim spread over two bare paragraphs ("A record that outlives a session
+#: still matters." / "That is exactly when SDD applies.") is seen by neither.
+#: A text scan cannot follow an argument across paragraphs; review has to.
+SDD_MEETS_FTD_STEMS = frozenset(
+    {
+        # The reviewable-contract definition: a decision is SDD only when
+        # someone absent from the implementation must review it before code.
+        '**SDD** when someone absent from the implementation must review a contract or a decision before code; when others build against its spec, API, authorization or data model; when others will execute its ordered units; or when it was asked for.',
+        # Negates: a decision or a trade-off alone goes on as FTD.
+        '**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.',
+        # Negates: a decision taken and landed in the same work promotes to FTD.
+        '**L0 → SDD** when a `needs_reviewable_contract` appears. A decision taken and landed in the same work promotes to FTD instead.',
+        # Negates: two designs or a trade-off, on their own, do not promote.
+        '**FTD → SDD** when a `needs_reviewable_contract` appears or SDD, a spec or a plan is asked for. Two reasonable designs or a trade-off, on their own, do not promote: they are decided, written down, and the FTD goes on.',
+    }
+)
 
-    The negation check is lexical: a sentence that sends work to SDD while
-    negating something else ("SDD, never L0") is skipped. That is a declared
-    blind spot, not a guarantee.
-    """
-    found = []
+
+def section_blocks(body: str) -> list[str]:
+    """Every list item and every paragraph of a section, whitespace collapsed
+    and list markers stripped -- an item's text equals its citable clause."""
+    blocks: list[list[str]] = []
+    current: list[str] | None = None
+    for line in body.split("\n"):
+        if _ITEM.match(line):
+            current = [_ITEM.sub("", line, count=1)]
+            blocks.append(current)
+        elif not line.strip():
+            current = None
+        elif current is not None:
+            current.append(line.strip())
+        else:
+            current = [line.strip()]
+            blocks.append(current)
+    return [" ".join(" ".join(block).split()) for block in blocks]
+
+
+def sdd_blocks(text: str) -> list[str]:
+    """Every block of the four decision sections that names SDD."""
     by_section = sections(text)
-    for section in DECISION_SECTIONS:
-        for item in list_items(by_section.get(section, "")):
-            head = lead(item)
-            parsed = promotion(item)
-            if section == ORDER_SECTION:
-                if "sdd" in bold_routes(item):
-                    found.append(item)
-                continue
-            if head == "SDD":
-                found.append(item)
-                continue
-            rest = item[len(head) + 4 :].strip() if head else item
-            subject = f"{head} " if head and parsed is None and head.lower() not in ROUTES else ""
-            for index, sentence in enumerate(part for part in _SENTENCE_END.split(rest) if part):
-                if parsed is not None and index == 0 and "sdd" in parsed[1]:
-                    found.append(f"**{head}** {sentence}")
-                elif _SDD.search(sentence) and not _NEGATION.search(sentence):
-                    found.append(subject + sentence)
-    return found
+    return [
+        block
+        for section in DECISION_SECTIONS
+        for block in section_blocks(by_section.get(section, ""))
+        if _SDD.search(block)
+    ]
+
+
+def sdd_meets_ftd_stems(text: str) -> set[str]:
+    """The blocks where SDD co-occurs with something v7 moved to FTD."""
+    return {block for block in sdd_blocks(text) if FTD_STEMS.search(block)}
+
+
+def sdd_meets_a_decision(text: str) -> set[str]:
+    """The blocks where SDD co-occurs with a decision."""
+    return {block for block in sdd_blocks(text) if _DECISION_STEM.search(block)}
 
 
 #: A routing-fact name as prose writes it: a backticked snake_case identifier.
@@ -381,10 +432,25 @@ class TraceabilityTest(FlowApplicabilityCase):
                 else:
                     self.assertTrue(bold_routes(clause), "no bold route word says what this clause resolves to")
 
-    def test_the_declared_residue_exists(self):
-        """A residue entry whose clause is gone would silently excuse nothing."""
-        leads = {lead(clause) for clause in self.clauses}
-        self.assertLessEqual(ROUTELESS_CLAUSES, leads)
+    def test_the_declared_residue_is_exactly_the_routeless_clauses(self):
+        """Both ways: a residue entry whose clause is gone would excuse nothing,
+        and a routeless clause missing from the residue would be a rule no
+        citation can be checked against."""
+        self.assertEqual(routeless_leads(self.text), ROUTELESS_CLAUSES)
+
+    def test_the_residue_is_pinned_to_its_single_entry(self):
+        """The set cannot grow quietly alongside a second routeless clause."""
+        self.assertEqual(ROUTELESS_CLAUSES, frozenset({"A bug fix with an unclear cause."}))
+
+    def test_no_clause_outside_the_promotions_resolves_to_two_routes(self):
+        """A clause with two bold routes lets a case cite the wrong half and
+        still agree with it. Only a promotion names more than one route, and it
+        names them as an origin and its targets, which a transition case must
+        match separately."""
+        for clause, section in self.clauses.items():
+            if section != PROMOTIONS_SECTION:
+                with self.subTest(section=section, clause=clause):
+                    self.assertLessEqual(len(bold_routes(clause)), 1)
 
     def test_a_citation_names_the_citing_cases_route(self):
         """Decision order, routes and ambiguous cases: the case's route must be

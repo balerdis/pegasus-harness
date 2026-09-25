@@ -29,7 +29,14 @@ import re
 import unittest
 from pathlib import Path
 
-from test_flow_routing import sdd_clauses, sdd_sentences
+from test_flow_routing import (
+    SDD_MEETS_FTD_STEMS,
+    _DECISION_STEM,
+    sdd_blocks,
+    sdd_clauses,
+    sdd_meets_a_decision,
+    sdd_meets_ftd_stems,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTENT = ROOT / "src" / "pegasus" / "content"
@@ -65,11 +72,6 @@ RETIRED_SDD_SIGNALS = (
     "across several sessions",
     "A written record has to survive the session",
 )
-
-#: Stems no sentence that sends work to SDD may carry, in any decision section:
-#: a trade-off, crossing sessions, and a record that outlives the session are
-#: FTD under v7.
-FTD_NOT_SDD_STEMS = ("trade-off", "session", "record", "outliv", "surviv")
 
 #: Word count, not line count. A line ceiling was proven defeatable in this
 #: repository: hand-wrapping a bullet across three physical lines and then
@@ -245,33 +247,30 @@ class FlowApplicabilityTest(unittest.TestCase):
             with self.subTest(signal=signal):
                 self.assertNotIn(signal, collapsed)
 
-    def test_the_sdd_sentences_include_the_sdd_route_and_steps(self):
-        """Guards the two checks below from passing vacuously: whatever reads
-        the SDD-sending sentences must at least see the SDD route and the SDD
-        steps of the decision order."""
+    def test_the_scan_sees_the_sdd_route_and_steps(self):
+        """Guards the two checks below from passing vacuously: the blocks they
+        scan must at least include the SDD route and the SDD steps of the
+        decision order."""
         text = APPLICABILITY.read_text(encoding="utf-8")
         clauses = sdd_clauses(text)
         self.assertGreaterEqual(len(clauses), 3, clauses)
-        self.assertLessEqual(set(clauses), set(sdd_sentences(text)))
+        self.assertLessEqual(set(clauses), set(sdd_blocks(text)))
 
-    def test_no_decision_section_sends_a_trade_off_a_session_or_a_record_to_sdd(self):
-        """Every sentence that sends work to SDD -- in the decision order, the
-        routes, the ambiguous cases or the promotions, read from the file --
-        names none of what v7 moved to FTD."""
-        for sentence in sdd_sentences(APPLICABILITY.read_text(encoding="utf-8")):
-            for stem in FTD_NOT_SDD_STEMS:
-                with self.subTest(sentence=sentence, stem=stem):
-                    self.assertNotIn(stem, sentence.lower())
+    def test_sdd_meets_what_v7_moved_to_ftd_only_in_the_pinned_blocks(self):
+        """Closed world, not a negation classifier: in the four decision
+        sections, the blocks where SDD co-occurs with a trade-off, a decision,
+        a session, a record, durability or continuity must be exactly the
+        pinned ones, as written. "It is not optional: a trade-off is SDD" fails
+        here however it is negated, phrased or split."""
+        found = sdd_meets_ftd_stems(APPLICABILITY.read_text(encoding="utf-8"))
+        self.assertEqual(found, set(SDD_MEETS_FTD_STEMS))
 
     def test_a_decision_goes_to_sdd_only_when_someone_absent_reviews_it(self):
-        """A decision alone is FTD: a sentence that sends work to SDD, in any
-        decision section, may name one only as something reviewed before code
-        by someone absent from the implementation."""
-        for sentence in sdd_sentences(APPLICABILITY.read_text(encoding="utf-8")):
-            if "decision" in sentence.lower():
-                with self.subTest(sentence=sentence):
-                    self.assertIn("absent", sentence.lower())
-                    self.assertIn("review", sentence.lower())
+        """The same closed world, seen from decisions: SDD meets a decision only
+        in the pinned blocks -- the reviewable-contract definition, and the
+        blocks that send a decision alone to FTD."""
+        found = sdd_meets_a_decision(APPLICABILITY.read_text(encoding="utf-8"))
+        self.assertEqual(found, {block for block in SDD_MEETS_FTD_STEMS if _DECISION_STEM.search(block)})
 
     def test_the_orchestrator_carries_the_compact_if(self):
         text = ORCHESTRATOR.read_text(encoding="utf-8")

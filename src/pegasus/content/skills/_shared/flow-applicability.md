@@ -70,7 +70,8 @@ Resolve them by what the OUTPUT has to be and who must review it before code, ne
   routes by its own facts.
 - **Large but already decided.** A dependency upgrade with known fallout, a mechanical migration, a
   cross-cutting rename or a refactor whose behaviour the tests already state is **FTD** however many
-  files it touches; one trivial operation repeated across many files stays **L0**.
+  files it touches.
+- **One trivial operation across many files** stays **L0**.
 
 Genuinely undecidable? Ask in one line, naming both routes and what each costs; never pick the heavier
 one silently because it is safer to be wrong about — a cycle nobody wanted is a real cost paid by a
