@@ -110,16 +110,60 @@ READER_SUBJECT_RESOLUTION = re.compile(
 #: A marker's spelling wherever the shipped tree writes it, counted per file.
 #: Closed world: a new mention anywhere -- a template, a sentence, a stray
 #: line -- changes a count and fails until the pin is edited on purpose.
-MARKER_MENTION = re.compile(r"Strict TDD Mode(?:\*\*)?\s*:\s*\**\s*\{?(?:enabled|disabled)", re.IGNORECASE)
+MARKER_MENTION = re.compile(r"Strict TDD Mode(?:\*\*)?\s*:\s*\**\s*[{<]?(?:enabled|disabled)", re.IGNORECASE)
 MARKER_MENTIONS = {
     CRAFT: 3,
     SKILLS / "sdd-verify" / "SKILL.md": 2,
     SKILLS / "sdd-init" / "references" / "init-details.md": 1,
+    # d5: the brief line, written as a template value -- never a bare marker.
+    SKILLS / "_shared" / "sdd-session-preflight.md": 1,
+    SKILLS / "_shared" / "ftd-procedure.md": 1,
 }
 #: A line that IS a marker, once list markers, quotes, backticks and bold are
 #: peeled off. Pegasus never switches the mode on or off for the person, so no
 #: shipped file may carry one.
 BARE_MARKER = re.compile(r"^\**strict tdd mode\**\s*:\s*\**\s*(?:enabled|disabled)\**$", re.IGNORECASE)
+
+#: d5: the mode is resolved once per session and travels in the brief. The
+#: sentences that say so, pinned as written, and the files that must say
+#: nothing else about Strict TDD. The subject is matched by its register, not
+#: one spelling: "Strict TDD", "TDD", "test-driven", "test first", "red-green".
+BRIEF_TEMPLATE = "`Strict TDD Mode: <enabled|disabled>`"
+PREFLIGHT = SKILLS / "_shared" / "sdd-session-preflight.md"
+PROCEDURE = SKILLS / "_shared" / "ftd-procedure.md"
+KING = CONTENT / "agents" / "king-pegasus.md"
+ORCHESTRATOR = CONTENT / "agents" / "pegasus-orchestrator.md"
+PREFLIGHT_BRIEF = (
+    'Resolve Strict TDD Mode once per session with "Resolving Strict TDD Mode" in `_shared/implementation-craft.md`, '
+    "and pass it to every implementation launch as `Strict TDD Mode: <enabled|disabled>`, filled with the value "
+    "resolved."
+)
+PROCEDURE_BRIEF = (
+    'Whoever coordinates the FTD resolves Strict TDD Mode once per session with "Resolving Strict TDD Mode" in '
+    "`_shared/implementation-craft.md`, and sends it in every implementation brief as "
+    "`Strict TDD Mode: <enabled|disabled>`, filled with the value resolved."
+)
+KING_TDD = (
+    "Resolve Strict TDD Mode once per session with `{{skills_root}}/_shared/implementation-craft.md` before "
+    "writing code; if it is missing or unreadable, judge it yourself and say so."
+)
+TDD_SUBJECT = re.compile(
+    r"strict[ _-]?tdd|\btdd\b|test[- ]driven|tests? first|test-first|red[- ]green|red\s*→\s*green"
+    # Review found "always write tests before code" missing: the mode can be
+    # overridden without naming it, by describing its discipline.
+    r"|tests? before|before (?:writing )?(?:the )?code|failing test|\brgr\b|testing discipline"
+    r"|\bred\b[^.]{0,40}\bgreen\b|write (?:the |a )?tests?\b",
+    re.IGNORECASE,
+)
+#: What each file may say about Strict TDD, and nothing more. The orchestrator
+#: says nothing: in L0 it loads neither the preflight nor the procedure, and
+#: the implementer resolves the mode with the same rule.
+TDD_UNITS = {
+    PREFLIGHT: frozenset({PREFLIGHT_BRIEF}),
+    PROCEDURE: frozenset({PROCEDURE_BRIEF}),
+    KING: frozenset({KING_TDD}),
+    ORCHESTRATOR: frozenset(),
+}
 
 #: The phrase the rule replaced, which nothing ever sent.
 DEAD_TDD_PHRASE = "STRICT TDD MODE IS ACTIVE"
@@ -351,6 +395,45 @@ class StrictTddResolutionTest(unittest.TestCase):
         details = (SKILLS / "sdd-init" / "references" / "init-details.md").read_text(encoding="utf-8")
         self.assertIn("`config.yaml` should include concise context, `strict_tdd`", details)
         self.assertIn("mem_save title/topic_key: sdd/{project}/testing-capabilities", details)
+
+
+class StrictTddTravelsInTheBriefTest(unittest.TestCase):
+    """Slice (d5): resolved once per session, sent in every implementation
+    brief -- by the preflight in SDD and by the procedure in FTD -- and
+    resolved by the teaching voice in its own session. Closed world: the
+    pinned sentences, each exactly once, and nothing else on the subject in
+    those files."""
+
+    def flat(self, path: Path) -> str:
+        return " ".join(path.read_text(encoding="utf-8").split())
+
+    def test_the_preflight_sends_the_mode_beside_the_artifact_store(self):
+        flat = self.flat(PREFLIGHT)
+        self.assertEqual(flat.count(PREFLIGHT_BRIEF), 1)
+        store = flat.index("Pass the resolved value to every sub-agent launch as `Artifact store mode`")
+        self.assertLess(store, flat.index(PREFLIGHT_BRIEF))
+        self.assertLess(flat.index(PREFLIGHT_BRIEF), flat.index("### 3. Chained PR strategy"))
+
+    def test_the_procedure_sends_the_mode_in_every_implementation_brief(self):
+        self.assertEqual(self.flat(PROCEDURE).count(PROCEDURE_BRIEF), 1)
+
+    def test_king_resolves_the_mode_in_its_own_session_through_the_craft(self):
+        rules = KING.read_text(encoding="utf-8").split("\n## Rules\n", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(" ".join(rules.split()).count(KING_TDD), 1)
+        self.assertIn("{{skills_root}}/_shared/implementation-craft.md", KING_TDD)
+        self.assertNotIn("ftd-procedure.md", KING.read_text(encoding="utf-8"))
+
+    def test_the_brief_carries_the_marker_spelling_as_a_template(self):
+        for sentence in (PREFLIGHT_BRIEF, PROCEDURE_BRIEF):
+            with self.subTest(sentence=sentence[:40]):
+                self.assertIn(BRIEF_TEMPLATE, sentence)
+                self.assertIn(RULE_POINTER, sentence)
+
+    def test_nothing_else_in_those_files_speaks_of_strict_tdd(self):
+        for path, pinned in TDD_UNITS.items():
+            with self.subTest(file=path.relative_to(CONTENT).as_posix()):
+                found = {unit for unit in units_of(path.read_text(encoding="utf-8")) if TDD_SUBJECT.search(unit)}
+                self.assertEqual(found, set(pinned))
 
 
 class CraftOwnsNoPhaseEnvelopeTest(unittest.TestCase):

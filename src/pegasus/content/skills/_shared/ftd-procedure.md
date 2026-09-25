@@ -18,6 +18,10 @@ no SDD pipeline and no `sdd-verify`: delivery, Git and isolation follow the exis
 Ask only when the answer changes the scope, the acceptance criteria, a risk, a dependency or the
 evidence, never as a ritual. Then confirm the scope once, and it becomes the record's Scope.
 
+Whoever coordinates the FTD resolves Strict TDD Mode once per session with "Resolving Strict TDD
+Mode" in `_shared/implementation-craft.md`, and sends it in every implementation brief as
+`Strict TDD Mode: <enabled|disabled>`, filled with the value resolved.
+
 ## The record
 
 One record per change, at `docs/ftd/<YYYY-MM-DD>-<slug>.md` in the project. Write it without

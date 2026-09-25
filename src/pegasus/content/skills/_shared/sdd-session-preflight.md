@@ -58,6 +58,10 @@ fine -- offering a choice without its default is what leaves a user stuck.
 Pass the resolved value to every sub-agent launch as `Artifact store mode`. Never hardcode
 a store in a phase prompt -- read it from the cached preflight.
 
+Resolve Strict TDD Mode once per session with "Resolving Strict TDD Mode" in
+`_shared/implementation-craft.md`, and pass it to every implementation launch as
+`Strict TDD Mode: <enabled|disabled>`, filled with the value resolved.
+
 ### 3. Chained PR strategy
 
 **Preflight resolves the delivery strategy only.**
