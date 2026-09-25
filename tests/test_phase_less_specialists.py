@@ -36,6 +36,35 @@ from pegasus.adapters.opencode import render as render_module
 from pegasus.core import content as content_module
 from pegasus.core.content import AgentMode
 from pegasus.core.types import ConfigKeyArtifact, Environment
+from test_orchestrator_routing import READINESS_STEM, RECORD_STEM, sentences_on
+
+#: Slice (c): inside an FTD, whoever coordinates keeps the record and a
+#: specialist returns evidence. Pinned as written, in `## Result identity`.
+SPECIALIST_RECORD = "Inside an FTD, whoever coordinates it keeps the record; you return evidence for it."
+#: The writers this applies to. `pegasus-verifier` is left out on purpose: it
+#: never writes and does not change in slice (c).
+RECORD_RETURNERS = ("pegasus-implementer", "pegasus-general")
+#: Every sentence of each writer on the readiness subject, as written, all of
+#: them from before slice (c). Closed world: nothing may join them unpinned.
+SPECIALIST_READINESS_SENTENCES = {
+    "pegasus-implementer": frozenset(
+        {
+            "Read before you write, and prove the change works before you call it done.",
+            "The evidence you get back is evidence, never a sign-off: no agent you can reach has the standing to "
+            "call a change ready, and neither do you.",
+            "Not a narration of the diff, and not a claim about the change being ready.",
+        }
+    ),
+    "pegasus-general": frozenset(
+        {
+            "This is deliberate — the ten SDD phase agents each own a phase and return a phase-shaped result "
+            "(`sdd-explore` an `## Exploration: {topic}`, `sdd-verify` a `## Verification Report`), so a fan-out "
+            "of phase-agent copies would produce several competing phase reports, `sdd-verify` copies included, "
+            "each declaring the same change ready to archive.",
+        }
+    ),
+}
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTENT = ROOT / "src" / "pegasus" / "content"
@@ -502,6 +531,23 @@ class WhatEachOneReturnsTest(unittest.TestCase):
     def test_the_explorer_returns_a_finding_and_the_implementer_what_changed(self):
         self.assertIn("finding", body("pegasus-explorer").lower())
         self.assertIn("what changed", body("pegasus-implementer").lower())
+
+    def test_a_writer_leaves_the_record_to_whoever_coordinates_and_returns_evidence(self):
+        for name in RECORD_RETURNERS:
+            with self.subTest(agent=name):
+                identity = " ".join(body(name).split("## Result identity", 1)[1].split())
+                self.assertIn(SPECIALIST_RECORD, identity)
+                self.assertEqual(" ".join(whole(name).split()).count(SPECIALIST_RECORD), 1)
+
+    def test_no_other_sentence_of_a_writer_speaks_of_the_record(self):
+        for name in RECORD_RETURNERS:
+            with self.subTest(agent=name):
+                self.assertEqual(sentences_on(whole(name), RECORD_STEM), {SPECIALIST_RECORD})
+
+    def test_no_new_readiness_sentence_joins_a_writer(self):
+        for name in RECORD_RETURNERS:
+            with self.subTest(agent=name):
+                self.assertEqual(sentences_on(whole(name), READINESS_STEM), set(SPECIALIST_READINESS_SENTENCES[name]))
 
     def test_each_contract_is_advertised_where_a_caller_reads_it_too(self):
         """The one place a contract legitimately lives twice.

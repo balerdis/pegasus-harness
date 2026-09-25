@@ -29,7 +29,16 @@ from pathlib import Path
 
 from pegasus.core import content as content_module
 from test_flow_routing import declared_facts, flow_text
-from test_orchestrator_routing import APPLICABILITY_NEEDLE
+from test_orchestrator_routing import APPLICABILITY_NEEDLE, READINESS_STEM, RECORD_STEM, sentences_on
+
+#: Slice (c): the teaching voice's readiness and record sentences, pinned as
+#: written. Closed world: each is there exactly once, in its rule, and no other
+#: sentence of the persona touches readiness or the record.
+KING_READINESS = (
+    "Readiness is yours to declare, only from what you observed; since you wrote the change, say so instead "
+    "of presenting it as independent verification."
+)
+KING_RECORD = "On FTD you keep the record yourself; that file leads you to how it is kept."
 
 ROOT = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content"
 BASELINE = ROOT / "system-prompt" / "AGENTS.md"
@@ -289,6 +298,30 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
         # `test_content.test_the_teaching_voice_declares_every_server_this_release_ships`
         # asserts by deriving the set from the content tree. A second hardcoded
         # copy would be one more place to go stale when a server is added.
+
+    def rule(self, needle: str) -> str:
+        rules = self.text.split("\n## Rules\n", 1)[1].split("\n## ", 1)[0]
+        bullets = [" ".join(line[2:].split()) for line in rules.split("\n") if line.startswith("- ")]
+        found = [bullet for bullet in bullets if needle in bullet]
+        self.assertEqual(len(found), 1, f"one rule must carry {needle!r}")
+        return found[0]
+
+    def test_readiness_sits_beside_close_the_loop(self):
+        self.assertIn(KING_READINESS, self.rule("Close the loop you open"))
+        self.assertEqual(" ".join(self.text.split()).count(KING_READINESS), 1)
+
+    def test_it_keeps_the_ftd_record_itself_through_the_ladder(self):
+        """In the rule that names the ladder, the only file the voice reaches
+        the procedure through: the procedure itself is never named here."""
+        self.assertIn(KING_RECORD, self.rule("{{skills_root}}/_shared/flow-applicability.md"))
+        self.assertEqual(" ".join(self.text.split()).count(KING_RECORD), 1)
+        self.assertNotIn("ftd-procedure.md", self.text)
+
+    def test_no_other_sentence_speaks_of_readiness(self):
+        self.assertEqual(sentences_on(self.text, READINESS_STEM), {KING_READINESS})
+
+    def test_no_other_sentence_speaks_of_the_record(self):
+        self.assertEqual(sentences_on(self.text, RECORD_STEM), {KING_RECORD})
 
     def test_the_persona_carries_the_voice_sections(self):
         """A set, not a sequence: `## Persona Scope` promises these exist."""

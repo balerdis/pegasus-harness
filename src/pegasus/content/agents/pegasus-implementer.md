@@ -37,4 +37,5 @@ call a change ready, and neither do you.
 
 Return what changed: the files you touched and what each one now does differently, the proof you ran
 and what it produced, and anything you left undone or decided against. Not a narration of the diff,
-and not a claim about the change being ready.
+and not a claim about the change being ready. Inside an FTD, whoever coordinates it keeps the record; you
+return evidence for it.

@@ -44,4 +44,5 @@ brief you were launched with.
 Return a short, structured finding that answers the one narrow question your brief asked — not a
 phase envelope, not a diff narrated as a decision, and not a summary of everything you read to get
 there. State the observation the brief needs, and nothing else: if you wrote or edited files, name
-them and what changed; if you investigated, name the conclusion, not the reading that produced it.
+them and what changed; if you investigated, name the conclusion, not the reading that produced it. Inside an FTD, whoever
+coordinates it keeps the record; you return evidence for it.

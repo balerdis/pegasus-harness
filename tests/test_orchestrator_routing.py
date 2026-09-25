@@ -120,6 +120,69 @@ FLOW_APPLICABILITY_WORD_CEILING = 1061
 #: own session, with that pointer's fail-open. 715 + 43 + 25 = 783.
 KING_PEGASUS_WORD_CEILING = 783
 
+#: Readiness, by stem -- a claim that something is ready, done or signed off,
+#: in any wording: "ready", "readiness", "declares", "sign-off", "approved",
+#: "verdict", "done", "finished", "complete", "accepted", "good to go",
+#: "green light". A stem list is finite, and that is its declared residue:
+#: "ship" is left out because `pegasus-general` uses it for something else
+#: ("CLIs ship their own built-in sub-agent types").
+READINESS_STEM = re.compile(
+    r"\bready\b|readiness|declar|\bsign(?:s|ed|ing)?\b|sign-?off|approv|verdict|\bdone\b|finish"
+    r"|\bcomplete(?:d|s)?\b|\bcompletion\b|accept|good to go|green light"
+    # Review found "shippable" missing; the rest of this line is the same
+    # register a person reaches for when calling work finished.
+    r"|shippable|ship it|\blgtm\b|merge-?able|merge-ready|wrap(?:s|ped|ping)? (?:it )?up|close(?:s|d)? (?:it )?out",
+    re.IGNORECASE,
+)
+#: The FTD record, by stem, including the words it could be called instead.
+RECORD_STEM = re.compile(r"record|\blog\b|checklist|docs/ftd", re.IGNORECASE)
+
+#: The permitted sentences of slice (c), pinned as written. Closed world: the
+#: pinned sentence must be there exactly once, and no other sentence of the
+#: same file may touch the same subject -- an inverted, passive, doubly negated
+#: or reworded sentence fails, and a legitimate rewording is a deliberate edit
+#: of the pin.
+WARMTH_SDD = (
+    "In SDD, until `sdd-verify` has spoken, the friendliest honest sentence available to you is the one "
+    "naming what is still missing."
+)
+READINESS_OUTSIDE_SDD = (
+    "In L0 and FTD, readiness is yours to declare as whoever asked for the work, from observed evidence; "
+    "if you wrote it yourself, say so."
+)
+#: Every sentence of the orchestrator on the readiness subject, as written.
+#: The first four predate slice (c); `ReadinessAuthorityScopeTest` still owns
+#: the claim they carry, untouched.
+ORCHESTRATOR_READINESS_SENTENCES = frozenset(
+    {
+        "For every executable or configuration change delivered through SDD, delegate a fresh `sdd-verify` "
+        "before declaring the change ready to archive.",
+        "`sdd-verify` is Pegasus's sole authority for declaring that an SDD change is ready to archive.",
+        "A sub-agent's claim is evidence, not a verdict.",
+        "Read it with the same suspicion you would read a claim from anyone else: a phase that reports done "
+        "while showing no runtime proof has reported an intention, and saying so is your job rather than an "
+        "accusation.",
+        "Warmth is never a readiness claim.",
+        READINESS_OUTSIDE_SDD,
+    }
+)
+
+
+def sentences_of(text: str) -> list[str]:
+    """Every sentence of `text`, whitespace collapsed, a leading list marker
+    stripped."""
+    found = []
+    for part in re.split(r"(?<=[.!?])\s+", " ".join(text.split())):
+        part = re.sub(r"^(?:- |\d+\. )", "", part).strip()
+        if part:
+            found.append(part)
+    return found
+
+
+def sentences_on(text: str, stem: re.Pattern[str]) -> set[str]:
+    return {sentence for sentence in sentences_of(text) if stem.search(sentence)}
+
+
 #: The bodies a word ceiling guards, each with the ceiling it answers to.
 CEILINGED_BODIES = (
     (ORCHESTRATOR, ORCHESTRATOR_WORD_CEILING),
@@ -298,6 +361,35 @@ class FlowApplicabilityTest(unittest.TestCase):
         for name in ("pegasus-explorer", "pegasus-verifier", "pegasus-implementer"):
             with self.subTest(agent=name):
                 self.assertIn(name, prose)
+
+
+class ReadinessOutsideSddTest(unittest.TestCase):
+    """Slice (c), option (a): outside SDD, readiness is declared by whoever
+    asked, from observed evidence, and signing what you wrote is said as such;
+    "until `sdd-verify` has spoken" is scoped to SDD in its own sentence.
+
+    Closed world, not a negation classifier: the permitted sentences are pinned
+    as written, and every sentence of the orchestrator that touches readiness
+    or the FTD record must be one of them."""
+
+    def setUp(self):
+        self.text = ORCHESTRATOR.read_text(encoding="utf-8")
+        self.flat = " ".join(self.text.split())
+
+    def test_readiness_outside_sdd_is_declared_by_whoever_asked(self):
+        self.assertEqual(self.flat.count(READINESS_OUTSIDE_SDD), 1)
+
+    def test_waiting_for_sdd_verify_is_scoped_to_sdd_in_its_own_sentence(self):
+        self.assertEqual(self.flat.count(WARMTH_SDD), 1)
+        self.assertEqual(self.flat.count("until `sdd-verify` has spoken"), 1)
+
+    def test_no_other_sentence_speaks_of_readiness(self):
+        self.assertEqual(sentences_on(self.text, READINESS_STEM), set(ORCHESTRATOR_READINESS_SENTENCES))
+
+    def test_the_orchestrator_says_nothing_about_who_keeps_the_record(self):
+        """That rule lives in the procedure and in the specialists; a sentence
+        here would be a second, unpinned owner."""
+        self.assertEqual(sentences_on(self.text, RECORD_STEM), set())
 
 
 class PreflightStaysStrictTest(unittest.TestCase):
