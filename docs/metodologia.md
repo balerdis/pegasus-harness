@@ -61,13 +61,17 @@ Antes de iniciar una fase SDD, el orquestador necesita el pre-chequeo de sesión
 
 ## TDD: cuándo aplica
 
-`sdd-init` detecta el runner y guarda la capacidad de testing. Si Strict TDD está activo y hay runner, apply trabaja con esta secuencia por tarea:
+Strict TDD ya no depende de que `sdd-init` haya corrido. El modo se resuelve una vez por sesión con una sola regla, la de [implementation-craft.md](../src/pegasus/content/skills/_shared/implementation-craft.md), y viaja en el brief de cada implementación, en SDD y en FTD; en L0, el implementer lo resuelve con esa misma regla.
+
+Lo primero que mira esa regla es un marker: una línea cuyo contenido entero es `Strict TDD Mode: enabled` o `Strict TDD Mode: disabled`, también con el rótulo en negrita. Vive en las instrucciones que el CLI carga en la sesión, las del proyecto o las de la persona, y Pegasus nunca la escribe. Una línea en las instrucciones de la persona vale para todos sus proyectos; para apagarlo en uno, se agrega `Strict TDD Mode: disabled` a las instrucciones de ese proyecto, que ganan. Sin marker, la regla sigue con el flag que escribió `sdd-init` y, si no hay nada escrito, con la presencia de un runner.
+
+Si Strict TDD está activo, la implementación trabaja con esta secuencia por tarea:
 
 ```text
 RED: prueba escrita y fallando → GREEN: implementación que pasa → REFACTOR: limpieza con la prueba en verde
 ```
 
-La evidencia de ese ciclo queda registrada. Si Strict TDD no está activo, igual hay evidencia mínima por unidad: test enfocado, escenario de runtime cuando exista una frontera real, y límite de rollback. Ninguna de las dos modalidades autoriza marcar una tarea completa con checks fallando.
+La evidencia de ese ciclo queda registrada. Un cambio sin comportamiento que probar —un typo en la documentación— se registra como `N/A: no behavior changed`, nunca como un fallo del gate. Si Strict TDD no está activo, igual hay evidencia mínima por unidad: test enfocado, escenario de runtime cuando exista una frontera real, y límite de rollback. Ninguna de las dos modalidades autoriza marcar una tarea completa con checks fallando.
 
 ## OpenSpec y Engram: dónde queda el contexto
 
