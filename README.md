@@ -93,9 +93,9 @@ Los dos guardan su configuración en raíces distintas: OpenCode en `~/.config/o
 
 ## Cómo encaja el flujo
 
-La versión corta es: primero entender, después especificar, implementar por unidades chicas y probar el resultado. [docs/metodologia.md](docs/metodologia.md) explica las responsabilidades de SDD, TDD, OpenSpec, Engram y ChainPR sin esconder los límites operativos.
+La versión corta es: primero entender el pedido y después elegir la ruta. Una consulta se responde sin tocar nada, un cambio trivial y ya entendido se hace directo, y la mayoría de los cambios comunes van por FTD, con un record en `docs/ftd/` y sin tener que pedirlo. SDD se propone sólo cuando hay que fijar antes del código un contrato o una decisión que va a revisar alguien que no está en la implementación, o una spec contra la que otros van a construir; el tamaño del cambio no decide ninguna ruta. [docs/metodologia.md](docs/metodologia.md) explica las rutas y las responsabilidades de SDD, FTD, TDD, OpenSpec, Engram y ChainPR sin esconder los límites operativos.
 
-Para cambios ejecutables o de configuración, `sdd-verify` es la autoridad final de readiness. CBM ayuda a descubrir estructura y callers; no reemplaza una prueba de comportamiento que pasó.
+En SDD, `sdd-verify` es la única autoridad para declarar listo para archivar un cambio. Fuera de SDD, el listo lo declara quien pidió el trabajo, a partir de la evidencia observada, y si lo escribió él mismo lo dice. CBM ayuda a descubrir estructura y callers; no reemplaza una prueba de comportamiento que pasó.
 
 ## Prerrequisitos por CLI
 
