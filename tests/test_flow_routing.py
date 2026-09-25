@@ -37,6 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FLOW_APPLICABILITY = ROOT / "src" / "pegasus" / "content" / "skills" / "_shared" / "flow-applicability.md"
 CORPUS = ROOT / "tests" / "fixtures" / "routing-corpus" / "cases.json"
+EXPLORER = ROOT / "src" / "pegasus" / "content" / "agents" / "pegasus-explorer.md"
 
 ROUTES = ("query", "l0", "ftd", "sdd")
 #: The order a promotion climbs. A query sits below every change route: the
@@ -222,6 +223,43 @@ def sdd_sentences(text: str) -> list[str]:
                 elif _SDD.search(sentence) and not _NEGATION.search(sentence):
                     found.append(subject + sentence)
     return found
+
+
+#: A routing-fact name as prose writes it: a backticked snake_case identifier.
+_FACT_NAME = re.compile(r"`([a-z]+(?:_[a-z]+)+)`")
+#: The one clause in the explorer's whole file allowed to mention choosing a
+#: route, pinned as written. Closed world: every OTHER sentence of the file
+#: must not mention route choice at all, in any voice or form.
+FORBIDDING_CLAUSE = "never choose the route yourself: that decision is the caller's"
+#: The one clause allowed to speak of returning the facts, pinned the same way.
+RETURNING_CLAUSE = "When the brief asks for routing facts, return each one"
+
+#: A route, as a noun or a verb ("route", "routes", "routed", "routing").
+_ROUTE_STEM = re.compile(r"\brout(?:e|es|ed|ing)\b", re.IGNORECASE)
+#: Choosing, matched by stem so no inflection or voice slips past: "chosen",
+#: "chose", "picked", "decides", "decision", "selection", "elected".
+_CHOICE_STEM = re.compile(r"choos|chose|pick|decid|decis|select|elect", re.IGNORECASE)
+#: Routing used as a verb on the work itself: "route it", "route the request".
+_ROUTE_AS_VERB = re.compile(
+    r"\brout(?:e|es|ed|ing)\s+(?:it|them|this|that|the\s+(?:request|work|brief|change))\b", re.IGNORECASE
+)
+_FACT_STEM = re.compile(r"\bfacts?\b", re.IGNORECASE)
+#: Anything done with the facts, returning or withholding them, by stem.
+_HANDLING_STEM = re.compile(r"return|report|give|hand|send|withh|omit|skip|hold|keep|leav|hid|conceal|drop", re.IGNORECASE)
+
+
+def explorer_text() -> str:
+    """The explorer's whole file, whitespace collapsed -- front matter included."""
+    return " ".join(EXPLORER.read_text(encoding="utf-8").split())
+
+
+def split_around(text: str, clause: str) -> tuple[list[str], list[str]]:
+    """`(host remainders, other sentences)`: the sentence holding the pinned
+    `clause`, with the clause cut out, and every other sentence of `text`."""
+    hosts, others = [], []
+    for sentence in (part for part in _SENTENCE_END.split(text) if part.strip()):
+        (hosts if clause in sentence else others).append(sentence.replace(clause, " "))
+    return hosts, others
 
 
 def corpus() -> dict:
@@ -479,6 +517,109 @@ class FactsContractTest(FlowApplicabilityCase):
     def test_every_route_has_its_own_clause(self):
         leads = {_FIRST_BOLD.match(item).group(1).lower() for item in list_items(sections(self.text)[ROUTES_SECTION])}
         self.assertEqual(leads, set(ROUTES))
+
+
+class ExplorerReturnsRoutingFactsTest(unittest.TestCase):
+    """The explorer -> orchestrator half of the routing-facts contract.
+
+    When a brief asks for routing facts, `pegasus-explorer` returns exactly the
+    facts `## Routing facts` declares -- the set is read from
+    `flow-applicability.md`, never retyped -- each as true or false with its
+    evidence, and never the route: choosing it is the caller's.
+
+    Closed world, because every open-world version -- "each mention of choosing
+    the route must be negated" -- was defeated by shape: a negation merely
+    nearby, the passive voice ("the route may be chosen by you"), a double
+    negation ("no reason not to choose the route"). So two clauses are pinned
+    as written, `FORBIDDING_CLAUSE` and `RETURNING_CLAUSE`, each exactly once,
+    and no other sentence of the whole file may mention route choice, or what
+    happens to the facts, in any form: stems, not inflections. The sentence
+    that hosts a pinned clause gets no loophole either: the forbidding clause
+    must end its sentence, and nothing else in either host sentence may carry a
+    choosing or handling stem.
+
+    Fail-safe by design: any rewording fails loudly, including a harmless one.
+    "The caller decides the route, not you" added as a second sentence fails
+    too, and that is intended -- a legitimate rewording is a deliberate edit of
+    the pinned clause here, never a sentence the check has to judge.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.section = sections(EXPLORER.read_text(encoding="utf-8")).get("Result identity", "")
+        cls.collapsed = " ".join(cls.section.split())
+        cls.facts = declared_facts(flow_text())
+        cls.sentences = [part for part in _SENTENCE_END.split(cls.collapsed) if part]
+
+    def facts_sentence(self) -> str:
+        naming = [s for s in self.sentences if all(f"`{fact}`" in s for fact in self.facts)]
+        self.assertEqual(len(naming), 1, "one sentence must name every routing fact")
+        return naming[0]
+
+    def test_the_prose_names_exactly_the_declared_facts(self):
+        self.assertEqual(len(self.facts), 4)
+        self.assertEqual(set(_FACT_NAME.findall(self.section)), set(self.facts))
+
+    def test_each_fact_is_asked_as_true_or_false_with_its_evidence(self):
+        sentence = self.facts_sentence()
+        self.assertIn("true or false", sentence)
+        self.assertIn("evidence", sentence)
+
+    def test_it_applies_only_when_the_brief_asks_for_routing_facts(self):
+        """An ordinary exploration brief is unaffected: the instruction opens on
+        its condition."""
+        sentence = self.facts_sentence()
+        self.assertRegex(sentence, r"^(?:When|If)\b")
+        self.assertLess(sentence.index("routing facts"), sentence.index(f"`{self.facts[0]}`"))
+
+    def test_the_returning_clause_is_there_exactly_once(self):
+        self.assertEqual(explorer_text().count(RETURNING_CLAUSE), 1, RETURNING_CLAUSE)
+
+    def test_no_other_sentence_speaks_of_returning_or_withholding_the_facts(self):
+        hosts, others = split_around(explorer_text(), RETURNING_CLAUSE)
+        for remainder in hosts:
+            with self.subTest(host=remainder):
+                self.assertIsNone(_HANDLING_STEM.search(remainder), "the pinned clause's own sentence qualifies it")
+        for sentence in others:
+            with self.subTest(sentence=sentence):
+                self.assertFalse(
+                    _FACT_STEM.search(sentence) and _HANDLING_STEM.search(sentence),
+                    "only the pinned clause may say what happens to the facts",
+                )
+
+    def test_the_forbidding_clause_is_there_exactly_once_and_closes_its_sentence(self):
+        """Closing the sentence leaves nothing after it to qualify the clause."""
+        self.assertEqual(explorer_text().count(FORBIDDING_CLAUSE), 1, FORBIDDING_CLAUSE)
+        self.assertEqual(explorer_text().count(f"{FORBIDDING_CLAUSE}."), 1, "the clause must end its sentence")
+
+    def test_no_other_sentence_mentions_route_choice(self):
+        hosts, others = split_around(explorer_text(), FORBIDDING_CLAUSE)
+        for remainder in hosts:
+            with self.subTest(host=remainder):
+                self.assertIsNone(_CHOICE_STEM.search(remainder), "the pinned clause's own sentence qualifies it")
+                self.assertIsNone(_ROUTE_AS_VERB.search(remainder), "the pinned clause's own sentence qualifies it")
+        for sentence in others:
+            with self.subTest(sentence=sentence):
+                self.assertFalse(
+                    _ROUTE_STEM.search(sentence) and _CHOICE_STEM.search(sentence),
+                    "only the pinned clause may mention choosing a route",
+                )
+                self.assertIsNone(_ROUTE_AS_VERB.search(sentence), "routing the work, outside the pinned clause")
+
+    def test_the_word_route_lives_only_in_the_pinned_clause(self):
+        """The choosing stems above are a list, and a list forgets a synonym:
+        "settle which route applies" names no stem and passes them. The
+        explorer has no other reason to say "route" at all, so the word itself
+        is the closed world -- outside the pinned clause it does not appear,
+        and "routing" appears only as the name "routing facts". A new sentence
+        that needs the word is a deliberate edit of this test, not a slip."""
+        rest = explorer_text().replace(FORBIDDING_CLAUSE, " ")
+        self.assertEqual(re.findall(r"\broute[sd]?\b", rest, re.IGNORECASE), [])
+        self.assertEqual(re.findall(r"\brouting\b(?!\s+facts\b)", rest, re.IGNORECASE), [])
+
+    def test_the_pointer_to_the_ladder_fails_open(self):
+        self.assertIn("{{skills_root}}/_shared/flow-applicability.md", self.section)
+        self.assertIn("missing or unreadable", self.section)
 
 
 if __name__ == "__main__":

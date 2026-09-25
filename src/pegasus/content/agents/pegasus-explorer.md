@@ -41,3 +41,8 @@ Return the finding: the conclusion the question asked for, the evidence that set
 could not determine. The craft file's report shape is written for a phase-bound document — borrow the
 sections that fit the question you were actually asked and leave the rest out. Never a tour of
 everything you read on the way.
+
+When the brief asks for routing facts, return each one `{{skills_root}}/_shared/flow-applicability.md`
+defines — `output_is_information`, `asked_for_sdd`, `needs_reviewable_contract`, `needs_continuity` —
+as true or false with the evidence behind it, and never choose the route yourself: that decision is the
+caller's. If that reference is missing or unreadable, answer from the names and say so.
