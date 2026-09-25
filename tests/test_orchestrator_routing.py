@@ -14,8 +14,9 @@ Three reported frictions, one file:
 3.  Nothing in the product owned whether a request IS an SDD request, so
     everything was routed into the SDD flow and a person who wanted one thing
     looked at was asked to run `sdd-init` and resolve preflight first.
-    `_shared/sdd-applicability.md` now owns that question; the orchestrator
-    keeps the compact IF.
+    `_shared/flow-applicability.md` now owns that question -- which of four
+    routes a request takes: a query, an L0 direct change, FTD or SDD -- and
+    the orchestrator keeps the compact IF.
 
 The assertions hold FACTS rather than proxies: the old framings must be gone
 from the file that produced the behaviour (not merely balanced by new text
@@ -24,8 +25,11 @@ shipped tree, and the preflight gate must still be intact for work that IS SDD.
 """
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
+
+from test_flow_routing import sdd_clauses, sdd_sentences
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTENT = ROOT / "src" / "pegasus" / "content"
@@ -34,7 +38,7 @@ SKILLS = CONTENT / "skills"
 SHARED = SKILLS / "_shared"
 
 ORCHESTRATOR = AGENTS / "pegasus-orchestrator.md"
-APPLICABILITY = SHARED / "sdd-applicability.md"
+APPLICABILITY = SHARED / "flow-applicability.md"
 CRITERION = SHARED / "sub-delegation-criterion.md"
 
 #: Gate 1's own wording. The orchestrator must point at it, never restate it.
@@ -51,6 +55,20 @@ PERMISSION_FRAMINGS = (
 #: A distinctive instruction from the new shared file. Finding it in a second
 #: place means the compact IF swallowed the HOW it was supposed to point at.
 APPLICABILITY_NEEDLE = "Name the moment out loud, propose the switch, and resolve preflight then"
+
+#: What the retired applicability file listed as signs that work is SDD,
+#: word for word. Under v7 each of them is FTD unless a reviewable contract
+#: says otherwise, so the rename inverts them rather than keeping them.
+RETIRED_SDD_SIGNALS = (
+    "an approach worth arguing, trade-offs",
+    "across several sessions",
+    "A written record has to survive the session",
+)
+
+#: Stems no sentence that sends work to SDD may carry, in any decision section:
+#: a trade-off, crossing sessions, and a record that outlives the session are
+#: FTD under v7.
+FTD_NOT_SDD_STEMS = ("trade-off", "session", "record", "outliv", "surviv")
 
 #: Word count, not line count. A line ceiling was proven defeatable in this
 #: repository: hand-wrapping a bullet across three physical lines and then
@@ -158,7 +176,7 @@ class ThresholdReadsAsCostTest(unittest.TestCase):
         self.assertIn("inflate your own context", self.text)
 
 
-class SddApplicabilityTest(unittest.TestCase):
+class FlowApplicabilityTest(unittest.TestCase):
     def test_the_shared_file_exists_and_follows_the_house_conventions(self):
         self.assertTrue(APPLICABILITY.is_file())
         text = APPLICABILITY.read_text(encoding="utf-8")
@@ -178,17 +196,60 @@ class SddApplicabilityTest(unittest.TestCase):
 
     def test_the_shared_file_points_instead_of_restating_preflight(self):
         """Preflight's own owner keeps owning WHAT preflight is and WHEN it
-        runs; this file only decides whether the request is SDD at all."""
+        runs; this file only decides which route the request takes."""
         text = APPLICABILITY.read_text(encoding="utf-8")
         self.assertIn("_shared/sdd-session-preflight.md", text)
         self.assertNotIn("Execution mode", text)
         self.assertNotIn("Review budget", text)
 
+    def test_the_retired_sdd_signals_are_gone(self):
+        collapsed = " ".join(APPLICABILITY.read_text(encoding="utf-8").split())
+        for signal in RETIRED_SDD_SIGNALS:
+            with self.subTest(signal=signal):
+                self.assertNotIn(signal, collapsed)
+
+    def test_the_sdd_sentences_include_the_sdd_route_and_steps(self):
+        """Guards the two checks below from passing vacuously: whatever reads
+        the SDD-sending sentences must at least see the SDD route and the SDD
+        steps of the decision order."""
+        text = APPLICABILITY.read_text(encoding="utf-8")
+        clauses = sdd_clauses(text)
+        self.assertGreaterEqual(len(clauses), 3, clauses)
+        self.assertLessEqual(set(clauses), set(sdd_sentences(text)))
+
+    def test_no_decision_section_sends_a_trade_off_a_session_or_a_record_to_sdd(self):
+        """Every sentence that sends work to SDD -- in the decision order, the
+        routes, the ambiguous cases or the promotions, read from the file --
+        names none of what v7 moved to FTD."""
+        for sentence in sdd_sentences(APPLICABILITY.read_text(encoding="utf-8")):
+            for stem in FTD_NOT_SDD_STEMS:
+                with self.subTest(sentence=sentence, stem=stem):
+                    self.assertNotIn(stem, sentence.lower())
+
+    def test_a_decision_goes_to_sdd_only_when_someone_absent_reviews_it(self):
+        """A decision alone is FTD: a sentence that sends work to SDD, in any
+        decision section, may name one only as something reviewed before code
+        by someone absent from the implementation."""
+        for sentence in sdd_sentences(APPLICABILITY.read_text(encoding="utf-8")):
+            if "decision" in sentence.lower():
+                with self.subTest(sentence=sentence):
+                    self.assertIn("absent", sentence.lower())
+                    self.assertIn("review", sentence.lower())
+
     def test_the_orchestrator_carries_the_compact_if(self):
         text = ORCHESTRATOR.read_text(encoding="utf-8")
-        self.assertIn("_shared/sdd-applicability.md", text)
+        self.assertIn("_shared/flow-applicability.md", text)
         lowered = text.lower()
         self.assertIn("not every request is sdd", lowered)
+
+    def test_the_orchestrator_no_longer_says_a_record_outliving_the_session_is_sdd(self):
+        collapsed = " ".join(ORCHESTRATOR.read_text(encoding="utf-8").split())
+        self.assertNotIn("a record outliving the session", collapsed)
+        for sentence in re.split(r"(?<=[.!?])\s+", collapsed):
+            if "SDD" in sentence:
+                for stem in ("outliv", "surviv"):
+                    with self.subTest(sentence=sentence, stem=stem):
+                        self.assertNotIn(stem, sentence.lower())
 
     def test_the_orchestrator_does_not_swallow_the_how(self):
         self.assertEqual(occurrences(APPLICABILITY_NEEDLE), [APPLICABILITY])

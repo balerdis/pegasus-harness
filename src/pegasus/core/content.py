@@ -85,7 +85,7 @@ def mcp_convention_path(server_id: str) -> PurePosixPath:
 _DELEGATION_CAPABILITIES_PATH = PurePosixPath("_shared") / "delegation-capabilities.md"
 """Where the generated delegation-target reference lands, relative to the skills root.
 
-Flat inside `_shared/`, the same home `exploration-craft.md`, `sdd-applicability.md`
+Flat inside `_shared/`, the same home `exploration-craft.md`, `flow-applicability.md`
 and every other lazy-loaded reference already lives in -- not a subdirectory of its
 own. Unlike a server id, which is chosen by whoever writes an MCP descriptor and could
 someday collide with a hand-authored stem, this file has exactly one name, chosen once,

@@ -559,15 +559,15 @@ class ShippedCatalogTest(unittest.TestCase):
         # 27, not 24: `agent:pegasus-explorer`, `agent:pegasus-verifier` and
         # `agent:pegasus-implementer` are their config-key entries, alongside
         # their files.
-        # 97, not 96: `_shared/sdd-applicability.md` owns the question nothing
-        # in the product owned -- whether a request is SDD work at all -- which
+        # 97, not 96: `_shared/flow-applicability.md` owns the question nothing
+        # in the product owned -- which route a request takes, SDD or not -- which
         # the orchestrator body now carries the compact IF for and points here
         # for the rest. A lazy-loaded reference is a file, never a config entry.
         # 98, not 97: `_shared/delegation-capabilities.md` is the generated
         # reference every delegating agent's body now points at instead of
         # assuming a target's tools and MCP reach -- a fifth file to join
         # `exploration-craft.md`, `verification-craft.md`,
-        # `implementation-craft.md` and `sdd-applicability.md` in that same
+        # `implementation-craft.md` and `flow-applicability.md` in that same
         # lazy-loaded home. No settings key of its own, for the same reason
         # every other reference in that list has none.
         self.assertEqual((len(files), len(keys)), (98, 27))

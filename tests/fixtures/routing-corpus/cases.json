@@ -1,0 +1,602 @@
+{
+  "not_covered": "This corpus is checked statically: each case's facts lead to its route by the decision order, each decided_by quotes a clause of _shared/flow-applicability.md, and every clause is cited. It does not prove that a model, given a real request, answers the four facts correctly; to measure that, run the requests by hand against a real model and compare the facts, outside the suite.",
+  "cases": [
+    {
+      "request": "Why does this project use SDD at all, when most of it was built with a single architecture file for progress and decisions?",
+      "facts": {
+        "output_is_information": true,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "query",
+      "decided_by": "`output_is_information` → **query**.",
+      "surface": "small"
+    },
+    {
+      "request": "Walk me through how past features were tracked in one architecture file instead of SDD, and whether that should shape a lighter lane.",
+      "facts": {
+        "output_is_information": true,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "query",
+      "decided_by": "**Query** when the output ends the work: explain, compare, investigate, audit, review, run a check, or propose without authorization to implement. It changes nothing.",
+      "surface": "small"
+    },
+    {
+      "request": "Check whether the status recorded for the pending release is still true, without changing anything.",
+      "facts": {
+        "output_is_information": true,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "query",
+      "decided_by": "**Query** when the output ends the work: explain, compare, investigate, audit, review, run a check, or propose without authorization to implement. It changes nothing.",
+      "surface": "small"
+    },
+    {
+      "request": "Does a candidate dependency really lack a published download URL, or did we only assume it?",
+      "facts": {
+        "output_is_information": true,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "query",
+      "decided_by": "`output_is_information` → **query**.",
+      "surface": "small"
+    },
+    {
+      "request": "Do the two open upstream issues blocking a permission fix show any sign of being fixed?",
+      "facts": {
+        "output_is_information": true,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "query",
+      "decided_by": "`output_is_information` → **query**.",
+      "surface": "small"
+    },
+    {
+      "request": "Did the install failure someone reported really come from a bad checksum, or from something else?",
+      "facts": {
+        "output_is_information": true,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "query",
+      "decided_by": "`output_is_information` → **query**.",
+      "surface": "small"
+    },
+    {
+      "request": "Audit every module of the core for imports that reach into an adapter and report what you find; change nothing.",
+      "facts": {
+        "output_is_information": true,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "query",
+      "decided_by": "**Query** when the output ends the work: explain, compare, investigate, audit, review, run a check, or propose without authorization to implement. It changes nothing.",
+      "surface": "large"
+    },
+    {
+      "request": "Find out why the test suite got slow and tell me what you would change; do not touch anything yet.",
+      "facts": {
+        "output_is_information": true,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "query",
+      "decided_by": "**Query** when the output ends the work: explain, compare, investigate, audit, review, run a check, or propose without authorization to implement. It changes nothing.",
+      "surface": "medium"
+    },
+    {
+      "request": "Fix the error message so the real failure reason is no longer hidden behind a long URL.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "None of the above → **L0**.",
+      "surface": "small"
+    },
+    {
+      "request": "Stop a core error formatter from depending on text that only an adapter promises to add.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "**L0** when the change is one trivial, atomic, known intervention with no decision to settle, provable with one proportionate piece of evidence. It leaves a diff, that evidence and an honest report, and no record.",
+      "surface": "small"
+    },
+    {
+      "request": "A test leaves a stale cached attribute behind for the next test; fix its teardown.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "None of the above → **L0**.",
+      "surface": "small"
+    },
+    {
+      "request": "A preflight check treats 'not installed' and 'installed but will not start' as the same case; split them.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "None of the above → **L0**.",
+      "surface": "small"
+    },
+    {
+      "request": "The CLI breaks entirely on an interpreter built without an optional terminal library; stop importing the screen module eagerly.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "**L0** when the change is one trivial, atomic, known intervention with no decision to settle, provable with one proportionate piece of evidence. It leaves a diff, that evidence and an honest report, and no record.",
+      "surface": "small"
+    },
+    {
+      "request": "The release goes out tonight: stop the installer from aborting silently under strict shell flags when a version string spans two lines.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "None of the above → **L0**.",
+      "surface": "small"
+    },
+    {
+      "request": "Reinstalling wipes the ownership journal and orphans everything already on disk; fix it.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "None of the above → **L0**.",
+      "surface": "small"
+    },
+    {
+      "request": "Uninstalling a renamed list item reports success even though nothing matching it exists.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "None of the above → **L0**.",
+      "surface": "small"
+    },
+    {
+      "request": "A safety check runs before the ownership journal loads and reports false positives; move it after the load.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "None of the above → **L0**.",
+      "surface": "small"
+    },
+    {
+      "request": "The dry run of an update undercounts already-current items compared with the real run.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "None of the above → **L0**.",
+      "surface": "small"
+    },
+    {
+      "request": "`upgrade` treats any different version as newer, so an older release silently downgrades the binary; compare versions properly.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "None of the above → **L0**.",
+      "surface": "small"
+    },
+    {
+      "request": "A shipped adapter file hardcodes the orchestrator's name instead of reading it from content.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "**L0** when the change is one trivial, atomic, known intervention with no decision to settle, provable with one proportionate piece of evidence. It leaves a diff, that evidence and an honest report, and no record.",
+      "surface": "small"
+    },
+    {
+      "request": "A safety guard only worked because a hardcoded literal matched our own name; find out why it passed and derive the name from the identity file.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "**A bug fix with an unclear cause.** Investigate before routing; once the cause is confirmed, the fix routes by its own facts.",
+      "surface": "small"
+    },
+    {
+      "request": "Update the year in the license header of every source file.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": false
+      },
+      "route": "l0",
+      "decided_by": "**Large but already decided.** A dependency upgrade with known fallout, a mechanical migration, a cross-cutting rename or a refactor whose behaviour the tests already state is **FTD** however many files it touches; one trivial operation repeated across many files stays **L0**.",
+      "surface": "large"
+    },
+    {
+      "request": "Instrument the test suite over several passes to find what really makes it slow, and fix the worst offender.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "`needs_continuity` → **FTD**.",
+      "surface": "large"
+    },
+    {
+      "request": "Publish a release end to end and write up, with evidence, which fixes came from user reports and which from audits.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**FTD** when the change is decided enough to apply, needs no reviewable contract, and does need continuity, a checklist, durable evidence or a handoff. Ask until the scope is closed, then confirm once before writing.",
+      "surface": "medium"
+    },
+    {
+      "request": "Decide how the filesystem layer tells a missing path apart from an unreadable one across a dozen call sites, then apply it.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.",
+      "surface": "large"
+    },
+    {
+      "request": "Replace a content-hash permission model with explicit snapshot and restore, deciding the retention count along the way.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.",
+      "surface": "large"
+    },
+    {
+      "request": "Decide, before any code, the three shapes a bundled dependency's distribution can take and where it lives on disk.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.",
+      "surface": "large"
+    },
+    {
+      "request": "Decide whether shipping support for a second CLI should be numbered as a major release.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.",
+      "surface": "small"
+    },
+    {
+      "request": "Decide whether a permission baseline that blocks a whole class of operations should default to allow, given its real cost and the upstream bug that exposed it.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.",
+      "surface": "medium"
+    },
+    {
+      "request": "Decide whether the per-platform installers share one script with their differences applied at build time, or each keep a full copy of it.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.",
+      "surface": "large"
+    },
+    {
+      "request": "Decide what a routing fact means, how many clarifying questions an agent may ask, and whether a verifier may ever issue a readiness verdict.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.",
+      "surface": "large"
+    },
+    {
+      "request": "Bump the dependency to its next major version and fix whatever it breaks.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**Large but already decided.** A dependency upgrade with known fallout, a mechanical migration, a cross-cutting rename or a refactor whose behaviour the tests already state is **FTD** however many files it touches; one trivial operation repeated across many files stays **L0**.",
+      "surface": "large"
+    },
+    {
+      "request": "Finish the adapter cleanup over the next few sessions, leaving a checklist the next session can pick up.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**Work that crosses sessions or leaves a record behind.** A checklist the next session picks up, or a record that outlives the session, is continuity: **FTD**.",
+      "surface": "medium"
+    },
+    {
+      "request": "The upgrade check fails on some machines; the cause is confirmed in how three modules compare versions, and each needs its own fix and evidence.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**A bug fix with an unclear cause.** Investigate before routing; once the cause is confirmed, the fix routes by its own facts.",
+      "surface": "medium"
+    },
+    {
+      "request": "Two reasonable designs for the cache came up during the migration; pick one with me, write down why, and carry on.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.",
+      "surface": "medium"
+    },
+    {
+      "request": "Open an SDD change to replace the clean-install foundation with an additive engine that never deletes a user's existing setup.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": true,
+        "needs_reviewable_contract": true,
+        "needs_continuity": true
+      },
+      "route": "sdd",
+      "decided_by": "`asked_for_sdd` → **SDD**; the explicit request is the acceptance.",
+      "surface": "large"
+    },
+    {
+      "request": "Write a spec for the release-acceptance contract and an agent-safe preflight that other release tooling will build against.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": true,
+        "needs_reviewable_contract": true,
+        "needs_continuity": true
+      },
+      "route": "sdd",
+      "decided_by": "`asked_for_sdd` → **SDD**; the explicit request is the acceptance.",
+      "surface": "large"
+    },
+    {
+      "request": "Add one optional field to the journal format that two other tools read without being part of this change.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": true,
+        "needs_continuity": false
+      },
+      "route": "sdd",
+      "decided_by": "**A small change to a contract others build against.** Two lines can still need a spec: when consumers outside the change build against them, it is **SDD**.",
+      "surface": "small"
+    },
+    {
+      "request": "Define the interface third-party adapters will implement, before any of them is written.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": true,
+        "needs_continuity": true
+      },
+      "route": "sdd",
+      "decided_by": "**SDD** when someone absent from the implementation must review a contract or a decision before code; when others build against its spec, API, authorization or data model; when others will execute its ordered units; or when it was asked for.",
+      "surface": "large"
+    },
+    {
+      "request": "Change the exit code `doctor` returns on drift; scripts written by people outside this change branch on it.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": true,
+        "needs_continuity": false
+      },
+      "route": "sdd",
+      "decided_by": "`needs_reviewable_contract` → **SDD** is proposed, and entered only on explicit acceptance.",
+      "surface": "small"
+    },
+    {
+      "request": "Split the content-format migration into ordered units that other contributors will implement without us.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": true,
+        "needs_continuity": true
+      },
+      "route": "sdd",
+      "decided_by": "`needs_reviewable_contract` → **SDD** is proposed, and entered only on explicit acceptance.",
+      "surface": "medium"
+    },
+    {
+      "request": "Investigate why the release build got slow; the findings leave a fix that spans several passes, each with its own measurement, and the person says to go ahead.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**Query → L0, FTD or SDD** when the investigation leaves an executable proposal. A query authorizes no change: ask once whether to go ahead, and the investigation becomes the new route's input.",
+      "surface": "medium",
+      "during": "query",
+      "new_fact": "needs_continuity",
+      "requires_acceptance": true
+    },
+    {
+      "request": "Backport a generic fix to the maintenance branch; once the same two failures recur on every backport, turn the ritual into a written, numbered procedure.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**L0 → FTD** when the change stops being atomic: several tasks, another session or a handoff, grouped evidence, more surface than planned, or a decision worth recording. Carry over what was done as it really happened, never as if FTD had been there from the start.",
+      "surface": "medium",
+      "during": "l0",
+      "new_fact": "needs_continuity",
+      "requires_acceptance": true
+    },
+    {
+      "request": "Fix the flaky download test; halfway through, the same race shows up in five modules and the fix will span sessions.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**L0 → FTD** when the change stops being atomic: several tasks, another session or a handoff, grouped evidence, more surface than planned, or a decision worth recording. Carry over what was done as it really happened, never as if FTD had been there from the start.",
+      "surface": "large",
+      "during": "l0",
+      "new_fact": "needs_continuity",
+      "requires_acceptance": true
+    },
+    {
+      "request": "Change the default retry count; it turns out the right value is a trade-off worth recording with its reasons.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "ftd",
+      "decided_by": "**L0 → FTD** when the change stops being atomic: several tasks, another session or a handoff, grouped evidence, more surface than planned, or a decision worth recording. Carry over what was done as it really happened, never as if FTD had been there from the start.",
+      "surface": "small",
+      "during": "l0",
+      "new_fact": "needs_continuity",
+      "requires_acceptance": true
+    },
+    {
+      "request": "Rename a field in the `doctor` report; midway it turns out tools outside this change parse that report.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": true,
+        "needs_continuity": false
+      },
+      "route": "sdd",
+      "decided_by": "**L0 → SDD** when a `needs_reviewable_contract` appears. A decision taken and landed in the same work promotes to FTD instead.",
+      "surface": "small",
+      "during": "l0",
+      "new_fact": "needs_reviewable_contract",
+      "requires_acceptance": true
+    },
+    {
+      "request": "Midway through a multi-module refactor, the change reaches the interface that third-party adapters implement.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": false,
+        "needs_reviewable_contract": true,
+        "needs_continuity": true
+      },
+      "route": "sdd",
+      "decided_by": "**FTD → SDD** when a `needs_reviewable_contract` appears or SDD, a spec or a plan is asked for. Two reasonable designs or a trade-off, on their own, do not promote: they are decided, written down, and the FTD goes on.",
+      "surface": "large",
+      "during": "ftd",
+      "new_fact": "needs_reviewable_contract",
+      "requires_acceptance": true
+    },
+    {
+      "request": "Midway through the dependency upgrade, the person asks for a spec before going on.",
+      "facts": {
+        "output_is_information": false,
+        "asked_for_sdd": true,
+        "needs_reviewable_contract": false,
+        "needs_continuity": true
+      },
+      "route": "sdd",
+      "decided_by": "**FTD → SDD** when a `needs_reviewable_contract` appears or SDD, a spec or a plan is asked for. Two reasonable designs or a trade-off, on their own, do not promote: they are decided, written down, and the FTD goes on.",
+      "surface": "large",
+      "during": "ftd",
+      "new_fact": "asked_for_sdd",
+      "requires_acceptance": false
+    }
+  ]
+}
