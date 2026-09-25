@@ -1442,6 +1442,468 @@ sobreescribe lo que la primera dejó en esa configuración compartida. Esto se d
 comportamiento conocido, no se soluciona acá — convivencia de dos productos bajo el mismo usuario no
 funciona, y no hay que dar a entender lo contrario.
 
+## v7: FTD y la escalera de rutas
+
+Hasta 6.1.2 Pegasus conoce dos maneras de trabajar: SDD, con preflight, artifacts, fases y `sdd-verify`, y todo lo demás, que el orquestador resuelve sin nombre. v7 le pone nombre a lo demás y agrega entre las dos un carril intermedio, **FTD — Fast-Track Development**: un cambio gobernado liviano, con un record durable en el proyecto y sin la cadena de fases. Esta sección nace con la fase 2 del diseño y suma el plan de la fase 3. Lo que presenta como decidido ya está decidido y no se reabre acá: los seis puntos que la fase 2 dejó pendientes se confirmaron el 24 de septiembre de 2026 y ya están en el cuerpo. Los cuatro puntos que agregó la fase 3 también quedaron aprobados ese día. El estado de cada confirmación, y lo único que sigue abierto, están al final, en [Confirmaciones y lo que sigue pendiente](#confirmaciones-y-lo-que-sigue-pendiente). El plan de tareas por archivo está en [Slices de v7 y su progreso](#slices-de-v7-y-su-progreso), quedó aprobado, y su columna *Estado* registra el avance.
+
+v7 no usa el ciclo SDD. Se lleva en esta sección, como se llevaron v4, v5 y v6 en este documento, que es la forma de trabajo que v7 formaliza como FTD.
+
+### El problema y las dos reglas de v7
+
+La tesis cabe en una línea:
+
+> **"No merece SDD" no equivale a "no merece ningún estado durable".**
+
+Hoy un pedido que no es SDD termina en una respuesta o en un diff, y nada más. Si el cambio necesita un checklist, sobrevivir a una compactación o dejar evidencia agrupada, el producto no tiene dónde ponerlo, y la única salida escrita es subir a SDD, que es justo la fricción que `_shared/sdd-applicability.md` existe para sacar. Con v7, **FTD pasa a ser el carril habitual del trabajo ordinario**, aunque la superficie sea grande, y SDD queda para lo que necesita un contrato revisable antes del código. FTD no es un SDD reducido: no usa `sdd-apply` ni `sdd-verify` fuera de sus contratos.
+
+Dos reglas gobiernan el diseño, como las dos del principio de este documento gobiernan el motor:
+
+> **1. Decidir y ejecutar son capas distintas.**
+
+Un archivo decide qué ruta toma un pedido; otro enseña a recorrer la ruta elegida. Ninguna frontera entre rutas tiene dos dueños, y nadie carga el procedimiento de una ruta que no va a recorrer.
+
+> **2. El router no debe convertirse en el manual de todos los flujos.**
+
+El cuerpo always-on del orquestador lleva sólo las pistas para saber si hace falta clasificar; la clasificación vive en un archivo que se lee cuando la ruta no es obvia, y el cómo de cada ruta en otro que se lee al recorrerla. La prueba para saber dónde va un párrafo: **¿hace falta para elegir la ruta, o sólo para recorrerla?** Lo segundo nunca va al router.
+
+### Lo que ya existe y se conserva
+
+Tres de las cuatro rutas ya están, y v7 las formaliza en vez de inventarlas. Todo lo que sigue se verificó contra `bb37b09`:
+
+| Hecho | Evidencia | Qué implica para v7 |
+|---|---|---|
+| Tres rutas existen: una pregunta va a `pegasus-explorer`, un check a `pegasus-verifier` y un cambio chico ya decidido a `pegasus-implementer`, o lo hace el orquestador dentro de su `Direct Work Threshold` | `src/pegasus/content/agents/pegasus-orchestrator.md:33-37` (*"Is this SDD at all?"*); los tres especialistas sin fase son de `009106d` | La consulta y L0 no son nuevas; lo nuevo es FTD, su record y la escalera explícita que lo rodea |
+| `_shared/sdd-applicability.md` ya es dueño del criterio: *"never by size alone"*, los casos ambiguos, el trabajo que crece hasta SDD a mitad de camino sin retroactividad (*"Do not retrofit"*) y fail-open | `sdd-applicability.md:41`, `:58`, `:63-68`; `SddApplicabilityTest` (`tests/test_orchestrator_routing.py:161`) | Se renombra y se generaliza a cuatro rutas; no se escribe desde cero |
+| El `Direct Work Threshold` decide cómo se ejecuta, no qué flujo se sigue | `pegasus-orchestrator.md:15-31` | Se conserva tal cual, y se aplica después de elegir la ruta |
+| El cuerpo del orquestador tiene 1409 palabras contra un techo de 1420 | `ORCHESTRATOR_WORD_CEILING` (`tests/test_orchestrator_routing.py:71`), `OrchestratorStaysSmallTest` (`:256`), `WordCeilingIsReformatProofTest` (`:262`) | Quedan 11 palabras: las pistas de routing salen de reescribir *"Is this SDD at all?"* texto por texto, no de agregar |
+| `king-pegasus` no tiene techo de palabras (665 hoy) y no menciona `implementation-craft.md` ni Strict TDD | `src/pegasus/content/agents/king-pegasus.md`, leído entero | Gana techo propio en el slice (a) y la resolución de Strict TDD en el (d) |
+| `sdd-applicability.md` tiene 694 palabras | `wc -w` | Es la base del techo de `flow-applicability.md` |
+| `delegation-capabilities.md` no es un archivo fuente: lo generan los adapters y aterriza instalado en `_shared/` | `adapters/opencode/render.py:547`, `adapters/claudecode/render.py:329`, `core/content.py:106-113` | No entra en el renombre ni en ningún cambio de v7 |
+| El cómo de Strict TDD ya es compartido e independiente de SDD | `_shared/implementation-craft.md:28`, que `pegasus-implementer.md:25` ya lee | Lo que falta es cómo saber si está activo: el slice (d) |
+
+**El renombre no deja huérfano el archivo viejo.** Un `_shared/*.md` es un asset del directorio `_shared`, con la ruta instalada tomada del nombre del archivo en disco (`_assets()` en `core/content.py:1934`), así que renombrarlo cambia la dirección instalada. `planner.retirements()` (`src/pegasus/core/planner.py:350`) decide por dirección —tipo, target y puntero— y no por id: `_claimed_by_address` (`:283`) sólo salva la entrada cuyo id cambió con el mismo target, que no es este caso. La entrada vieja del journal no coincide con nada del render nuevo, `retirements()` la devuelve y `retire()` (`:931`) la borra. Corre en `install` (`cli.py:957`), `update` es reinstalar, y el planner no conoce CLIs, así que vale igual para los dos adapters. `tests.test_planner.RetirementsTest` (5/5) lo cubre a nivel unidad, y es el invariante que [Verificación de la arquitectura](#verificación-de-la-arquitectura) ya exige: *"Instalar retira lo que el journal reclama y el render ya no produce"*. **Falta un test de punta a punta de este renombre en disco** —instalar un render, instalar el siguiente con el archivo renombrado y comprobar que el viejo ya no está—, y entra en el slice (a).
+
+Fuera del archivo mismo, el renombre toca cuatro referencias, ninguna fuera de `src/` y `tests/`:
+
+| Referencia | Naturaleza |
+|---|---|
+| `src/pegasus/content/agents/pegasus-orchestrator.md:37` | El puntero vivo del orquestador |
+| `src/pegasus/core/content.py:88` | Docstring que lista los archivos lazy de `_shared/` |
+| `tests/test_orchestrator_routing.py:17`, `:37`, `:189` | Un comentario, la constante `APPLICABILITY` y un `assertIn` sobre el literal; `SddApplicabilityTest` pasa a apuntar al archivo nuevo |
+| `tests/test_catalog.py:562`, `:570` | Comentarios que narran el conteo del catálogo; no afirman el nombre |
+
+El conteo del catálogo (`tests/test_catalog.py:573`: 98 archivos, 27 claves) no se mueve con el renombre y pasa a 99 archivos con `ftd-procedure.md`. Las claves no cambian: una referencia lazy es un archivo, nunca una entrada de configuración.
+
+**El "agent marker" de Strict TDD no está definido en ningún lado.** Sólo lo nombra `src/pegasus/content/skills/sdd-init/SKILL.md:54,62`, como primer escalón para resolver si el modo está activo; ningún archivo dice qué es ni dónde se escribe.
+
+### Lo que enseña el historial
+
+Pegasus se construyó casi entero como v7 propone. El proyecto empezó el 22 de julio de 2026 (`aad26ba`). Los dos únicos cambios con SDD son de v3 (`openspec/archive/v3/`) y se escribieron entre el 6 y el 8 de agosto (`853d569` a `296b943`); el 13 de agosto, días después, `8e70588` demolió el motor de v3 y mandó OpenSpec al archivo. Desde entonces v4, v5 y v6 se llevaron en este documento, sin cadena de fases.
+
+- **Siete decisiones reales se tomaron sin SDD, y salieron bien.** Las unidades 8, 9 y 10 del corte de v4; la numeración de una versión mayor; la línea base de permisos, revisada tres veces; una reestructuración de arquitectura con un trade-off que se revirtió a mitad de camino y se resolvió con registros de decisión, un plan corto y etapas; y el diseño de v7 mismo.
+- **Lo que separa a los dos cambios de v3 de esos siete no es que hubiera una decisión: casi todo tenía una.** Es que la decisión tenía que poder revisarla, antes del código, alguien que no iba a ver la implementación, o que otros iban a construir contra una spec sin estar en el cambio. Cuando quien decide ve aterrizar el código en el mismo documento vivo, y puede corregirlo, el documento cumple la función de la propuesta.
+- **La continuidad entre sesiones y compactaciones nunca la dio SDD.** La dieron el documento vivo, los resúmenes de sesión en Engram y un topic estable de Engram que funciona como cola de trabajo.
+- **Las reglas de evidencia salen de fallas de instrumento reales**: mediciones y checks que informaron éxito, o una cifra, y eran falsos. Están en [Reglas de evidencia de FTD](#reglas-de-evidencia-de-ftd).
+
+Un límite de lo que el historial prueba: lo único que registra es si se usó SDD. Clasificar los demás casos como consulta, L0 o FTD es una lectura retroactiva con el vocabulario de v7, no algo que alguien decidió en su momento, y el corpus de tests la usa como semilla, no como prueba.
+
+**Por eso `needs_reviewable_contract` reemplaza a `needs_agreement`.** Con un fact que preguntara sólo si hay una decisión que tomar, cada una de esas siete habría disparado una propuesta de SDD que la persona rechazaría —siete de unos treinta pedidos reales, casi un cuarto—, y esa fricción es la que v7 viene a sacar. Una decisión o un trade-off sin contrato revisable no cambia la ruta: se toma, se registra en *Decisions* del record FTD y se sigue. Una decisión que tiene que sobrevivir a la sesión cuenta como `needs_continuity`, así que va a FTD y no a L0. Y **la coordinación entre sesiones deja de ser disparador de SDD**: es continuidad, y la resuelven el record FTD, el documento vivo del proyecto y Engram.
+
+### Las cuatro rutas y los routing facts
+
+La separación obligatoria es de cuatro rutas. Las preguntas son semánticas, no una tabla de umbrales:
+
+| Ruta | Pregunta representativa | Qué NO la decide |
+|---|---|---|
+| Consulta / observación | ¿El resultado buscado es información, una recomendación, una investigación o un check, sin modificar todavía el sistema? | Que el tema sea grande, urgente o afecte muchos archivos |
+| L0 — cambio directo | ¿Hay una única intervención ya comprendida, sin decisión pendiente, que puede ejecutarse y demostrarse con evidencia puntual? | La cantidad de archivos, líneas, comandos o entidades afectadas |
+| FTD | ¿El cambio puede cerrarse y ejecutarse sin un acuerdo formal de diseño, pero necesita continuidad, alcance explícito, checklist y evidencia durable? | La falta inicial de detalle: se investiga y se pregunta para cerrar el alcance antes de aplicar |
+| SDD formal | ¿Hay que fijar, antes del código, un contrato o una decisión que tiene que poder revisar alguien que no va a estar en la implementación, o una spec contra la que otros van a construir? | Que haya una decisión o un trade-off que resolver, el tamaño del diff o el miedo a equivocarse |
+
+Las respuestas se reducen a **cuatro routing facts**, que son a la vez el contrato entre `pegasus-explorer` y el orquestador y el vocabulario del corpus de tests:
+
+| Fact | Pregunta |
+|---|---|
+| `output_is_information` | ¿El resultado buscado es información, recomendación, investigación o un check? |
+| `asked_for_sdd` | ¿Pidió SDD, spec o plan explícitamente, por comando o con sus palabras? |
+| `needs_reviewable_contract` | ¿Hay que fijar antes del código un contrato o una decisión que tiene que poder revisar alguien que no va a estar en la implementación, o una spec contra la que otros van a construir? |
+| `needs_continuity` | ¿Necesita continuidad, checklist, handoff o evidencia durable? |
+
+Lo único fijo es el orden en que se consultan:
+
+1. `output_is_information` → **consulta**.
+2. `asked_for_sdd` → **SDD**; el pedido explícito es la aceptación.
+3. `needs_reviewable_contract` → **se propone SDD**, y se entra sólo con aceptación explícita.
+4. `needs_continuity` → **FTD**.
+5. Ninguna de las anteriores → **L0**.
+
+> **El tamaño nunca es un fact.**
+
+Ni la cantidad de archivos, ni las líneas, ni la urgencia: nada del routing puede depender de ellos. Un cambio distribuido en muchos archivos sigue siendo L0 si es una única operación trivial, atómica y demostrable; uno de dos líneas es SDD si fija un contrato que consumen otros. La cantidad de archivos puede ser pista para decidir si conviene delegar, nunca para elegir la ruta.
+
+**Nombres, y la consulta sin número.** Los niveles se llaman L0, FTD y SDD. La consulta no lleva número ni etiqueta propia: alcanza con nombrarla en el orden de `flow-applicability.md`, porque hoy nada la identifica y nada lo necesita. **FTD se activa sólo por routing en v7**: `src/pegasus/content/commands/` no tiene infraestructura de comandos para rutas fuera de SDD, y un comando puede sumarse después sin tocar el contrato de facts.
+
+Cuándo entra cada ruta, en corto:
+
+- **Consulta**, cuando el output pedido termina el trabajo: explicar, comparar, investigar, auditar, revisar, correr un check o proponer sin autorización para implementar. No autoriza modificaciones ni crea artifact durable.
+- **L0**, cuando, con el alcance cerrado, el cambio es trivial, atómico, mecánico y conocido, sin checklist durable, sin handoff y sin decisión que resolver. Deja un diff, evidencia puntual proporcional y un reporte honesto. **No crea record FTD ni carga el procedimiento FTD.**
+- **FTD**, cuando hay intención de aplicar un cambio ya suficientemente decidido, `needs_reviewable_contract` es falso, no hacen falta varias fases ordenadas y el cambio sí merece continuidad, checklist, evidencia durable o handoff. La investigación no espera una autorización literal: investiga, pregunta para cerrar el alcance y, con una propuesta ejecutable, pide una única confirmación antes de escribir —*"Está todo definido y el alcance es X; ¿le doy?"*—. Un upgrade de dependencia con fallout conocido, una migración mecánica grande, un bug con causa confirmada, un renombre transversal o un refactor de varios módulos con el enfoque ya definido son FTD, aunque no sean chicos.
+- **SDD**, cuando hay un contrato o una decisión que alguien ausente de la implementación tiene que revisar antes del código; una spec o un plan contra el que otros van a construir; una API, una autorización o un modelo de datos compartido con consumidores que no participan del cambio; varias unidades ordenadas que otros van a ejecutar; o un pedido explícito. Adentro sigue todo el flujo actual —preflight, `sdd-init`, explore a tasks, apply, verify y archive—, con delivery strategy, review budget, ChainPR y `sdd-verify` como autoridad final.
+
+Si la ruta no es obvia, el orquestador obtiene sólo los facts que le faltan: investiga inline dentro de su threshold o delega una exploración estrecha a `pegasus-explorer`, que devuelve routing facts y no ejecuta un flujo ni crea artifacts. Todo lo que se juntó para decidir —la investigación de la consulta, los findings, la evidencia de un L0— entra como input de la ruta elegida.
+
+### Tres capas: decidir, ejecutar y nada más en el cuerpo
+
+La primera versión del diseño proponía un archivo de applicability por nivel, y se descartó: para cargar el correcto había que saber de antemano a qué nivel se iba, y cada frontera quedaba con dos dueños. La separación es por función, no por nivel:
+
+| Capa | Archivo | Qué contiene | Cuándo se carga |
+|---|---|---|---|
+| Pistas | El cuerpo de `pegasus-orchestrator.md` y el de `king-pegasus.md` | ¿Información o intención de cambio?, ¿pidió SDD, spec o plan?, y que el resto requiere clasificar | Siempre, como hoy |
+| Decidir | `src/pegasus/content/skills/_shared/flow-applicability.md`, renombre de `sdd-applicability.md` | Las preguntas de cada frontera, los cuatro facts, el orden de decisión y las promociones, con lo que el archivo viejo ya tenía de valor —casos ambiguos, crecimiento a mitad de camino, fail-open— generalizado a las cuatro rutas | Sólo cuando la ruta no es obvia |
+| Ejecutar | FTD: `src/pegasus/content/skills/_shared/ftd-procedure.md`, nuevo. SDD: el preflight y los gates que ya existen. L0: casi nada | El record, las reglas de evidencia y el cierre de FTD | Sólo al recorrer esa ruta |
+
+`ftd-procedure.md` es de la misma familia que `sdd-session-preflight.md` y `sdd-phase-common.md`: los tres dicen cómo se ejecuta algo que otro archivo ya decidió. `flow-applicability.md` pasa a ser el único dueño de la escalera y sus fronteras, y decide sin enseñar a ejecutar. El orquestador lee como mucho un archivo para decidir y uno para ejecutar, y ningún cuerpo always-on incorpora el texto de ninguno de los dos.
+
+Los techos de palabras usan el mecanismo que ya protege al orquestador: un test de techo y un gemelo que prueba que re-envolver las líneas no lo esquiva.
+
+| Cuerpo | Palabras hoy | Techo |
+|---|---|---|
+| `pegasus-orchestrator.md` | 1409 | 1420, sin cambio: la sección se reescribe dentro del margen |
+| `king-pegasus.md` | 665 | Propio y nuevo, en el slice (a) |
+| `flow-applicability.md` | 694, medido sobre `sdd-applicability.md` | Propio y nuevo, en el slice (a), para que no crezca a escondidas |
+
+El valor de los dos techos nuevos no está fijado: sale de medir el texto que aterrice en el slice (a).
+
+### Transiciones entre rutas
+
+| Desde → hacia | Cuándo | Aceptación | Qué se preserva |
+|---|---|---|---|
+| Consulta → L0, FTD o SDD | La investigación dejó una propuesta ejecutable | Una consulta no autoriza cambios: *"Ya está definido X, con alcance Y; ¿le doy?"*. Hacia SDD, además, la aceptación explícita de siempre | La investigación entra como input de la ruta nueva |
+| L0 → FTD | Deja de ser atómico; necesita varias tareas, otra sesión o un handoff; requiere evidencia agrupada; toca más superficie de la prevista; no se prueba con una evidencia puntual; se vuelve mantenimiento repetible; o aparece una decisión que conviene registrar | La confirmación de alcance de FTD | El record se crea desde el estado actual —qué se hizo, con qué evidencia real, qué falta—, sin fingir que FTD existía desde el inicio ni marcar checks que no se observaron |
+| L0 → SDD | Aparece un `needs_reviewable_contract`. Una decisión que se toma y se ve aterrizar en el mismo record promueve a FTD, con la decisión en *Decisions* | Explícita, después de nombrar el hecho nuevo y por qué L0 ya no alcanza | Lo previo queda como exploración y evidencia de entrada; preflight y gates rigen desde la promoción |
+| FTD → SDD | Aparece un `needs_reviewable_contract` o un pedido expreso de SDD, spec o plan. Dos diseños razonables o un trade-off, solos, no promueven: se deciden, se registran y el FTD sigue | Explícita, antes de entrar al ciclo | El record es input de proposal, spec y design, sin duplicar datos; SDD no se aplica retroactivamente |
+| SDD → FTD o L0 | Nunca de forma automática | — | Una cancelación controlada exigiría decisión explícita, preservación honesta del estado, justificación y tests, y no entra en v7 |
+
+Si una promoción no es obvia, se re-evalúa con el contexto disponible y, si los sistemas o contratos involucrados no están claros, se delega una exploración estrecha que devuelve routing facts. Se juzga la complejidad de decisiones y de coordinación, nunca la cantidad de archivos. Es la regla que `sdd-applicability.md:58` ya aplica al trabajo que crece hasta SDD, extendida a las dos promociones nuevas.
+
+### Actores y readiness fuera de SDD
+
+v7 no agrega roles ni cambia ningún `may_delegate_to`; la evolución de roles queda fuera. Lo que cambia es qué hace cada agente en las rutas nuevas:
+
+| Agente | En v7 |
+|---|---|
+| `pegasus-orchestrator` | Enruta, coordina y hace él mismo los chequeos y la investigación acotada que necesita para decidir y preparar delegaciones; no es un delegador puro. Decide la ruta primero y aplica después el `Direct Work Threshold`, `may_delegate_to`, las capacidades del target y las reglas de paralelismo. No hay pipeline fijo de subagentes para L0 ni para FTD: cada handoff se justifica y nada se delega por ceremonia |
+| `king-pegasus` | **Aplica a todas las rutas salvo SDD.** Como escribe, arma él mismo el record FTD; si un trabajo suyo tiene que pasar a SDD, lo dice y deriva al orquestador, sin correr el ciclo. Su `may_delegate_to: [pegasus-general]` (`king-pegasus.md:6`) no cambia |
+| `pegasus-implementer` | El gemelo operativo de `sdd-apply` fuera de SDD: ejecuta L0 y FTD sin heredar preflight, artifacts ni gates exclusivos de SDD |
+| `pegasus-verifier` | Sigue devolviendo sólo evidencia, nunca un veredicto de readiness |
+| `pegasus-general` | El worker sin identidad de fase, usable en L0, en la investigación previa y en FTD |
+| `pegasus-explorer` | Investigación read-only sin artifact de fase; en v7, además, devuelve routing facts cuando se le piden |
+| `sdd-apply`, `sdd-verify` | Sin cambio: `sdd-apply` implementa tareas SDD y `sdd-verify` sigue siendo la única autoridad de readiness SDD |
+
+**Readiness fuera de SDD: la opción (a).** El readiness de L0 y FTD lo declara quien pidió el trabajo —el orquestador, o `king-pegasus` en su propia sesión— leyendo la evidencia, que es lo que el verifier ya dice de sí mismo: *"leave the conclusion to whoever asked for it"* (`pegasus-verifier.md:17`). En FTD se ve en el record: un ítem está hecho sólo si tiene asociada una observación concreta. La separación de `009106d` se conserva tal cual: `pegasus-implementer` y `pegasus-general` pueden llamar a `pegasus-verifier` (la línea 6 de cada uno), y justamente por eso el verifier no firma:
+
+> **Nadie que un escritor pueda alcanzar tiene autoridad para firmar.**
+
+**Cuando quien firma también escribió** —un L0 inline del orquestador, o todo lo de `king-pegasus`—, nadie declara "listo" sin una observación registrada, y quien firma algo que escribió lo dice explícitamente en vez de presentarlo como verificación independiente. Es la extensión del *"Close the loop you open"* de `king-pegasus.md:19`, que ya cubría casi todo.
+
+### El record FTD y dónde vive
+
+**Ubicación: `docs/ftd/<YYYY-MM-DD>-<slug>.md` en el proyecto.** El subdirectorio propio evita pisar la documentación que el proyecto ya tenga en `docs/`. Se escribe sin preguntar nada y **se versiona con Git por defecto**. El FTD que crea `docs/ftd/` avisa una sola vez dónde quedó el record y que, si no se quiere subir, se puede excluir con `.gitignore` o con `.git/info/exclude`, que no se versiona. Detectar el primero no necesita estado guardado: es el que crea el directorio.
+
+**Engram es el nexo, no una segunda copia.** Con Engram disponible, las decisiones, el resultado y la ruta exacta del record se guardan también ahí con el protocolo normal (`mem_save`, el resumen de sesión); es lo que permite recuperar el contexto y enlazar un FTD con una promoción posterior a SDD. Sin Engram, el record es la fuente durable y la conversación informa su ruta explícitamente. FTD no crea wiki, no compite con OpenSpec y no crea una tercera memoria; SDD conserva sin cambios su elección explícita de `openspec`, `engram`, `hybrid` o `none`.
+
+El record tiene seis secciones:
+
+| Sección | Qué lleva |
+|---|---|
+| *Intent* | Lo que el cambio quiere lograr |
+| *Scope* | El alcance confirmado antes de escribir —el X del *"¿le doy?"*— |
+| *Decisions* | Opcional, sólo si el cambio toma decisiones: una tabla corta de tema, decisión y motivo, como [Decisiones tomadas](#decisiones-tomadas) al principio de este documento. No repite el diff |
+| *Checklist* | Los ítems del cambio; uno está hecho sólo con una observación asociada |
+| *Evidence* | Los comandos textuales tal como se corrieron, con su exit status y lo que produjeron |
+| *Next* | Lo que falta de este cambio, no de todos, con cada ítem en uno de tres estados |
+
+Los tres estados de *Next* son los mismos tres libros que este documento lleva para el trabajo pendiente, y por la misma razón: una deuda que se decidió dejar no es lo mismo que una que espera.
+
+| Estado | Qué lleva |
+|---|---|
+| Deuda abierta | Lo que la destraba |
+| Resuelta | Su evidencia |
+| Limitación aceptada | Nada que la destrabe: se decidió que se queda, y se reabre sólo si se reabre la decisión |
+
+Dos reglas más cierran el record:
+
+- **Las decisiones que duran se gradúan.** El record es la bitácora de un cambio: se cierra y no se corrige. Una decisión que sobrevive al cambio —una convención, una limitación aceptada, un invariante— pasa al documento vivo del proyecto, si lo tiene, o a un topic estable de Engram, y el record enlaza hacia allá. Si no hay ninguno de los dos, queda en el record y se dice. Es la diferencia de forma con este documento, que puede corregirse porque es uno solo y se lee antes de volver a escribir; un record por cambio no puede.
+- ***Next* enlaza a la cola de trabajo del proyecto**, si existe como topic de Engram, en lugar de duplicarla.
+
+**Sin límite numérico de preguntas.** Se pregunta sólo cuando la respuesta cambia alcance, criterios de aceptación, riesgos, dependencias o evidencia; nunca por ritual.
+
+**Un escritor por vez: el record lo mantiene quien coordina el FTD**, el orquestador o `king-pegasus`. Los subagentes devuelven evidencia y él la incorpora.
+
+### Reglas de evidencia de FTD
+
+> **Un checkbox no es evidencia.**
+
+Cada ítem completado se asocia a una observación concreta: test, build, exit status, check de runtime, parseo de configuración, búsqueda confirmada, smoke test o verificación visual apropiada. Un check que no se pudo correr se registra `not-run`, `blocked` o `failed`, nunca como hecho. *Evidence* guarda los comandos textuales con su exit status: además de evidencia, es la materia prima para detectar repetición en el futuro (ver [Fuera de v7](#fuera-de-v7)).
+
+Las nueve reglas salen de mediciones o checks del historial que informaron éxito, o una cifra, y eran falsos. Viven en `ftd-procedure.md`, redactadas cortas porque ese archivo se carga en cada FTD:
+
+1. El exit status que importa es el del comando, nunca el de un pipe que lo sigue: `if cmd | tail; then` mide `tail`.
+2. Una búsqueda de X no corre donde su propio path contiene X; si no se puede evitar, se verifica antes de creer el resultado.
+3. Una cifra que salió con una limitación declarada viaja con esa limitación: "N, con la limitación L" es un solo hecho.
+4. Los nombres de artefactos, URLs y archivos que usa un check se derivan de la misma fuente que los produjo, nunca se tipean de memoria.
+5. Una sonda necesita un brazo de control y un observable que el agente bajo prueba no pueda fabricar.
+6. Un grep vacío es evidencia débil de ausencia, no prueba.
+7. Un literal que coincide con la identidad de hoy es correcto por accidente: el invariante se deriva de la fuente que protege.
+8. El nombre de un test verde es una afirmación: se audita que el cuerpo pruebe lo que el nombre promete.
+9. Con `set -euo pipefail`, un pipe a `head -1` puede matar al productor con SIGPIPE y abortar el script en silencio.
+
+El mismo historial dejó tres reglas más, propias de un flujo de trabajo entre repositorios que Pegasus no tiene, y no entran.
+
+FTD tampoco impone branch automático, prohibición de worktrees, el pipeline SDD completo ni `sdd-verify`: delivery, Git y aislamiento siguen la policy existente de Pegasus.
+
+### Strict TDD fuera de SDD
+
+Hoy `_shared/implementation-craft.md:28` tiene el gate *"when Strict TDD Mode is active"* y `pegasus-implementer` lo lee, pero ningún archivo le dice al implementer ni a `king-pegasus` cómo saber si está activo: la resolución vive sólo en `sdd-init/SKILL.md:54-62`. Con FTD como carril principal, sin esto el carril principal saldría sin TDD. El slice (d) lo resuelve así:
+
+1. **El flag sigue siendo por proyecto y lo sigue escribiendo `sdd-init`**, como hoy.
+2. **La regla de lectura pasa a un único dueño compartido**, probablemente `implementation-craft.md`, que ya es dueño del gate. El orden: el marker explícito, si existe; el flag del proyecto, si `sdd-init` corrió (`openspec/config.yaml` o Engram); y si no hay nada escrito, el mismo default que aplicaría `sdd-init`: con test runner, activo; sin test runner, inactivo, y se dice.
+3. **`sdd-init` deja de ser dueño de la regla y pasa a usarla**: sigue escribiendo el flag, pero lee la regla del mismo lugar que todos.
+4. **Se resuelve una vez por sesión y viaja en el brief.** El orquestador, o `king-pegasus`, la resuelve como ya resuelve las respuestas del preflight; si el brief no la trae, el implementer la resuelve con la misma regla.
+5. **Un cambio sin comportamiento** —un typo en la documentación— se registra como **`N/A: no behavior changed`**, de forma honesta, y nunca como FAILED del gate.
+
+Qué es el marker estaba abierto. La definición propuesta está en el plan del slice (d) y espera aprobación.
+
+### Estrategia de tests de routing
+
+Los tests de routing son **estáticos**, y cada uno reclama sólo lo que prueba: un test que verifica que una regla está escrita no se presenta como un test de que el modelo enruta bien.
+
+El corpus vive en `tests/fixtures/routing-corpus/cases.json` —en una subcarpeta propia, porque `tests/fixtures/` ya tiene fixtures de otras suites— y lo prueba `tests/test_flow_routing.py`. No se instala, así que no cuesta contexto en runtime. Cada caso lleva el `request`, los cuatro `facts`, la `route`, `decided_by` —una cláusula literal de `flow-applicability.md`— y `surface`; los de transición agregan `during` (`l0` o `ftd`), el hecho nuevo que dispara la promoción y si la ruta resultante requiere aceptación explícita.
+
+```json
+{
+  "request": "Subí la versión de la dependencia y arreglá lo que rompa",
+  "facts": {"output_is_information": false, "asked_for_sdd": false,
+            "needs_reviewable_contract": false, "needs_continuity": true},
+  "route": "ftd",
+  "decided_by": "<cláusula literal de flow-applicability.md>",
+  "surface": "large"
+}
+```
+
+| Chequeo | Qué verifica | Qué atrapa |
+|---|---|---|
+| Coherencia | Los `facts` de cada caso llevan a su `route` según el orden de decisión | Un caso mal etiquetado |
+| Trazabilidad | `decided_by` cita una cláusula que existe literalmente en `flow-applicability.md` | Una regla borrada o renombrada que deja casos huérfanos |
+| Cobertura | Cada cláusula de `flow-applicability.md` tiene al menos un caso que la cita | Una regla que nada ejercita |
+| Trampas por estructura | Hay casos `surface: large` que no son SDD y casos `surface: small` que sí lo son | Que el tamaño vuelva a decidir la ruta |
+| Transiciones | Los casos con `during` promueven a la ruta correcta; toda entrada a SDD por `needs_reviewable_contract` requiere aceptación; ningún caso baja desde SDD | Promociones rotas y downgrades automáticos |
+| Contrato de facts | `flow-applicability.md` declara exactamente los campos que usa el corpus | Que el contrato explorer → orquestador y el corpus diverjan |
+
+**El corpus sale de pedidos reales.** La exploración del historial dejó unos treinta candidatos de todas las rutas, y entran parafraseados y anonimizados: sin nombres de productos distintos de Pegasus, personas, equipos, instituciones, hosts ni correos. La procedencia de cada caso y la clasificación retroactiva de la exploración no entran al corpus. Tiene que incluir, como mínimo:
+
+- cambios grandes que no son SDD;
+- un cambio chico que sí es SDD, como dos líneas de un contrato que consumen otros;
+- los siete casos del historial con una decisión real y sin contrato revisable, que van a FTD;
+- promociones reales.
+
+`surface` es una carnada: se anota para demostrar que no importó. Una regla de tamaño no se puede escribir en el vocabulario de los cuatro facts, así que la cobertura la rechaza: no hay caso coherente que pueda citarla.
+
+Además del corpus: los tests de techo, con su gemelo, para `flow-applicability.md` y `king-pegasus.md`; un test de lazy-load que fija que ningún cuerpo always-on incorpora el texto de `flow-applicability.md` ni de `ftd-procedure.md`, y que el procedimiento sólo se nombra en la salida de la ruta FTD de `flow-applicability.md`; y el test de punta a punta del renombre.
+
+**Residuo declarado.** El corpus **no prueba** que el modelo, ante un pedido real, responda bien los cuatro facts, y eso queda escrito como no cubierto. Si se quiere medir, las `request` del corpus se corren a mano contra un modelo real y se comparan los facts, fuera de la suite, como los checks de release.
+
+**Lo que no se copia del harness externo estudiado como referencia.** Su routing tenía justamente el defecto que este diseño evita: el corpus se declaraba puntuado por un eval de comportamiento que en realidad leía otro archivo, así que lo único que lo tocaba era un chequeo de forma; un test aprobaba si una palabra de tamaño aparecía en la justificación, y probaba la palabra y no el caso; y los casos se puntuaban con un ranker léxico, por coincidencia de palabras entre pedido y descripción. De ahí se toma sólo la idea de un corpus con la ruta esperada de cada caso.
+
+### Compatibilidad, permisos y seguridad
+
+- **Wire formats**: no cambia ninguno. `cli.SCHEMA`, `journal.SCHEMA`, `catalog.SCHEMA`, `journal-v4.json` y las claves y variables de entorno que enumera [Identidad de producto y raíz de composición](#identidad-de-producto-y-raíz-de-composición) quedan como están.
+- **Instalaciones existentes**: reinstalar retira `_shared/sdd-applicability.md` y escribe `flow-applicability.md` y `ftd-procedure.md` por el mecanismo de retiro que ya existe, en los dos adapters; `uninstall` retira lo que el journal reclame en ese momento.
+- **Quien no use FTD**: sin impacto, más allá del texto que cambia en dos cuerpos que ya tienen tests y de `docs/ftd/`, que aparece recién con el primer FTD.
+- **SDD**: nada cambia adentro del ciclo. Cambia cómo se llega: por pedido explícito, o por un `needs_reviewable_contract` propuesto y aceptado.
+- **Permisos**: v7 no agrega herramientas, grants MCP ni directorios. `docs/ftd/` se escribe dentro del proyecto con el `edit` y el `write` que el agente que coordina ya tiene, y ningún `may_delegate_to` cambia.
+- **Controles que no se debilitan**: CBM es inteligencia de código, no evidencia de runtime; `sdd-verify` sigue siendo la autoridad exclusiva de readiness SDD; ChainPR y review budget siguen rigiendo SDD; se conservan `may_delegate_to`, los permisos por agente y los grants de MCP y de directorios; el journal, los snapshots, el restore y el ownership; la delivery strategy, el aislamiento y las políticas de worktree; y el techo de palabras del orquestador.
+- **Versión**: mayor o menor es una decisión de release, y sigue pendiente (ver al final).
+
+### Riesgos y rollback
+
+| Riesgo | Mitigación |
+|---|---|
+| El orquestador pasa su techo al reescribir *"Is this SDD at all?"* | La reescritura es texto por texto, con 11 palabras de margen, y `OrchestratorStaysSmallTest` falla si no alcanza |
+| `flow-applicability.md` crece hasta volverse el manual de todos los flujos | Techo propio, y el formato del record, la evidencia y el cierre viven en `ftd-procedure.md` |
+| El tamaño vuelve a decidir la ruta por la puerta de atrás | Las trampas del corpus y la cobertura: una regla de tamaño no tiene caso coherente que la cite |
+| Un test de routing se lee como prueba de que el modelo enruta bien | El residuo declarado, escrito en esta sección y en el corpus |
+| El renombre deja `sdd-applicability.md` huérfano en una instalación existente | El retiro por dirección, y el test de punta a punta del slice (a) |
+| FTD se vuelve ceremonia para lo que es L0 | L0 no crea record ni carga el procedimiento, y el corpus lleva casos L0 que lo fijan |
+| El carril principal sale sin TDD | El slice (d): una regla de lectura, resuelta una vez por sesión |
+| *Evidence* sube al repositorio algo que no debía: los records se versionan por defecto y guardan salidas textuales | El aviso único con `.gitignore` y `.git/info/exclude`. Que `ftd-procedure.md` prohíba además copiar secretos o el contenido de archivos sensibles a *Evidence* es la tarea b4, propuesta y pendiente de aprobación |
+
+**Rollback.** v7 es contenido y tests, sin wire formats nuevos: volver atrás es reinstalar con el binario de una versión anterior, cuyo render ya no produce `flow-applicability.md` ni `ftd-procedure.md`, así que el mismo retiro por dirección los borra y `sdd-applicability.md` vuelve a escribirse. Los records que ya estén en `docs/ftd/` son archivos del proyecto, no de Pegasus: el journal no los reclama y ningún rollback los toca.
+
+### Criterios de aceptación de v7
+
+Cada criterio se comprueba con un test o un comando, no con una lectura:
+
+| # | Criterio | Cómo se comprueba |
+|---|---|---|
+| 1 | `src/pegasus/content/skills/_shared/sdd-applicability.md` no existe y `flow-applicability.md` sí | `test -e` sobre las dos rutas |
+| 2 | `grep -rn sdd-applicability src/` no devuelve nada, y en `tests/` sólo quedan, si quedan, comentarios que narran la historia del conteo del catálogo | El grep |
+| 3 | `flow-applicability.md` declara exactamente los cuatro facts y el orden de decisión de cinco pasos | El chequeo de contrato de facts de `tests/test_flow_routing.py` |
+| 4 | El corpus pasa coherencia, trazabilidad y cobertura, e incluye al menos un caso `large` que no es SDD, uno `small` que sí lo es, los siete casos de decisión sin contrato en FTD y promociones desde L0 y desde FTD | `tests/test_flow_routing.py` |
+| 5 | Toda entrada a SDD por `needs_reviewable_contract` requiere aceptación explícita, y ningún caso sale de SDD | El chequeo de transiciones |
+| 6 | El cuerpo del orquestador sigue en 1420 palabras o menos; `king-pegasus.md` y `flow-applicability.md` tienen techo propio, cada uno con su gemelo contra el re-envolver | `OrchestratorStaysSmallTest` y sus equivalentes nuevos |
+| 7 | Ningún cuerpo always-on incorpora el texto de `flow-applicability.md` ni de `ftd-procedure.md`, y `ftd-procedure.md` sólo se nombra en la salida de la ruta FTD de `flow-applicability.md`, nunca desde un cuerpo always-on | El test de lazy-load |
+| 8 | Instalar un render y después otro con el archivo renombrado deja el viejo ausente del disco, en los dos adapters | El test de punta a punta del slice (a) |
+| 9 | El catálogo cuenta 99 archivos y 27 claves | `tests/test_catalog.py` |
+| 10 | `ftd-procedure.md` fija la ruta `docs/ftd/<YYYY-MM-DD>-<slug>.md`, el aviso único, las seis secciones, los tres estados de *Next*, la graduación de decisiones y las nueve reglas de evidencia | Tests de contenido del slice (b) sobre el texto del archivo |
+| 11 | La regla de lectura de Strict TDD vive en un único archivo; `sdd-init`, `sdd-apply`, `sdd-verify`, `king-pegasus` y `pegasus-implementer` la referencian en vez de repetirla, el preflight y el procedimiento FTD la pasan en el brief, y `N/A: no behavior changed` figura como resultado válido del gate | Tests de contenido del slice (d) |
+| 12 | `pegasus-verifier` sigue sin emitir veredicto y ningún `may_delegate_to` cambia | `tests/test_phase_less_specialists.py` y el diff del frontmatter de los agentes |
+| 13 | La suite completa pasa | `PYTHONPATH=src:tests .venv/bin/python3 -m unittest discover -s tests -q` |
+
+### Slices de v7 y su progreso
+
+Los slices van de (a) a (d). El plan de la fase 3 sigue a esta tabla y espera aprobación antes de implementar. La tabla es donde se anota el progreso de cada slice a medida que aterrice, con su commit y su evidencia, igual que [Deudas resueltas](#deudas-resueltas) lleva lo que se cerró:
+
+| Slice | Contenido | Estado |
+|---|---|---|
+| (a) Escalera y routing | `flow-applicability.md` —renombre y ampliación, con techo—; pistas mínimas en el orquestador, texto por texto dentro de su techo, y en `king-pegasus`, que gana techo propio; routing facts en `pegasus-explorer`; el corpus y sus tests; y el test de punta a punta del renombre | Sin empezar: espera la aprobación de la fase 3 |
+| (b) Record FTD y persistencia | `ftd-procedure.md`, `docs/ftd/`, el aviso único, el enlace con Engram, *Decisions*, *Next* con tres estados, la graduación de decisiones y las reglas de evidencia | Sin empezar |
+| (c) Ajuste de roles | `pegasus-implementer`, `pegasus-verifier` y `king-pegasus` alineados con la opción (a) de readiness y con el record | Sin empezar |
+| (d) Strict TDD fuera de SDD | La regla de lectura con un solo dueño, su resolución por sesión en el brief y `N/A: no behavior changed` | Sin empezar |
+
+#### Requisitos verificables por ruta y transición
+
+Todos se comprueban con tests estáticos: el corpus y el texto de los archivos, nunca una corrida contra un modelo.
+
+| # | Requisito | Lo verifica |
+|---|---|---|
+| R1 | Consulta: `output_is_information` verdadero lleva a la consulta, valgan lo que valgan los otros tres facts, y la cláusula dice que no autoriza cambios ni crea artifact | `CoherenceTest`; `FlowApplicabilityTest` sobre la cláusula |
+| R2 | L0: los cuatro facts falsos llevan a L0, y la cláusula de L0 no nombra el record ni `ftd-procedure.md` | `CoherenceTest`; `ProcedureIsLazyTest` |
+| R3 | FTD: `needs_continuity` sin los anteriores lleva a FTD; los siete casos de decisión sin contrato revisable van a FTD; la entrada pide la confirmación de alcance | `CoherenceTest`, `SizeTrapTest`; `FlowApplicabilityTest` |
+| R4 | SDD por pedido: `asked_for_sdd` lleva a SDD sin otra aceptación, porque el pedido lo es | `CoherenceTest`, `TransitionTest` |
+| R5 | SDD por contrato: `needs_reviewable_contract` propone SDD y exige aceptación explícita | `TransitionTest` (`requires_acceptance`) |
+| R6 | El tamaño no decide: hay casos `large` que no son SDD y `small` que sí, y ninguna cláusula citable habla de tamaño | `SizeTrapTest`, `CoverageTest` |
+| T1 | Consulta → cambio: la escalera dice que una consulta no autoriza escribir y nombra la confirmación única | `FlowApplicabilityTest` |
+| T2 | L0 → FTD: con `new_fact: needs_continuity`, o cuando aparece una decisión sin contrato revisable | `TransitionTest` |
+| T3 | L0 → SDD: sólo con `new_fact: needs_reviewable_contract`, y con aceptación | `TransitionTest` |
+| T4 | FTD → SDD: sólo con `needs_reviewable_contract` o `asked_for_sdd`; un trade-off solo deja el caso en FTD | `TransitionTest` |
+| T5 | Sin bajada: ningún caso tiene `during: sdd`, y el esquema lo rechaza | `CorpusSchemaTest`, `TransitionTest` |
+| P1 | Presupuesto y lazy-load: los tres cuerpos tienen techo, y ningún cuerpo always-on nombra el procedimiento | a6, `ProcedureIsLazyTest` |
+
+Cada tarea escribe primero su test y lo ve fallar. Donde el guardia ya se cumple al escribirlo —un techo, una ausencia—, el rojo se muestra por mutación: se rompe en memoria lo que protege, se ve fallar y la corrida queda en la evidencia. Donde la tarea no cambia comportamiento, se registra `N/A: no behavior changed`. Todos los comandos corren desde la raíz con `PYTHONPATH=src:tests .venv/bin/python3 -m unittest`, abreviado `unittest` en las tablas.
+
+#### Slice (a) — escalera y routing
+
+| # | Tarea | Archivos | Test primero (rojo) | Evidencia de cierre | Depende de |
+|---|---|---|---|---|---|
+| a1 | Corpus y su test | `tests/fixtures/routing-corpus/cases.json` y `tests/test_flow_routing.py`, nuevos | `CorpusSchemaTest` —claves exactas `request`, `facts`, `route`, `decided_by`, `surface`, más `during`, `new_fact` y `requires_acceptance` en las transiciones; ninguna clave de procedencia; `route` en `query`, `l0`, `ftd`, `sdd`; `during` en `l0`, `ftd`—, `CoherenceTest`, `TraceabilityTest`, `CoverageTest`, `SizeTrapTest`, `TransitionTest` y `FactsContractTest`. Las cláusulas citables se derivan del archivo —los ítems de lista de sus secciones de decisión—, nunca de una lista retipeada en el test. Rojo: `flow-applicability.md` no existe | `unittest tests.test_flow_routing -v`: rojo antes de a3, verde después | — |
+| a2 | Test de punta a punta del renombre | `tests/test_shared_reference_rename_migration.py`, nuevo, sobre el arnés de `tests/test_identity_rename_migration.py` (`RealHomeTestCase`, `run_cli`, `RenamingTheInstalledIdentityMigratesArtifactsTest`) y el de `tests/test_cli_claudecode.py` | Una clase por adapter, `opencode` y `claudecode`: instala con el contenido real cuyo asset de `_shared` se llama `sdd-applicability.md` —derivado de `content_module.load()` con `dataclasses.replace` e inyectado con `patch("pegasus.core.content.load", ...)`, como en `tests/test_cli_progress.py:146`—, corre `update` con el contenido real y afirma que el viejo no está en disco, que el nuevo sí, que el journal ya no reclama el viejo y que el reporte de `update` lo da por retirado. Rojo: no existe `flow-applicability.md` | `unittest tests.test_shared_reference_rename_migration -v`: rojo antes de a3 y verde después, en los dos adapters | — |
+| a3 | Renombre y reescritura de la escalera | `git mv` de `src/pegasus/content/skills/_shared/sdd-applicability.md` a `flow-applicability.md`, con su texto llevado a cuatro rutas (`## Routing facts`, el orden de decisión, una cláusula por ruta, las promociones, los casos ambiguos, el crecimiento a mitad de camino y el fail-open); `pegasus-orchestrator.md:33-37`, reescrito texto por texto; `tests/test_orchestrator_routing.py:17`, `:37` y `:161-205` | `SddApplicabilityTest` pasa a `FlowApplicabilityTest` sobre la ruta nueva y suma que el archivo no liste como señal de SDD una decisión, un trade-off, cruzar sesiones ni un record que sobreviva a la sesión, y que el orquestador ya no diga que un record que sobrevive a la sesión es SDD; `APPLICABILITY_NEEDLE` sigue en un solo archivo, y los tres especialistas siguen nombrados en la prosa. Rojo: la ruta nueva no existe | `unittest tests.test_orchestrator_routing tests.test_flow_routing tests.test_shared_reference_rename_migration tests.test_skill_references tests.test_adapter_reference_integrity` verde; `wc -w` del orquestador ≤ 1400, para dejarle margen a (c) | a1, a2 |
+| a4 | Referencias restantes | `src/pegasus/core/content.py:88` (docstring); `tests/test_catalog.py:562` y `:570` (comentarios) | `N/A: no behavior changed` | `git grep -n sdd-applicability -- src tests` vacío; `unittest tests.test_catalog` sigue en (98, 27) | a3 |
+| a5 | Pistas mínimas en `king-pegasus` | `src/pegasus/content/agents/king-pegasus.md`, `## Rules` | `KingPegasusRoutesTest` en `tests/test_persona_split.py`: la prosa nombra `{{skills_root}}/_shared/flow-applicability.md` con su fail-open (*"missing or unreadable"*), dice que un trabajo que pasa a SDD se deriva al orquestador y no contiene `APPLICABILITY_NEEDLE`. Rojo: nada de eso está | `unittest tests.test_persona_split` verde, `PersonaTest` intacto | a3 |
+| a6 | Techos de `flow-applicability.md` y `king-pegasus.md` | `tests/test_orchestrator_routing.py`: `FLOW_APPLICABILITY_WORD_CEILING`, `KING_PEGASUS_WORD_CEILING`, `FlowApplicabilityStaysSmallTest`, `KingPegasusStaysSmallTest`, y `WordCeilingIsReformatProofTest` recorriendo los tres cuerpos con `subTest` | Rojo por mutación: sumar en memoria palabras por encima de cada techo lo pone rojo | Valores medidos después de a3 y a5, con el margen para el puntero de b5 y las frases de c3 y d5 escrito en el comentario de cada constante, como el de `ORCHESTRATOR_WORD_CEILING` | a3, a5 |
+| a7 | Routing facts en `pegasus-explorer` | `src/pegasus/content/agents/pegasus-explorer.md`, `## Result identity` | `ExplorerReturnsRoutingFactsTest` en `tests/test_flow_routing.py`: la prosa nombra exactamente los facts de `## Routing facts` —conjunto derivado de `flow-applicability.md`—, pide cada uno como verdadero o falso con su evidencia y dice que la ruta no la elige el explorer. Rojo: la prosa no nombra ningún fact | `unittest tests.test_flow_routing tests.test_phase_less_specialists` verde; el cuerpo sigue bajo `BODY_WORD_CEILING` = 516 (`tests/test_phase_less_specialists.py:94`; hoy 417) | a3 |
+
+El corpus arranca con unos treinta casos sacados de los candidatos del historial. Los que ya están parafraseados se reescriben donde nombran otro producto, una persona o un equipo, o se descartan, y la procedencia no entra nunca. La anonimización no puede ser un test con una lista de nombres, porque esa lista metería los nombres al repositorio: la cubren el esquema, que no admite un campo de procedencia, y la revisión independiente.
+
+**Cierre propio de (a):** el catálogo sigue en (98, 27), `git grep -n sdd-applicability -- src tests` sale vacío, a2 está verde en los dos adapters y el orquestador queda en 1400 palabras o menos.
+
+#### Slice (b) — record FTD y persistencia
+
+| # | Tarea | Archivos | Test primero (rojo) | Evidencia de cierre | Depende de |
+|---|---|---|---|---|---|
+| b1 | Tests del procedimiento | `tests/test_ftd_procedure.py`, nuevo | `FtdProcedureConventionsTest` (existe, con `## Scope`, `## Authority` y fail-open); `RecordTemplateTest` (plantilla con *Intent*, *Scope*, *Decisions*, *Checklist*, *Evidence* y *Next*, en ese orden, con *Decisions* opcional); `NextStatesTest` (los tres estados); `GraduationTest` (documento vivo o topic estable de Engram, enlace desde el record, y qué se hace si no hay ninguno); `PromotionIntoFtdTest` (el record nace del estado actual y no marca checks no observados); `EvidenceRulesTest` (*"A checkbox is not evidence"*, `not-run`, `blocked` y `failed`, comandos textuales con exit status, nueve reglas numeradas); `RecordLocationTest` (`docs/ftd/<YYYY-MM-DD>-<slug>.md`, `.gitignore` y `.git/info/exclude`, aviso sólo al crear el directorio); `EngramLinkTest` (la ruta exacta del record, redactado defensivo para cuando Engram no está); `ProcedureIsLazyTest` (ningún cuerpo always-on —el orquestador, `king-pegasus`, el prompt de sistema— nombra `ftd-procedure.md`; el único archivo de contenido que lo nombra es `flow-applicability.md`, en la salida de la ruta FTD; una frase distintiva del procedimiento vive sólo en él). Rojo: el archivo no existe | `unittest tests.test_ftd_procedure -v`: rojo antes de b3 | a3 |
+| b2 | Conteo del catálogo | `tests/test_catalog.py:573`, a `(99, 27)`, con su comentario *"99, not 98"* | La aserción cambiada es el rojo: falla con 98 hasta b3 | `unittest tests.test_catalog` verde después de b3 | — |
+| b3 | El procedimiento | `src/pegasus/content/skills/_shared/ftd-procedure.md`, nuevo, en inglés | b1 y b2 | `unittest tests.test_ftd_procedure tests.test_catalog tests.test_skill_references tests.test_adapter_reference_integrity tests.test_engram_convention` verde; `EngramProjectArgumentTest` impide templar el argumento de proyecto | b1, b2 |
+| b4 | **Propuesta, pendiente de aprobación**: secretos fuera de *Evidence* | `ftd-procedure.md`: *Evidence* nunca copia secretos ni el contenido de archivos sensibles; el comando se registra con su exit status y la salida que los traiga se omite, diciendo que se omitió | `SecretsRuleTest` en `tests/test_ftd_procedure.py`. Rojo: la regla no está | `unittest tests.test_ftd_procedure` verde | b3 |
+| b5 | Puntero desde la escalera | `flow-applicability.md`, la cláusula de salida de la ruta FTD | `ProcedureIsLazyTest` exige ese único puntero; rojo hasta que exista | `unittest tests.test_flow_routing tests.test_ftd_procedure` verde: si la cláusula citada cambió, los `decided_by` se actualizan en el mismo commit; `FlowApplicabilityStaysSmallTest` verde | b3, a6 |
+| b6 | Documentación de uso | `docs/metodologia.md` (*El recorrido normal*, *Roles y límites* y una sección breve sobre FTD y su record) y `MANUAL.md` (*Usarlo todos los días*): las cuatro rutas, FTD como carril habitual, `docs/ftd/` y cómo excluirlo | `N/A: no behavior changed` | `.venv/bin/python3 tools/check_docs_links.py` da PASS | b3 |
+
+**Cierre propio de (b):** el catálogo en (99, 27) y `ProcedureIsLazyTest` verde. b4 entra sólo si se aprueba; si no, `SecretsRuleTest` no se escribe y la fila de (b) lo dice.
+
+#### Slice (c) — roles y readiness
+
+| # | Tarea | Archivos | Test primero (rojo) | Evidencia de cierre | Depende de |
+|---|---|---|---|---|---|
+| c1 | Tests de readiness fuera de SDD | `tests/test_orchestrator_routing.py` (`ReadinessOutsideSddTest`), `tests/test_persona_split.py` (`PersonaTest`), `tests/test_phase_less_specialists.py` (`WhatEachOneReturnsTest`) | El orquestador dice que en L0 y FTD el readiness lo declara quien pidió, leyendo evidencia observada, y que quien firma lo que escribió lo dice; *"until `sdd-verify` has spoken"* queda acotado a SDD en su misma oración; `king-pegasus` dice lo mismo junto a *"Close the loop you open"*; `pegasus-implementer` y `pegasus-general` dicen que el record lo lleva quien coordina y que ellos devuelven evidencia. Rojo: ninguna frase está | Los tres módulos, rojos antes de c2-c4 | b3 |
+| c2 | Orquestador | `pegasus-orchestrator.md:98-100`, la viñeta *"Warmth is never a readiness claim"*, texto por texto | c1 | `OrchestratorStaysSmallTest` ≤ 1420 y `ReadinessAuthorityScopeTest` (`tests/test_readiness_authority_scope.py`) verdes: la frase nueva no reclama autoridad, porque ese guardia sólo admite la afirmación en `sdd-verify` y en `pegasus-orchestrator.md:47` | c1, a3 |
+| c3 | `king-pegasus` | `king-pegasus.md:19`, y la regla de que arma él mismo el record, al que llega por `flow-applicability.md` | c1 | `KingPegasusStaysSmallTest` y `PersonaTest` verdes | c1, a6 |
+| c4 | Implementer, general y verifier | `pegasus-implementer.md` y `pegasus-general.md`, `## Result identity`; `pegasus-verifier.md` sin cambio | c1 | `unittest tests.test_phase_less_specialists tests.test_general_fan_out_checkpoint` verde, con `BODY_WORD_CEILING` = 516 y `GENERAL_WORD_CEILING` = 556; `git diff --stat -- src/pegasus/content/agents/pegasus-verifier.md` vacío; `WhatEachOneReturnsTest` y `RenderedPermissionTest` siguen probando que el verifier no firma ni escribe | c1 |
+
+**Cierre propio de (c):** `pegasus-verifier.md` sin diff, y `ReadinessAuthorityScopeTest` y `WhatEachOneReturnsTest` verdes sin haberlos tocado.
+
+#### Slice (d) — Strict TDD fuera de SDD
+
+La regla está repetida hoy en tres lectores, no en uno: `sdd-init/SKILL.md:54-56` y `:62`, el paso 3 de `sdd-apply/SKILL.md:110-139` y las puertas de `sdd-verify/SKILL.md:43-45`. Esta última espera que el orquestador diga `STRICT TDD MODE IS ACTIVE`, y ningún archivo embarcado lo dice.
+
+| # | Tarea | Archivos | Test primero (rojo) | Evidencia de cierre | Depende de |
+|---|---|---|---|---|---|
+| d1 | Tests de la regla compartida | `tests/test_craft_extraction.py`: `CraftIsNotRestatedTest` y una `StrictTddResolutionTest` nueva | La regla de lectura vive sólo en `implementation-craft.md` (una frase distintiva, con `occurrences` igual a ese archivo); `sdd-init`, `sdd-apply`, `sdd-verify`, `king-pegasus` y `pegasus-implementer` la señalan en vez de repetirla; las filas de `sdd-init/SKILL.md:54-56` y el paso `:62` ya no resuelven; la puerta de `sdd-verify/SKILL.md:43` usa la grafía del brief; `N/A: no behavior changed` figura como resultado válido del gate; la grafía del marker está escrita como literal en `implementation-craft.md`, y ningún archivo embarcado la trae como línea suelta, así que Pegasus nunca activa el modo en nombre de la persona. Rojo: nada de eso está | `unittest tests.test_craft_extraction -v`: rojo | — |
+| d2 | La regla y el marker | `src/pegasus/content/skills/_shared/implementation-craft.md`: una subsección nueva antes de *Strict TDD Hard Gate* (`:28`) | d1 | `unittest tests.test_craft_extraction tests.test_strict_tdd_red_evidence tests.test_phase_less_specialists` verde (`CRAFT_NEEDLE` sigue en un solo archivo) | d1 |
+| d3 | `sdd-init` pasa a usar la regla | `src/pegasus/content/skills/sdd-init/SKILL.md:54-56` y `:62`; sigue escribiendo `strict_tdd` en `openspec/config.yaml` y en `sdd/{project}/testing-capabilities` (`references/init-details.md:38`, `:59`) | d1 | `unittest tests.test_craft_extraction tests.test_sdd_phase_macros` verde | d2 |
+| d4 | Los otros dos lectores | `src/pegasus/content/skills/sdd-apply/SKILL.md:110-139`: primero el valor del brief, después la regla; `src/pegasus/content/skills/sdd-verify/SKILL.md:43-45` | d1 | `unittest tests.test_craft_extraction tests.test_strict_tdd_red_evidence` verde | d2 |
+| d5 | Una vez por sesión, en el brief | `_shared/sdd-session-preflight.md`, junto a `:58`, que ya manda `Artifact store mode` a cada lanzamiento; `_shared/ftd-procedure.md`; `king-pegasus.md`, que nombra `implementation-craft.md` y resuelve el modo en su propia sesión. El cuerpo del orquestador no cambia | `StrictTddTravelsInTheBriefTest` en `tests/test_craft_extraction.py`: el preflight y el procedimiento FTD mandan `Strict TDD Mode` en cada brief de implementación, y `king-pegasus` nombra `_shared/implementation-craft.md`. Rojo: no está | `unittest tests.test_craft_extraction tests.test_ftd_procedure tests.test_orchestrator_routing` verde, `KingPegasusStaysSmallTest` incluido | d2, b3, a6 |
+| d6 | Documentación | `docs/metodologia.md`, *TDD: cuándo aplica*: la regla ya no depende de `sdd-init`; el marker y `N/A: no behavior changed` | `N/A: no behavior changed` | `.venv/bin/python3 tools/check_docs_links.py` da PASS | d2 |
+
+En L0 el orquestador no carga ni el preflight ni el procedimiento, así que no resuelve el modo: lo resuelve el implementer con la misma regla, que es el respaldo que la decisión ya prevé para cuando el brief no lo trae. Con eso el cuerpo del orquestador no gasta ni una palabra en (d).
+
+**Propuesta, pendiente de aprobación: qué es el agent marker.** Hoy `sdd-init/SKILL.md:54` lo pone primero (*"strict TDD marker/config found → Use that value"*) y `:62` lo llama *"agent marker"*, sin decir qué es.
+
+| Aspecto | Propuesta |
+|---|---|
+| Qué es | Una línea cuyo contenido entero es `Strict TDD Mode: enabled` o `Strict TDD Mode: disabled`. También vale la misma línea con el rótulo en negrita, `**Strict TDD Mode**: enabled`, que es como la escribe `sdd-init` en su reporte (`sdd-init/references/init-details.md:66`), para que lo que produce `sdd-init` cuente como marker. Cualquier otra forma no es un marker |
+| Dónde vive | En las instrucciones que el CLI anfitrión carga en la sesión, las del proyecto o las de la persona. Nunca en un archivo que escribe Pegasus, porque reinstalar lo reemplaza entero. El contenido tampoco puede nombrar el archivo de instrucciones de un CLI concreto (`tests/test_content_core_is_cli_agnostic.py`): nombra la línea, no el archivo |
+| Cómo se lee | Quien coordina la busca en las instrucciones que ya tiene en contexto, sin abrir archivos. Si hay una del proyecto y otra de la persona, gana la del proyecto; si dos se contradicen y no puede saber de dónde vino cada una, no hay marker, se pasa al flag del proyecto y se dice. `enabled` sin test runner queda inactivo, y se dice. La misma grafía viaja en el brief y reemplaza el `STRICT TDD MODE IS ACTIVE` de `sdd-verify/SKILL.md:43` |
+| Sin `sdd-init` | Funciona igual: no depende de `openspec/config.yaml` ni de Engram, y sin marker ni flag rige el default por runner |
+
+Lo que cuesta: ningún test de la suite puede probar que un agente note la línea, sólo que la regla está escrita, que es el mismo residuo que el de los routing facts. La línea vive en archivos que Pegasus no escribe, así que `doctor` no la informa y la persona la escribe a mano. Una línea en las instrucciones de la persona vale para todos sus proyectos, y la del proyecto es la forma de apagarlo en uno. La procedencia de una línea no siempre está a la vista del agente, así que dos líneas contradictorias degradan al flag. Y cambia un literal que hoy lee `sdd-verify`. Se descartaron dos alternativas: un archivo propio en cada proyecto, que es determinista y visible para `doctor` pero es una convención nueva que ninguna otra herramienta lee, y sólo `openspec/config.yaml`, que exige justo lo que el marker tiene que evitar: que `sdd-init` haya corrido.
+
+**Cierre propio de (d):** `git grep -n 'STRICT TDD MODE IS ACTIVE' -- src` sale vacío y la regla vive en un solo archivo. La definición del marker entra sólo si se aprueba; si no, d2 escribe el orden sin su primer escalón y la fila de (d) lo dice.
+
+#### Cierre de cada slice
+
+Además de lo propio de cada uno, un slice cierra cuando se cumplen cuatro cosas:
+
+- la suite completa pasa: `PYTHONPATH=src:tests .venv/bin/python3 -m unittest discover -s tests -q` termina en `OK`, y el conteo se anota contra la base de 2892 más los tests que sumó el slice;
+- `.venv/bin/python3 tools/check_docs_links.py` da PASS;
+- una revisión independiente, en contexto fresco y con la consigna de romperlo, lo leyó antes del commit;
+- y se commitea por unidad de trabajo: (a) en tres (a1-a4, a5-a6, a7), (b) en dos (b1-b5, b6), (c) en uno, y (d) en tres (d1-d4, d5, d6).
+
+La fila del slice en la tabla de arriba pasa a llevar los commits y el conteo.
+
+#### Riesgos del plan
+
+| Riesgo | Mitigación |
+|---|---|
+| El cuerpo del orquestador se edita en (a) y en (c), y tiene 11 palabras de margen | a3 deja el cuerpo en 1400 palabras o menos; c2 es texto por texto; (d) no le agrega nada, porque el brief vive en el preflight y en el procedimiento |
+| `king-pegasus.md` se edita en (a), (c) y (d) | El techo de a6 se mide con el margen de c3 y d5 escrito en su comentario; si no alcanza, el techo sube a propósito, nunca re-envolviendo líneas |
+| `flow-applicability.md` se edita en (a) y en (b), y el corpus cita su texto literal | El techo de a6 reserva el lugar del puntero de b5, y toda edición de una cláusula citada lleva sus `decided_by` en el mismo commit: que la trazabilidad se rompa es lo que se busca |
+| El renombre, el puntero y los tests de a3 separados en commits dejan un puntero colgado | Van en un solo commit: `test_skill_references` y `test_adapter_reference_integrity` fallan ante una referencia que no resuelve |
+| `ftd-procedure.md` nace en (b) y se edita en (d) | (d) va después de (b); d5 depende de b3 |
+| El texto de hoy contradice lo decidido: `sdd-applicability.md` pone como señales de SDD *"an approach worth arguing, trade-offs"*, *"across several sessions"* y *"a written record has to survive the session"*, y dos casos ambiguos mandan una decisión de diseño a SDD; `pegasus-orchestrator.md:35` dice que un record que sobrevive a la sesión es SDD | El renombre invierte esas señales en vez de conservarlas, y los tests de a3 fijan su ausencia |
+| Poco margen en los especialistas: al explorer le quedan 99 palabras bajo 516 y al general unas 32 bajo 556 | Las frases de a7 y c4 son una o dos oraciones; si no entran, se sube el techo a propósito |
+
+### Fuera de v7
+
+Dos capacidades quedan para después, con su propio diseño y su propia aprobación. v7 sólo mapea dónde se enganchan:
+
+- **Detección de brechas de skills o procedimientos.** Cuando el trabajo entregue o repita un procedimiento: si una skill o un agente ya lo cubre, se usa; si no, se registra la brecha y se **propone** una skill nueva, nunca se crea ni se instala sola. La señal es evidencia de repetición o de necesidad real, no coincidencia superficial de palabras; reutiliza el skill registry y `_shared/skill-resolver.md`, y no interrumpe un flujo activo.
+- **Tooling operativo basado en evidencia.** Detectar integraciones reales del proyecto —dependencias, imports, configuraciones, variables de entorno— y sólo entonces proponer scripts, comandos o automatizaciones repetibles. Nada especulativo; nunca crear `.env` reales ni tocar credenciales; un artifact aprobado lleva como mínimo documentación, `.env.example` y un smoke test read-only; la ubicación project-local queda a evaluar.
+
+**El pedido de "reportá una oportunidad de tooling" en cada brief queda fuera de v7.** No es mapear: cambia lo que el orquestador escribe en cada brief y lo que cada subagente devuelve, y agrega una lista de candidatos que nadie diseñó dónde vive, todo dentro del contexto que v7 está protegiendo. La materia prima ya existe sin tocar los briefs: `pegasus-verifier` devuelve *"each command as you ran it, its exit code"* (`pegasus-verifier.md:42`), `pegasus-implementer` devuelve *"the proof you ran and what it produced"* (`pegasus-implementer.md:38-39`), *Evidence* guarda comandos textuales y Engram guarda lo que pasó entre sesiones. Para el diseño futuro quedan como punto de partida: proponer en los cierres naturales —el fin de un FTD, el cierre de una sesión— y no a mitad de trabajo; la vía a pedido por la ruta consulta (*"¿qué tools le faltan a este proyecto?"*); dónde se acumulan los candidatos y con qué umbral de repetición; y si hace falta una línea fija en el cuerpo del implementer y del verifier para lo que sólo el subagente ve.
+
+### Confirmaciones y lo que sigue pendiente
+
+Los puntos 1 a 6 que la fase 2 dejó abiertos se confirmaron el 24 de septiembre de 2026 y viven en el cuerpo: el readiness de quien firma lo que escribió, en [Actores y readiness fuera de SDD](#actores-y-readiness-fuera-de-sdd); la consulta sin etiqueta, los nombres L0, FTD y SDD y FTD sólo por routing, en [Las cuatro rutas y los routing facts](#las-cuatro-rutas-y-los-routing-facts); un escritor por vez, en [El record FTD y dónde vive](#el-record-ftd-y-dónde-vive); y la compatibilidad, en [Compatibilidad, permisos y seguridad](#compatibilidad-permisos-y-seguridad). Los cuatro puntos que agregó la fase 3 se aprobaron el mismo día, y figuran abajo con su estado. Solo queda abierta la versión, que se decide al cortar la release.
+
+| Punto | Estado |
+|---|---|
+| Definición del "agent marker" de Strict TDD | **Aprobada** el 24 de septiembre de 2026, tal como la define el plan del slice (d), incluida la variante con el rótulo en negrita |
+| Prohibir secretos y contenido de archivos sensibles en *Evidence* | **Aprobada** el 24 de septiembre de 2026: tarea b4 |
+| Dónde se nombra `ftd-procedure.md` | Sólo en la salida de la ruta FTD de `flow-applicability.md` (b5), porque al orquestador le quedan 11 palabras. Entrar a FTD pasa siempre por la escalera, aunque la ruta sea obvia: una lectura para decidir y una para ejecutar. Reescribe el criterio 7 aprobado en la fase 2, que decía «desde la capa de ejecución». **Aprobado** el 24 de septiembre de 2026 |
+| Strict TDD en L0 | El orquestador lo resuelve una vez por sesión a través del preflight (SDD) y del procedimiento (FTD), no desde su cuerpo; en un L0 lo resuelve el implementer con la misma regla (d5). Reescribe el criterio 11 aprobado, que nombraba al orquestador entre los que referencian la regla. **Aprobado** el 24 de septiembre de 2026 |
+| Versión mayor o menor | Una decisión de release, no de código. Antecedentes: 4.0.0 fue mayor por una ruptura explícita, 5.0.0 por cambiar el punto de entrada a un único ejecutable, 6.0.0 por soportar un segundo CLI (`7b8d4e7`), y de 5.1 a 5.8 hubo cambios de comportamiento que salieron como menores. Los identificadores de wire no cambian |
+
 ## Deudas sin unidad asignada
 
 Trabajo conocido que no pertenece a ninguna unidad del corte. Se acarrea a propósito, y cada ítem declara qué lo destraba, para que el acarreo sea una decisión y no un olvido, y qué puede hacer una persona mientras siga abierto — vacío donde no hay nada útil que decir. Acá va sólo lo que todavía está por decidirse o por hacerse: lo que funciona así a propósito vive en [Limitaciones aceptadas](#limitaciones-aceptadas), más abajo.
@@ -1557,3 +2019,5 @@ Y salió del árbol lo que quedaba de la distribución de v3: el binario vendori
 La lección que deja esa serie es de método y no de diseño: **cada uno de esos defectos era invisible desde el repositorio y evidente desde una instalación**. La suite verificaba que el archivo se escribiera; lo que faltaba era preguntarle al runtime qué había entendido. `opencode debug agent`, un handshake real, un `chmod` sobre un árbol de dos archivos — las herramientas que encontraron los defectos fueron siempre las que ejercitan, no las que inspeccionan.
 
 **Lo que sigue.** La migración de tests que la unidad 10 dejó a medio camino se cerró, y de paso corrigió cómo estaba descripta: `test_journal_store.py` y `test_snapshot_store.py` nunca migraron nada — conservaron sus casos contra el doble y **agregaron** una clase corta contra disco real, porque el doble prueba la política y el disco prueba que las dos mitades componen. `test_model_assignment_store.py` y `tests/test_dependencies.py` recibieron esa misma contraparte: modos reales, round-trip real, y la limpieza de un árbol escrito a medias, que es lo que un doble respaldado por un diccionario no puede desmentir. Lo que no se movió tampoco debía moverse: los casos que inyectan una falla —«permission denied», «no space left on device»— no se producen contra un disco real de forma determinística, y los dobles de `test_dependencies.py` son una red y un `npm ci`, que no son de lo que esta deuda hablaba. El resto vive en «Deudas sin unidad asignada», acarreado a propósito.
+
+**v7 está en implementación.** Sus decisiones —FTD como carril habitual del trabajo ordinario, la escalera de cuatro rutas con sus routing facts, el record en `docs/ftd/` y Strict TDD fuera de SDD— viven en [v7: FTD y la escalera de rutas](#v7-ftd-y-la-escalera-de-rutas). El plan de slices quedó aprobado ahí, y el progreso de cada slice se anota en esa sección, no acá.
