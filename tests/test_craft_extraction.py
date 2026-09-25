@@ -13,12 +13,116 @@ silently restating the craft it is supposed to point at instead.
 """
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
 from test_phase_less_specialists import PHASE_MARKERS
 
-SKILLS = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content" / "skills"
+CONTENT = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content"
+SKILLS = CONTENT / "skills"
+CRAFT = SKILLS / "_shared" / "implementation-craft.md"
+
+#: Slice (d): the Strict TDD reading rule, with one owner. A distinctive phrase
+#: of it, and the rule's clauses pinned as written -- each a permission or a
+#: prohibition, so each is closed-world: there exactly once, and no other
+#: sentence of the same file on the same subject.
+RULE_NEEDLE = "Resolve the mode once, in this order"
+RULE_HEADING = "### Resolving Strict TDD Mode"
+RULE_POINTER = '"Resolving Strict TDD Mode" in `_shared/implementation-craft.md`'
+RULE_STEPS = (
+    "A marker in the instructions already in context",
+    "The project flag",
+    "The runner default",
+)
+#: Every sentence of the craft file on the rule's subjects -- the marker, a
+#: brief, a runner, a change with no behavior, standard mode, a fallback or a
+#: default -- as written. The last five predate slice (d) and are pinned so a
+#: new "otherwise default to standard mode" cannot join them unseen.
+CRAFT_RULE_SENTENCES = frozenset(
+    {
+        "**There is no silent fallback.** If Strict TDD is active, follow it or report failure.",
+        "Do not quietly switch to standard mode.",
+        "Every assigned work unit, including standard mode, MUST produce a **Work Unit Evidence** table before "
+        "its tasks are marked complete:",
+        "If design/tasks contain applicable threat-matrix cases, write and run each mapped RED test before the "
+        "corresponding production change even in standard mode.",
+        "The default PR review budget is **400 changed lines** (`additions + deletions`), counting authored text "
+        "additions plus deletions only; generated goldens are excluded from that count.",
+        "**A marker in the instructions already in context**, opening no file for it.",
+        "A marker is a line whose whole content is `Strict TDD Mode: enabled` or `Strict TDD Mode: disabled`, "
+        "or that line with its label in bold, `**Strict TDD Mode**: enabled`; no other shape is one.",
+        "A project's marker beats the person's; contradictory markers of unclear origin count as none: say so "
+        "and go on.",
+        "**The runner default**: a test runner means active; none means inactive, and say so.",
+        "`enabled` without a test runner is inactive, and say so.",
+        "A brief carrying the marker's spelling has already resolved the mode; a brief with no spelling this "
+        "rule recognizes is resolved here, never silently as standard mode.",
+        "A change with no behavior to test records `N/A: no behavior changed` as its gate result, never FAILED.",
+    }
+)
+CRAFT_RULE_SUBJECT = re.compile(
+    r"marker|brief|runner|no behavior|standard mode|fall ?back|default|inactive"
+    # Review found "skip TDD", "treat as disabled" and "assume off" missing:
+    # the ways to say the mode is off without naming standard mode.
+    r"|\bskip|\btreat|\bassum|\bdisabl|\boff\b|\bwithout tdd\b|\bno tdd\b",
+    re.IGNORECASE,
+)
+
+#: The readers. Each unit -- a table row, a fence line, a heading, or a prose
+#: sentence -- that speaks of resolving the mode, as written. Nothing else in
+#: the reader may: a reader that restated the rule, or quietly defaulted to
+#: standard mode, fails here whatever its wording.
+READER_UNITS = {
+    SKILLS / "sdd-init" / "SKILL.md": frozenset(
+        {
+            '| Strict TDD Mode | Resolve it with "Resolving Strict TDD Mode" in `_shared/implementation-craft.md`, '
+            "then persist the result as `strict_tdd`. |",
+            'Resolve Strict TDD Mode with "Resolving Strict TDD Mode" in `_shared/implementation-craft.md`, using '
+            "the runner step 2 found.",
+            "Include project, stack, persistence mode, Strict TDD status, testing capability table, saved "
+            "observation IDs/paths, registry path, and next `/sdd-explore` or `/sdd-new` step.",
+        }
+    ),
+    SKILLS / "sdd-apply" / "SKILL.md": frozenset(
+        {
+            "### Step 3: Resolve Strict TDD Mode",
+            "Take `Strict TDD Mode` from your brief first.",
+            'Without it, resolve the mode with "Resolving Strict TDD Mode" in `_shared/implementation-craft.md`, '
+            "which also says what a brief with no recognized spelling means.",
+        }
+    ),
+    SKILLS / "sdd-verify" / "SKILL.md": frozenset(
+        {
+            "| Brief says `Strict TDD Mode: enabled` | Strict TDD verify; load module. |",
+            "| Brief says `Strict TDD Mode: disabled` | Standard verify; skip TDD checks. |",
+            '| No recognized spelling in the brief | Resolve with "Resolving Strict TDD Mode" in '
+            "`_shared/implementation-craft.md`. |",
+            "Resolve Strict TDD Mode as the Decision Gates say.",
+        }
+    ),
+}
+READER_SUBJECT_MODE = re.compile(r"strict[ _]?tdd|tdd mode|standard mode", re.IGNORECASE)
+READER_SUBJECT_RESOLUTION = re.compile(
+    r"brief|strict_tdd|runner|marker|resolv|config|cache|capabilit|default|fall|spelling|recogni", re.IGNORECASE
+)
+
+#: A marker's spelling wherever the shipped tree writes it, counted per file.
+#: Closed world: a new mention anywhere -- a template, a sentence, a stray
+#: line -- changes a count and fails until the pin is edited on purpose.
+MARKER_MENTION = re.compile(r"Strict TDD Mode(?:\*\*)?\s*:\s*\**\s*\{?(?:enabled|disabled)", re.IGNORECASE)
+MARKER_MENTIONS = {
+    CRAFT: 3,
+    SKILLS / "sdd-verify" / "SKILL.md": 2,
+    SKILLS / "sdd-init" / "references" / "init-details.md": 1,
+}
+#: A line that IS a marker, once list markers, quotes, backticks and bold are
+#: peeled off. Pegasus never switches the mode on or off for the person, so no
+#: shipped file may carry one.
+BARE_MARKER = re.compile(r"^\**strict tdd mode\**\s*:\s*\**\s*(?:enabled|disabled)\**$", re.IGNORECASE)
+
+#: The phrase the rule replaced, which nothing ever sent.
+DEAD_TDD_PHRASE = "STRICT TDD MODE IS ACTIVE"
 
 #: The phase-result headings, derived from the set the specialist guard already
 #: forbids in a phase-less agent body rather than retyped here -- a future phase
@@ -38,6 +142,78 @@ def all_text() -> dict[Path, str]:
 
 def occurrences(needle: str) -> list[Path]:
     return [path for path, text in all_text().items() if needle in text]
+
+
+def content_files() -> list[Path]:
+    """Every shipped text file in the content tree, not only the skills."""
+    return sorted(
+        path for path in CONTENT.rglob("*") if path.is_file() and "__pycache__" not in path.parts
+    )
+
+
+def content_occurrences(needle: str) -> list[Path]:
+    """Files whose text, whitespace collapsed, contains `needle` -- a phrase
+    wrapped across two source lines is still the phrase."""
+    return [
+        path
+        for path in content_files()
+        if needle in " ".join(path.read_text(encoding="utf-8", errors="replace").split())
+    ]
+
+
+def units_of(text: str) -> list[str]:
+    """Table rows, fence lines and headings as they are; every list item and
+    prose paragraph collapsed and cut into sentences, a leading list marker
+    stripped."""
+    units: list[str] = []
+    paragraph: list[str] = []
+    fenced = False
+
+    def flush() -> None:
+        if paragraph:
+            for part in re.split(r"(?<=[.!?])\s+", " ".join(" ".join(paragraph).split())):
+                part = re.sub(r"^(?:- |\d+\. )", "", part).strip()
+                if part:
+                    units.append(part)
+            paragraph.clear()
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            flush()
+            fenced = not fenced
+        elif fenced or stripped.startswith("|") or stripped.startswith("#"):
+            flush()
+            if stripped:
+                units.append(stripped)
+        elif not stripped:
+            flush()
+        elif re.match(r"(?:- |\d+\. )", stripped):
+            flush()
+            paragraph.append(stripped)
+        else:
+            paragraph.append(stripped)
+    flush()
+    return units
+
+
+def peeled(line: str) -> str:
+    """A line with its list, quote and heading markers and its wrapping
+    backticks removed. A heading is still a line a model reads as content, so
+    `## Strict TDD Mode: enabled` has to peel to a bare marker too."""
+    line = line.strip()
+    line = re.sub(r"^(?:[-*+>]\s+|\d+[.)]\s+|#{1,6}\s+)+", "", line)
+    return line.strip("`'\" ").strip()
+
+
+def marker_candidates(line: str) -> list[str]:
+    """What a model could read as a whole line: the line itself, peeled, and --
+    for a table row -- each of its cells, since a one-cell row or a cell of its
+    own is read the same way."""
+    candidates = [peeled(line)]
+    if line.strip().startswith("|"):
+        candidates += [peeled(cell) for cell in line.strip().strip("|").split("|")]
+    return candidates
 
 
 class CraftFilesExistTest(unittest.TestCase):
@@ -83,6 +259,98 @@ class CraftIsNotRestatedTest(unittest.TestCase):
     def test_the_work_unit_evidence_gate_lives_only_in_implementation_craft(self):
         found = occurrences("MUST produce a **Work Unit Evidence** table")
         self.assertEqual(found, [SKILLS / "_shared" / "implementation-craft.md"])
+
+    def test_the_strict_tdd_reading_rule_lives_only_in_implementation_craft(self):
+        """Across the whole content tree, agents and system prompt included."""
+        self.assertEqual(content_occurrences(RULE_NEEDLE), [CRAFT])
+
+    def test_the_readers_point_at_the_rule_instead_of_restating_it(self):
+        for reader in READER_UNITS:
+            with self.subTest(reader=reader.relative_to(SKILLS).as_posix()):
+                self.assertIn(RULE_POINTER, " ".join(reader.read_text(encoding="utf-8").split()))
+
+    def test_the_implementer_reaches_the_rule_through_its_craft_file(self):
+        implementer = (CONTENT / "agents" / "pegasus-implementer.md").read_text(encoding="utf-8")
+        self.assertIn("{{skills_root}}/_shared/implementation-craft.md", implementer)
+
+
+class StrictTddResolutionTest(unittest.TestCase):
+    """Slice (d): how any agent knows whether Strict TDD Mode is on, read from
+    one owner. Every check pins the clause as written and closes the world
+    around it: an inverted, reworded, passive or doubly negated clause fails,
+    and so does any new sentence on the same subject."""
+
+    def setUp(self):
+        self.craft = CRAFT.read_text(encoding="utf-8")
+        self.flat = " ".join(self.craft.split())
+
+    def rule_section(self) -> str:
+        self.assertIn(RULE_HEADING, self.craft)
+        return self.craft.split(RULE_HEADING, 1)[1].split("\n### ", 1)[0]
+
+    def test_the_rule_comes_before_the_hard_gate(self):
+        self.assertLess(self.craft.index(RULE_HEADING), self.craft.index("### Strict TDD Hard Gate"))
+
+    def test_the_order_is_marker_then_project_flag_then_runner(self):
+        steps = re.findall(r"^(\d+)\. \*\*([^*]+)\*\*", self.rule_section(), re.MULTILINE)
+        self.assertEqual(steps, [(str(number), lead) for number, lead in enumerate(RULE_STEPS, start=1)])
+
+    def test_the_rule_sentences_are_exactly_the_pinned_ones(self):
+        found = {unit for unit in units_of(self.craft) if CRAFT_RULE_SUBJECT.search(unit)}
+        self.assertEqual(found, set(CRAFT_RULE_SENTENCES))
+
+    def test_each_pinned_clause_is_there_exactly_once(self):
+        for sentence in CRAFT_RULE_SENTENCES:
+            with self.subTest(sentence=sentence):
+                self.assertEqual(self.flat.count(sentence), 1)
+
+    def test_the_marker_spellings_are_literals_in_the_rule(self):
+        for spelling in ("`Strict TDD Mode: enabled`", "`Strict TDD Mode: disabled`", "`**Strict TDD Mode**: enabled`"):
+            with self.subTest(spelling=spelling):
+                self.assertIn(spelling, self.rule_section())
+
+    def test_no_shipped_file_carries_a_marker_line(self):
+        """Pegasus never decides the mode for the person: a bare marker line
+        in anything it ships would."""
+        offenders = [
+            f"{path.relative_to(CONTENT).as_posix()}:{number}"
+            for path in content_files()
+            for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1)
+            if any(BARE_MARKER.match(candidate) for candidate in marker_candidates(line))
+        ]
+        self.assertEqual(offenders, [])
+
+    def test_the_marker_spelling_appears_only_where_pinned(self):
+        found = {}
+        for path in content_files():
+            count = len(MARKER_MENTION.findall(path.read_text(encoding="utf-8", errors="replace")))
+            if count:
+                found[path] = count
+        self.assertEqual(found, MARKER_MENTIONS)
+
+    def test_each_reader_resolves_the_mode_only_in_its_pinned_units(self):
+        for reader, pinned in READER_UNITS.items():
+            with self.subTest(reader=reader.relative_to(SKILLS).as_posix()):
+                found = {
+                    unit
+                    for unit in units_of(reader.read_text(encoding="utf-8"))
+                    if READER_SUBJECT_MODE.search(unit) and READER_SUBJECT_RESOLUTION.search(unit)
+                }
+                self.assertEqual(found, set(pinned))
+
+    def test_a_brief_without_a_recognized_spelling_falls_back_to_the_rule(self):
+        """The compatibility clause, said once, by the owner: an old phrase
+        from an orchestrator outside Pegasus means the rule decides, never a
+        silent standard mode."""
+        self.assertEqual(content_occurrences("never silently as standard mode"), [CRAFT])
+
+    def test_the_dead_phrase_is_gone_from_the_shipped_tree(self):
+        self.assertEqual(content_occurrences(DEAD_TDD_PHRASE), [])
+
+    def test_sdd_init_still_writes_the_project_flag(self):
+        details = (SKILLS / "sdd-init" / "references" / "init-details.md").read_text(encoding="utf-8")
+        self.assertIn("`config.yaml` should include concise context, `strict_tdd`", details)
+        self.assertIn("mem_save title/topic_key: sdd/{project}/testing-capabilities", details)
 
 
 class CraftOwnsNoPhaseEnvelopeTest(unittest.TestCase):

@@ -40,9 +40,9 @@ The orchestrator should provide structured status from `_shared/sdd-status-contr
 
 | Condition | Action |
 |---|---|
-| Orchestrator says `STRICT TDD MODE IS ACTIVE` | Treat as authoritative. |
-| Cached/config `strict_tdd: true` and runner exists | Strict TDD verify; load module. |
-| Strict TDD false or no runner | Standard verify; skip TDD checks. |
+| Brief says `Strict TDD Mode: enabled` | Strict TDD verify; load module. |
+| Brief says `Strict TDD Mode: disabled` | Standard verify; skip TDD checks. |
+| No recognized spelling in the brief | Resolve with "Resolving Strict TDD Mode" in `_shared/implementation-craft.md`. |
 | `actionContext.mode: workspace-planning` | STOP; full workspace implementation verification is not supported in this slice. |
 | Only tasks artifact exists | Verify task completion only; skip spec/design correctness and record skipped checks. |
 | Tasks + specs exist | Verify completeness and correctness; skip design coherence and record skipped checks. |
@@ -56,7 +56,7 @@ The orchestrator should provide structured status from `_shared/sdd-status-contr
 
 1. Load relevant skills via shared SDD Section A.
 2. Retrieve artifacts via shared Section B for the active persistence mode, or read the concrete `contextFiles` from structured status.
-3. Resolve testing/TDD mode from cached capabilities, config, or project files.
+3. Resolve Strict TDD Mode as the Decision Gates say.
 4. Follow the execution steps in `_shared/verification-craft.md` (task count, spec/design mapping, running tests, and the compliance matrix).
 5. Persist and return the verification report per `_shared/verification-craft.md`'s output contract.
 

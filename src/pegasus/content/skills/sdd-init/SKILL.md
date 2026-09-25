@@ -51,15 +51,13 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 | `mode=openspec` | Create/update openspec bootstrap files only. |
 | `mode=hybrid` | Do both Engram and openspec persistence. |
 | `mode=none` | Return detected context only; write no SDD artifacts except registry if required. |
-| strict TDD marker/config found | Use that value. |
-| no marker/config but test runner exists | Default `strict_tdd: true`. |
-| no test runner | Set `strict_tdd: false` and explain unavailable. |
+| Strict TDD Mode | Resolve it with "Resolving Strict TDD Mode" in `_shared/implementation-craft.md`, then persist the result as `strict_tdd`. |
 
 ## Execution Steps
 
 1. Inspect project files (`package.json`, `go.mod`, `pyproject.toml`, CI, lint/test config) and summarize stack/conventions.
 2. Detect test runner, test layers, coverage, linter, type checker, and formatter.
-3. Resolve Strict TDD from agent marker, `openspec/config.yaml`, detected runner fallback, or no-runner fallback.
+3. Resolve Strict TDD Mode with "Resolving Strict TDD Mode" in `_shared/implementation-craft.md`, using the runner step 2 found.
 4. Initialize persistence for the resolved mode.
 5. Build `.atl/skill-registry.md` using the skill-registry scan rules.
 6. Persist testing capabilities and project context.

@@ -25,6 +25,23 @@ Before writing any code:
 
 ## Test-Driven Discipline
 
+### Resolving Strict TDD Mode
+
+Resolve the mode once, in this order, and say which step decided it:
+
+1. **A marker in the instructions already in context**, opening no file for it. A marker is a line
+   whose whole content is `Strict TDD Mode: enabled` or `Strict TDD Mode: disabled`, or that line
+   with its label in bold, `**Strict TDD Mode**: enabled`; no other shape is one. A project's marker
+   beats the person's; contradictory markers of unclear origin count as none: say so and go on.
+2. **The project flag** `sdd-init` wrote: `strict_tdd` in `openspec/config.yaml`, or Engram's
+   `sdd/{project}/testing-capabilities`.
+3. **The runner default**: a test runner means active; none means inactive, and say so.
+
+`enabled` without a test runner is inactive, and say so. A brief carrying the marker's spelling has
+already resolved the mode; a brief with no spelling this rule recognizes is resolved here, never
+silently as standard mode. A change with no behavior to test records `N/A: no behavior changed` as
+its gate result, never FAILED.
+
 ### Strict TDD Hard Gate (when Strict TDD Mode is active)
 
 - You MUST produce a **TDD Cycle Evidence** table in your progress report

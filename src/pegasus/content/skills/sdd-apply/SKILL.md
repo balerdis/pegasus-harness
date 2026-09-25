@@ -107,24 +107,17 @@ Before starting work, check for existing apply-progress:
 
 **CRITICAL**: If the orchestrator told you previous progress exists, you MUST read it. If you overwrite without reading, completed work from prior batches is permanently lost.
 
-### Step 3: Read Testing Capabilities and Resolve Mode
+### Step 3: Resolve Strict TDD Mode
 
-Read the cached testing capabilities to determine implementation mode:
+Take `Strict TDD Mode` from your brief first. Without it, resolve the mode with "Resolving Strict TDD
+Mode" in `_shared/implementation-craft.md`, which also says what a brief with no recognized spelling
+means.
 
 ```
-Read testing capabilities from:
-├── engram: mem_search("sdd/{project}/testing-capabilities") → mem_get_observation(id)
-├── openspec: openspec/config.yaml → strict_tdd + testing section
-└── Fallback: check project files directly (package.json, go.mod, etc.)
-
-Resolve mode:
-├── IF strict_tdd: true AND test runner exists
-│   └── STRICT TDD MODE → Load and follow the Strict TDD module
-│       (read the file: sdd-apply/strict-tdd.md)
-│
-├── IF strict_tdd: false OR no test runner
-│   └── STANDARD MODE → use Step 4 below (no TDD module loaded)
-│
+Resolved mode:
+├── active   → STRICT TDD MODE → Load and follow the Strict TDD module
+│              (read the file: sdd-apply/strict-tdd.md)
+├── inactive → STANDARD MODE → use Step 4 below (no TDD module loaded)
 └── Cache the resolved mode for the return summary
 ```
 
