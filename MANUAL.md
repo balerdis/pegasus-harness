@@ -127,9 +127,11 @@ Si la ruta que otorgás cae bajo uno de esos cinco directorios, `directory grant
 ## Usarlo todos los días
 
 1. Abrí OpenCode dentro del repositorio en el que vas a trabajar.
-2. Para un cambio con alcance real, iniciá el flujo SDD (`sdd-init`, `sdd-new` o `sdd-ff`) y completá el pre-chequeo de sesión que pide el orquestador.
-3. Dejá que explore, propuesta, spec, diseño y tareas aclaren el cambio antes de `sdd-apply`.
-4. Implementá por unidades de trabajo y cerrá con `sdd-verify` cuando estén completas las tareas; `sdd-verify` es la única autoridad de readiness.
+2. Pedí lo que necesitás con tus palabras. El orquestador elige la ruta: una consulta se responde sin tocar nada, un cambio trivial y ya entendido se hace directo, y la mayoría de los cambios comunes van por FTD sin que tengas que pedirlo.
+3. En FTD, el agente cierra el alcance, te pide una sola confirmación antes de escribir y lleva un record en `docs/ftd/`. El FTD que crea esa carpeta te avisa una sola vez; si no querés versionarla, agregá `docs/ftd/` a `.gitignore`, o a `.git/info/exclude` si tampoco querés versionar la exclusión.
+4. SDD aparece cuando hace falta: el orquestador lo propone si hay que fijar antes del código un contrato o una decisión que va a revisar alguien que no está en la implementación, o una spec contra la que otros van a construir, y entra sólo si aceptás. También podés pedirlo vos (`sdd-init`, `sdd-new` o `sdd-ff`): completás el pre-chequeo de sesión, explore, propuesta, spec, diseño y tareas aclaran el cambio antes de `sdd-apply`, y cerrás con `sdd-verify`, la única autoridad para declarar listo para archivar un cambio SDD.
+
+Qué ruta toma cada pedido lo decide [flow-applicability.md](src/pegasus/content/skills/_shared/flow-applicability.md), y cómo corre un FTD, [ftd-procedure.md](src/pegasus/content/skills/_shared/ftd-procedure.md).
 
 Los comandos distribuidos son `sdd-init`, `sdd-new`, `sdd-ff`, `sdd-continue`, `sdd-apply`, `sdd-status`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-explore`, además de `context-load`, `context-save`, `handoff-load`, `handoff-save`, `skill-creator` y `skill-registry`. Podés leer su contenido en `~/.config/opencode/commands/` antes de usarlos.
 

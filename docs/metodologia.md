@@ -4,6 +4,17 @@ Pegasus no es un framework que reemplace el criterio del equipo. Es una capa de 
 
 ## El recorrido normal
 
+Antes de cualquier flujo, el orquestador elige la ruta del pedido. Hay cuatro, y el tamaño del cambio no decide ninguna:
+
+- **Consulta**: si lo que se busca es información —explicar, comparar, investigar, revisar o correr un check—, se responde sin tocar nada.
+- **L0**: una única intervención trivial y ya entendida se hace directo y se prueba con una evidencia puntual.
+- **FTD**: el carril habitual. Un cambio ya decidido que necesita continuidad, checklist o evidencia durable se hace con un record en `docs/ftd/`, sin que nadie tenga que pedirlo.
+- **SDD**: se propone sólo cuando hay que fijar antes del código un contrato o una decisión que va a revisar alguien que no está en la implementación, o una spec contra la que otros van a construir; entra con aceptación explícita, o cuando la persona lo pide.
+
+Una decisión o un trade-off que resolver, un trabajo que cruza sesiones o un record que tiene que durar no llevan a SDD: son FTD. Las fronteras entre rutas están en [flow-applicability.md](../src/pegasus/content/skills/_shared/flow-applicability.md).
+
+Dentro de SDD, el recorrido es el de siempre:
+
 1. El orquestador confirma contexto, modo de ejecución, persistencia, estrategia de entrega y presupuesto de revisión.
 2. SDD deja claro qué se quiere cambiar y cómo se va a probar.
 3. El agente de apply implementa solamente las tareas asignadas.
@@ -11,6 +22,12 @@ Pegasus no es un framework que reemplace el criterio del equipo. Es una capa de 
 5. Si el cambio ya está probado, se archiva. Si no, vuelve al punto que tenga el problema.
 
 No hay atajo útil acá: CBM ayuda a leer el código; los tests y los checks de runtime prueban comportamiento.
+
+## FTD y su record
+
+El agente investiga, pregunta sólo cuando la respuesta cambia el alcance, los criterios de aceptación, un riesgo, una dependencia o la evidencia y, con una propuesta ejecutable, pide una única confirmación antes de escribir. Después lleva un record por cambio en `docs/ftd/<YYYY-MM-DD>-<slug>.md`: intención, alcance, decisiones si las hubo, checklist, evidencia y lo que falta. Un ítem del checklist está hecho sólo si tiene una observación concreta asociada en la evidencia.
+
+El record se versiona con Git por defecto. El FTD que crea `docs/ftd/` avisa una sola vez dónde quedó; si no se quiere subir, se excluye con `.gitignore` o con `.git/info/exclude`, que no se versiona. Con Engram disponible, la ruta del record también queda en memoria; sin Engram, el agente la informa en la conversación. Cómo se arma el record y qué cuenta como evidencia está en [ftd-procedure.md](../src/pegasus/content/skills/_shared/ftd-procedure.md).
 
 ## Las piezas y para qué sirven
 
@@ -83,10 +100,11 @@ No se cambia de estrategia a mitad de la cadena. Si el diff trae cambios que no 
 | Rol | Responsabilidad | Límite importante |
 | --- | --- | --- |
 | Persona responsable | Elige alcance, proveedor/modelo, dependencias opcionales y estrategia de entrega. | No delega su decisión de producto ni el manejo de credenciales. |
-| `pegasus-orchestrator` | Ordena fases, valida gates y delega el trabajo correcto. | No ejecuta inline las fases que pertenecen a un subagente. |
+| `pegasus-orchestrator` | Elige la ruta de cada pedido, coordina el trabajo y, en SDD, ordena fases, valida gates y delega el trabajo correcto. | No ejecuta inline las fases que pertenecen a un subagente. |
+| Quien coordina un FTD | Mantiene el record, un escritor por vez; los subagentes le devuelven evidencia. | Declara listo un cambio leyendo las observaciones registradas; si firma algo que él mismo escribió, lo dice. |
 | Agente SDD de planificación | Produce explore, proposal, spec, design o tasks según la fase. | No implementa ni declara listo un cambio por su cuenta. |
 | `sdd-apply` | Implementa las tareas asignadas y deja evidencia de unidad de trabajo. | No ejecuta verify final ni toma tareas fuera de su asignación. |
-| `sdd-verify` | Es la única autoridad de readiness para cambios ejecutables o de configuración. | No arregla lo que encuentra; informa el problema para remediación. |
+| `sdd-verify` | Es la única autoridad para declarar listo para archivar un cambio SDD. | No arregla lo que encuentra; informa el problema para remediación. |
 | CBM | Mapea la superficie de código antes de tocar símbolos compartidos. | No reemplaza tests ni runtime checks. |
 
 ## Dónde mirar en el repo
