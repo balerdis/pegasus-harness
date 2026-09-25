@@ -28,6 +28,8 @@ import unittest
 from pathlib import Path
 
 from pegasus.core import content as content_module
+from test_flow_routing import declared_facts, flow_text
+from test_orchestrator_routing import APPLICABILITY_NEEDLE
 
 ROOT = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content"
 BASELINE = ROOT / "system-prompt" / "AGENTS.md"
@@ -297,6 +299,67 @@ class PersonaTest(SharedContentRules, unittest.TestCase):
             if not declares(found, level, prefix)
         ]
         self.assertEqual(missing, [], f"the persona lost sections; it has {found}")
+
+
+class KingPegasusRoutesTest(unittest.TestCase):
+    """The teaching voice takes every route but SDD, and reaches the ladder lazily.
+
+    `_shared/flow-applicability.md` owns the four routes; this voice only needs
+    to know where that file is, what to do when it cannot be read, and that
+    work which turns out to need SDD is named and handed to the orchestrator
+    rather than run here. Anything more would be the ladder restated in an
+    always-on body. Like the rest of this module it pins structure -- a path,
+    the house fail-open phrase, two names in one rule -- never a sentence.
+    """
+
+    POINTER = "{{skills_root}}/_shared/flow-applicability.md"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = PERSONA.read_text(encoding="utf-8")
+        rules = cls.text.split("\n## Rules\n", 1)[1].split("\n## ", 1)[0]
+        cls.bullets = [" ".join(line[2:].split()) for line in rules.split("\n") if line.startswith("- ")]
+        cls.agent = next(a for a in content_module.load().agents if a.name == "king-pegasus")
+
+    def bullets_naming(self, *needles: str) -> list[str]:
+        return [bullet for bullet in self.bullets if all(needle in bullet for needle in needles)]
+
+    def test_a_rule_points_at_the_route_ladder(self):
+        self.assertTrue(self.bullets_naming(self.POINTER), self.bullets)
+
+    def test_the_pointer_fails_open(self):
+        """In the same rule, so the fallback belongs to this reference and not to
+        the delegation-capabilities one that already says it."""
+        self.assertTrue(self.bullets_naming(self.POINTER, "missing or unreadable"), self.bullets)
+
+    def test_work_that_needs_sdd_is_handed_to_the_orchestrator_not_run_here(self):
+        rules = self.bullets_naming("SDD", "`pegasus-orchestrator`")
+        self.assertTrue(rules, self.bullets)
+        # The negation has to govern "run ... yourself" and the hand-over has to
+        # stand un-negated: a bullet that merely has "never" somewhere before
+        # "run" also passes when it says the opposite ("never hand it over --
+        # run it yourself"), which is the one reading this rule forbids.
+        handed_over = re.compile(r"\bhand(?:s|ed)?\s+(?:it\s+)?over\s+to\s+`pegasus-orchestrator`")
+        never_run_here = re.compile(r"\b(?:never|not)\s+run\s+(?:it\s+)?yourself\b")
+        negated_hand_over = re.compile(r"\b(?:never|not|no)\b[^.]*\bhand")
+        self.assertTrue(
+            any(
+                handed_over.search(rule) and never_run_here.search(rule) and not negated_hand_over.search(rule)
+                for rule in rules
+            ),
+            rules,
+        )
+
+    def test_handing_sdd_over_adds_no_delegation_target(self):
+        """Handing over is naming the work and pointing at the orchestrator, not
+        delegating to it: the voice still delegates to `pegasus-general` only."""
+        self.assertEqual(self.agent.may_delegate_to, ("pegasus-general",))
+
+    def test_the_ladder_is_pointed_at_not_restated(self):
+        self.assertNotIn(APPLICABILITY_NEEDLE, self.text)
+        for fact in declared_facts(flow_text()):
+            with self.subTest(fact=fact):
+                self.assertNotIn(fact, self.text)
 
 
 class EngramConventionTest(unittest.TestCase):

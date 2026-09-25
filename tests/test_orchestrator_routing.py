@@ -39,6 +39,7 @@ SHARED = SKILLS / "_shared"
 
 ORCHESTRATOR = AGENTS / "pegasus-orchestrator.md"
 APPLICABILITY = SHARED / "flow-applicability.md"
+KING_PEGASUS = AGENTS / "king-pegasus.md"
 CRITERION = SHARED / "sub-delegation-criterion.md"
 
 #: Gate 1's own wording. The orchestrator must point at it, never restate it.
@@ -81,12 +82,48 @@ FTD_NOT_SDD_STEMS = ("trade-off", "session", "record", "outliv", "surviv")
 #: `WordCeilingIsReformatProofTest` below, which proves this on a rewrapped
 #: copy rather than asserting it).
 #:
-#: 1327 words today. The ceiling carries the same proportional headroom the
-#: retired line ceiling did (104 / 97 ~= 1.072x), rounded down: 1327 * 1.07 ~=
-#: 1420. That is room for a short new sentence, not a second section -- a
-#: change that needs more than that earns a deliberate ceiling bump, not a
-#: reflow.
+#: 1327 words when the ceiling was set; 1398 after v7 rewrote the routing
+#: section text for text, which leaves the margin slice (c) needs. The
+#: ceiling carries the same proportional headroom the retired line ceiling
+#: did (104 / 97 ~= 1.072x), rounded down: 1327 * 1.07 ~= 1420. That is
+#: room for a short new sentence, not a second section -- a change that
+#: needs more than that earns a deliberate ceiling bump, not a reflow.
 ORCHESTRATOR_WORD_CEILING = 1420
+
+#: What every ceiling below measures: the WHOLE file, as `wc -w` and
+#: `len(text.split())` count it -- front matter included -- exactly as
+#: `ORCHESTRATOR_WORD_CEILING` above always has, even where prose calls the
+#: file "the body". Subtracting the front matter re-derives a number these
+#: tests never check. Each ceiling is the count measured when it was set plus
+#: only the words already reserved for additions the v7 plan names: no
+#: round-number slack, so drift beyond those additions is caught.
+#:
+#: `flow-applicability.md`: 1026 words measured after v7 a3 (it has no front
+#: matter, so here whole file and prose agree). Reserved: 35 words for b5's
+#: pointer to `_shared/ftd-procedure.md` at the exit of the FTD route clause --
+#: one sentence naming the procedure (record, evidence, close), that it is read
+#: only on that route, and its fail-open, estimated from a draft of that
+#: sentence. 1026 + 35 = 1061. Anything past that pointer earns a deliberate
+#: bump, never a reflow.
+FLOW_APPLICABILITY_WORD_CEILING = 1061
+
+#: `king-pegasus.md`: 715 words measured after v7 a5 -- 33 of them front
+#: matter, its two `---` delimiters included. Reserved, estimated from a draft
+#: of each sentence: 43 words for c3 -- about 30 for the readiness wording
+#: beside "Close the loop you open" (outside SDD the readiness call is this
+#: voice's own, made from what it observed, and signing what it wrote is said
+#: as such) and about 13 for the rule that on FTD it keeps the record itself,
+#: reached through `flow-applicability.md`; and 25 words for d5 -- naming
+#: `_shared/implementation-craft.md` and resolving Strict TDD Mode once in its
+#: own session, with that pointer's fail-open. 715 + 43 + 25 = 783.
+KING_PEGASUS_WORD_CEILING = 783
+
+#: The bodies a word ceiling guards, each with the ceiling it answers to.
+CEILINGED_BODIES = (
+    (ORCHESTRATOR, ORCHESTRATOR_WORD_CEILING),
+    (APPLICABILITY, FLOW_APPLICABILITY_WORD_CEILING),
+    (KING_PEGASUS, KING_PEGASUS_WORD_CEILING),
+)
 
 
 def rewrap_preserving_words(text: str) -> str:
@@ -320,34 +357,53 @@ class OrchestratorStaysSmallTest(unittest.TestCase):
         self.assertLessEqual(words, ORCHESTRATOR_WORD_CEILING, "the orchestrator body grew")
 
 
+class FlowApplicabilityStaysSmallTest(unittest.TestCase):
+    """The ladder is read whenever a route is not obvious; it must not grow into
+    the manual of every flow. How FTD runs belongs to its own procedure."""
+
+    def test_the_ladder_did_not_grow_in_hiding(self):
+        words = len(APPLICABILITY.read_text(encoding="utf-8").split())
+        self.assertLessEqual(words, FLOW_APPLICABILITY_WORD_CEILING, "flow-applicability.md grew")
+
+
+class KingPegasusStaysSmallTest(unittest.TestCase):
+    """An always-on body: every word is paid on every turn of the voice."""
+
+    def test_the_teaching_voice_did_not_grow(self):
+        words = len(KING_PEGASUS.read_text(encoding="utf-8").split())
+        self.assertLessEqual(words, KING_PEGASUS_WORD_CEILING, "king-pegasus.md grew")
+
+
 class WordCeilingIsReformatProofTest(unittest.TestCase):
     """The decisive guard: the measure must not move when only line breaks do.
 
-    Rewraps the real orchestrator body in memory -- the repository file is
-    read and never written -- and asserts the word count this suite relies on is
+    Rewraps each ceilinged body in memory -- the repository files are read and
+    never written -- and asserts the word count this suite relies on is
     unchanged while the line count is, proving the incident in the comment
     above cannot recur under the new measure the way it did under the old one.
     """
 
     def test_rewrapping_moves_lines_but_not_words(self):
-        original = ORCHESTRATOR.read_text(encoding="utf-8")
-        rewrapped = rewrap_preserving_words(original)
+        for body, _ in CEILINGED_BODIES:
+            with self.subTest(body=body.name):
+                original = body.read_text(encoding="utf-8")
+                rewrapped = rewrap_preserving_words(original)
 
-        original_words = len(original.split())
-        rewrapped_words = len(rewrapped.split())
-        original_lines = len(original.splitlines())
-        rewrapped_lines = len(rewrapped.splitlines())
+                original_words = len(original.split())
+                rewrapped_words = len(rewrapped.split())
+                original_lines = len(original.splitlines())
+                rewrapped_lines = len(rewrapped.splitlines())
 
-        self.assertEqual(
-            original_words,
-            rewrapped_words,
-            "the rewrap changed the word count -- it is not a pure reflow",
-        )
-        self.assertNotEqual(
-            original_lines,
-            rewrapped_lines,
-            "the rewrap did not actually change the line layout -- the test proves nothing",
-        )
+                self.assertEqual(
+                    original_words,
+                    rewrapped_words,
+                    "the rewrap changed the word count -- it is not a pure reflow",
+                )
+                self.assertNotEqual(
+                    original_lines,
+                    rewrapped_lines,
+                    "the rewrap did not actually change the line layout -- the test proves nothing",
+                )
 
 
 if __name__ == "__main__":
