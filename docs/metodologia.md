@@ -105,7 +105,7 @@ No se cambia de estrategia a mitad de la cadena. Si el diff trae cambios que no 
 | --- | --- | --- |
 | Persona responsable | Elige alcance, proveedor/modelo, dependencias opcionales y estrategia de entrega. | No delega su decisión de producto ni el manejo de credenciales. |
 | `pegasus-orchestrator` | Elige la ruta de cada pedido, coordina el trabajo y, en SDD, ordena fases, valida gates y delega el trabajo correcto. | No ejecuta inline las fases que pertenecen a un subagente. |
-| Quien coordina un FTD | Mantiene el record, un escritor por vez; los subagentes le devuelven evidencia. | Declara listo un cambio leyendo las observaciones registradas; si firma algo que él mismo escribió, lo dice. |
+| Quien coordina un FTD | Mantiene el record, un escritor por vez; los subagentes le devuelven evidencia. | No declara listo un cambio sin leer las observaciones registradas; si firma algo que escribió él mismo, no lo presenta como verificación independiente. |
 | Agente SDD de planificación | Produce explore, proposal, spec, design o tasks según la fase. | No implementa ni declara listo un cambio por su cuenta. |
 | `sdd-apply` | Implementa las tareas asignadas y deja evidencia de unidad de trabajo. | No ejecuta verify final ni toma tareas fuera de su asignación. |
 | `sdd-verify` | Es la única autoridad para declarar listo para archivar un cambio SDD. | No arregla lo que encuentra; informa el problema para remediación. |
