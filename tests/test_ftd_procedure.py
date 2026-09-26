@@ -59,14 +59,24 @@ PROCEDURE_NEEDLE = "A checkbox is not evidence"
 
 _FENCE = re.compile(r"^```[^\n]*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
-_MARKING = re.compile(r"\bmark(?:s|ed|ing)?\b", re.IGNORECASE)
+#: Marking a check, by the words for it: "mark", "tick the box", "check it
+#: off", "cross it off", "[x]", "flag it as done".
+_MARKING = re.compile(
+    r"\bmark(?:s|ed|ing)?\b|\btick(?:s|ed|ing)?\b|\bcheck(?:s|ed|ing)? (?:it |them |each |an item |items )?off\b"
+    r"|\bcheck(?:s|ed|ing)? the (?:check)?box|\bcross(?:es|ed|ing)? (?:it |them )?off\b|\[x\]"
+    r"|\bflag(?:s|ged|ging)? (?:it |them )?as done|\bfill(?:s|ed|ing)? in the (?:check)?box",
+    re.IGNORECASE,
+)
 #: Secrets by the words people actually use for them. A stem list forgets a
 #: word ("paste a private key or an API key" named none of the first five), so
 #: it is wide on purpose, and a bare "key" counts: the procedure has no other
 #: reason to say it ("topic_key" is one word and does not match).
 _SECRET_STEM = re.compile(
-    r"secret|sensitive|credential|password|passphrase|token|\bkeys?\b|api[\s_-]?keys?|\.env\b"
-    r"|\bauth\b|authentica|authoriz|bearer|cookie|certificat|\bssh\b",
+    r"secret|sensitive|credential|passw|passphrase|token|\bkeys?\b|api[\s_-]?keys?|\.env"
+    r"|\bauth\b|authentica|authoriz|bearer|cookie|certificat|\bssh\b"
+    r"|oauth|\bjwt\b|\bpem\b|id_rsa|\bgpg\b|\bpgp\b|\bpii\b|personal data|confidential|private"
+    r"|connection string|\bdsn\b|keychain|keyring|keystore|\bvault\b|\.netrc|\.npmrc|kubeconfig"
+    r"|\bpin\b|\botp\b|one-time code|\b2fa\b|\bmfa\b|seed phrase|session[ _-]?id",
     re.IGNORECASE,
 )
 

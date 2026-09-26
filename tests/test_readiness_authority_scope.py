@@ -37,8 +37,11 @@ AGENTS = Path(__file__).resolve().parents[1] / "src" / "pegasus" / "content" / "
 
 #: A self-declared "I am THE authority" claim, worded loosely enough to catch a
 #: future agent phrasing it differently while still claiming the same thing:
-#: "sole" (or "the one") within a short distance of "authority".
-AUTHORITY_CLAIM = re.compile(r"\bsole\b.{0,60}\bauthority\b", re.IGNORECASE | re.DOTALL)
+#: "sole" -- or "only", "final", "ultimate", "exclusive", "single", "the one"
+#: -- within a short distance of "authority".
+AUTHORITY_CLAIM = re.compile(
+    r"\b(?:sole|only|final|ultimate|exclusive|single|the one)\b.{0,60}\bauthority\b", re.IGNORECASE | re.DOTALL
+)
 
 #: The scope the claim is allowed to have: the SDD archive gate.
 ARCHIVE_SCOPE = re.compile(r"\barchive\b", re.IGNORECASE)

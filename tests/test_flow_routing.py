@@ -80,7 +80,10 @@ _FIRST_BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _LEAD = re.compile(r"^\*\*([^*]+)\*\*")
 _WORD = re.compile(r"[A-Za-z0-9]+")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
-_SDD = re.compile(r"\bSDD\b")
+#: SDD by any of its names: the acronym in any case, spelled out, its spec,
+#: and the reviewable contract that is its entry fact. A block that sends work
+#: to "a spec" sends it to SDD without writing the acronym.
+_SDD = re.compile(r"\bsdd\b|spec[- ]?driven|\bspecs?\b|specification|reviewable[ _]contract", re.IGNORECASE)
 
 
 def flow_text() -> str:
@@ -201,13 +204,21 @@ def promotion(clause: str) -> tuple[str, set[str]] | None:
     return origin.strip().lower(), {word.lower() for word in _WORD.findall(targets) if word.lower() in ROUTES}
 
 
+#: A decision, by stem: deciding, choosing, settling, weighing, a judgement
+#: call.
+_DECISION_STEM = re.compile(r"decision|decid|choice|choos|chose|settl|judge?ment call|\bweigh", re.IGNORECASE)
 #: What v7 moved from SDD to FTD, by stem: a decision or a trade-off to settle,
 #: crossing sessions, a record that outlives the session, durable evidence,
-#: continuity, a handoff.
+#: continuity, a checklist, a handoff. Built on `_DECISION_STEM`, so every
+#: block the decision check can see is one this check sees too.
 FTD_STEMS = re.compile(
-    r"trade|decision|decid|session|record|outliv|surviv|durab|continu|hand-?\s?off", re.IGNORECASE
+    _DECISION_STEM.pattern
+    + r"|trade|session|record|outliv|surviv|durab|continu|hand-?\s?off|hand-?\s?over|\btak(?:e|es|en|ing) over\b"
+    r"|checklist|persist|lasting|long-lived|multi-?day|\bdays\b|tomorrow|resum|pick(?:s|ed|ing)? (?:it |them )?up"
+    r"|carr(?:y|ies|ied|ying) over|(?:paper|audit) trail|writ(?:e|es|ten|ing) (?:it |them )?down"
+    r"|\blog\b|journal|logbook|ledger|worklog",
+    re.IGNORECASE,
 )
-_DECISION_STEM = re.compile(r"decision|decid", re.IGNORECASE)
 
 #: Closed world: every block -- a list item or a paragraph -- of a decision
 #: section in which SDD meets one of `FTD_STEMS`, pinned as written. Blocks, not
@@ -217,15 +228,21 @@ _DECISION_STEM = re.compile(r"decision|decid", re.IGNORECASE)
 #: the SDD reading; any new co-occurrence fails whatever its grammar, and a
 #: legitimate rewording is a deliberate edit here.
 #:
-#: Declared residue: the unit is a block, and a block ends at a blank line, so
-#: a claim spread over two bare paragraphs ("A record that outlives a session
-#: still matters." / "That is exactly when SDD applies.") is seen by neither.
-#: A text scan cannot follow an argument across paragraphs; review has to.
+#: The unit is a block, and a block ends at a blank line, so a claim spread
+#: over two bare paragraphs ("A record that outlives a session still matters."
+#: / "That is exactly when SDD applies.") is seen by neither block. That gap is
+#: closed, not by this scan, but by `DECISION_PARAGRAPHS` below: the decision
+#: sections admit no bare paragraph beyond the pinned ones, so the split cannot
+#: be written there without failing, whatever it says.
 SDD_MEETS_FTD_STEMS = frozenset(
     {
         # The reviewable-contract definition: a decision is SDD only when
         # someone absent from the implementation must review it before code.
         '**SDD** when someone absent from the implementation must review a contract or a decision before code; when others build against its spec, API, authorization or data model; when others will execute its ordered units; or when it was asked for.',
+        # Negates: FTD is the change that needs no reviewable contract. Seen
+        # once `_SDD` learned SDD's other names, the reviewable contract among
+        # them.
+        '**FTD** when the change is decided enough to apply, needs no reviewable contract, and does need continuity, a checklist, durable evidence or a handoff. Ask until the scope is closed, then confirm once before writing. How it runs — its record, evidence and close — is `_shared/ftd-procedure.md`, read only on this route; if it is missing or unreadable, keep the checklist and its evidence in your reply.',
         # Negates: a decision or a trade-off alone goes on as FTD.
         '**A decision or a trade-off to settle.** On its own it is not SDD: decide it with the person, write it down with the work, and go on as **FTD**.',
         # Negates: a decision taken and landed in the same work promotes to FTD.
@@ -234,6 +251,34 @@ SDD_MEETS_FTD_STEMS = frozenset(
         '**FTD → SDD** when a `needs_reviewable_contract` appears or SDD, a spec or a plan is asked for. Two reasonable designs or a trade-off, on their own, do not promote: they are decided, written down, and the FTD goes on.',
     }
 )
+
+
+#: Closed world over the bare paragraphs of the decision sections, pinned as
+#: written: each section's introduction line and the paragraphs that close a
+#: section. Every other line of those sections belongs to a list item, and an
+#: item is a citable clause, so editing one breaks the cases that cite it.
+#: Between the two, nothing in a decision section can change unseen: a new
+#: bare paragraph fails whatever it says -- the two-paragraph claim above
+#: included -- and a legitimate one is a deliberate edit here.
+DECISION_PARAGRAPHS = {
+    ORDER_SECTION: frozenset({"Ask in this order and stop at the first fact that is true:"}),
+    ROUTES_SECTION: frozenset(),
+    AMBIGUOUS_SECTION: frozenset(
+        {
+            "Resolve them by what the OUTPUT has to be and who must review it before code, never by size:",
+            "Genuinely undecidable? Ask in one line, naming both routes and what each costs; never pick the "
+            "heavier one silently because it is safer to be wrong about — a cycle nobody wanted is a real cost "
+            "paid by a real person.",
+        }
+    ),
+    PROMOTIONS_SECTION: frozenset(
+        {
+            "A route moves only up the ladder, and every move is named out loud:",
+            "Entering SDD because a reviewable contract appeared needs explicit acceptance; an explicit request "
+            "is its own acceptance. Nothing leaves SDD on its own.",
+        }
+    ),
+}
 
 
 def section_blocks(body: str) -> list[str]:
@@ -253,6 +298,36 @@ def section_blocks(body: str) -> list[str]:
             current = [line.strip()]
             blocks.append(current)
     return [" ".join(" ".join(block).split()) for block in blocks]
+
+
+def section_paragraphs(body: str) -> list[str]:
+    """Every run of lines of a section that belongs to no list item,
+    whitespace collapsed. Items are read exactly as `list_items` reads them --
+    a marker line and its indented continuation -- so a line glued to an item
+    without indentation is a paragraph here, as it is outside the clause."""
+    paragraphs: list[list[str]] = []
+    current: list[str] | None = None
+    in_item = False
+    for line in body.split("\n"):
+        if _ITEM.match(line):
+            in_item, current = True, None
+        elif in_item and line.startswith(" ") and line.strip():
+            continue
+        elif not line.strip():
+            in_item, current = False, None
+        else:
+            in_item = False
+            if current is None:
+                current = []
+                paragraphs.append(current)
+            current.append(line.strip())
+    return [" ".join(" ".join(paragraph).split()) for paragraph in paragraphs]
+
+
+def decision_paragraphs(text: str) -> dict[str, list[str]]:
+    """The bare paragraphs of each decision section."""
+    by_section = sections(text)
+    return {section: section_paragraphs(by_section.get(section, "")) for section in DECISION_SECTIONS}
 
 
 def sdd_blocks(text: str) -> list[str]:
@@ -285,18 +360,38 @@ FORBIDDING_CLAUSE = "never choose the route yourself: that decision is the calle
 #: The one clause allowed to speak of returning the facts, pinned the same way.
 RETURNING_CLAUSE = "When the brief asks for routing facts, return each one"
 
-#: A route, as a noun or a verb ("route", "routes", "routed", "routing").
-_ROUTE_STEM = re.compile(r"\brout(?:e|es|ed|ing)\b", re.IGNORECASE)
+#: A route, as a noun or a verb ("route", "routes", "routed", "routing"), its
+#: synonyms "lane" and "flow", or a route by name -- "pick FTD or SDD" names
+#: no route word. The names are matched in capitals only: `sdd-explore` and
+#: `docs/ftd` are not routes.
+_ROUTE_STEM = re.compile(r"\brout(?:e|es|ed|ing)\b|\b(?:lanes?|flows?)\b|(?-i:\b(?:L0|FTD|SDD)\b)", re.IGNORECASE)
 #: Choosing, matched by stem so no inflection or voice slips past: "chosen",
-#: "chose", "picked", "decides", "decision", "selection", "elected".
-_CHOICE_STEM = re.compile(r"choos|chose|pick|decid|decis|select|elect", re.IGNORECASE)
-#: Routing used as a verb on the work itself: "route it", "route the request".
-_ROUTE_AS_VERB = re.compile(
-    r"\brout(?:e|es|ed|ing)\s+(?:it|them|this|that|the\s+(?:request|work|brief|change))\b", re.IGNORECASE
+#: "chose", "choice", "picked", "decides", "decision", "selection", "elected",
+#: "settle", "determine", "opt for", "go with", "make the call", "propose",
+#: "say which route it takes".
+_CHOICE_STEM = re.compile(
+    r"choos|chose|choic|pick|decid|decis|select|elect|settl|determin|\bopt(?:s|ed|ing)?\b|\bgo(?:es|ing)? with\b"
+    r"|assign|classif|judg|\bcall(?:s|ed|ing)?\b|resolv|recommend|suggest|propos|advis|\btak(?:e|es|en|ing)\b"
+    r"|commit|\bland(?:s|ed|ing)? on\b|prefer|\bset(?:s|ting)?\b",
+    re.IGNORECASE,
 )
-_FACT_STEM = re.compile(r"\bfacts?\b", re.IGNORECASE)
+#: Routing used as a verb on the work itself: "route it", "route the request",
+#: "route a ticket", "route every change".
+_ROUTE_AS_VERB = re.compile(
+    r"\brout(?:e|es|ed|ing)\s+(?:it|them|this|that|(?:the|a|an|each|every|your|this|that)\s+"
+    r"(?:request|work|brief|change|task|ticket|issue|bug|fix|feature|job|question|ask))\b",
+    re.IGNORECASE,
+)
+#: The facts, by the word or by a fact's own backticked name: "omit
+#: `needs_continuity`" names no "fact".
+_FACT_STEM = re.compile(r"\bfacts?\b|`[a-z]+(?:_[a-z]+)+`|\bbooleans?\b|\bsignals?\b", re.IGNORECASE)
 #: Anything done with the facts, returning or withholding them, by stem.
-_HANDLING_STEM = re.compile(r"return|report|give|hand|send|withh|omit|skip|hold|keep|leav|hid|conceal|drop", re.IGNORECASE)
+_HANDLING_STEM = re.compile(
+    r"return|report|give|hand|send|withh|omit|skip|hold|keep|leav|hid|conceal|drop"
+    r"|provid|suppl|\bpass(?:es|ed|ing)?\b|\bshar(?:e|es|ed|ing)\b|deliver|includ|exclud|\blist(?:s|ed|ing)?\b"
+    r"|\bstat(?:e|es|ed|ing)\b|surfac|suppress|ignor|discard|filter|\btrim|answer",
+    re.IGNORECASE,
+)
 
 
 def explorer_text() -> str:
@@ -471,6 +566,41 @@ class TraceabilityTest(FlowApplicabilityCase):
                     origin, targets = promotion(case["decided_by"])
                     self.assertEqual(case["during"], origin)
                     self.assertIn(case["route"], targets)
+
+
+class DecisionParagraphsTest(FlowApplicabilityCase):
+    """A claim spread over two bare paragraphs is seen by no block-level scan,
+    so the decision sections admit no bare paragraph beyond the pinned ones."""
+
+    def test_every_decision_section_has_a_pin(self):
+        self.assertEqual(set(DECISION_PARAGRAPHS), set(DECISION_SECTIONS))
+
+    def test_the_decision_sections_hold_exactly_the_pinned_paragraphs(self):
+        found = decision_paragraphs(self.text)
+        for section in DECISION_SECTIONS:
+            with self.subTest(section=section):
+                self.assertCountEqual(found[section], DECISION_PARAGRAPHS[section])
+
+    def test_the_reviewers_two_paragraph_split_is_caught(self):
+        """The shape the block scan could not see, planted in memory: two bare
+        paragraphs, each innocent alone, that together send a record to SDD."""
+        planted = (
+            "A record that outlives a session still matters on its own.\n\n"
+            "That is exactly when SDD applies, regardless of a reviewable contract.\n"
+        )
+        text = self.text.replace("\n## Promotions\n", f"\n{planted}\n## Promotions\n", 1)
+        self.assertNotEqual(text, self.text, "the plant did not land")
+        found = decision_paragraphs(text)[AMBIGUOUS_SECTION]
+        self.assertIn("A record that outlives a session still matters on its own.", found)
+        self.assertNotEqual(sorted(found), sorted(DECISION_PARAGRAPHS[AMBIGUOUS_SECTION]))
+
+    def test_a_line_glued_to_an_item_without_indentation_is_a_paragraph(self):
+        """Items are read as the citations read them: a marker line and its
+        indented continuation. An unindented line right after an item is not
+        part of the clause a case cites, so it must count as a paragraph."""
+        body = "- **A clause.** It routes to **FTD**.\nThat is exactly when SDD applies.\n"
+        self.assertEqual(list_items(body), ["**A clause.** It routes to **FTD**."])
+        self.assertEqual(section_paragraphs(body), ["That is exactly when SDD applies."])
 
 
 class CoverageTest(FlowApplicabilityCase):

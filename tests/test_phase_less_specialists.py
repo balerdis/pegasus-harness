@@ -37,6 +37,7 @@ from pegasus.core import content as content_module
 from pegasus.core.content import AgentMode
 from pegasus.core.types import ConfigKeyArtifact, Environment
 from test_orchestrator_routing import READINESS_STEM, RECORD_STEM, sentences_on
+from test_readiness_authority_scope import AUTHORITY_CLAIM
 
 #: Slice (c): inside an FTD, whoever coordinates keeps the record and a
 #: specialist returns evidence. Pinned as written, in `## Result identity`.
@@ -102,9 +103,9 @@ PHASE_MARKERS = (
     "return `blocked`",
 )
 
-#: A self-declared "I am THE authority" claim, the same shape
-#: `test_readiness_authority_scope.py` refuses outside its owner.
-AUTHORITY_CLAIM = re.compile(r"\bsole\b.{0,60}\bauthority\b", re.IGNORECASE | re.DOTALL)
+#: A self-declared "I am THE authority" claim: `AUTHORITY_CLAIM`, imported
+#: from `test_readiness_authority_scope.py`, which refuses it outside its
+#: owner -- the same regex, never a retyped copy that drifts from it.
 
 #: Word count, not line count. A line ceiling is defeated by reflow alone --
 #: `tests/test_orchestrator_routing.py` proves this in this same repository:

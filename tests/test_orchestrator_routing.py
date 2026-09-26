@@ -47,6 +47,7 @@ SHARED = SKILLS / "_shared"
 ORCHESTRATOR = AGENTS / "pegasus-orchestrator.md"
 APPLICABILITY = SHARED / "flow-applicability.md"
 KING_PEGASUS = AGENTS / "king-pegasus.md"
+FTD_PROCEDURE = SHARED / "ftd-procedure.md"
 CRITERION = SHARED / "sub-delegation-criterion.md"
 
 #: Gate 1's own wording. The orchestrator must point at it, never restate it.
@@ -120,6 +121,13 @@ FLOW_APPLICABILITY_WORD_CEILING = 1061
 #: own session, with that pointer's fail-open. 715 + 43 + 25 = 783.
 KING_PEGASUS_WORD_CEILING = 783
 
+#: `ftd-procedure.md`: 915 words measured after v7 d5, the last slice that
+#: wrote to it (it has no front matter, so here whole file and prose agree).
+#: It is read on every FTD, so every word is paid on every FTD. Reserved:
+#: nothing -- v7 plans no further addition to the procedure. 915 + 0 = 915.
+#: Any growth earns a deliberate bump, never a reflow.
+FTD_PROCEDURE_WORD_CEILING = 915
+
 #: Readiness, by stem -- a claim that something is ready, done or signed off,
 #: in any wording: "ready", "readiness", "declares", "sign-off", "approved",
 #: "verdict", "done", "finished", "complete", "accepted", "good to go",
@@ -128,14 +136,22 @@ KING_PEGASUS_WORD_CEILING = 783
 #: ("CLIs ship their own built-in sub-agent types").
 READINESS_STEM = re.compile(
     r"\bready\b|readiness|declar|\bsign(?:s|ed|ing)?\b|sign-?off|approv|verdict|\bdone\b|finish"
-    r"|\bcomplete(?:d|s)?\b|\bcompletion\b|accept|good to go|green light"
+    r"|\bcomplete(?:d|s)?\b|\bcompletion\b|accept|good to go|green[- ]?light|greenlit"
     # Review found "shippable" missing; the rest of this line is the same
     # register a person reaches for when calling work finished.
-    r"|shippable|ship it|\blgtm\b|merge-?able|merge-ready|wrap(?:s|ped|ping)? (?:it )?up|close(?:s|d)? (?:it )?out",
+    r"|shippable|ship it|\blgtm\b|merge-?able|merge-ready|wrap(?:s|ped|ping)? (?:it )?up|close(?:s|d)? (?:it )?out"
+    # The vocabulary corpus found the rest: "all set", "it's a wrap", "safe to
+    # merge", "okay to ship", "passes review", "rubber-stamp it".
+    r"|it'?s a wrap|\ball (?:set|green)\b|thumbs[- ]up|rubber[- ]?stamp|finali[sz]|pass(?:es|ed)? review"
+    r"|\bbless(?:es|ed|ing)?\b|\b(?:safe|ok(?:ay)?|clear(?:ed)?) to (?:merge|ship|release|land|deploy|archive)\b",
     re.IGNORECASE,
 )
 #: The FTD record, by stem, including the words it could be called instead.
-RECORD_STEM = re.compile(r"record|\blog\b|checklist|docs/ftd", re.IGNORECASE)
+RECORD_STEM = re.compile(
+    r"record|\blog\b|checklist|docs/ftd|journal|worklog|logbook|ledger|diary|\btracker\b|tracking (?:file|doc)"
+    r"|(?:paper|audit) trail|running notes|notes? file|\bftd (?:file|doc)|changelog",
+    re.IGNORECASE,
+)
 
 #: The permitted sentences of slice (c), pinned as written. Closed world: the
 #: pinned sentence must be there exactly once, and no other sentence of the
@@ -188,6 +204,7 @@ CEILINGED_BODIES = (
     (ORCHESTRATOR, ORCHESTRATOR_WORD_CEILING),
     (APPLICABILITY, FLOW_APPLICABILITY_WORD_CEILING),
     (KING_PEGASUS, KING_PEGASUS_WORD_CEILING),
+    (FTD_PROCEDURE, FTD_PROCEDURE_WORD_CEILING),
 )
 
 
@@ -463,6 +480,15 @@ class KingPegasusStaysSmallTest(unittest.TestCase):
     def test_the_teaching_voice_did_not_grow(self):
         words = len(KING_PEGASUS.read_text(encoding="utf-8").split())
         self.assertLessEqual(words, KING_PEGASUS_WORD_CEILING, "king-pegasus.md grew")
+
+
+class FtdProcedureStaysSmallTest(unittest.TestCase):
+    """Read on every FTD: the procedure points at its owners instead of
+    growing into them."""
+
+    def test_the_procedure_did_not_grow_in_hiding(self):
+        words = len(FTD_PROCEDURE.read_text(encoding="utf-8").split())
+        self.assertLessEqual(words, FTD_PROCEDURE_WORD_CEILING, "ftd-procedure.md grew")
 
 
 class WordCeilingIsReformatProofTest(unittest.TestCase):

@@ -36,11 +36,15 @@ RULE_STEPS = (
     "The runner default",
 )
 #: Every sentence of the craft file on the rule's subjects -- the marker, a
-#: brief, a runner, a change with no behavior, standard mode, a fallback or a
-#: default -- as written. The last five predate slice (d) and are pinned so a
-#: new "otherwise default to standard mode" cannot join them unseen.
+#: brief, a runner, the project flag, a change with no behavior, standard
+#: mode, a fallback, a default, or setting the mode aside -- as written. The
+#: first five and the hard-gate line predate slice (d) and are pinned so a new
+#: "otherwise default to standard mode" cannot join them unseen.
 CRAFT_RULE_SENTENCES = frozenset(
     {
+        # The hard gate's own line: seen once the subject learned "without
+        # writing tests".
+        "If you complete a task WITHOUT writing tests first, mark it as FAILED in the evidence table",
         "**There is no silent fallback.** If Strict TDD is active, follow it or report failure.",
         "Do not quietly switch to standard mode.",
         "Every assigned work unit, including standard mode, MUST produce a **Work Unit Evidence** table before "
@@ -50,6 +54,9 @@ CRAFT_RULE_SENTENCES = frozenset(
         "The default PR review budget is **400 changed lines** (`additions + deletions`), counting authored text "
         "additions plus deletions only; generated goldens are excluded from that count.",
         "**A marker in the instructions already in context**, opening no file for it.",
+        # The rule's second step: seen once the subject learned the project flag.
+        "**The project flag** `sdd-init` wrote: `strict_tdd` in `openspec/config.yaml`, or Engram's "
+        "`sdd/{project}/testing-capabilities`.",
         "A marker is a line whose whole content is `Strict TDD Mode: enabled` or `Strict TDD Mode: disabled`, "
         "or that line with its label in bold, `**Strict TDD Mode**: enabled`; no other shape is one.",
         "A project's marker beats the person's; contradictory markers of unclear origin count as none: say so "
@@ -65,7 +72,12 @@ CRAFT_RULE_SUBJECT = re.compile(
     r"marker|brief|runner|no behavior|standard mode|fall ?back|default|inactive"
     # Review found "skip TDD", "treat as disabled" and "assume off" missing:
     # the ways to say the mode is off without naming standard mode.
-    r"|\bskip|\btreat|\bassum|\bdisabl|\boff\b|\bwithout tdd\b|\bno tdd\b",
+    r"|\bskip|\btreat|\bassum|\bdisabl|\boff\b|\bwithout tdd\b|\bno tdd\b"
+    # The vocabulary corpus found the rest: other ways to set the mode aside
+    # ("opt out", "waive", "optional", "proceed without tests"), and the
+    # project flag the rule reads second.
+    r"|opt(?:s|ed|ing)?[- ]out|bypass|\bignor|\bwaiv|\brelax|\bsuspend|optional|not (?:required|needed|mandatory)"
+    r"|\bflag\b|strict_tdd|config|without (?:writing )?tests?",
     re.IGNORECASE,
 )
 
@@ -102,15 +114,17 @@ READER_UNITS = {
         }
     ),
 }
-READER_SUBJECT_MODE = re.compile(r"strict[ _]?tdd|tdd mode|standard mode", re.IGNORECASE)
+READER_SUBJECT_MODE = re.compile(r"strict[ _-]?tdd|tdd mode|standard mode|test-driven mode", re.IGNORECASE)
 READER_SUBJECT_RESOLUTION = re.compile(
-    r"brief|strict_tdd|runner|marker|resolv|config|cache|capabilit|default|fall|spelling|recogni", re.IGNORECASE
+    r"brief|strict_tdd|runner|marker|resolv|config|cache|capabilit|default|fall|spelling|recogni"
+    r"|detect|infer|determin|decid|look(?:s|ed|ing)? up|lookup|assum|treat|flag|setting|persist|\bsav(?:e|es|ed|ing)\b",
+    re.IGNORECASE,
 )
 
 #: A marker's spelling wherever the shipped tree writes it, counted per file.
 #: Closed world: a new mention anywhere -- a template, a sentence, a stray
 #: line -- changes a count and fails until the pin is edited on purpose.
-MARKER_MENTION = re.compile(r"Strict TDD Mode(?:\*\*)?\s*:\s*\**\s*[{<]?(?:enabled|disabled)", re.IGNORECASE)
+MARKER_MENTION = re.compile(r"Strict TDD Mode\**\s*:\s*\**\s*[{<]?(?:enabled|disabled)", re.IGNORECASE)
 MARKER_MENTIONS = {
     CRAFT: 3,
     SKILLS / "sdd-verify" / "SKILL.md": 2,
@@ -152,7 +166,11 @@ TDD_SUBJECT = re.compile(
     # Review found "always write tests before code" missing: the mode can be
     # overridden without naming it, by describing its discipline.
     r"|tests? before|before (?:writing )?(?:the )?code|failing test|\brgr\b|testing discipline"
-    r"|\bred\b[^.]{0,40}\bgreen\b|write (?:the |a )?tests?\b",
+    r"|\bred\b[^.]{0,40}\bgreen\b|write (?:the |a )?tests?\b"
+    # The vocabulary corpus found the rest: "watch the test fail", "tests up
+    # front", "no code without a failing test", "a RED test".
+    r"|(?:see|watch)(?:es|ed|ing)? (?:it|them|the tests?) fail|tests? up-?\s?front"
+    r"|code without (?:a |the )?(?:failing )?tests?|\bred (?:test|phase|step)",
     re.IGNORECASE,
 )
 #: What each file may say about Strict TDD, and nothing more. The orchestrator
