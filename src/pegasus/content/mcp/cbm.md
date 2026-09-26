@@ -2,9 +2,9 @@
 name: cbm
 description: Knowledge graph of the codebase for structural code discovery
 distribution: download
-endpoint: https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.10.8/codebase-memory-mcp-linux-amd64.tar.gz
-version: 0.10.8
-checksum: sha256:e5cba4cad6ca8254a85f45041fc8a831908d7d5cb64f98fc3f8eb70a58671793
+endpoint: https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.11.0/codebase-memory-mcp-linux-amd64.tar.gz
+version: 0.11.0
+checksum: sha256:032b33c1833919a2d1de67ff6367fa6ea46aee8689c86ef223c88fae3b6e4536
 archive_members: [codebase-memory-mcp, LICENSE, install.sh, THIRD_PARTY_NOTICES.md]
 archive_executable: codebase-memory-mcp
 withheld_tools: [delete_project, ingest_traces]
