@@ -77,15 +77,17 @@ The orchestrator persists DAG state after each phase transition to enable SDD re
 
 Sub-agents launch with a fresh context and NO access to the orchestrator's instructions or memory protocol.
 
+Per the ambient memory-scope rule (`_shared/mcp/engram-convention.md`), a sub-agent makes no memory write unless its brief asks. The `Artifact store mode` line below, when `engram` or `hybrid`, IS the brief asking for that phase's own artifact write — nothing else. An SDD phase agent saves only its designated artifact; ad-hoc discovery saves and `mem_session_summary` are not its brief's business unless a specific instruction adds them.
+
 Who reads, who writes:
-- Non-SDD (general task): orchestrator searches engram, passes summary in prompt; sub-agent saves discoveries via `mem_save`
+- Non-SDD (general task): orchestrator searches engram, passes summary in prompt; sub-agent returns durable findings in its reply, and the orchestrator saves what is worth keeping
 - SDD (phase with dependencies): sub-agent reads artifacts directly from backend; sub-agent saves its artifact
 - SDD (phase without dependencies, e.g. explore): nobody reads; sub-agent saves its artifact
 
 Why this split:
 - Orchestrator reads for non-SDD: it knows what context is relevant; sub-agents doing their own searches waste tokens on irrelevant results
 - Sub-agents read for SDD: SDD artifacts are large; inlining them in the orchestrator prompt would consume the entire context window
-- Sub-agents always write: they have the complete detail on what happened; nuance is lost by the time results flow back to the orchestrator
+- SDD phases write their own artifact: the `Artifact store mode` line in their launch asks for exactly that write, and the detail is theirs to persist directly. Non-SDD sub-agents return findings instead — the launcher decides what is durable enough to save.
 
 ## Orchestrator Prompt Instructions for Sub-Agents
 
@@ -94,10 +96,14 @@ Every template below reads from or writes to memory. Inject those lines only whe
 Non-SDD:
 
 ```
-PERSISTENCE (MANDATORY):
-If you make important discoveries, decisions, or fix bugs, you MUST save them to engram before returning:
-  mem_save(title: "{short description}", type: "{decision|bugfix|discovery|pattern}", content: "{What, Why, Where, Learned}")
-Do NOT return without saving what you learned. This is how the team builds persistent knowledge across sessions.
+Return durable findings in your reply — decisions, discoveries, bug fixes, conventions
+worth keeping. You make no memory write; the launcher decides what to save from what
+you return.
+```
+
+Add this line only when the launcher wants this sub-agent to make one specific write itself, naming what to save:
+```
+PERSISTENCE: Call mem_save(title: "{short description}", type: "{decision|bugfix|discovery|pattern}", content: "{What, Why, Where, Learned}") to save {name the specific thing to save}.
 ```
 
 SDD (with dependencies):

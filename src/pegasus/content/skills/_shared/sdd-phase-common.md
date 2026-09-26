@@ -36,7 +36,7 @@ Do NOT use search previews as source material.
 
 ## C. Artifact Persistence
 
-Every phase that produces an artifact MUST persist it. Skipping this BREAKS the pipeline — downstream phases will not find your output.
+Every phase that produces an artifact MUST persist it. Skipping this BREAKS the pipeline — downstream phases will not find your output. This is the one memory write your launch brief asks for, per the ambient memory-scope rule: the `Artifact store mode` your launch passed is that ask, and it covers your own artifact only — not a session summary, not a free-standing discovery.
 
 ### Engram mode
 

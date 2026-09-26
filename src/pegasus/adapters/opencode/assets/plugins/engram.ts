@@ -46,15 +46,30 @@ const MEMORY_INSTRUCTIONS = `## Engram Persistent Memory — Protocol
 
 You have access to Engram, a persistent memory system that survives across sessions and compactions.
 
-### WHEN TO SAVE (mandatory — not optional)
+### WHO WRITES
 
-Call \`mem_save\` IMMEDIATELY after any of these:
+If you were launched by another agent, you make no memory writes — no \`mem_save\`,
+\`mem_update\`, \`mem_session_summary\`, nor the \`mem_judge\` that follows a save —
+unless your brief asks for one. You may still read memory: \`mem_search\`,
+\`mem_context\`, \`mem_get_observation\`. What deserves keeping goes in your reply;
+whoever launched you decides what to save.
+
+If you are the agent talking with the person, ask a launched agent's brief for any
+write you want it to make, and a durable finding in its reply is yours to save.
+
+### WHEN TO SAVE (if you are the agent talking with the person)
+
+Call \`mem_save\` after any of these:
 - Bug fix completed
 - Architecture or design decision made
 - Non-obvious discovery about the codebase
 - Configuration change or environment setup
 - Pattern established (naming, structure, convention)
 - User preference or constraint learned
+
+When nothing durable happened — a check that only confirmed, an attempt that was
+blocked, a delegation that brought back nothing new — there is nothing to save. A
+topic already in memory is updated under its topic key rather than saved again.
 
 Format for \`mem_save\`:
 - **title**: Verb + what — short, searchable (e.g. "Fixed N+1 query in UserList", "Chose Zustand over Redux")
@@ -86,9 +101,12 @@ Also search memory PROACTIVELY when:
 - The user mentions a topic you have no context on — check if past sessions covered it
 - The user's FIRST message references the project, a feature, or a problem — call \`mem_search\` with keywords from their message to check for prior work before responding
 
-### SESSION CLOSE PROTOCOL (mandatory)
+### SESSION CLOSE PROTOCOL (if you are the agent talking with the person)
 
-Before ending a session or saying "done" / "listo" / "that's it", you MUST:
+Only the agent talking with the person calls \`mem_session_summary\`, and only at a
+real close: the person says the session is ending, or asks for it. Finishing a
+task, getting a delegation back, or delivering a reply is not a close, and neither
+is saying "done" / "listo" / "that's it". At a real close:
 1. Call \`mem_session_summary\` with this structure:
 
 ## Goal
@@ -111,14 +129,14 @@ Before ending a session or saying "done" / "listo" / "that's it", you MUST:
 
 This is NOT optional. If you skip this, the next session starts blind.
 
-### AFTER COMPACTION
+### AFTER COMPACTION (if you are the agent talking with the person)
 
-If you see a message about compaction or context reset, or if you see "FIRST ACTION REQUIRED" in your context:
+If you are the agent talking with the person and you see a message about compaction or context reset, or "FIRST ACTION REQUIRED" in your context:
 1. IMMEDIATELY call \`mem_session_summary\` with the compacted summary content — this persists what was done before compaction
 2. Then call \`mem_context\` to recover any additional context from previous sessions
 3. Only THEN continue working
 
-Do not skip step 1. Without it, everything done before compaction is lost from memory.
+Do not skip step 1. Without it, everything done before compaction is lost from memory. A sub-agent that hits compaction follows the WHO WRITES rule above instead: no \`mem_session_summary\` unless its brief asks for one.
 `
 
 // ─── HTTP Client ─────────────────────────────────────────────────────────────
@@ -404,7 +422,18 @@ export const Engram: Plugin = async (ctx) => {
     // block at the beginning. By concatenating, we avoid adding extra system
     // messages that would break these models. See: GitHub issue #23.
 
-    "experimental.chat.system.transform": async (_input, output) => {
+    "experimental.chat.system.transform": async (input, output) => {
+      // Subagent sessions do not write memory (see the WHO WRITES section of
+      // MEMORY_INSTRUCTIONS above) — injecting the write-triggering protocol
+      // into their system prompt would tell them to do writes their brief
+      // never asked for, so we skip them the same way chat.message and
+      // tool.execute.after already do. `sessionID` is optional on this hook,
+      // so we fail CLOSED on a missing one rather than open: when engram is
+      // selected, the ambient block already carries the protocol to the root
+      // session, so skipping this injection costs nothing there; without
+      // engram there are no mem tools to instruct anyway.
+      if (!input.sessionID || subAgentSessions.has(input.sessionID)) return
+
       if (output.system.length > 0) {
         output.system[output.system.length - 1] += "\n\n" + MEMORY_INSTRUCTIONS
       } else {
@@ -421,6 +450,12 @@ export const Engram: Plugin = async (ctx) => {
     // 3. Tell the compressor to remind the new agent to save memories
 
     "experimental.session.compacting": async (input, output) => {
+      // Subagent sessions do not write memory; the "FIRST ACTION REQUIRED"
+      // nudge below is for the root session only. Returning early here keeps
+      // a subagent from being told to call mem_session_summary on
+      // compaction, which its brief never asked for.
+      if (input.sessionID && subAgentSessions.has(input.sessionID)) return
+
       if (input.sessionID) {
         await ensureSession(input.sessionID)
       }

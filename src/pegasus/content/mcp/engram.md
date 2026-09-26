@@ -18,9 +18,20 @@ reached through the `mem_save`, `mem_search`, `mem_context`, and the rest of the
 `mem_*` family. This protocol is mandatory and always active whenever those tools
 are present in your session — not something you activate on demand.
 
-## Proactive Save Triggers (mandatory — do not wait for the user to ask)
+## Memory Scope (who writes, and when)
 
-Call `mem_save` immediately and without being asked after any of these:
+If you were launched by another agent, you make no memory writes — no `mem_save`,
+`mem_update`, `mem_session_summary`, nor the `mem_judge` that follows a save — unless
+your brief asks for one. You may still read: `mem_search`, `mem_context`,
+`mem_get_observation`. What deserves keeping goes in your reply; whoever launched you
+decides what to save.
+
+If you are the agent talking with the person, ask a launched agent's brief for any
+write you want it to make, and a durable finding in its reply is yours to save.
+
+## Proactive Save Triggers (if you are the agent talking with the person)
+
+Call `mem_save` after any of these:
 
 - Architecture or design decision made
 - Team convention documented or established
@@ -35,8 +46,9 @@ Call `mem_save` immediately and without being asked after any of these:
 - Pattern established (naming, structure, convention)
 - User preference or constraint learned
 
-Self-check after EVERY task: "Did I make a decision, fix a bug, learn something
-non-obvious, or establish a convention? If yes, call `mem_save` NOW."
+When nothing durable happened — a check that only confirmed, an attempt that was
+blocked, a delegation that brought back nothing new — there is nothing to save. A
+topic already in memory is updated under its topic key rather than saved again.
 
 ## Save Format
 
@@ -76,10 +88,13 @@ Also search PROACTIVELY when:
   `mem_search` with keywords from their message to check for prior work before
   responding
 
-## Session Close Protocol (mandatory)
+## Session Close Protocol (if you are the agent talking with the person)
 
-Before ending a session or saying "done" / "listo" / "that's it" (or the
-equivalent in the user's language), call `mem_session_summary` with this shape:
+Only the agent talking with the person calls `mem_session_summary`, and only at a
+real close: the person says the session is ending, or asks for it (or the
+equivalent in the user's language). Finishing a task, getting a delegation back, or
+delivering a reply is not a close, and neither is saying "done" / "listo" / "that's
+it". At a real close, call `mem_session_summary` with this shape:
 
 ```markdown
 ## Goal
@@ -103,21 +118,24 @@ equivalent in the user's language), call `mem_session_summary` with this shape:
 
 This is NOT optional. If you skip it, the next session starts blind.
 
-## After Compaction
+## After Compaction (if you are the agent talking with the person)
 
-If you see a compaction message or "FIRST ACTION REQUIRED":
-
+If you are the agent talking with the person and you see a compaction message or
+"FIRST ACTION REQUIRED":
 1. IMMEDIATELY call `mem_session_summary` with the compacted summary content —
    this persists what was done before compaction
 2. Call `mem_context` to recover additional context from previous sessions
 3. Only THEN continue working
 
 Do not skip step 1. Without it, everything done before compaction is lost from
-memory.
+memory. A sub-agent that hits compaction follows the Memory Scope rule above
+instead: no `mem_session_summary` unless its brief asks for one.
 
 ## SDD Artifact Naming Convention
 
 NOTE: Critical engram calls (`mem_search`, `mem_save`, `mem_get_observation`) are inlined directly in each skill's SKILL.md. This section is supplementary reference — sub-agents do NOT need to read it to function.
+
+For an SDD phase sub-agent, the `Artifact store mode` line in your launch — `engram` or `hybrid` — is the brief asking for exactly this artifact write; it is not a license to save anything else. Ad-hoc discovery saves and `mem_session_summary` stay the launching agent's job, not yours, per the Memory Scope rule above.
 
 ### Naming Rules
 

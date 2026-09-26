@@ -2,7 +2,9 @@
   "about": "Natural phrasings that each closed-world subject regex must match, by topic. A topic names the regexes by the test module that defines them, and every phrase must match every regex named. A phrase a regex misses is a sentence its check never looks at. Seeded with every phrase a review found missing and the obvious synonyms of the register; it proves the lists match what was thought of, not what was not.",
   "topics": {
     "readiness": {
-      "stems": ["test_orchestrator_routing.READINESS_STEM"],
+      "stems": [
+        "test_orchestrator_routing.READINESS_STEM"
+      ],
       "must_match": [
         "shippable",
         "call it done",
@@ -50,7 +52,9 @@
       ]
     },
     "ftd_record": {
-      "stems": ["test_orchestrator_routing.RECORD_STEM"],
+      "stems": [
+        "test_orchestrator_routing.RECORD_STEM"
+      ],
       "must_match": [
         "the record",
         "recorded",
@@ -74,7 +78,9 @@
       ]
     },
     "secrets": {
-      "stems": ["test_ftd_procedure._SECRET_STEM"],
+      "stems": [
+        "test_ftd_procedure._SECRET_STEM"
+      ],
       "must_match": [
         "private key",
         "API key",
@@ -127,7 +133,9 @@
       ]
     },
     "marking_a_check": {
-      "stems": ["test_ftd_procedure._MARKING"],
+      "stems": [
+        "test_ftd_procedure._MARKING"
+      ],
       "must_match": [
         "mark",
         "marks",
@@ -148,7 +156,9 @@
       ]
     },
     "authority_claim": {
-      "stems": ["test_readiness_authority_scope.AUTHORITY_CLAIM"],
+      "stems": [
+        "test_readiness_authority_scope.AUTHORITY_CLAIM"
+      ],
       "must_match": [
         "sole authority",
         "the sole readiness authority",
@@ -162,7 +172,9 @@
       ]
     },
     "route_word": {
-      "stems": ["test_flow_routing._ROUTE_STEM"],
+      "stems": [
+        "test_flow_routing._ROUTE_STEM"
+      ],
       "must_match": [
         "route",
         "routes",
@@ -179,7 +191,9 @@
       ]
     },
     "route_choice": {
-      "stems": ["test_flow_routing._CHOICE_STEM"],
+      "stems": [
+        "test_flow_routing._CHOICE_STEM"
+      ],
       "must_match": [
         "settle which route applies",
         "pick",
@@ -217,7 +231,9 @@
       ]
     },
     "routing_the_work": {
-      "stems": ["test_flow_routing._ROUTE_AS_VERB"],
+      "stems": [
+        "test_flow_routing._ROUTE_AS_VERB"
+      ],
       "must_match": [
         "route it",
         "route them",
@@ -245,7 +261,9 @@
       ]
     },
     "routing_facts": {
-      "stems": ["test_flow_routing._FACT_STEM"],
+      "stems": [
+        "test_flow_routing._FACT_STEM"
+      ],
       "must_match": [
         "fact",
         "facts",
@@ -260,7 +278,9 @@
       ]
     },
     "handling_the_facts": {
-      "stems": ["test_flow_routing._HANDLING_STEM"],
+      "stems": [
+        "test_flow_routing._HANDLING_STEM"
+      ],
       "must_match": [
         "return",
         "report",
@@ -295,7 +315,9 @@
       ]
     },
     "sdd_name": {
-      "stems": ["test_flow_routing._SDD"],
+      "stems": [
+        "test_flow_routing._SDD"
+      ],
       "must_match": [
         "SDD",
         "formal SDD",
@@ -312,7 +334,9 @@
       ]
     },
     "what_v7_moved_to_ftd": {
-      "stems": ["test_flow_routing.FTD_STEMS"],
+      "stems": [
+        "test_flow_routing.FTD_STEMS"
+      ],
       "must_match": [
         "handoff",
         "hand-off",
@@ -354,7 +378,10 @@
       ]
     },
     "decision": {
-      "stems": ["test_flow_routing._DECISION_STEM", "test_flow_routing.FTD_STEMS"],
+      "stems": [
+        "test_flow_routing._DECISION_STEM",
+        "test_flow_routing.FTD_STEMS"
+      ],
       "must_match": [
         "a decision",
         "decide it",
@@ -371,7 +398,9 @@
       ]
     },
     "strict_tdd_subject": {
-      "stems": ["test_craft_extraction.TDD_SUBJECT"],
+      "stems": [
+        "test_craft_extraction.TDD_SUBJECT"
+      ],
       "must_match": [
         "always write tests before code",
         "failing test",
@@ -404,7 +433,9 @@
       ]
     },
     "strict_tdd_rule_subject": {
-      "stems": ["test_craft_extraction.CRAFT_RULE_SUBJECT"],
+      "stems": [
+        "test_craft_extraction.CRAFT_RULE_SUBJECT"
+      ],
       "must_match": [
         "skip TDD",
         "treat as disabled",
@@ -439,7 +470,9 @@
       ]
     },
     "strict_tdd_mode_name": {
-      "stems": ["test_craft_extraction.READER_SUBJECT_MODE"],
+      "stems": [
+        "test_craft_extraction.READER_SUBJECT_MODE"
+      ],
       "must_match": [
         "Strict TDD",
         "Strict TDD Mode",
@@ -452,7 +485,9 @@
       ]
     },
     "strict_tdd_resolution": {
-      "stems": ["test_craft_extraction.READER_SUBJECT_RESOLUTION"],
+      "stems": [
+        "test_craft_extraction.READER_SUBJECT_RESOLUTION"
+      ],
       "must_match": [
         "brief",
         "strict_tdd",
@@ -481,7 +516,10 @@
       ]
     },
     "strict_tdd_marker_line": {
-      "stems": ["test_craft_extraction.BARE_MARKER", "test_craft_extraction.MARKER_MENTION"],
+      "stems": [
+        "test_craft_extraction.BARE_MARKER",
+        "test_craft_extraction.MARKER_MENTION"
+      ],
       "must_match": [
         "Strict TDD Mode: enabled",
         "Strict TDD Mode: disabled",
@@ -493,6 +531,44 @@
         "**Strict TDD Mode**: **enabled**",
         "Strict TDD Mode:enabled",
         "*Strict TDD Mode*: disabled"
+      ]
+    },
+    "subagent_memory_write": {
+      "stems": [
+        "test_engram_memory_scope.SUBAGENT_WRITE_STEM"
+      ],
+      "must_match": [
+        "launched by another agent",
+        "you were launched by another agent",
+        "sub-agent",
+        "subagent",
+        "sub agent",
+        "a sub-agent",
+        "sub-agents"
+      ]
+    },
+    "engram_session_close_trigger": {
+      "stems": [
+        "test_engram_memory_scope.SESSION_CLOSE_STEM"
+      ],
+      "must_match": [
+        "mem_session_summary",
+        "call mem_session_summary",
+        "a real close",
+        "this is not a close",
+        "not a close"
+      ]
+    },
+    "non_sdd_write_mandate": {
+      "stems": [
+        "test_engram_memory_scope.NON_SDD_MANDATE_STEM"
+      ],
+      "must_match": [
+        "you must save them to engram before returning",
+        "must save your discoveries to engram",
+        "do not return without saving what you learned",
+        "save it before returning",
+        "must save before returning"
       ]
     }
   }
