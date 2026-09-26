@@ -570,6 +570,51 @@
         "save it before returning",
         "must save before returning"
       ]
+    },
+    "key_learnings": {
+      "stems": [
+        "test_engram_memory_scope.KEY_LEARNINGS_STEM"
+      ],
+      "must_match": [
+        "Key Learnings",
+        "## Key Learnings",
+        "### Key Learnings",
+        "key learnings section",
+        "KEY LEARNINGS",
+        "a Key Learnings heading",
+        "the Key Learnings mechanism"
+      ]
+    },
+    "key_learnings_mandate": {
+      "stems": [
+        "test_engram_memory_scope.KEY_LEARNINGS_MANDATE_STEM"
+      ],
+      "must_match": [
+        "always write a ## Key Learnings section",
+        "always include a Key Learnings section in your reply",
+        "always end your reply with a Key Learnings section",
+        "call mem_capture_passive",
+        "use mem_capture_passive to save it",
+        "mem_capture_passive"
+      ]
+    },
+    "verification_loop_mandate": {
+      "stems": [
+        "test_engram_memory_scope.VERIFICATION_LOOP_STEM"
+      ],
+      "must_match": [
+        "Check that they landed, and save them yourself if they did not",
+        "check whether the items landed",
+        "search memory to confirm the items landed",
+        "search memory and confirm they landed",
+        "confirm that they landed before continuing",
+        "confirm whether the items were saved",
+        "verify whether the items landed",
+        "verify that it was saved",
+        "don't forget to check whether they landed",
+        "never search memory just to confirm they landed",
+        "it never searches memory to confirm either way"
+      ]
     }
   }
 }

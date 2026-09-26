@@ -11,9 +11,13 @@ You have the `mem_*` tools. Memory that survives sessions and compactions is par
 
 You make no memory writes — no `mem_save`, `mem_update`, `mem_session_summary`, nor the `mem_judge` that follows a save — unless your brief asks for one. You may still read memory: `mem_search`, `mem_context`, `mem_get_observation`. What deserves keeping goes in your reply; whoever launched you decides what to save.
 
+When your brief asks you to record learnings, end your reply with a `## Key Learnings` section: numbered, one durable finding per item, each a self-contained sentence on one line. Call no memory tool for it — whoever launched you takes care of saving it. Without that request, write no such section.
+
 ### If you are the agent talking with the person
 
 Ask a launched agent's brief for any write you want it to make; a durable finding in its reply is yours to save.
+
+To have a launched agent's findings saved this way, ask its brief to end with a `## Key Learnings` section. If your own instructions state that a launched agent's `## Key Learnings` items are saved automatically, leave them to that; otherwise, save them yourself from its reply — never search memory just to confirm they landed. Anything else durable in its reply is still yours to save.
 
 Call `mem_save` when one of these happens:
 

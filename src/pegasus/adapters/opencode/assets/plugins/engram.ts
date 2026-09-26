@@ -54,8 +54,18 @@ unless your brief asks for one. You may still read memory: \`mem_search\`,
 \`mem_context\`, \`mem_get_observation\`. What deserves keeping goes in your reply;
 whoever launched you decides what to save.
 
+When your brief asks you to record learnings, end your reply with a \`## Key Learnings\`
+section: numbered, one durable finding per item, each a self-contained sentence on one
+line. That section is saved for you when your reply returns, so you call no memory tool
+for it. Without that request, write no such section.
+
 If you are the agent talking with the person, ask a launched agent's brief for any
 write you want it to make, and a durable finding in its reply is yours to save.
+
+To have a launched agent's findings saved this way, ask its brief to end with a
+\`## Key Learnings\` section; its items are saved automatically when it returns, one
+observation each — don't save them again yourself. Anything else durable in its reply
+is still yours to save.
 
 ### WHEN TO SAVE (if you are the agent talking with the person)
 
@@ -395,9 +405,31 @@ export const Engram: Plugin = async (ctx) => {
         toolCounts.set(sessionId, (toolCounts.get(sessionId) ?? 0) + 1)
       }
 
-      // Passive capture: extract learnings from Task tool output
-      if (input.tool === "Task" && output && sessionId) {
-        const text = typeof output === "string" ? output : JSON.stringify(output)
+      // Passive capture: extract learnings from a sub-agent's output.
+      //
+      // The tool id is checked case-insensitively, and against every id a
+      // sub-agent has been observed or reported to carry. OpenCode records
+      // this tool as lowercase `task` (5171/5171 rows in a live install's
+      // DB), not the capitalized `Task` this check was copied from — that
+      // name came from Claude Code's own tool naming and never fired here.
+      // `subagent` is an unverified, reported future rename; kept so this
+      // does not go dark again if OpenCode renames the tool.
+      //
+      // We send `output.output` — the tool's own text, not a JSON dump of
+      // the hook's output object. Engram's extractor (`ExtractLearnings` in
+      // engram v1.20.0) matches headings and list items at real line
+      // starts (`(?m)^#{2,3}\s+...`); `JSON.stringify` escapes newlines to
+      // `\n`, so a `## Key Learnings` heading would never match a line
+      // start and nothing would ever be captured.
+      //
+      // The extractor itself is the gate: it stores nothing unless the
+      // text has a `## Key Learnings` section — engram's heading pattern is
+      // anchored to two or three `#` (`^#{2,3}`), never one — which a
+      // sub-agent writes only when its own brief asked for one — this hook
+      // makes no decision about what to save, it only ships the text.
+      const subAgentToolIds = new Set(["task", "subagent"])
+      if (subAgentToolIds.has(input.tool.toLowerCase()) && output && sessionId) {
+        const text = output.output ?? ""
         if (text.length > 50) {
           await engramFetch("/observations/passive", {
             method: "POST",

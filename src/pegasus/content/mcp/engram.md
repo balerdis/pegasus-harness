@@ -29,6 +29,45 @@ decides what to save.
 If you are the agent talking with the person, ask a launched agent's brief for any
 write you want it to make, and a durable finding in its reply is yours to save.
 
+## Sub-Agent Findings (`## Key Learnings`)
+
+Where the platform's own plugin performs a passive capture on the way back from a
+launched agent, a sub-agent can have specific findings saved for it without ever
+calling a memory tool: when its brief asks for this, it ends its reply with a
+`## Key Learnings` section, and that section is saved automatically once the reply
+returns.
+
+The section, exactly:
+
+- Always write the heading exactly as `## Key Learnings`, on its own line. As
+  compatibility forms only, engram v1.20.0's extractor (`ExtractLearnings`,
+  `internal/store/store.go`) also recognizes `### Key Learnings`, `## Learnings`
+  and `### Learnings` — never a heading with a single `#`: the extractor's
+  heading pattern is anchored to two or three `#` (`^#{2,3}`), so one `#` is
+  not recognized and nothing under it is saved.
+- Items are numbered (`1.`, `2.`, ...), one durable finding per item, each a
+  self-contained sentence on its own line. A bulleted list is used only as a
+  fallback when there are no numbered items.
+- Each item needs 20 or more characters and 4 or more words after stripping bold,
+  italic and inline-code markup — a fragment shorter than that is dropped, not
+  saved short.
+- If the reply has more than one such section, only the **last** one that yields
+  valid items is used; an earlier one is discarded, not merged.
+- Saved items are deduplicated by a normalized hash within the project — the same
+  finding written twice does not produce two observations.
+- Each item lands as its own observation, type `passive`, scope project, linked to
+  the **launcher's** session — the passive capture runs in the launching agent's
+  hook, not the sub-agent's.
+
+This save exists only where the platform this session runs under ships a plugin
+that performs the capture on the sub-agent tool's output. Where no such capture
+runs (no plugin installed for this session, or none exists for it), a
+`## Key Learnings` section is not saved on its own. The agent that launched the
+sub-agent relies on its own instructions to tell which case applies: if those
+instructions state this save runs automatically, it leaves the items to that;
+otherwise it saves them itself from the reply — it never searches memory just
+to confirm either way.
+
 ## Proactive Save Triggers (if you are the agent talking with the person)
 
 Call `mem_save` after any of these:

@@ -101,9 +101,9 @@ worth keeping. You make no memory write; the launcher decides what to save from 
 you return.
 ```
 
-Add this line only when the launcher wants this sub-agent to make one specific write itself, naming what to save:
+Add this line only when the launcher wants this sub-agent's findings saved automatically instead of returned for the launcher to save:
 ```
-PERSISTENCE: Call mem_save(title: "{short description}", type: "{decision|bugfix|discovery|pattern}", content: "{What, Why, Where, Learned}") to save {name the specific thing to save}.
+PERSISTENCE: End your reply with a `## Key Learnings` section — numbered, one durable finding per item, each a self-contained sentence on one line. Call no memory tool for it; whoever launched you takes care of saving it.
 ```
 
 SDD (with dependencies):
