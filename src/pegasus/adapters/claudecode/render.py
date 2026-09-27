@@ -211,7 +211,7 @@ def agent(
     those descriptors into this CLI's own two frontmatter keys.
     """
     fields: dict[str, Any] = {"name": item.name, "description": item.description}
-    fields["tools"] = _tools_field(item)
+    fields["tools"] = _tools_field(item, mcp)
     servers = _mcp_servers_field(layout, mcp)
     if servers:
         fields["mcpServers"] = servers
@@ -499,7 +499,7 @@ def delegation_capabilities(layout: Layout, targets: tuple[Any, ...]) -> list[Ar
     ]
 
 
-def _tools_field(item: Agent) -> str:
+def _tools_field(item: Agent, mcp: tuple[Mcp, ...]) -> str:
     """A comma-separated tool list, plus an `Agent(...)` entry for delegation.
 
     `Agent(name-a, name-b)` is Claude Code's purpose-built construct for
@@ -507,6 +507,24 @@ def _tools_field(item: Agent) -> str:
     same `tools` list, not in a field of its own. An agent whose `may_
     delegate_to` is empty gets no `Agent(...)` entry at all: that omission is
     how "may delegate to nobody" is spelled, not a special case to guard.
+
+    Measured live on Claude Code 2.1.283 (`docs/arquitectura/arquitectura.md`'s
+    7.3.3 section): a sub-agent reaches the tools of the servers in its own
+    `mcpServers:` regardless of what its `tools:` names, but the session
+    identity -- the one agent `settings.json`'s `agent` key names, `item.
+    default` here -- does not: its `tools:` filters MCP tools out even though
+    `mcpServers:` connects the servers. Naming a server *at the server level*
+    in `tools:` (`mcp__<key>`, never the bare `mcp__*` wildcard, which was
+    measured to be a silent no-op) is what exposes every tool that server
+    has. So for the session identity only, and only when it was granted at
+    least one server, this appends one `mcp__<key>` entry per resolved key in
+    `mcp` -- the exact same keys `_mcp_servers_field` already wrote into this
+    agent's own `mcpServers:` -- plus `ToolSearch`, which is how this session
+    loads them: with every server up, an interactive session defers all its
+    MCP tools (61 of them, "loaded on-demand") and fetches them through that
+    tool, so without it none would arrive. A sub-agent is never touched
+    here: it already reaches its granted servers' tools without this, and
+    adding it there would be a change nobody asked for.
     """
     names = (*item.requires_tools, *item.optional_tools)
     unknown = [name for name in names if name not in TOOL_NAME]
@@ -515,6 +533,10 @@ def _tools_field(item: Agent) -> str:
     entries = sorted({TOOL_NAME[name] for name in names})
     if item.may_delegate_to:
         entries.append(f"Agent({', '.join(item.may_delegate_to)})")
+    if item.default and mcp:
+        keys = sorted({server.bound_to or server.name for server in mcp})
+        entries += [f"mcp__{key}" for key in keys]
+        entries.append("ToolSearch")
     return ", ".join(entries)
 
 

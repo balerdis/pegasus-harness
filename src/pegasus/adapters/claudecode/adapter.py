@@ -154,16 +154,19 @@ class Adapter:
         return DirectoryGrantBehavior(allowed_by_default=True, writes_own_entry=False, has_deny_floor=True)
 
     def mcp_grant_behavior(self) -> McpGrantBehavior:
-        """`writes_per_agent_entry=False`: `core.catalog.render` builds the
-        `mcp` tuple `render_agent` receives entirely from `item.optional_mcp`
-        -- the shipped servers this install actually chose -- never from
-        `item.granted_mcp`, so a key granted through `mcp grant` never
-        reaches any agent's own `mcpServers:`/`disallowedTools:` frontmatter.
-        Only the journal (`installed.granted_mcp`) and the generated
-        `delegation-capabilities.md` change; no agent file gains an entry
-        for the key. See `docs/arquitectura/arquitectura.md`'s own debt note
-        for what closing this gap for real would take."""
-        return McpGrantBehavior(writes_per_agent_entry=False)
+        """`writes_per_agent_entry=True`: `core.catalog.render`'s `_mcp_for_
+        agent` folds `item.granted_mcp` in alongside `item.optional_mcp`, so
+        a key granted through `mcp grant` reaches every agent's own
+        `mcpServers:` frontmatter as a bare, bound-reference entry --
+        `_mcp_servers_field`'s own `is_bound` branch, the exact shape this
+        adapter already writes for a shipped server bound to a key the user
+        administers. If the grant is to the session-identity agent, `_tools_
+        field`'s own `item.default` branch adds the matching `mcp__<key>`
+        entry there too, the same as for any other server it was granted.
+        Measured live on 2026-09-27 (`docs/arquitectura/arquitectura.md`'s
+        7.3.3 section): a sub-agent reaches a bound server named this way,
+        and did not before this key was rendered anywhere at all."""
+        return McpGrantBehavior(writes_per_agent_entry=True)
 
     def render_system_prompt(
         self, layout: Layout, system_prompt: SystemPrompt, identity: Identity

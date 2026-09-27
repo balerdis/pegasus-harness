@@ -19,6 +19,7 @@ from pegasus.core.content import (
     Execution,
     Mcp,
     RunsAs,
+    SESSION_STARTS_IN,
     Skill,
     SystemPrompt,
 )
@@ -354,6 +355,104 @@ class AgentMcpGrantRenderTest(unittest.TestCase):
             self.adapter.render_agent(self.layout, self.agent(), mcp=(self.server,)), FileArtifact
         )[0]
         self.assertNotIn("disallowedTools", artifact.content.decode())
+
+
+class SessionIdentityMcpToolsTest(unittest.TestCase):
+    """Measured live on Claude Code 2.1.283 (see `docs/arquitectura/
+    arquitectura.md`'s 7.3.3 section): the main session -- the agent named
+    `SESSION_STARTS_IN`, the one `settings.json`'s `agent` key names -- gets
+    ZERO MCP tools from its own `mcpServers:` alone; its `tools:` has to name
+    each granted server at the server level (`mcp__<key>`) for the tools to
+    appear at all. A sub-agent needs none of this: it already reaches its own
+    granted servers' tools through `mcpServers:` alone, so this must never
+    apply to one.
+    """
+
+    def setUp(self):
+        self.adapter = Adapter()
+        self.layout = self.adapter.layout(ENVIRONMENT)
+        self.server = Mcp(
+            name="engram",
+            description="d",
+            body="# Engram Convention\n",
+            distribution=Distribution.REMOTE,
+            endpoint="https://engram.example/mcp",
+            source=PurePosixPath("mcp/engram.md"),
+        )
+
+    def session_identity_agent(self, **overrides):
+        fields = dict(
+            name=SESSION_STARTS_IN,
+            description="Orchestrator",
+            body="Orchestrate.\n",
+            mode=AgentMode.PRIMARY,
+            source=PurePosixPath("agents/pegasus-orchestrator.md"),
+            requires_tools=("bash",),
+        )
+        fields.update(overrides)
+        return Agent(**fields)
+
+    def subagent(self, **overrides):
+        fields = dict(
+            name="sdd-verify",
+            description="Readiness authority",
+            body="Verify things.\n",
+            mode=AgentMode.SUBAGENT,
+            source=PurePosixPath("agents/sdd-verify.md"),
+            requires_tools=("bash",),
+        )
+        fields.update(overrides)
+        return Agent(**fields)
+
+    def test_session_identity_gets_a_server_level_tool_entry(self):
+        content = only(
+            self.adapter.render_agent(self.layout, self.session_identity_agent(), mcp=(self.server,)),
+            FileArtifact,
+        )[0].content.decode()
+        self.assertIn("mcp__engram", content)
+
+    def test_session_identity_never_gets_the_silent_no_op_wildcard(self):
+        """`mcp__*` was measured as a silent no-op -- never render it."""
+        content = only(
+            self.adapter.render_agent(self.layout, self.session_identity_agent(), mcp=(self.server,)),
+            FileArtifact,
+        )[0].content.decode()
+        self.assertNotIn("mcp__*", content)
+
+    def test_session_identity_gets_tool_search_to_load_deferred_mcp_tools(self):
+        content = only(
+            self.adapter.render_agent(self.layout, self.session_identity_agent(), mcp=(self.server,)),
+            FileArtifact,
+        )[0].content.decode()
+        self.assertIn("ToolSearch", content)
+
+    def test_no_mcp_servers_means_no_change_to_tools(self):
+        content = only(
+            self.adapter.render_agent(self.layout, self.session_identity_agent(), mcp=()), FileArtifact
+        )[0].content.decode()
+        self.assertNotIn("mcp__", content)
+        self.assertNotIn("ToolSearch", content)
+
+    def test_a_bound_servers_key_is_the_one_exposed(self):
+        from dataclasses import replace
+
+        bound = replace(self.server, bound_to="my-own-engram")
+        content = only(
+            self.adapter.render_agent(self.layout, self.session_identity_agent(), mcp=(bound,)),
+            FileArtifact,
+        )[0].content.decode()
+        self.assertIn("mcp__my-own-engram", content)
+        self.assertNotIn("mcp__engram", content)
+
+    def test_a_subagent_gets_no_server_level_tool_entry(self):
+        """A sub-agent already reaches its granted server's tools through
+        `mcpServers:` alone (measured live) -- adding `mcp__<key>` to its
+        `tools:` would be a change this fix never asked for."""
+        content = only(
+            self.adapter.render_agent(self.layout, self.subagent(), mcp=(self.server,)), FileArtifact
+        )[0].content.decode()
+        self.assertNotIn("mcp__", content)
+        self.assertNotIn("ToolSearch", content)
 
 
 class McpRenderTest(unittest.TestCase):

@@ -20,7 +20,7 @@ from pathlib import PurePath, PurePosixPath
 from typing import Any
 
 from pegasus.core import ownership
-from pegasus.core.content import Content
+from pegasus.core.content import Content, Distribution, Mcp
 from pegasus.core.identity import Identity
 from pegasus.core.types import Capability, ConfigKeyArtifact, Environment, FileArtifact
 
@@ -174,16 +174,27 @@ def render(
     it.
 
     `render_agent` also receives, as its fourth argument, every `Mcp`
-    descriptor `_mcp_by_key(content)` resolves for that agent's own
-    `optional_mcp` -- see that helper's own docstring for why the lookup key
-    is `Mcp.bound_to or Mcp.name`, never the bare name alone. `content` at
-    this point has already been through `select_mcp`/`grant_mcp` (see
-    `cli.py`'s ordering), exactly the same precondition `_delegation_targets`
-    below relies on, so `optional_mcp` is what an install will really grant,
-    not the shipped superset -- an agent's rendered grant and the descriptors
-    handed to `render_agent` for it can never disagree about which servers
-    survived selection. Every other capability's renderer keeps its original
-    two-argument shape.
+    descriptor `_mcp_for_agent` resolves for that agent -- both halves of
+    what it may reach: `_mcp_by_key(content)` for `item.optional_mcp` (a
+    shipped server the user chose; see that helper's own docstring for why
+    the lookup key is `Mcp.bound_to or Mcp.name`, never the bare name alone)
+    and one synthesized bound descriptor per key in `item.granted_mcp` (a
+    server the user administers themselves, granted through `mcp grant` --
+    see `content.grant_mcp`'s own docstring). `content` at this point has
+    already been through `select_mcp`/`grant_mcp` (see `cli.py`'s ordering),
+    exactly the same precondition `_delegation_targets` below relies on, so
+    both fields are what an install will really grant, not the shipped
+    superset -- an agent's rendered grant and the descriptors handed to
+    `render_agent` for it can never disagree about which servers survived
+    selection. Threading `granted_mcp` through here, rather than leaving it
+    for each adapter to read off `item` directly, is what lets an adapter
+    whose own per-agent configuration has a place for a bound server's
+    definition actually receive one; an adapter whose own `render_agent`
+    ignores this parameter entirely, and reads `item.granted_mcp` off the
+    `Agent` it already has instead (see that adapter's own docstring for
+    why), is unaffected by what this tuple now contains, so widening it
+    cannot alter that adapter's rendered bytes. Every other capability's
+    renderer keeps its original two-argument shape.
 
     `_delegation_targets(content)` is computed here, the same moment
     `orchestrator_name` is, and for the same reason: `content` at this point has
@@ -210,9 +221,7 @@ def render(
         attribute, renderer = SOURCES[capability]
         for item in _items(content, attribute):
             if capability is Capability.SUB_AGENTS:
-                granted = tuple(
-                    mcp_by_key[key] for key in item.optional_mcp if key in mcp_by_key
-                )
+                granted = _mcp_for_agent(item, mcp_by_key)
                 artifacts.extend(
                     getattr(adapter, renderer)(layout, item, overrides.get(item.name), mcp=granted)
                 )
@@ -375,6 +384,54 @@ def _mcp_by_key(content: Content) -> dict[str, Any]:
     superset.
     """
     return {server.bound_to or server.name: server for server in content.mcp}
+
+
+def _mcp_for_agent(item: Any, mcp_by_key: dict[str, Mcp]) -> tuple[Mcp, ...]:
+    """Every `Mcp` descriptor one agent may reach: shipped, then granted.
+
+    `item.optional_mcp` resolves against `mcp_by_key` exactly as it always
+    has. `item.granted_mcp` -- a key the person administers themselves,
+    identical on every agent (`content.grant_mcp`) -- has no descriptor in
+    `content.mcp` by construction (`grant_mcp` refuses a key `per_agent_mcp_
+    keys` already covers), so there is nothing to look up: a bound-reference
+    descriptor is synthesized instead, the same shape `select_mcp` itself
+    produces for a server the user configured on their own. Appended after
+    the shipped set, never merged into it or reordered: the two key spaces
+    are disjoint by that same refusal, so there is no collision to resolve,
+    only a fixed order to keep the rendered list stable across the same
+    input.
+    """
+    shipped = tuple(mcp_by_key[key] for key in item.optional_mcp if key in mcp_by_key)
+    granted = tuple(_granted_mcp_descriptor(key) for key in item.granted_mcp)
+    return shipped + granted
+
+
+def _granted_mcp_descriptor(key: str) -> Mcp:
+    """A bound-reference `Mcp` for a key the person administers themselves.
+
+    Pegasus never shipped a descriptor for this key -- there is no
+    `description`, `body`, or `distribution` to state a fact about, because
+    none of those facts are Pegasus's to know for a server it neither
+    fetches nor defines. `bound_to=key` is the only field an adapter reading
+    a granted server actually consults -- one adapter's own bound-reference
+    render branch, another's own wildcard over `item.granted_mcp`, neither
+    of which ever looks at this object's other fields at all -- every
+    adapter that names a bound server writes only the key that installation
+    already runs it under, never a definition of its own. `distribution`/
+    `endpoint` still need placeholder values the dataclass accepts --
+    `Distribution.REMOTE` and an empty string -- but no renderer this
+    codebase ships ever reads either for a descriptor whose `is_bound` is
+    true.
+    """
+    return Mcp(
+        name=key,
+        description="a server the person administers themselves, granted through `mcp grant`",
+        body="",
+        distribution=Distribution.REMOTE,
+        endpoint="",
+        source=PurePosixPath("mcp") / f"{key}-granted",
+        bound_to=key,
+    )
 
 
 def _items(content: Content, attribute: str) -> tuple[Any, ...]:

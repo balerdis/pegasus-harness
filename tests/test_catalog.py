@@ -298,6 +298,99 @@ class RenderAgentMcpGrantTest(unittest.TestCase):
         self.assertEqual(bound.mcp[0].bound_to, "my-own-cbm")
 
 
+class RenderAgentGrantedMcpTest(unittest.TestCase):
+    """`item.granted_mcp` -- a server key the person administers themselves,
+    set identically on every agent by `content.grant_mcp` -- must reach
+    `render_agent`'s `mcp` parameter too, exactly the way `item.optional_mcp`
+    already does, folded in as a bound-reference descriptor (`Mcp.bound_to
+    == key`, nothing else Pegasus could know about a server it never
+    shipped). Before this, only `optional_mcp` was threaded here
+    (`docs/arquitectura/arquitectura.md`'s 7.3.3 section), so a grant never
+    reached Claude Code's per-agent `mcpServers:`/`disallowedTools:` --
+    OpenCode was unaffected because its own `render_agent` ignores this
+    parameter entirely and reads `item.granted_mcp` straight off the `Agent`
+    it already has.
+    """
+
+    def setUp(self):
+        base = _content(
+            agents=(
+                content_module.Agent(
+                    name="probe-agent",
+                    description="d",
+                    body="body",
+                    mode=content_module.AgentMode.SUBAGENT,
+                    source=PurePosixPath("agents/probe-agent.md"),
+                ),
+            ),
+        )
+        self.content, _ = content_module.grant_mcp(base, ["figma"])
+        self.manifest = CapabilityManifest(cli_id="probe", sub_agents=True)
+
+    def test_a_granted_key_reaches_render_agent_as_a_bound_descriptor(self):
+        adapter = StubAdapter(manifest=self.manifest)
+        catalog_module.render(self.content, adapter, ENVIRONMENT, IDENTITY)
+        calls = dict(adapter.agent_mcp_calls)
+        granted = calls["probe-agent"]
+        self.assertEqual(len(granted), 1)
+        self.assertTrue(granted[0].is_bound)
+        self.assertEqual(granted[0].bound_to, "figma")
+
+    def test_a_shipped_and_a_granted_server_both_reach_the_same_agent(self):
+        server = content_module.Mcp(
+            name="cbm",
+            description="d",
+            body="body",
+            distribution=content_module.Distribution.REMOTE,
+            endpoint="https://example.test/mcp",
+            source=PurePosixPath("mcp/cbm.md"),
+            reaches=("probe-agent",),
+        )
+        base = content_module.select_mcp(
+            _content(
+                mcp=(server,),
+                agents=(
+                    content_module.Agent(
+                        name="probe-agent",
+                        description="d",
+                        body="body",
+                        mode=content_module.AgentMode.SUBAGENT,
+                        source=PurePosixPath("agents/probe-agent.md"),
+                        optional_mcp=("cbm",),
+                    ),
+                ),
+            ),
+            ["cbm"],
+        )
+        content, _ = content_module.grant_mcp(base, ["figma"])
+        adapter = StubAdapter(manifest=self.manifest)
+        catalog_module.render(content, adapter, ENVIRONMENT, IDENTITY)
+        calls = dict(adapter.agent_mcp_calls)
+        granted = calls["probe-agent"]
+        keys = {server.bound_to or server.name for server in granted}
+        self.assertEqual(keys, {"cbm", "figma"})
+
+    def test_no_grant_means_the_mcp_tuple_is_unchanged(self):
+        """No regression on the existing, already-passing behaviour: an
+        ungranted install still receives exactly the shipped descriptors,
+        nothing appended."""
+        adapter = StubAdapter(manifest=self.manifest)
+        untouched = _content(
+            agents=(
+                content_module.Agent(
+                    name="probe-agent",
+                    description="d",
+                    body="body",
+                    mode=content_module.AgentMode.SUBAGENT,
+                    source=PurePosixPath("agents/probe-agent.md"),
+                ),
+            ),
+        )
+        catalog_module.render(untouched, adapter, ENVIRONMENT, IDENTITY)
+        calls = dict(adapter.agent_mcp_calls)
+        self.assertEqual(calls["probe-agent"], ())
+
+
 class DigestTest(unittest.TestCase):
     def file_catalog(self, content_bytes):
         artifact = FileArtifact(id="a", path=CONFIG / "a", content=content_bytes, executable=False)
