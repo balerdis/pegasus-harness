@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import unittest
+from dataclasses import replace
 from pathlib import PurePosixPath
 from unittest.mock import patch
 
@@ -186,6 +187,46 @@ class DryRunDownloadTest(RealHomeTestCase):
         self.assertEqual(len(dry_report["created"]), len(real_report["created"]))
         self.assertEqual(len(dry_report["updated"]), len(real_report["updated"]))
         self.assertEqual(len(dry_report["unchanged"]), len(real_report["unchanged"]))
+
+
+PROBE_V2_BYTES = b"the newly released binary"
+PROBE_V2_CHECKSUM = ownership.digest_of_bytes(PROBE_V2_BYTES)
+PROBE_V2 = replace(
+    PROBE,
+    version="1.2.4",
+    checksum=PROBE_V2_CHECKSUM,
+    endpoint="https://example.test/releases/probe-linux-x64-v2",
+)
+PROBE_CONTENT_V2 = Content(mcp=(PROBE_V2,), agents=(_ORCHESTRATOR,))
+
+
+@patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
+class UpdateDownloadReportTest(RealHomeTestCase):
+    """A `download` server already installed under an older version and
+    checksum has to be refetched -- it is not new, only different from what
+    is on disk -- so a run that replaces it must report it as `updated`, the
+    same as any other artifact whose bytes changed. Reporting it as
+    `created` instead (the historical shape) tells a caller that installed
+    nothing before that this is the first time Pegasus ever placed it, which
+    is exactly wrong the one time it matters: `upgrade`'s own report is read
+    by an agent deciding what changed, not a person who can eyeball it."""
+
+    def test_a_replaced_dependency_is_reported_as_updated_not_created(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        with patch("pegasus.core.content.load", return_value=PROBE_CONTENT_V2):
+            downloader = FakeDownloader({PROBE_V2.endpoint: PROBE_V2_BYTES})
+            _, report = self.run_cli("update", "--cli", CLI, downloader=downloader)
+        self.assertNotIn("dependency:probe", [item["id"] for item in report["created"]])
+        self.assertIn("dependency:probe", [item["id"] for item in report["updated"]])
+
+    def test_a_replaced_dependency_is_previewed_as_updated_not_created(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        with patch("pegasus.core.content.load", return_value=PROBE_CONTENT_V2):
+            _, report = self.run_cli("update", "--cli", CLI, "--dry-run")
+        self.assertNotIn("dependency:probe", [item["id"] for item in report["created"]])
+        self.assertIn("dependency:probe", [item["id"] for item in report["updated"]])
 
 
 @patch("pegasus.core.content.load", return_value=PROBE_CONTENT)

@@ -775,15 +775,15 @@ def install(
         # would otherwise have anything to say about it (see
         # `_previewed_dependencies`'s own docstring). Read-only, so a dry
         # run costs no fetch either.
-        kept_dependencies, previewed_dependencies = _previewed_dependencies(
+        kept_dependencies, previewed_created, previewed_updated = _previewed_dependencies(
             runtime, layout, content, installed
         )
         return {
             "cli": adapter.id,
             "status": "planned",
             "activation": activation,
-            "created": [_placed(step) for step in plan.creations] + list(previewed_dependencies),
-            "updated": [_placed(step) for step in plan.updates],
+            "created": [_placed(step) for step in plan.creations] + list(previewed_created),
+            "updated": [_placed(step) for step in plan.updates] + list(previewed_updated),
             "unchanged": [_placed(step) for step in plan.unchanged]
             + [_recorded(record) for record in kept_dependencies],
             "overwritten": [_placed(step) for step in plan.overwritten],
@@ -890,7 +890,7 @@ def install(
     # never sees. A mismatch here raises before a single byte reaches disk,
     # so the whole install fails exactly as cleanly as a collision would.
     try:
-        kept_dependencies, new_dependencies = _materialize_dependencies(
+        kept_dependencies, new_dependencies, replaced_dependency_ids = _materialize_dependencies(
             runtime,
             layout,
             content,
@@ -1033,7 +1033,13 @@ def install(
     # they are reported alongside everything else that needed no write,
     # never as an "update" that did not happen.
     reported = applied.records + new_dependencies
-    created_ids = {step.artifact.id for step in plan.creations} | {record.id for record in new_dependencies}
+    # A dependency whose id `replaced_dependency_ids` names already had a
+    # journal entry before this run -- refetched because the version or
+    # digest changed, not because Pegasus never placed one before. Excluding
+    # it here is what moves it into "updated", below, instead of "created".
+    created_ids = {step.artifact.id for step in plan.creations} | {
+        record.id for record in new_dependencies if record.id not in replaced_dependency_ids
+    }
     retired_ids = set(stale.removed)
     return {
         "cli": adapter.id,
@@ -1981,7 +1987,7 @@ def _prospective_dependency_targets(
 
 def _previewed_dependencies(
     runtime: Runtime, layout, content: content_module.Content, installed: Install | None
-) -> tuple[tuple[Record, ...], tuple[dict[str, Any], ...]]:
+) -> tuple[tuple[Record, ...], tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
     """What `_materialize_dependencies` would report, without fetching a byte.
 
     A `download` or `npm` server is materialized outside the catalog
@@ -1994,22 +2000,23 @@ def _previewed_dependencies(
     `_prospective_dependency_targets` reuses it, so the three can never
     quietly disagree about what "already there" means.
 
-    Returns ``(kept, previewed)``: ``kept`` are journal entries a real run
+    Returns ``(kept, created, updated)``: ``kept`` are journal entries a real run
     would leave untouched, reported exactly the way `_materialize_dependencies`'s
     own `kept` return is -- alongside `plan.unchanged` in the report, never
-    counted as a write. ``previewed`` is not a `Record`: nothing has been
-    fetched, so there is no digest yet to attach to one, only the id and
-    target this run already knows without reaching the network -- the same
-    two fields `_recorded` would have read off a real one. `install`'s real
-    (non-dry) run reports every server it actually fetches as `created`,
-    never `updated`, regardless of whether the journal already held an
-    entry under that id (see its own `created_ids`) -- this mirrors that
-    same, single bucket, so a dry run predicts the real run it precedes
-    rather than a more careful categorization the real run does not make.
+    counted as a write. ``created`` and ``updated`` are not `Record`s: nothing
+    has been fetched, so there is no digest yet to attach to one, only the id
+    and target this run already knows without reaching the network -- the
+    same two fields `_recorded` would have read off a real one. An id `owned`
+    already held before this run is reported under ``updated`` -- the journal
+    already claimed it, so refetching it replaces an entry rather than
+    introducing one -- and everything else under ``created``, the same split
+    a real (non-dry) run now makes (see its own `created_ids`), so a dry run
+    predicts the real run it precedes rather than a coarser one.
     """
     owned = {entry.id: entry for entry in (installed.entries if installed else ())}
     kept: list[Record] = []
-    previewed: list[dict[str, Any]] = []
+    created: list[dict[str, Any]] = []
+    updated: list[dict[str, Any]] = []
     for item in content.mcp:
         if not _materializes(item):
             continue
@@ -2017,14 +2024,14 @@ def _previewed_dependencies(
         if existing is not None:
             kept.append(existing)
             continue
-        previewed.append(
-            {
-                "id": f"dependency:{item.name}",
-                "kind": "dependency-tree",
-                "target": str(dependencies_module.target_dir(layout.dependencies_dir, item)),
-            }
-        )
-    return tuple(kept), tuple(previewed)
+        dependency_id = f"dependency:{item.name}"
+        preview = {
+            "id": dependency_id,
+            "kind": "dependency-tree",
+            "target": str(dependencies_module.target_dir(layout.dependencies_dir, item)),
+        }
+        (updated if dependency_id in owned else created).append(preview)
+    return tuple(kept), tuple(created), tuple(updated)
 
 
 def _materialize_dependencies(
@@ -2034,16 +2041,22 @@ def _materialize_dependencies(
     installed: Install | None,
     on_step: Callable[[str], None] | None = None,
     on_download_progress: Callable[[str, int, int | None], None] | None = None,
-) -> tuple[tuple[Record, ...], tuple[Record, ...]]:
+) -> tuple[tuple[Record, ...], tuple[Record, ...], frozenset[str]]:
     """Fetch and place every `download` or `npm` server this run still names.
 
-    Returns ``(kept, created)``: a server already materialized at exactly the
-    version and digest this release still asks for costs no fetch at all —
-    the record the journal already holds is reused as is. Everything else is
-    fetched, verified, and placed fresh; a failure here leaves whatever this
-    call already placed for a *previous* server on disk, which the caller
-    cleans up alongside everything else once it knows the whole install is
-    being undone.
+    Returns ``(kept, created, replaced_ids)``: a server already materialized at
+    exactly the version and digest this release still asks for costs no fetch
+    at all — the record the journal already holds is reused as is. Everything
+    else is fetched, verified, and placed fresh; a failure here leaves
+    whatever this call already placed for a *previous* server on disk, which
+    the caller cleans up alongside everything else once it knows the whole
+    install is being undone.
+
+    ``replaced_ids`` names which ids inside ``created`` already had a journal
+    entry before this run started -- refetched because the version or digest
+    changed, not because Pegasus never placed one. The caller reports those
+    under ``updated``, not ``created``: the journal already claimed the id,
+    so this run replaces an entry rather than introducing one.
 
     ``on_step``, when given, is told once per server this call actually
     fetches -- never for one already `kept`, since that one cost no work --
@@ -2059,6 +2072,7 @@ def _materialize_dependencies(
     node_present = shutil.which(NODE_BINARY, path=runtime.variables.get("PATH")) is not None
     kept: list[Record] = []
     created: list[Record] = []
+    replaced_ids: set[str] = set()
     for item in content.mcp:
         if not _materializes(item):
             continue
@@ -2066,6 +2080,9 @@ def _materialize_dependencies(
         if existing is not None:
             kept.append(existing)
             continue
+        dependency_id = f"dependency:{item.name}"
+        if dependency_id in owned:
+            replaced_ids.add(dependency_id)
         try:
             created.append(_materialize_one(runtime, layout, item, node_present, on_download_progress=on_download_progress))
         except dependencies_module.MaterializeError:
@@ -2076,7 +2093,7 @@ def _materialize_dependencies(
             raise
         if on_step is not None:
             on_step(item.name)
-    return tuple(kept), tuple(created)
+    return tuple(kept), tuple(created), frozenset(replaced_ids)
 
 
 def _materialize_one(
