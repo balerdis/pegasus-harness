@@ -15,6 +15,7 @@ from pegasus.core.content import (
     Agent,
     AgentMode,
     Command,
+    DENY_FLOOR_DIRECTORIES,
     Distribution,
     Execution,
     Mcp,
@@ -120,6 +121,16 @@ EXTERNAL_DIRECTORY_TOOLS = frozenset({"read", "grep", "glob", "edit", "write", "
 # unguarded in the abstract, the moment they live anywhere outside these five
 # directories, which is most places a file can live.
 #
+# The five directory names themselves are not retyped here: they are
+# `pegasus.core.content.DENY_FLOOR_DIRECTORIES`, the one CLI-agnostic list
+# every adapter's own deny floor derives from (see its own docstring for
+# why a second, independently-typed list of the same five words would be a
+# silent way for two adapters to drift apart about what "the floor" means).
+# This dict comprehension is OpenCode's own translation of that list into
+# its runtime's wildcard vocabulary -- `f"*/{name}/*"` keyed to `"deny"` --
+# and nothing else in this module, or in the tests that pin its rendered
+# byte shape, changed when the list moved here from a dict literal.
+#
 # What this floor actually is, said without overclaiming: a guard against an
 # agent that wanders into one of these five directories BY ACCIDENT, not a
 # boundary against one that means to get there. Matching here is on the
@@ -138,13 +149,7 @@ EXTERNAL_DIRECTORY_TOOLS = frozenset({"read", "grep", "glob", "edit", "write", "
 # strategy makes possible for anyone to build, and this comment exists so
 # nobody reads five denied strings as a boundary that holds against an agent
 # that is trying to get past it.
-EXTERNAL_DIRECTORY_DENY_FLOOR: dict[str, str] = {
-    "*/.ssh/*": "deny",
-    "*/.aws/*": "deny",
-    "*/.credentials/*": "deny",
-    "*/secrets/*": "deny",
-    "*/.config/gh/*": "deny",
-}
+EXTERNAL_DIRECTORY_DENY_FLOOR: dict[str, str] = {f"*/{name}/*": "deny" for name in DENY_FLOOR_DIRECTORIES}
 
 #: Regex metacharacters the runtime's own `Wildcard.match`
 #: (`packages/core/src/util/wildcard.ts`) escapes before turning a pattern

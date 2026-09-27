@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pegasus.core.identity import Identity, ReleaseSource
-from pegasus.core.types import Capability, CapabilityManifest, Environment, Layout
+from pegasus.core.types import Capability, CapabilityManifest, DirectoryGrantBehavior, Environment, Layout
 
 PROBE = Environment(home=Path("/nonexistent/pegasus-registry-probe"))
 """A home that does not exist, used to prove layouts are pure path arithmetic."""
@@ -113,6 +113,7 @@ class Registry:
         _check_own_artifacts(adapter, cli_id, layout)
         _check_activation_steps(adapter, cli_id)
         _check_writes_mcp_config_key(adapter, cli_id, manifest)
+        _check_directory_grant_behavior(adapter, cli_id)
 
         self._adapters[cli_id] = adapter
         self._manifests[cli_id] = manifest
@@ -203,6 +204,32 @@ def _check_own_artifacts(adapter: object, cli_id: str, layout: Layout) -> None:
             raise AdapterScopeError(
                 f"adapter {cli_id!r} would write {artifact.path} outside {layout.config_dir}"
             )
+
+
+def _check_directory_grant_behavior(adapter: object, cli_id: str) -> None:
+    """Confirm the adapter can state what `pegasus directory grant` actually
+    does on its own CLI, as a `DirectoryGrantBehavior` -- unconditionally,
+    not gated on any `Capability`, the same way `own_artifacts` is required
+    of every adapter: `content.grant_directories` already applies to every
+    registered adapter with no per-CLI branch, so there is no capability an
+    adapter could decline this behind.
+
+    Checked at registration, not merely typed, so a future adapter that
+    forgets to implement this (or returns the wrong shape) fails loudly
+    before the first byte, instead of `cli.directory_grant` discovering the
+    gap the first time somebody runs the command.
+    """
+    if not _implements(adapter, "directory_grant_behavior"):
+        raise ManifestMismatchError(
+            f"adapter {cli_id!r} must implement directory_grant_behavior; "
+            "cli.directory_grant reads it instead of ever comparing adapter.id"
+        )
+    behavior = adapter.directory_grant_behavior()
+    if not isinstance(behavior, DirectoryGrantBehavior):
+        raise ManifestMismatchError(
+            f"adapter {cli_id!r}.directory_grant_behavior() must return a DirectoryGrantBehavior, "
+            f"got {type(behavior).__name__!r}"
+        )
 
 
 def _check_identity(adapter: object, cli_id: str, manifest: CapabilityManifest) -> None:

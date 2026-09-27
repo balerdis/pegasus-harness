@@ -35,8 +35,6 @@ from typing import Any, Callable, TextIO
 
 import pegasus
 from pegasus.adapters import available
-from pegasus.adapters.opencode import render as opencode_render_module
-from pegasus.adapters.opencode.manifest import CLI_ID as OPENCODE_CLI_ID
 from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
 from pegasus.core import dependencies as dependencies_module
@@ -2753,6 +2751,14 @@ def _directory(arguments, runtime: Runtime) -> dict[str, Any]:
     raise CommandError("directory needs a subcommand: grant or revoke")
 
 
+_DENY_FLOOR_DESCRIPTION = ", ".join(content_module.DENY_FLOOR_DIRECTORIES)
+"""The five always-denied floor directories, rendered once as the same
+comma-separated text every prose message below quotes -- built from
+`content.DENY_FLOOR_DIRECTORIES` itself rather than retyped as a literal in
+three separate f-strings, which is exactly how those three copies drifted
+out of sync with each other before this constant existed."""
+
+
 def directory_grant(cli_id: str, paths: list[str], runtime: Runtime) -> dict[str, Any]:
     """Grant one or more working directories of the person's own choosing to
     every agent's `external_directory` permission, in a single command, and
@@ -2783,22 +2789,24 @@ def directory_grant(cli_id: str, paths: list[str], runtime: Runtime) -> dict[str
     spelling of the same directory, or a trailing slash or a repeated `/`
     silently produces two directories where the person meant one.
 
-    A path this validation accepts can still be one `render.py`'s own
-    `EXTERNAL_DIRECTORY_DENY_FLOOR` shadows -- `.ssh`, `.aws`, `.credentials`,
-    `.config/gh`, `secrets`, written last into every rendered
-    `external_directory` map so the runtime's last-match resolution always
-    lands on the floor's `deny` regardless of a grant naming that exact
-    directory. Refusing the grant outright would change this command's
-    contract for a case the person did not ask to be blocked on, so it is not
-    refused: it is still recorded and still reported as granted, with a
-    warning -- one per shadowed path in the batch -- that it can never take
-    effect, checked through `opencode_render_module.deny_floor_shadows` --
-    the OpenCode-specific fact of which directories the floor covers has no
-    business in `content.py` (`core` may not import an adapter), so the
-    predicate lives in the adapter and this CLI layer, which already depends
-    on everything, is what calls it. Only for `opencode` -- another CLI
-    adapter this product ships may have no such floor, and must not inherit a
-    warning describing OpenCode's own.
+    A path this validation accepts can still be one `content.
+    DENY_FLOOR_DIRECTORIES` shadows -- `.ssh`, `.aws`, `.credentials`,
+    `secrets`, `.config/gh`, written last into every rendered permission map
+    (whatever that CLI's own vocabulary spells it as) so the runtime's
+    last-match resolution always lands on the floor's `deny` regardless of a
+    grant naming that exact directory. Refusing the grant outright would
+    change this command's contract for a case the person did not ask to be
+    blocked on, so it is not refused: it is still recorded and still
+    reported as granted, with a warning -- one per shadowed path in the
+    batch, for every adapter whose `directory_grant_behavior().
+    has_deny_floor` is `True` -- that it can never take effect, checked
+    through `content.deny_floor_shadows`, the one CLI-agnostic predicate
+    both adapters' own floors share (see its own docstring for why this is
+    a plain substring test rather than a port of any one runtime's glob
+    syntax). `has_deny_floor` is what makes this per-adapter without ever
+    comparing `adapter.id`: a future CLI adapter this product ships may
+    declare `has_deny_floor=False` and must not inherit a warning describing
+    a floor it never renders.
     """
     adapter = _adapter(cli_id)
     if not paths:
@@ -2830,19 +2838,29 @@ def directory_grant(cli_id: str, paths: list[str], runtime: Runtime) -> dict[str
         granted_directories=list(granted),
         label="directory grant",
     )
+    # What this grant actually does, read off the adapter itself
+    # (`CliAdapter.directory_grant_behavior`) rather than by comparing
+    # `adapter.id` against a literal -- a fact that differs by adapter, not
+    # by path, and is exactly the kind of thing the hexagonal rule says a
+    # shared module like this one must ask the adapter rather than assume.
+    # `_directory_prose` is the one place the two booleans below get put
+    # into words.
+    behavior = adapter.directory_grant_behavior()
     result = {
         **report,
         "action": "grant",
         "paths": normalized_paths,
         "granted_directories": list(granted),
         "status": "granted",
+        "allowed_by_default": behavior.allowed_by_default,
+        "writes_own_entry": behavior.writes_own_entry,
     }
-    if adapter.id == OPENCODE_CLI_ID:
-        shadowed = [path for path in normalized_paths if opencode_render_module.deny_floor_shadows(path)]
+    if behavior.has_deny_floor:
+        shadowed = [path for path in normalized_paths if content_module.deny_floor_shadows(path)]
         if shadowed:
             result["warning"] = "\n\n".join(
                 f"{path!r} is granted and recorded, but it will never take effect: it falls under "
-                f"OpenCode's own always-denied floor (.ssh, .aws, .credentials, .config/gh, secrets), which "
+                f"{report['cli']}'s own always-denied floor ({_DENY_FLOOR_DESCRIPTION}), which "
                 f"is written after every grant so it always wins the match. This is not the ordinary dormant "
                 f"case -- an ordinary grant regains meaning if the baseline ever goes back to \"ask\"; this "
                 f"one never will, because the floor is written last regardless of the baseline."
@@ -2864,6 +2882,11 @@ def directory_revoke(cli_id: str, paths: list[str], runtime: Runtime) -> dict[st
     the normalized spelling. Without this, a directory granted as
     `/srv/work/` and revoked as `/srv/work` (or the reverse) would compare
     unequal, report `already-revoked`, and leave the grant rendered.
+
+    Carries `writes_own_entry` (from `adapter.directory_grant_behavior()`)
+    alongside the rest, so `_directory_prose` can say honestly whether this
+    removed a rendered permission entry or only took back a journal record
+    that was never reflected in the CLI's own configuration.
     """
     adapter = _adapter(cli_id)
     if not paths:
@@ -2904,6 +2927,7 @@ def directory_revoke(cli_id: str, paths: list[str], runtime: Runtime) -> dict[st
         "paths": normalized_paths,
         "granted_directories": list(granted),
         "status": "revoked",
+        "writes_own_entry": adapter.directory_grant_behavior().writes_own_entry,
     }
 
 
@@ -4239,9 +4263,51 @@ def _mcp_prose(report: dict[str, Any]) -> str:
 
 
 def _directory_prose(report: dict[str, Any]) -> str:
+    """The one resolver both `pegasus directory grant --json` (through
+    `_prose` dispatch, below) and a human-readable run share -- the TUI
+    surfaces no directory grant screen of its own, so this is the only place
+    this wording is ever produced.
+
+    Every CLI Pegasus ships today already allows external directories by
+    default (`report["allowed_by_default"]`, set by `directory_grant` from
+    `CliAdapter.directory_grant_behavior()`), so a grant changes nothing on
+    either of them, and the wording says so honestly rather than claiming an
+    effect a recording never had. What differs between them is only
+    `report["writes_own_entry"]`: whether that CLI still renders a rule of
+    its own for the granted path (dormant, not inert -- it would regain its
+    own meaning if that CLI's baseline ever asked again) or writes nothing
+    at all because its own permission vocabulary has no per-directory
+    concept to write. A future adapter whose own baseline still asks first
+    would report `allowed_by_default=False` and get the plain "granted ...
+    to every agent" wording back, unchanged.
+
+    `revoke` reads the same `writes_own_entry` fact to say the honest thing
+    on the way out too: a CLI that wrote its own entry had it removed; a CLI
+    that never wrote one for a grant only ever had the journal record to
+    take back, so revoking says exactly that instead of claiming a removal
+    from a configuration file that was never touched.
+    """
     action = report.get("action")
     if action == "grant":
         paths = ", ".join(report["paths"])
+        if report.get("allowed_by_default"):
+            if report.get("writes_own_entry"):
+                entries = ", ".join(f'"{path}/*": "allow"' for path in report["paths"])
+                plural = "y" if len(report["paths"]) == 1 else "ies"
+                line = (
+                    f"{report['cli']}: recorded {paths}, and wrote {entries} as its own permission "
+                    f"entr{plural}. This changes nothing today: external directories are already "
+                    f"allowed by default there, outside the fixed always-denied floor "
+                    f"({_DENY_FLOOR_DESCRIPTION})."
+                )
+            else:
+                line = (
+                    f"{report['cli']}: recorded {paths}; nothing needed writing. This changes nothing "
+                    f"today: external directories are already allowed by default there, outside the "
+                    f"fixed always-denied floor ({_DENY_FLOOR_DESCRIPTION})."
+                )
+            lines = [line, report["warning"]] if report.get("warning") else [line]
+            return "\n".join(_and_activation(lines, report))
         line = f"{report['cli']}: granted {paths} to every agent."
         lines = [line, report["warning"]] if report.get("warning") else [line]
         return "\n".join(_and_activation(lines, report))
@@ -4249,7 +4315,10 @@ def _directory_prose(report: dict[str, Any]) -> str:
         paths = ", ".join(report["paths"])
         if report.get("status") == "already-revoked":
             return f"{report['cli']}: {paths} was not granted; nothing to do."
-        line = f"{report['cli']}: revoked {paths}."
+        if report.get("writes_own_entry"):
+            line = f"{report['cli']}: revoked {paths}; its own permission entry was removed."
+        else:
+            line = f"{report['cli']}: {paths} removed from the record; nothing was written to unwrite."
         return "\n".join(_and_activation([line], report))
     return "directory: nothing to report."
 

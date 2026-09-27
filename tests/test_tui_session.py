@@ -1468,6 +1468,11 @@ class _NeverDeclaresPerAgentModel:
     def activation_steps(self):
         return ()
 
+    def directory_grant_behavior(self):
+        from pegasus.core.types import DirectoryGrantBehavior
+
+        return DirectoryGrantBehavior(allowed_by_default=True, writes_own_entry=False, has_deny_floor=False)
+
 
 class NoPerAgentModelCapabilityTest(ModelsScreenTestCase):
     """The most fundamental of the three explanations this screen can show:

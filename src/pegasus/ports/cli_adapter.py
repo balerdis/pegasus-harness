@@ -23,6 +23,7 @@ from pegasus.core.types import (
     Artifact,
     CapabilityManifest,
     Detection,
+    DirectoryGrantBehavior,
     Environment,
     Layout,
     ModelAssignment,
@@ -256,6 +257,31 @@ class CliAdapter(Protocol):
         silent-capability-gap failure mode this whole feature exists to
         close. A caller exercising `own_artifacts` in isolation, or an
         adapter untouched by this feature, passes an empty tuple explicitly.
+        """
+
+    def directory_grant_behavior(self) -> DirectoryGrantBehavior:
+        """What `pegasus directory grant` actually does on this CLI, today.
+
+        Not gated behind any `Capability`: unlike an MCP grant or a
+        per-agent model, granting a working directory is a fact every
+        registered adapter must be able to state (`content.grant_directories`
+        already applies to every adapter alike, with no per-CLI branch), so
+        this is required unconditionally, the same way `own_artifacts` is.
+
+        Returning the wrong thing here does not fail loudly the way an
+        undeclared render method does -- there is no capability to check it
+        against -- so get both fields right the first time: `allowed_by_default`
+        is whether this CLI's own baseline already lets every agent read and
+        write outside the working directory (floor excepted), and
+        `writes_own_entry` is whether granting a directory still renders a
+        rule of its own into this CLI's configuration, distinct from that
+        baseline fact. See `DirectoryGrantBehavior`'s own docstring for the
+        full account of why these are two separate booleans, not one.
+
+        `cli.directory_grant`/`cli._directory_prose` read this instead of
+        ever comparing `adapter.id` against a literal to decide what to say
+        -- the hexagonal violation `tests/test_cli_directory_all_clis.py`
+        guards against.
         """
 
     # --- Models: only when the manifest declares per_agent_model ---

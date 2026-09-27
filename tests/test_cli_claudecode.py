@@ -33,6 +33,7 @@ import json
 
 from pegasus import cli
 from pegasus.adapters import available
+from pegasus.adapters.claudecode import render as render_module
 from pegasus.core import journal as journal_module
 from pegasus.core.types import Environment
 from real_home import RealHomeTestCase as _RealHomeTestCase
@@ -257,3 +258,81 @@ class DriftTest(RealHomeTestCase):
         entry = cli_entry(report)
         self.assertIn("agent:pegasus-orchestrator", entry["drifted"])
         self.assertFalse(entry["missing"])
+
+
+class PermissionsTest(RealHomeTestCase):
+    """External directories allowed by default for Claude Code too (the same
+    product decision already taken for OpenCode's `external_directory`
+    baseline), written as `permissions.allow`/`permissions.deny` in
+    `settings.json`, each entry Pegasus's own append -- never the person's
+    whole array -- so a hand-written entry of theirs, present before install
+    or added afterward, survives untouched.
+    """
+
+    def _settings(self):
+        return json.loads(self.layout().settings_file.read_bytes())
+
+    def test_install_writes_exactly_the_allow_rules_and_the_floor_deny_rules(self):
+        self.install()
+        settings = self._settings()
+        self.assertEqual(settings["permissions"]["allow"], list(render_module.PERMISSIONS_ALLOW))
+        self.assertEqual(settings["permissions"]["deny"], list(render_module.PERMISSIONS_DENY_FLOOR))
+
+    def test_install_preserves_pre_existing_user_permission_entries(self):
+        self.present()
+        layout = self.layout()
+        layout.settings_file.write_text(
+            json.dumps({"permissions": {"allow": ["Bash(ls:*)"], "deny": ["Bash(rm -rf /:*)"]}}),
+            encoding="utf-8",
+        )
+        code, report = self.run_cli("install", "--cli", CLI)
+        self.assertEqual(code, 0, report)
+        settings = self._settings()
+        self.assertIn("Bash(ls:*)", settings["permissions"]["allow"])
+        self.assertIn("Bash(rm -rf /:*)", settings["permissions"]["deny"])
+        for rule in render_module.PERMISSIONS_ALLOW:
+            self.assertIn(rule, settings["permissions"]["allow"])
+        for rule in render_module.PERMISSIONS_DENY_FLOOR:
+            self.assertIn(rule, settings["permissions"]["deny"])
+
+    def test_update_is_idempotent_no_duplicate_rules(self):
+        self.install()
+        code, report = self.run_cli("update", "--cli", CLI)
+        self.assertEqual(code, 0, report)
+        settings = self._settings()
+        self.assertEqual(settings["permissions"]["allow"].count("Read(//**)"), 1)
+        self.assertEqual(settings["permissions"]["allow"].count("Edit(//**)"), 1)
+        self.assertEqual(len(settings["permissions"]["deny"]), len(render_module.PERMISSIONS_DENY_FLOOR))
+
+    def test_the_agent_key_is_unaffected(self):
+        self.install()
+        settings = self._settings()
+        self.assertEqual(settings["agent"], ORCHESTRATOR_AGENT)
+        self.assertIn("permissions", settings)
+
+    def test_uninstall_removes_only_pegasus_entries_and_keeps_the_users(self):
+        self.present()
+        layout = self.layout()
+        layout.settings_file.write_text(
+            json.dumps({"permissions": {"allow": ["Bash(ls:*)"], "deny": ["Bash(rm -rf /:*)"]}}),
+            encoding="utf-8",
+        )
+        self.run_cli("install", "--cli", CLI)
+        code, report = self.run_cli("uninstall", "--cli", CLI)
+        self.assertEqual(code, 0, report)
+        settings = self._settings()
+        self.assertEqual(settings["permissions"]["allow"], ["Bash(ls:*)"])
+        self.assertEqual(settings["permissions"]["deny"], ["Bash(rm -rf /:*)"])
+
+    def test_doctor_flags_a_hand_removed_permission_entry(self):
+        self.install()
+        layout = self.layout()
+        settings = self._settings()
+        settings["permissions"]["deny"] = [
+            rule for rule in settings["permissions"]["deny"] if rule != "Read(//**/.ssh/**)"
+        ]
+        layout.settings_file.write_text(json.dumps(settings), encoding="utf-8")
+
+        _, report = self.run_cli("doctor")
+        entry = cli_entry(report)
+        self.assertIn("own:permission-deny:Read-ssh", entry["missing"] + entry["drifted"])

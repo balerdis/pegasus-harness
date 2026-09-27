@@ -20,6 +20,7 @@ from pegasus.core.types import (
     CapabilityManifest,
     ConfigKeyArtifact,
     Detection,
+    DirectoryGrantBehavior,
     Environment,
     Layout,
     ModelAssignment,
@@ -131,6 +132,26 @@ class Adapter:
     def render_command(self, layout: Layout, command: Command, orchestrator_name: str) -> list[Artifact]:
         return render.command(layout, command, orchestrator_name)
 
+    def directory_grant_behavior(self) -> DirectoryGrantBehavior:
+        """`allowed_by_default=True`: `render.PERMISSIONS_ALLOW` already
+        grants `Read(//**)`/`Edit(//**)` at every install, floor excepted --
+        the same product decision already taken for OpenCode's own baseline,
+        so a granted directory changes nothing today here either.
+
+        `writes_own_entry=False`: unlike OpenCode's `external_directory`,
+        this CLI has no per-directory permission concept at all -- its own
+        `permissions.allow`/`deny` are anchored at the filesystem root
+        (`//**`), not scoped per granted path -- so granting one renders no
+        rule of its own; the journal entry is the only place it lives.
+
+        `has_deny_floor=True`: `render.PERMISSIONS_DENY_FLOOR` writes the
+        same five `content.DENY_FLOOR_DIRECTORIES`, as `Read(...)`/`Edit(...)`
+        pairs, after `PERMISSIONS_ALLOW` -- deny still wins the runtime's own
+        resolution -- so `cli.directory_grant` should warn here too when a
+        granted path falls under one of them (`content.deny_floor_shadows`).
+        """
+        return DirectoryGrantBehavior(allowed_by_default=True, writes_own_entry=False, has_deny_floor=True)
+
     def render_system_prompt(
         self, layout: Layout, system_prompt: SystemPrompt, identity: Identity
     ) -> list[Artifact]:
@@ -182,6 +203,13 @@ class Adapter:
         docstring for why its table is not a copy of OpenCode's -- it must
         speak this CLI's own tool and MCP-denial vocabulary, not the other
         adapter's, or it would lie about what a target can actually run.
+
+        `render.permission_artifacts` contributes the rest: the fixed
+        `permissions.allow`/`permissions.deny` entries that make external
+        directories allowed by default in this CLI too, with the same fixed
+        five-directory deny floor OpenCode already carries -- see that
+        function's own docstring for why each rule is its own appended
+        `ConfigKeyArtifact` rather than one value owning the whole array.
         """
         return [
             ConfigKeyArtifact(
@@ -191,4 +219,5 @@ class Adapter:
                 value=orchestrator_name,
             ),
             *render.delegation_capabilities(layout, delegation_targets),
+            *render.permission_artifacts(layout),
         ]

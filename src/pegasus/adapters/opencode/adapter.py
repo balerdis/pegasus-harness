@@ -26,6 +26,7 @@ from pegasus.core.types import (
     ConfigKeyArtifact,
     CredentialTransportCapability,
     Detection,
+    DirectoryGrantBehavior,
     Environment,
     FileArtifact,
     Layout,
@@ -284,6 +285,28 @@ class Adapter:
         settings file -- a bound server is the one exception, and that
         exception is exactly what `cli._bound_checks` exists to read."""
         return True
+
+    def directory_grant_behavior(self) -> DirectoryGrantBehavior:
+        """`allowed_by_default=True`: `render._permission` renders
+        `external_directory` with baseline `"*": "allow"` for every agent at
+        every depth (see that function's own docstring) -- a granted
+        directory changes nothing today.
+
+        `writes_own_entry=True`: a grant still renders its own
+        `f"{path}/*": "allow"` entry (`render._permission`'s
+        `item.granted_directories`), *dormant* while the baseline is
+        already `"allow"` rather than *inert* -- it would regain its own
+        meaning the day this baseline ever went back to `"ask"`, without
+        anyone having to grant it again. See `MANUAL.md`'s "Dar acceso a un
+        directorio de trabajo propio" for the same distinction in prose.
+
+        `has_deny_floor=True`: `render.EXTERNAL_DIRECTORY_DENY_FLOOR` writes
+        the same five `content.DENY_FLOOR_DIRECTORIES` last into every
+        rendered `external_directory` map, so `cli.directory_grant` should
+        warn when a granted path falls under one of them
+        (`content.deny_floor_shadows`).
+        """
+        return DirectoryGrantBehavior(allowed_by_default=True, writes_own_entry=True, has_deny_floor=True)
 
     # --- Models ---
 

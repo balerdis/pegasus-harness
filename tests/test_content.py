@@ -2694,6 +2694,50 @@ class GrantDirectoriesTest(unittest.TestCase):
                 )
 
 
+class DenyFloorShadowsTest(unittest.TestCase):
+    """`content.deny_floor_shadows` is the one, CLI-agnostic predicate that
+    answers "would this granted path fall under one of the five always-
+    denied floor directories" -- derived from `DENY_FLOOR_DIRECTORIES`
+    alone, never from any one adapter's own rendering syntax, so `cli.py`
+    can warn about a shadowed grant on every adapter without importing an
+    adapter's render module. Each adapter still spells its own rendered
+    floor differently (a wildcard pattern for one, a pair of Read/Edit
+    rules for another); this predicate is only ever about the CLI-agnostic
+    fact both spellings protect the same way.
+    """
+
+    def test_a_top_level_floor_directory_is_shadowed(self):
+        self.assertTrue(content.deny_floor_shadows("/home/me/.ssh"))
+
+    def test_a_nested_floor_directory_is_shadowed(self):
+        self.assertTrue(content.deny_floor_shadows("/home/me/projects/x/.ssh"))
+
+    def test_a_directory_inside_a_shadowed_directory_is_also_shadowed(self):
+        self.assertTrue(content.deny_floor_shadows("/home/me/.ssh/keys"))
+
+    def test_every_floor_directory_is_covered(self):
+        for name in content.DENY_FLOOR_DIRECTORIES:
+            with self.subTest(name=name):
+                self.assertTrue(content.deny_floor_shadows(f"/home/me/{name}"))
+
+    def test_a_directory_merely_named_similarly_is_not_shadowed(self):
+        self.assertFalse(content.deny_floor_shadows("/home/me/sshfoo"))
+
+    def test_ssh_as_a_trailing_filename_fragment_is_not_shadowed(self):
+        self.assertFalse(content.deny_floor_shadows("/home/me/config.ssh"))
+
+    def test_secrets_as_a_prefix_of_a_longer_name_is_not_shadowed(self):
+        self.assertFalse(content.deny_floor_shadows("/srv/app/secretsvault"))
+
+    def test_an_unrelated_directory_is_not_shadowed(self):
+        self.assertFalse(content.deny_floor_shadows("/home/me/worktrees/otro-repo"))
+
+    def test_gh_without_its_config_parent_is_not_shadowed(self):
+        """`.config/gh` needs the literal two-segment sequence -- a
+        directory just named `gh` elsewhere must not match."""
+        self.assertFalse(content.deny_floor_shadows("/home/me/tools/gh"))
+
+
 class SelectMcpShippedContentTest(unittest.TestCase):
     """`select_mcp` conditionality proven against the real shipped tree, not a
     fixture stand-in -- the fixture in `SelectMcpTest` proves the mechanism

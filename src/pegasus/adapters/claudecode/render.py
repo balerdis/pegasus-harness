@@ -6,6 +6,7 @@ Claude Code name. This is the only place those names are allowed to appear.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from pegasus.core import placeholders
 from pegasus.core.content import (
     Agent,
     Command,
+    DENY_FLOOR_DIRECTORIES,
     Distribution,
     Mcp,
     Skill,
@@ -22,7 +24,7 @@ from pegasus.core.content import (
 )
 from pegasus.core.dependencies import npm_script_path, program_path
 from pegasus.core.identity import Identity
-from pegasus.core.types import Artifact, FileArtifact, Layout, ModelAssignment
+from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout, ModelAssignment
 
 #: Claude Code's exact, case-sensitive tool names. This is the entire native
 #: tool vocabulary in shipped content: the union of `requires_tools` and
@@ -40,6 +42,110 @@ TOOL_NAME: dict[str, str] = {
     "ask": "AskUserQuestion",
     "skill": "Skill",
 }
+
+
+#: Measured live against a throwaway user on 2026-09-27, not assumed from the
+#: documentation (see this product's 7.3.0 architecture-doc section for the
+#: full account): with these two rules under `permissions.allow` in Claude
+#: Code's own `settings.json` -- the leading `//` anchors the pattern at the
+#: filesystem root rather than at the working directory -- a Read or Edit
+#: outside the current working directory proceeds without a prompt. This is
+#: Claude Code's own equivalent of the product decision already taken for
+#: OpenCode's `external_directory` baseline (`adapters/opencode/render.py`,
+#: `EXTERNAL_DIRECTORY_TOOLS`'s own docstring): external directories are
+#: allowed by default, in both CLIs alike.
+#:
+#: `Write(...)` is deliberately never one of these two rules, and must never
+#: be added: Claude Code's own permission docs say a `Write(path)` rule is
+#: never consulted at all -- only `Edit(...)`, which the same docs say also
+#: covers the Write tool -- so a `Write(...)` entry here would be dead
+#: configuration a person could mistake for a second guard.
+#:
+#: `permissions.additionalDirectories` is deliberately not used anywhere in
+#: this module either: measured the same day, it only grants reads, never
+#: writes, so it cannot stand in for these two rules, and Pegasus never
+#: writes it.
+PERMISSIONS_ALLOW: tuple[str, ...] = ("Read(//**)", "Edit(//**)")
+
+#: Claude Code's own translation of `content.DENY_FLOOR_DIRECTORIES` -- the
+#: one CLI-agnostic list of five always-denied directory names every
+#: adapter's own floor derives from -- into this runtime's own permission
+#: rule vocabulary, rather than a second, independently-typed list of the
+#: same five words (see `DENY_FLOOR_DIRECTORIES`'s own docstring for why
+#: that would be a silent way for the two adapters to drift apart).
+#:
+#: Measured live on 2026-09-27: a `permissions.deny` rule of this shape
+#: blocks Read, Edit/Write, AND a Bash `cat` of the same path -- verified for
+#: `.ssh`, `.config/gh` (two path segments) and `secrets`. Two rules per
+#: directory, `Read(...)` then `Edit(...)`, because Claude Code has no
+#: single wildcard-keyed permission the way OpenCode's `external_directory`
+#: is -- `Read` and `Edit` are separate permission families here, and `Edit`
+#: again covers Write, the same fact `PERMISSIONS_ALLOW` already relies on.
+PERMISSIONS_DENY_FLOOR: tuple[str, ...] = tuple(
+    rule for name in DENY_FLOOR_DIRECTORIES for rule in (f"Read(//**/{name}/**)", f"Edit(//**/{name}/**)")
+)
+
+_NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
+
+
+def _permission_slug(rule: str) -> str:
+    """A short, readable id fragment for one permission rule string.
+
+    Not guaranteed unique by construction the way a hash would be -- unique
+    across the fixed, small set this module actually renders, which
+    `test_claudecode_permissions.py` pins with its own uniqueness check.
+    Collapsing every run of non-alphanumeric characters to one `-` keeps a
+    directory name's own letters (`ssh`, `aws`, `config`, `gh`, ...) legible
+    in a journal dump instead of hiding them behind escaped parentheses and
+    slashes.
+    """
+    return _NON_ALNUM.sub("-", rule).strip("-")
+
+
+def permission_artifacts(layout: Layout) -> list[Artifact]:
+    """The fixed `permissions.allow`/`permissions.deny` entries this adapter
+    owns in `settings.json`, one `ConfigKeyArtifact` per rule.
+
+    Each is an *append* -- its pointer ends in `/-` -- the same mechanism
+    `core.planner` already gives every other list Pegasus contributes to
+    without claiming the whole array (see `system_prompt`'s own
+    `/instructions/-` entry above, or OpenCode's `/mcp/<id>` siblings, for
+    the same pattern in this codebase already). An append is identified by
+    its own fingerprint (`target`, `pointer`, `digest`), never by position or
+    by owning the array, so the person's own `permissions.allow`/`deny`
+    entries -- present before install, or added by hand afterward -- are
+    never touched, and `install`/`update` writing this twice never
+    duplicates a rule. `doctor` reports drift the same generic way it
+    already does for any other appended entry (`planner.
+    record_append_identity`, `cli._digest_of_config_key`); nothing there had
+    to learn about permissions specifically.
+
+    These artifacts are this adapter's implementation of the product
+    decision recorded in `docs/arquitectura/arquitectura.md`'s 7.3.0
+    section: external directories are allowed by default in Claude Code,
+    the same decision already taken for OpenCode, with the same fixed
+    five-directory floor (`content.DENY_FLOOR_DIRECTORIES`) still denied
+    regardless of that default.
+    """
+    allow = [
+        ConfigKeyArtifact(
+            id=f"own:permission-allow:{_permission_slug(rule)}",
+            path=layout.settings_file,
+            pointer="/permissions/allow/-",
+            value=rule,
+        )
+        for rule in PERMISSIONS_ALLOW
+    ]
+    deny = [
+        ConfigKeyArtifact(
+            id=f"own:permission-deny:{_permission_slug(rule)}",
+            path=layout.settings_file,
+            pointer="/permissions/deny/-",
+            value=rule,
+        )
+        for rule in PERMISSIONS_DENY_FLOOR
+    ]
+    return [*allow, *deny]
 
 
 class RenderError(ValueError):

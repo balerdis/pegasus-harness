@@ -11,6 +11,7 @@ from pegasus.core.types import (
     Codec,
     ConfigKeyArtifact,
     Detection,
+    DirectoryGrantBehavior,
     Environment,
     FileArtifact,
     Layout,
@@ -114,6 +115,54 @@ class CapabilityManifestTest(unittest.TestCase):
             CapabilityManifest(
                 cli_id="probe", per_agent_model=True, reasons={Capability.PER_AGENT_MODEL: "unreachable"}
             )
+
+    def test_a_reasons_key_that_is_not_a_capability_is_rejected_cleanly(self):
+        """`reasons` is typed `dict[Capability, str]`, but nothing before this
+        enforced it at construction: a plain string key reached `declares`,
+        which does `getattr(self, capability.value)` -- a bare string has no
+        `.value`, so the failure surfaced as an uninformative
+        `AttributeError` instead of a clear `ValueError` naming the mistake."""
+        with self.assertRaises(ValueError):
+            CapabilityManifest(cli_id="probe", reasons={"per_agent_model": "unreachable"})
+
+    def test_a_blank_reason_is_rejected(self):
+        """An empty or whitespace-only reason would show up as an empty
+        explanation everywhere `reason_for` is read back -- the TUI row, the
+        placeholder, the CLI refusal -- so it is refused at construction
+        rather than accepted and shown as nothing."""
+        with self.assertRaises(ValueError):
+            CapabilityManifest(cli_id="probe", reasons={Capability.PER_AGENT_MODEL: ""})
+
+    def test_a_whitespace_only_reason_is_rejected(self):
+        with self.assertRaises(ValueError):
+            CapabilityManifest(cli_id="probe", reasons={Capability.PER_AGENT_MODEL: "   "})
+
+
+class DirectoryGrantBehaviorTest(unittest.TestCase):
+    """The CLI-agnostic facts `pegasus directory grant`'s report is built
+    from: whether this CLI already allows external directories by default
+    (so a grant changes nothing today regardless), whether granting one
+    still writes a rule of its own into the rendered configuration, and
+    whether this CLI has a deny floor at all (so `cli.py` can warn about a
+    path the floor would shadow without assuming every adapter has one).
+    `cli.py` reads all three off the adapter instead of comparing against a
+    CLI id -- see `tests/test_cli_directory_all_clis.py` for the guards
+    proving that."""
+
+    def test_holds_all_three_declared_facts(self):
+        behavior = DirectoryGrantBehavior(
+            allowed_by_default=True, writes_own_entry=False, has_deny_floor=True
+        )
+        self.assertTrue(behavior.allowed_by_default)
+        self.assertFalse(behavior.writes_own_entry)
+        self.assertTrue(behavior.has_deny_floor)
+
+    def test_is_immutable(self):
+        behavior = DirectoryGrantBehavior(
+            allowed_by_default=True, writes_own_entry=True, has_deny_floor=True
+        )
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            behavior.allowed_by_default = False
 
 
 class LayoutTest(unittest.TestCase):

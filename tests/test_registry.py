@@ -14,6 +14,7 @@ from pegasus.core.types import (
     Capability,
     CapabilityManifest,
     Detection,
+    DirectoryGrantBehavior,
     Environment,
     FileArtifact,
     Layout,
@@ -55,6 +56,9 @@ class FakeAdapter:
 
     def activation_steps(self):
         return ()
+
+    def directory_grant_behavior(self):
+        return DirectoryGrantBehavior(allowed_by_default=True, writes_own_entry=False, has_deny_floor=False)
 
 
 ENVIRONMENT = Environment(home=Path("/home/probe"))

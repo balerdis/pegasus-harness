@@ -813,6 +813,72 @@ def grant_mcp(
     )
 
 
+#: The directory-shaped subset of the user's own standing security rule
+#: (`.ssh/`, `.credentials/`, `.aws/credentials`, `.config/gh/hosts.yml`,
+#: `secrets/`) -- the file-shaped members (`.env`, `.env.*`, `*.pem`, `*.key`)
+#: are inexpressible as a directory floor and are not listed here for that
+#: reason (see each adapter's own render for the rest of that story, told in
+#: its own runtime's vocabulary).
+#:
+#: This is the one, CLI-agnostic spelling of "which five directories every
+#: adapter's own baseline must keep denied regardless of how permissive that
+#: baseline otherwise is" -- a fact about what Pegasus protects, not about
+#: how any one runtime's permission syntax expresses it. Every adapter that
+#: needs a deny floor derives its own rendered form from this tuple rather
+#: than retyping the five names, each into its own runtime's own permission
+#: vocabulary -- one adapter's own deny-floor constant turns each name into a
+#: wildcard pattern keyed to its own external-directory permission, and
+#: another's turns each into a pair of read/write permission rules. Two
+#: adapters disagreeing about which five directories are floor-protected
+#: would be a silent product regression no test watching only one of them
+#: could catch; keeping one tuple here is what makes that disagreement a
+#: single edit instead of two that can drift apart.
+#:
+#: Order matters only for one adapter's own byte-for-byte rendered output,
+#: which existing tests pin -- it is preserved here rather than re-sorted.
+DENY_FLOOR_DIRECTORIES: tuple[str, ...] = (
+    ".ssh",
+    ".aws",
+    ".credentials",
+    "secrets",
+    ".config/gh",
+)
+
+
+def deny_floor_shadows(path: str) -> bool:
+    """Whether `path` falls under one of `DENY_FLOOR_DIRECTORIES` -- CLI-
+    agnostic, unlike each adapter's own rendered floor.
+
+    This is the one fact `cli.directory_grant` needs to warn about a
+    shadowed grant, and it must not be answered by importing an adapter's
+    render module: `core` may not import `adapters`, and a shared CLI-layer
+    function reaching into one specific adapter's own wildcard matcher
+    (one adapter's own faithful port of its runtime's glob-matching
+    function) to answer a question every adapter with a floor shares would
+    be exactly the same hexagonal violation this module already refuses
+    elsewhere -- only moved from `adapter.id` to `adapter.render`.
+
+    The check itself is a plain substring test, not a port of any one
+    runtime's glob syntax: `path` falls under a floor directory exactly
+    when `f"{path}/"` contains `f"/{name}/"` for some floor `name` --
+    equivalent, for every path this function is ever asked about, to that
+    adapter's own wildcard match against `f"{path}/*"` and pattern
+    `f"*/{name}/*"` (verified by `tests/test_external_directory_deny_floor_
+    shadow.py`'s own cases, mirrored here), but expressed without any
+    glob-to-regex translation this fact never actually needed: neither `*`
+    nor `?` nor a bracket can appear in a value `validate_granted_directory`
+    already accepted, so there is no wildcard syntax left to faithfully
+    port -- only a fixed set of literal directory names to look for as path
+    components. Each adapter that has a floor at all
+    (`DirectoryGrantBehavior.has_deny_floor`) still renders its own rejection
+    in its own runtime's vocabulary; this function only decides whether
+    `cli.py` should warn that the rendered rule -- whichever adapter wrote
+    it, however it is spelled -- can never take effect.
+    """
+    candidate = f"{path}/"
+    return any(f"/{name}/" in candidate for name in DENY_FLOOR_DIRECTORIES)
+
+
 #: Characters the runtime's own glob-to-regex translation gives special
 #: meaning to inside a permission rule name. `*` and `?` are confirmed by
 #: `_SERVER_KEY` above, for the identical reason -- a granted directory

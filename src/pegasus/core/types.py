@@ -118,7 +118,19 @@ class CapabilityManifest:
     def __post_init__(self) -> None:
         if not self.cli_id:
             raise ValueError("a capability manifest needs a cli_id")
-        for capability in self.reasons:
+        for capability, reason in self.reasons.items():
+            if not isinstance(capability, Capability):
+                raise ValueError(
+                    f"{self.cli_id!r} carries a reason keyed by {capability!r}, not a Capability member -- "
+                    "reasons is a dict[Capability, str], and a key of any other type could never be read "
+                    "back by reason_for, which only ever looks up a Capability"
+                )
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError(
+                    f"{self.cli_id!r} carries a blank reason for {capability.value!r} -- every surface "
+                    "that shows this back to a person (a TUI row, a placeholder, a CLI refusal) needs an "
+                    "actual explanation, not an empty string"
+                )
             if self.declares(capability):
                 raise ValueError(
                     f"{self.cli_id!r} declares {capability.value!r} as True and also carries a reason "
@@ -139,6 +151,55 @@ class CapabilityManifest:
     @property
     def enabled(self) -> frozenset[Capability]:
         return frozenset(item for item in Capability if self.declares(item))
+
+
+@dataclass(frozen=True)
+class DirectoryGrantBehavior:
+    """What `pegasus directory grant` actually does on one CLI -- the same
+    idea `CapabilityManifest.reasons` already models for a missing
+    capability, applied to a different fact this port needs from every
+    adapter: not "does this CLI have the concept", but "what does granting
+    one directory actually change here, today".
+
+    `allowed_by_default`: whether this CLI's own baseline already lets every
+    agent read and write outside the working directory, floor excepted --
+    the product decision documented in `docs/arquitectura/arquitectura.md`'s
+    7.3.0 sections, taken identically for every CLI this product ships.
+    `True` for every adapter registered today; declared per-adapter, not
+    assumed, so a future CLI whose own baseline still asks first can say so
+    and get the ordinary "granted" wording back.
+
+    `writes_own_entry`: whether granting a directory still renders a rule of
+    its own into that CLI's configuration, distinct from `allowed_by_default`
+    -- one CLI can keep writing a per-directory exception that is merely
+    *dormant* while the baseline already covers it (and would regain its own
+    meaning if that baseline ever changed), while another CLI's own
+    permission vocabulary has no per-directory concept to write at all, so a
+    grant there changes nothing on disk, not even a dormant entry.
+
+    `has_deny_floor`: whether this CLI carries a fixed, always-denied floor
+    at all -- `content.DENY_FLOOR_DIRECTORIES` written last into whatever
+    this CLI's own permission vocabulary is, so a grant naming one of those
+    directories can never take effect regardless of `allowed_by_default` or
+    `writes_own_entry`. `True` for every adapter registered today; declared
+    per-adapter, not assumed, because a future CLI could ship with no such
+    floor at all, and must not inherit a warning describing a floor it
+    never renders. The shadow check itself (`content.deny_floor_shadows`) is
+    CLI-agnostic -- it only asks whether a path falls under one of the five
+    floor directories, never how any one runtime's own syntax expresses
+    that -- so this field is the only per-adapter fact the check still
+    needs: whether to ask it at all.
+
+    `cli.directory_grant`/`cli._directory_prose` read all three facts off
+    the adapter (`CliAdapter.directory_grant_behavior`) to build an honest
+    report -- never by comparing `adapter.id` against a literal, which is
+    exactly the hexagonal violation `tests/test_cli_directory_all_clis.py`
+    guards against.
+    """
+
+    allowed_by_default: bool
+    writes_own_entry: bool
+    has_deny_floor: bool
 
 
 @dataclass(frozen=True)
