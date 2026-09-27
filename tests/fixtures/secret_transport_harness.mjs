@@ -366,4 +366,98 @@ results.over_cap_still_redacts_known_value = {
   usesSameVariable: outOverCap.parts[0].text.includes(varA ?? "$NEVER_MATCHES$"),
 }
 
+// ─── 7.3.2: unknown-variable warning + note idempotency ────────────────────
+//
+// The scenario this guards against: a message pasted out of an OpenCode
+// session's own history already carries `$PEGASUS_SECRET_<NAME>` tokens
+// (from a PAST process) plus that past process's own replaced-values note.
+// The CURRENT process never saw the real value behind that token, so a
+// shell command expands it to empty. `chat.message` must warn about that,
+// exactly once, and never duplicate the replaced-values note either.
+const NOTE_MARKER_RE = /were replaced with variables shown as/g
+const WARNING_MARKER_RE = /no value in this session/g
+const countMatches = (text, re) => (text.match(re) || []).length
+
+// (a) The real case: fresh process, text already carries an old note (from
+// a past process) and an unregistered `$PEGASUS_SECRET_APIKEY`, plus a
+// clientKey and a signature still in clear (fake) for THIS process to
+// detect and replace.
+const OLD_NOTE_FROM_PAST_SESSION =
+  "\n\n---\n" +
+  "Some values in this message were replaced with variables shown as " +
+  "`$PEGASUS_SECRET_<NAME>` -- a shell command expands them at run time."
+const clientKeyValueReal = "p1".repeat(5)
+const signatureValueReal = "q2".repeat(10)
+const realCaseMsg =
+  `X-Authorization: {"clientKey":"${clientKeyValueReal}","signature":"${signatureValueReal}"}\n` +
+  `pasted from history, still using $PEGASUS_SECRET_UNSEENCRED here` +
+  OLD_NOTE_FROM_PAST_SESSION
+const outUnknownReal = await sendMessage(realCaseMsg)
+const unknownRealText = outUnknownReal.parts.map((p) => p.text).join("\n")
+const envAfterUnknownReal = await shellEnv()
+results.unknown_variable_real_case = {
+  text: unknownRealText,
+  clientKeyGone: !unknownRealText.includes(clientKeyValueReal),
+  signatureGone: !unknownRealText.includes(signatureValueReal),
+  noteCount: countMatches(unknownRealText, NOTE_MARKER_RE),
+  warningCount: countMatches(unknownRealText, WARNING_MARKER_RE),
+  warningNamesApikey: unknownRealText.includes("PEGASUS_SECRET_UNSEENCRED"),
+  apikeyMissingFromEnv: !("PEGASUS_SECRET_UNSEENCRED" in envAfterUnknownReal),
+}
+
+// (b) A fresh paste of raw values gives exactly one note and no warning.
+const freshRawValue = "z9".repeat(5)
+const outFreshRaw = await sendMessage(`client_key: ${freshRawValue}`)
+const freshRawText = outFreshRaw.parts[0].text
+results.fresh_paste_no_warning = {
+  text: freshRawText,
+  valueGone: !freshRawText.includes(freshRawValue),
+  noteCount: countMatches(freshRawText, NOTE_MARKER_RE),
+  warningCount: countMatches(freshRawText, WARNING_MARKER_RE),
+}
+
+// (c) A message that mentions an already-registered `$PEGASUS_SECRET_TOKEN`
+// (registered above, case 1's JSON `"token"` field) in prose gives no
+// warning and no note.
+const registeredProseMsg = "The plan mentions $PEGASUS_SECRET_TOKEN in the brief but does nothing with it."
+const outRegisteredProse = await sendMessage(registeredProseMsg)
+const registeredProseText = outRegisteredProse.parts[0].text
+results.registered_variable_in_prose_no_warning = {
+  text: registeredProseText,
+  unchanged: registeredProseText === registeredProseMsg,
+  noteCount: countMatches(registeredProseText, NOTE_MARKER_RE),
+  warningCount: countMatches(registeredProseText, WARNING_MARKER_RE),
+}
+
+// (d) The same message processed twice gives exactly one note and one
+// warning both times -- never a duplicate on the second pass. Also proves
+// (e): the literal `$PEGASUS_SECRET_<NAME>` placeholder inside the note
+// itself is never reported as an unknown variable (else `warningCount`
+// would be 2, not 1, once the note's own placeholder text is present in
+// the reprocessed message).
+const doubleClientSecret = "w1".repeat(5)
+const doubleMsg = `client_secret: ${doubleClientSecret}\nstill unregistered here: $PEGASUS_SECRET_ZZZUNKNOWN`
+const outDouble1 = await sendMessage(doubleMsg)
+const doubleText1 = outDouble1.parts.map((p) => p.text).join("\n")
+const outDouble2 = await sendMessage(doubleText1)
+const doubleText2 = outDouble2.parts.map((p) => p.text).join("\n")
+results.double_processing_idempotent = {
+  firstNoteCount: countMatches(doubleText1, NOTE_MARKER_RE),
+  firstWarningCount: countMatches(doubleText1, WARNING_MARKER_RE),
+  secondNoteCount: countMatches(doubleText2, NOTE_MARKER_RE),
+  secondWarningCount: countMatches(doubleText2, WARNING_MARKER_RE),
+  secondUnchanged: doubleText2 === doubleText1,
+}
+
+// (f) A sub-agent brief referencing an unknown variable carries the
+// warning -- the same `chat.message` hook, whatever the message's origin.
+const briefMsg = "Sub-agent brief: authenticate with $PEGASUS_SECRET_UNKNOWNBRIEF against the service."
+const outBrief = await sendMessage(briefMsg)
+const briefText = outBrief.parts[0].text
+results.subagent_brief_unknown_variable = {
+  text: briefText,
+  warningCount: countMatches(briefText, WARNING_MARKER_RE),
+  namesUnknownBrief: briefText.includes("PEGASUS_SECRET_UNKNOWNBRIEF"),
+}
+
 console.log(JSON.stringify(results))

@@ -216,6 +216,51 @@ class SecretTransportPluginNodeTest(unittest.TestCase):
         self.assertTrue(data["valueGone"])
         self.assertTrue(data["usesSameVariable"])
 
+    def test_the_real_case_warns_about_an_unknown_variable_without_duplicating_the_old_note(self):
+        """7.3.2, the case that motivated this change: a message pasted out
+        of an OpenCode session's history already carries an old
+        replaced-values note plus `$PEGASUS_SECRET_APIKEY`, a token this
+        FRESH process never registered (a restart, or a copy from an
+        earlier session). `clientKey`/`signature` are still in clear and
+        must be detected and replaced as usual; the old note must not be
+        duplicated; exactly one warning must name the unknown variable; and
+        `shell.env` must carry no entry for it."""
+        data = self._run()["unknown_variable_real_case"]
+        self.assertTrue(data["clientKeyGone"], data["text"])
+        self.assertTrue(data["signatureGone"], data["text"])
+        self.assertEqual(data["noteCount"], 1, data["text"])
+        self.assertEqual(data["warningCount"], 1, data["text"])
+        self.assertTrue(data["warningNamesApikey"], data["text"])
+        self.assertTrue(data["apikeyMissingFromEnv"])
+
+    def test_a_fresh_paste_of_raw_values_gives_one_note_and_no_warning(self):
+        data = self._run()["fresh_paste_no_warning"]
+        self.assertTrue(data["valueGone"], data["text"])
+        self.assertEqual(data["noteCount"], 1, data["text"])
+        self.assertEqual(data["warningCount"], 0, data["text"])
+
+    def test_a_registered_variable_mentioned_in_prose_triggers_neither_note_nor_warning(self):
+        data = self._run()["registered_variable_in_prose_no_warning"]
+        self.assertTrue(data["unchanged"], data["text"])
+        self.assertEqual(data["noteCount"], 0, data["text"])
+        self.assertEqual(data["warningCount"], 0, data["text"])
+
+    def test_processing_the_same_message_twice_never_duplicates_the_note_or_the_warning(self):
+        """Also covers the literal `$PEGASUS_SECRET_<NAME>` placeholder
+        inside the note text itself: it must never be counted as an unknown
+        variable, or the second pass's warning count would climb to 2."""
+        data = self._run()["double_processing_idempotent"]
+        self.assertEqual(data["firstNoteCount"], 1, data)
+        self.assertEqual(data["firstWarningCount"], 1, data)
+        self.assertEqual(data["secondNoteCount"], 1, data)
+        self.assertEqual(data["secondWarningCount"], 1, data)
+        self.assertTrue(data["secondUnchanged"], data)
+
+    def test_a_subagent_brief_referencing_an_unknown_variable_carries_the_warning(self):
+        data = self._run()["subagent_brief_unknown_variable"]
+        self.assertEqual(data["warningCount"], 1, data["text"])
+        self.assertTrue(data["namesUnknownBrief"], data["text"])
+
 
 if __name__ == "__main__":
     unittest.main()

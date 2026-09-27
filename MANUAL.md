@@ -215,6 +215,10 @@ La detección corre en tiempo lineal sobre el tamaño del texto, no cuadrático:
 
 Lo que este mecanismo no cubre: un comando que imprime el valor mientras corre (un `curl -v`, un `echo` de la variable) lo deja en el historial de la sesión y en la TUI antes de que se pueda redactar la salida — el modelo nunca lo ve, pero vos sí, en tu propia terminal. No le pidas a un agente que imprima una credencial.
 
+El valor detrás de una `$PEGASUS_SECRET_<NOMBRE>` vive sólo mientras corre ESE proceso de OpenCode — reiniciarlo lo olvida por completo. Si copiás un mensaje del historial de una sesión (el propio, o el de un compañero) y lo pegás en un OpenCode recién reiniciado, ese texto trae el NOMBRE de la variable, nunca el valor: un comando de shell en el proceso nuevo la expande a vacío, sin ningún aviso visible más allá de que el comando falla o la API responde "unauthorized" por una razón que no se ve en ningún lado. Desde 7.3.2, Pegasus detecta esto: si un mensaje menciona una `$PEGASUS_SECRET_<NOMBRE>` que el proceso actual nunca registró, agrega un aviso corto nombrando esa variable, explicando que no tiene valor en esta sesión, y pidiendo pegar el valor real de nuevo. Ese aviso nunca se duplica, y si el mismo mensaje también dispara la nota de "valores reemplazados", comparten un solo bloque, no dos apéndices separados.
+
+Un cambio de plugin o de catálogo (por ejemplo, después de un `pegasus update`) no se aplica a un OpenCode que ya está corriendo: hace falta reiniciarlo para que cargue la versión nueva.
+
 ## Próximo paso
 
 - Para el recorrido completo de instalación: [INSTALL.md](INSTALL.md).

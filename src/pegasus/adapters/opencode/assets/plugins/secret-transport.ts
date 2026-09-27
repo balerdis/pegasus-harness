@@ -458,12 +458,62 @@ function globalRedact(text: string): string {
 
 // ─── Plugin export ───────────────────────────────────────────────────────────
 
-const NOTE =
-  "\n\n---\n" +
+// A marker substring, not the whole text: used only to detect that a note
+// (or warning) is ALREADY present in the message, so it is never appended
+// twice -- a message can carry one appended by a past OpenCode process (see
+// `UNKNOWN_VARIABLE_WARNING_MARKER` below) or by an earlier pass over the
+// same text in this one.
+const REPLACED_VALUES_NOTE_MARKER = "were replaced with variables shown as"
+const UNKNOWN_VARIABLE_WARNING_MARKER = "no value in this session"
+
+const REPLACED_VALUES_NOTE_BODY =
   "Some values in this message were replaced with variables shown as " +
   "`$PEGASUS_SECRET_<NAME>` — a shell command expands them at run time. " +
   "Use the variable name, never the value, in any brief, command, file or " +
   "reply, and never print it (no `echo`, no verbose flag that would dump it)."
+
+/** Every `$PEGASUS_SECRET_<NAME>` token in `text` whose NAME this process
+ * has not registered -- a variable with no value here, either because
+ * OpenCode was restarted since it was registered, or because the text was
+ * copied out of a different (past) OpenCode process's history. The
+ * literal `<NAME>` placeholder inside the note's own prose is never
+ * matched: the pattern requires at least one `[A-Z0-9_]` right after
+ * `SECRET_`, and `<` is not in that class. */
+function findUnknownVariableNames(text: string): string[] {
+  if (!text) return []
+  const re = /\$PEGASUS_SECRET_([A-Z0-9_]+)/g
+  const unknown = new Set<string>()
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text))) {
+    if (!usedNames.has(m[1])) unknown.add(m[1])
+  }
+  return [...unknown]
+}
+
+/** Short, model- and human-readable warning naming every variable in
+ * `names` that has no value in this session, why (a restart, or a paste
+ * from an earlier session), what happens if used anyway (a shell command
+ * expands it to empty), and the fix (paste the real value again). */
+function unknownVariableWarningBody(names: string[]): string {
+  const plural = names.length > 1
+  const list = names.map((n) => `\`$PEGASUS_SECRET_${n}\``).join(", ")
+  return (
+    `${list} ${plural ? "have" : "has"} no value in this session ` +
+    "(OpenCode was restarted, or this text was copied from an earlier " +
+    `session). A shell command would expand ${plural ? "them" : "it"} to ` +
+    `empty. Paste the real value${plural ? "s" : ""} again.`
+  )
+}
+
+/** One note block, never two separate appendices: the replaced-values
+ * note and the unknown-variable warning, each added only when it applies
+ * and is not already present, sharing a single `---` divider. */
+function buildNoteBlock(includeReplacedNote: boolean, unknownNames: string[]): string {
+  const paragraphs: string[] = []
+  if (includeReplacedNote) paragraphs.push(REPLACED_VALUES_NOTE_BODY)
+  if (unknownNames.length > 0) paragraphs.push(unknownVariableWarningBody(unknownNames))
+  return "\n\n---\n" + paragraphs.join("\n\n")
+}
 
 export const SecretTransportPlugin: Plugin = async () => {
   return {
@@ -478,13 +528,23 @@ export const SecretTransportPlugin: Plugin = async () => {
             changed = true
           }
         }
-        if (changed) {
-          const parts = output.parts as any[]
+
+        const parts = output.parts as any[]
+        const fullText = parts
+          .filter((p) => p?.type === "text" && typeof p.text === "string")
+          .map((p) => p.text)
+          .join("\n")
+
+        const needsReplacedNote = changed && !fullText.includes(REPLACED_VALUES_NOTE_MARKER)
+        const unknownNames = fullText.includes(UNKNOWN_VARIABLE_WARNING_MARKER) ? [] : findUnknownVariableNames(fullText)
+
+        if (needsReplacedNote || unknownNames.length > 0) {
+          const block = buildNoteBlock(needsReplacedNote, unknownNames)
           const lastText = [...parts].reverse().find((p) => p?.type === "text")
           if (lastText) {
-            lastText.text += NOTE
+            lastText.text += block
           } else {
-            parts.push({ type: "text", text: NOTE.trim() })
+            parts.push({ type: "text", text: block.trim() })
           }
         }
       } catch {
