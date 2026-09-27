@@ -163,6 +163,14 @@ class MenuPrefaceRenderingTest(unittest.TestCase):
         without_preface = Menu(title="t", entries=(Entry("a", QUIT),))
         self.assertEqual(render(with_preface, cursor=0), render(without_preface, cursor=0))
 
+    def test_a_long_preface_sentence_wraps_at_a_narrow_width_losing_no_words(self):
+        sentence = "OpenCode was installed with Pegasus Harness 1.0.0; the running binary is 2.0.0."
+        menu = Menu(title="t", preface=(sentence,), entries=(Entry("a", QUIT),))
+        lines = [line.text for line in render(menu, cursor=0, width=20)]
+        self.assertTrue(all(len(text) <= 20 for text in lines))
+        preface_lines = lines[2 : lines.index("", 2)]
+        self.assertEqual(" ".join(preface_lines).split(), sentence.split())
+
 
 class StatusScreenRenderingTest(unittest.TestCase):
     def test_it_carries_the_exact_prose_the_flags_would_print(self):
@@ -189,6 +197,19 @@ class PlaceholderRenderingTest(unittest.TestCase):
         screen = Placeholder("Install", "This screen has not been built yet.")
         lines = render(screen, cursor=0)
         self.assertFalse(any(line.highlighted for line in lines))
+
+    def test_a_long_note_wraps_on_word_boundaries_at_a_narrow_width_losing_no_words(self):
+        """The bug this fixes: a long note used to be cut by `draw`'s own
+        window-width clip, which once caused a real misdiagnosis when a
+        person acted on a message that had been cut off mid-sentence. It
+        now wraps here, in `render`, before `draw` ever sees it."""
+        note = "This explanation runs on for quite a while, long enough that a narrow terminal has to wrap it."
+        screen = Placeholder("Install", note)
+        lines = [line.text for line in render(screen, cursor=0, width=20)]
+        self.assertGreater(len(lines), 5)  # more than title, blank, note, blank, footer
+        self.assertTrue(all(len(text) <= 20 for text in lines))
+        note_lines = lines[2:-2]  # between the title/blank pair and the blank/footer pair
+        self.assertEqual(" ".join(note_lines).split(), note.split())
 
 
 class InstallPlanRenderingTest(unittest.TestCase):
@@ -356,6 +377,19 @@ class InstallResultRenderingTest(unittest.TestCase):
         lines = [line.text for line in render(InstallResultScreen(cli=SAMPLE, report=INSTALLED_REPORT), cursor=0)]
         for expected in cli.prose_for(INSTALLED_REPORT).splitlines():
             self.assertIn(expected, lines)
+
+    def test_a_long_error_line_wraps_at_a_narrow_width_instead_of_being_cut(self):
+        report = {
+            **FAILED_REPORT,
+            "error": "the disk is full and there is nowhere left at all to write even one more byte of it",
+        }
+        lines = [
+            line.text for line in render(InstallResultScreen(cli=SAMPLE, report=report), cursor=0, width=30)
+        ]
+        self.assertTrue(all(len(text) <= 30 for text in lines))
+        joined = " ".join(lines)
+        for word in report["error"].split():
+            self.assertIn(word, joined)
 
 
 class UpdatePlanRenderingTest(unittest.TestCase):
@@ -671,6 +705,15 @@ class ModelsLongListRenderingTest(unittest.TestCase):
         lines = [line.text for line in render(_models_screen(), cursor=0)]
         self.assertFalse(any("more" in text for text in lines))
 
+    def test_more_above_and_below_still_read_correctly_at_a_narrow_width(self):
+        """Wrapping the free text elsewhere on this screen must never touch
+        the choice rows themselves -- `_visible_window`'s own counts still
+        have to name exactly how many rows sit outside the visible slice."""
+        many_rows = tuple(AgentRow(agent=f"agent-{i}", current=None) for i in range(40))
+        lines = [line.text for line in render(_models_screen(rows=many_rows), cursor=20, width=30)]
+        self.assertIn("  ... 14 more above", lines)
+        self.assertIn("  ... 15 more below", lines)
+
 
 class BusyRenderingTest(unittest.TestCase):
     def test_the_message_becomes_the_one_line_shown(self):
@@ -709,6 +752,119 @@ class LineSpanTest(unittest.TestCase):
 
     def test_highlighted_still_defaults_to_false(self):
         self.assertFalse(Line("text").highlighted)
+
+
+class WrapTextTest(unittest.TestCase):
+    """`view._wrap_text` is the one place that decides where a block of
+    prose breaks across more than one physical row -- pure, so every
+    boundary it picks is provable without a terminal or a window. `render`
+    calls it for the free text a screen carries (a placeholder's note, a
+    prose line, a preface sentence); a menu entry or a choice row never
+    does, since one row must stay one item for `_visible_window`'s own
+    arithmetic to hold (see `ChoiceRowsNeverWrapTest` below)."""
+
+    def test_text_that_already_fits_is_returned_as_the_one_row_it_is(self):
+        self.assertEqual(view._wrap_text("short", width=40), ("short",))
+
+    def test_an_empty_line_stays_one_empty_row(self):
+        self.assertEqual(view._wrap_text("", width=40), ("",))
+
+    def test_a_long_message_wraps_on_word_boundaries_and_loses_no_words(self):
+        text = "one two three four five six seven eight nine ten"
+        rows = view._wrap_text(text, width=12)
+        self.assertGreater(len(rows), 1)
+        self.assertTrue(all(len(row) <= 12 for row in rows))
+        self.assertEqual(" ".join(rows).split(), text.split())
+
+    def test_a_single_word_longer_than_the_width_is_hard_broken(self):
+        text = "supercalifragilisticexpialidocious"
+        rows = view._wrap_text(text, width=10)
+        self.assertGreater(len(rows), 1)
+        self.assertTrue(all(len(row) <= 10 for row in rows))
+        self.assertEqual("".join(rows), text)
+
+    def test_a_word_too_long_mixed_with_ordinary_words_still_fits_every_row(self):
+        text = "see this supercalifragilisticexpialidocious word right there"
+        rows = view._wrap_text(text, width=10)
+        self.assertTrue(all(len(row) <= 10 for row in rows))
+        # Rejoining without spaces still reproduces every character, in
+        # order -- nothing dropped, only re-broken around the long word.
+        self.assertEqual("".join(rows).replace(" ", ""), text.replace(" ", ""))
+
+    def test_a_non_positive_width_returns_the_text_unbroken(self):
+        self.assertEqual(view._wrap_text("anything at all, however long", width=0), ("anything at all, however long",))
+
+
+class WrapLinesEmbeddedNewlineTest(unittest.TestCase):
+    """`_wrap_lines` splits each text on its own embedded newlines before
+    handing a single line at a time to `_wrap_text`, which only ever wraps
+    on word boundaries within one line -- a string that still carries a raw
+    "\\n" past that point would reach `window.addstr` in `draw` and corrupt
+    the row (the blocking bug this class pins: `_wrap_text("line one\\nline
+    two", 6)` used to return `('line', 'one\\nli', 'ne two')`, splicing the
+    newline into the middle of a wrapped word)."""
+
+    def test_an_embedded_newline_becomes_its_own_line_not_a_literal_character(self):
+        lines = view._wrap_lines(("line one\nline two",), width=40)
+        texts = [line.text for line in lines]
+        self.assertEqual(texts, ["line one", "line two"])
+        self.assertFalse(any("\n" in text for text in texts))
+
+    def test_an_embedded_newline_is_still_honored_even_when_a_line_needs_wrapping(self):
+        lines = view._wrap_lines(("aaa bbb ccc\nddd eee fff",), width=7)
+        texts = [line.text for line in lines]
+        self.assertFalse(any("\n" in text for text in texts))
+        self.assertTrue(all(len(text) <= 7 for text in texts))
+        self.assertEqual(" ".join(texts).split(), "aaa bbb ccc ddd eee fff".split())
+
+    def test_a_blank_line_between_two_paragraphs_survives(self):
+        lines = view._wrap_lines(("first\n\nsecond",), width=40)
+        texts = [line.text for line in lines]
+        self.assertEqual(texts, ["first", "", "second"])
+
+    def test_the_real_unresolved_bindings_message_never_leaks_a_raw_newline_into_a_line(self):
+        """The real repro: `cli.unresolved_bindings_message` embeds
+        `"\\n  {command}\\n"`, and reaches exactly this screen through
+        `session._mcp_selection_screen`/`_grant_mcp_screen`'s own
+        `Placeholder`."""
+        message = cli.unresolved_bindings_message("demo", ["x"], program_name="pegasus")
+        screen = Placeholder("Install", message)
+        lines = [line.text for line in render(screen, cursor=0, width=30)]
+        self.assertFalse(any("\n" in text for text in lines))
+        self.assertTrue(all(len(text) <= 30 for text in lines))
+        note_lines = lines[2:-2]
+        self.assertEqual(" ".join(note_lines).split(), message.replace("\n", " ").split())
+
+
+class NarrowWindowRenderingTest(unittest.TestCase):
+    """A window narrower than anything designed for must still render
+    something rather than raising -- wrapping can only rearrange text into
+    more rows, never fail to produce any (the same "surface smaller than
+    the thing drawn on it" case `draw`'s own clip already handles one layer
+    below this one)."""
+
+    def test_a_single_column_window_still_renders_every_screen_kind(self):
+        screens = [
+            Placeholder("Install", "A note that still has to render somehow, one way or another."),
+            InstallPlanScreen(cli=SAMPLE, report=PLANNED_REPORT),
+            StatusScreen(report=DOCTOR_REPORT),
+        ]
+        for screen in screens:
+            lines = render(screen, cursor=0, width=1)
+            self.assertTrue(lines)
+
+
+class ChoiceRowsNeverWrapTest(unittest.TestCase):
+    """Wrapping targets prose, not the selection list: a choice row (or a
+    menu entry) stays exactly one `Line` no matter how narrow the window,
+    since `_visible_window`'s cursor arithmetic assumes one row per item."""
+
+    def test_an_overlong_choice_row_stays_one_line_so_the_cursor_math_holds(self):
+        options = tuple(McpOption(id=f"server-{i}", description="x" * 60) for i in range(3))
+        screen = McpSelectionScreen(cli=SAMPLE, options=options, chosen=())
+        lines = [line.text for line in render(screen, cursor=0, width=20)]
+        for option in options:
+            self.assertEqual(sum(option.id in text for text in lines), 1)
 
 
 #: The full mark's own rows and the solo mark's own rows, for the fixture

@@ -387,6 +387,11 @@ class CapabilityRefusalTest(RealHomeTestCase):
         self.assertFalse(failures, "\n".join(failures))
 
     def test_the_refusal_names_the_cli_and_says_why_in_the_tui_voice(self):
+        """The reason must mean something to the person, never
+        implementation-speak restating the boolean that gates it -- so this
+        asserts against the one resolved sentence `cli.per_agent_model_reason`
+        hands every surface, not a hand-picked substring that would still
+        pass for a jargon-y rewrite of it."""
         cli_id = self.NO_PER_AGENT_MODEL[0]
         self.install_cli(cli_id)
         code, report = self.run_cli(
@@ -394,8 +399,20 @@ class CapabilityRefusalTest(RealHomeTestCase):
         )
         self.assertNotEqual(code, 0)
         self.assertIn(cli_id, report["error"])
-        self.assertIn("per-agent model", report["error"])
-        self.assertIn("model catalog", report["error"])
+        self.assertIn(cli.per_agent_model_reason(available().get(cli_id)), report["error"])
+
+    def test_the_refusal_is_not_implementation_speak(self):
+        """The regression this pins: a reason like "never declared support
+        for per-agent models" tells a developer something about the
+        manifest, not a person something they can act on."""
+        cli_id = self.NO_PER_AGENT_MODEL[0]
+        self.install_cli(cli_id)
+        code, report = self.run_cli(
+            "models", "set", "--cli", cli_id, "--assign", f"{CONFIGURABLE_AGENT}=anthropic/claude-sonnet-5",
+        )
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("declared support", report["error"])
+        self.assertNotIn("capability", report["error"])
 
     def test_the_refusal_is_checked_before_argument_validation(self):
         """A missing capability is not fixable by editing the rest of the
@@ -422,6 +439,63 @@ class CapabilityRefusalTest(RealHomeTestCase):
         )
         self.assertEqual(code, 0)
         self.assertEqual(report["status"], "set")
+
+
+class HelpNamesCapableClisTest(unittest.TestCase):
+    """`pegasus models --help` (and the same line in `pegasus --help`'s own
+    subcommand listing) names exactly the CLIs whose adapter declares
+    `per_agent_model` -- derived from `available()` itself, the same
+    discipline `CapabilityRefusalTest` already follows, so a third adapter
+    that gains or never declares the capability is named correctly the
+    moment it registers, with nothing here to update by hand."""
+
+    def _help_text(self, *argv: str) -> str:
+        import contextlib
+
+        buffer = io.StringIO()
+        runtime = cli.Runtime(filesystem=None, home=None, now=AT, out=io.StringIO())
+        with contextlib.redirect_stdout(buffer):
+            with self.assertRaises(SystemExit):
+                cli.main([*argv, "--help"], runtime=runtime)
+        return buffer.getvalue()
+
+    def _names(self, *, declares: bool) -> list[str]:
+        registry = available()
+        return [
+            registry.get(cli_id).display_name
+            for cli_id in registry.ids()
+            if registry.manifest(cli_id).declares(cli.Capability.PER_AGENT_MODEL) is declares
+        ]
+
+    def test_the_top_level_listing_names_every_capable_cli(self):
+        text = self._help_text()
+        for name in self._names(declares=True):
+            self.assertIn(name, text)
+
+    def test_the_top_level_listing_never_names_an_incapable_cli(self):
+        text = self._help_text()
+        for name in self._names(declares=False):
+            self.assertNotIn(name, text)
+
+    def test_models_own_help_repeats_the_same_names(self):
+        text = self._help_text("models")
+        for name in self._names(declares=True):
+            self.assertIn(name, text)
+        for name in self._names(declares=False):
+            self.assertNotIn(name, text)
+
+    def test_each_subcommands_own_help_repeats_the_same_names(self):
+        """`models set`/`unset`/`list` each build their own help text from
+        `cli._per_agent_model_suffix`, the same derived helper `models
+        --help` itself uses -- so a person who runs `pegasus models set
+        --help` directly, without ever seeing the parent's, still learns
+        which CLI it is for."""
+        for subcommand in ("set", "unset", "list"):
+            text = self._help_text("models", subcommand)
+            for name in self._names(declares=True):
+                self.assertIn(name, text, f"{subcommand} --help does not name {name!r}")
+            for name in self._names(declares=False):
+                self.assertNotIn(name, text, f"{subcommand} --help names {name!r}, which lacks the capability")
 
 
 class UnfilteredListingReportsPhantomEntriesTest(RealHomeTestCase):

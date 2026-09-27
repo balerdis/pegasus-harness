@@ -102,14 +102,39 @@ class CapabilityManifest:
     prompts: bool = False
     mcp: bool = False
     per_agent_model: bool = False
+    #: What `reason_for` reads back for a capability this manifest declares
+    #: `False` -- the adapter's own person-facing explanation of *why*, not
+    #: a developer-facing restatement of the boolean itself. Every surface
+    #: that shows a person a disabled feature (`cli._require_per_agent_model`,
+    #: `tui.session._models_screen`'s placeholder, `tui.navigator
+    #: .models_menu`'s own row, by way of `tui.session
+    #: .disabled_model_reasons`) reads this same string, so an adapter that
+    #: declares one is the single source every one of them repeats verbatim
+    #: -- see `cli._per_agent_model_reason` for the generic fallback used
+    #: when an adapter declares none.
+    reasons: dict[Capability, str] = field(default_factory=dict)
     schema: str = CAPABILITY_MANIFEST_SCHEMA
 
     def __post_init__(self) -> None:
         if not self.cli_id:
             raise ValueError("a capability manifest needs a cli_id")
+        for capability in self.reasons:
+            if self.declares(capability):
+                raise ValueError(
+                    f"{self.cli_id!r} declares {capability.value!r} as True and also carries a reason "
+                    "for its absence -- a reason only ever explains a capability this manifest does "
+                    "not declare"
+                )
 
     def declares(self, capability: Capability) -> bool:
         return bool(getattr(self, capability.value))
+
+    def reason_for(self, capability: Capability) -> str | None:
+        """The adapter's own person-facing reason it does not support
+        `capability`, or `None` when it declared none -- never raised for a
+        capability this manifest declares `True`, since `__post_init__`
+        already refuses that combination at construction."""
+        return self.reasons.get(capability)
 
     @property
     def enabled(self) -> frozenset[Capability]:

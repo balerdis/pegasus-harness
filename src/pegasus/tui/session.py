@@ -91,6 +91,30 @@ def detect_clis(runtime: cli.Runtime) -> tuple[CliOption, ...]:
     return tuple(options)
 
 
+def disabled_model_reasons() -> dict[str, str]:
+    """Every registered adapter's id that lacks `Capability.
+    PER_AGENT_MODEL`, mapped to the one person-facing sentence explaining
+    why (`cli.per_agent_model_reason`, already resolved -- an adapter's own
+    declared reason, or the generic fallback) -- the fact `app.run` hands
+    `Navigator.starting` so `models_menu` can show a CLI lacking it disabled
+    *with that reason already in its own row*, before a person ever walks
+    into `_models_screen`'s own placeholder for the same absence and reads
+    it there instead. `tui.navigator` never resolves this itself -- it stays
+    the pure layer it always has been, reading only the strings this
+    function already hands it, never a registry or a CLI's own name.
+
+    Reads no machine state at all -- which CLIs declare this capability is
+    fixed by what registered, never by what is installed or detected -- so,
+    unlike `detect_clis`, this needs no `Runtime` to answer.
+    """
+    registry = available()
+    return {
+        cli_id: cli.per_agent_model_reason(registry.get(cli_id))
+        for cli_id in registry.ids()
+        if not registry.manifest(cli_id).declares(Capability.PER_AGENT_MODEL)
+    }
+
+
 def detect_installed(runtime: cli.Runtime) -> tuple[CliOption, ...]:
     """Every CLI this release supports that Pegasus is currently recorded as
     installed into — unlike :func:`detect_clis`, never mind whether the CLI
@@ -565,8 +589,7 @@ def _models_screen(cli_option: CliOption, runtime: cli.Runtime) -> Menu | Placeh
     if not adapter.capabilities().declares(Capability.PER_AGENT_MODEL):
         return Placeholder(
             f"Configure models · {cli_option.display_name}",
-            f"{cli_option.display_name} never declared support for per-agent models -- its adapter "
-            f"carries no model catalog at all, so there is nothing here for this screen to configure, "
+            f"{cli.per_agent_model_reason(adapter)} There is nothing here for this screen to configure, "
             f"whether or not {runtime.identity.display_name} is installed into {cli_option.display_name}.",
         )
     if journal_module.install_for(cli.journal_store(runtime).load(), cli_option.id) is None:

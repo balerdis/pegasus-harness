@@ -499,6 +499,7 @@ def run(window, runtime: cli.Runtime) -> None:
         display_name=runtime.identity.display_name,
         version=runtime.identity.version,
         wordmark_words=runtime.identity.wordmark_words,
+        disabled_model_reasons=session.disabled_model_reasons(),
     )
     draw(window, _render_current(window, navigator), accent_attr=accent_attr)
 

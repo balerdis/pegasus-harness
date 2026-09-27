@@ -752,6 +752,65 @@ class ModelsMenuTest(unittest.TestCase):
         navigator = navigator.handle(Action.CHOOSE)
         self.assertIsInstance(navigator.current, Menu)
 
+    def test_no_disabled_reasons_given_at_all_keeps_every_entry_enabled(self):
+        """Every caller written before this capability existed -- and every
+        one that genuinely has no fact to report -- must see exactly what it
+        always did: nothing marked disabled. `None` means "no fact
+        offered", not "nothing is capable"."""
+        menu = models_menu(detections=(SAMPLE,))
+        self.assertNotIn("disabled", menu.entries[0].label.lower())
+
+    def test_a_cli_missing_per_agent_model_is_shown_disabled_with_its_own_reason(self):
+        """The rule this satisfies: a feature that does not apply to the CLI
+        in play is shown disabled, with a reason a person can actually act
+        on right there in the row -- not implementation-speak, not hidden,
+        and not something learned only by entering it
+        (`session._models_screen` still explains the same absence in the
+        same words once entered; this is what keeps a person from ever
+        having to enter it first to find out). This module never invents
+        that sentence itself -- `disabled_reasons` always hands it in
+        already resolved (`session.disabled_model_reasons`, in turn
+        `cli.per_agent_model_reason`), so there is no CLI-specific literal
+        of any kind in this file (see `NoCliLiteralsInNavigatorTest`)."""
+        reason = "some engine-agnostic, person-facing reason a fixture supplies"
+        menu = models_menu(detections=(SAMPLE,), disabled_reasons={SAMPLE.id: reason})
+        label = menu.entries[0].label
+        self.assertIn("disabled", label.lower())
+        self.assertIn(reason, label)
+
+    def test_a_cli_that_declares_per_agent_model_is_not_marked_disabled(self):
+        menu = models_menu(detections=(SAMPLE,), disabled_reasons={})
+        self.assertNotIn("disabled", menu.entries[0].label.lower())
+
+    def test_only_the_incapable_entry_is_marked_among_several(self):
+        capable = replace(SAMPLE, id="capable", display_name="Capable CLI")
+        incapable = replace(SAMPLE, id="incapable", display_name="Incapable CLI")
+        menu = models_menu(
+            detections=(capable, incapable), disabled_reasons={"incapable": "some reason"}
+        )
+        self.assertNotIn("disabled", menu.entries[0].label.lower())
+        self.assertIn("disabled", menu.entries[1].label.lower())
+        self.assertIn("some reason", menu.entries[1].label)
+
+
+class NoCliLiteralsInNavigatorTest(unittest.TestCase):
+    """The hexagonal rule this whole batch follows: the TUI's pure layer
+    never hard-codes a CLI's name or its per-CLI behavior -- whatever
+    depends on a CLI comes from the registered adapters, by way of `session`
+    and `cli`, as plain data. Read directly off the registry, so a third
+    adapter's own display name is covered the moment it registers, with
+    nothing here to update by hand."""
+
+    def test_navigator_source_names_no_registered_cli_by_its_own_display_name(self):
+        import inspect
+
+        from pegasus.adapters import available
+
+        source = inspect.getsource(navigator_module)
+        for cli_id in available().ids():
+            display_name = available().get(cli_id).display_name
+            self.assertNotIn(display_name, source, f"{display_name!r} (from {cli_id!r}) is a literal in navigator.py")
+
 
 class ModelsWizardRowsStepTest(unittest.TestCase):
     def test_moving_the_cursor_wraps_across_rows_and_the_confirm_row(self):

@@ -240,6 +240,44 @@ def safe_report(command: str, call: Callable[[], dict[str, Any]]) -> tuple[int, 
     return code, {"schema": SCHEMA, "command": command, **report}
 
 
+def _per_agent_model_display_names() -> tuple[str, ...]:
+    """Display names of every registered adapter that declares
+    `Capability.PER_AGENT_MODEL`, in registry order (alphabetical by
+    `cli_id`, see `Registry.ids`).
+
+    What `_parser` names in `models`'s own help, per this release's own
+    rule: a feature that exists for only one CLI says so in its name or
+    label, everywhere it appears -- here, in the TUI's `models_menu`
+    (`tui.navigator`), and in `_require_per_agent_model`'s own refusal.
+    Read from the registry rather than hand-listed, so a CLI added later
+    without this capability is silently left out and one that gains it is
+    silently named, with nothing here to update by hand.
+    """
+    registry = available()
+    return tuple(
+        registry.get(cli_id).display_name
+        for cli_id in registry.ids()
+        if registry.manifest(cli_id).declares(Capability.PER_AGENT_MODEL)
+    )
+
+
+def _per_agent_model_suffix() -> str:
+    """The `" (only <cli>, <cli>)"` (or the no-adapter fallback) clause
+    every `models` help string ends with -- shared by the top-level
+    `models` parser and each of its subcommands (`set`/`unset`/`list`), so
+    `pegasus models set --help` names the same CLI(s) `pegasus models
+    --help` already does, from the one call to `_per_agent_model_display_names`.
+    """
+    names = _per_agent_model_display_names()
+    if names:
+        return f" (only {', '.join(names)})"
+    return " (no CLI in this release supports per-agent models)"
+
+
+def _models_help_text() -> str:
+    return f"assign, remove, or list per-agent model preferences{_per_agent_model_suffix()}"
+
+
 def _parser(identity: Identity) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=identity.program_name,
@@ -337,11 +375,14 @@ def _parser(identity: Identity) -> argparse.ArgumentParser:
     )
     restore.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
-    models = commands.add_parser("models", help="assign, remove, or list per-agent model preferences")
+    _models_help = _models_help_text()
+    models = commands.add_parser("models", help=_models_help, description=_models_help)
     models.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     models_commands = models.add_subparsers(dest="models_command")
 
-    set_parser = models_commands.add_parser("set", help="assign a model to one or more agents, in one command")
+    _per_agent_model_suffix_text = _per_agent_model_suffix()
+    _set_help = f"assign a model to one or more agents, in one command{_per_agent_model_suffix_text}"
+    set_parser = models_commands.add_parser("set", help=_set_help, description=_set_help)
     set_parser.add_argument("--cli", required=True)
     set_parser.add_argument(
         "--assign",
@@ -359,12 +400,14 @@ def _parser(identity: Identity) -> argparse.ArgumentParser:
     )
     set_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
-    unset_parser = models_commands.add_parser("unset", help="remove one or more agents' model assignment")
+    _unset_help = f"remove one or more agents' model assignment{_per_agent_model_suffix_text}"
+    unset_parser = models_commands.add_parser("unset", help=_unset_help, description=_unset_help)
     unset_parser.add_argument("--cli", required=True)
     unset_parser.add_argument("--agent", action="append", required=True, help="repeatable")
     unset_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
-    list_parser = models_commands.add_parser("list", help="show current model assignments")
+    _list_help = f"show current model assignments{_per_agent_model_suffix_text}"
+    list_parser = models_commands.add_parser("list", help=_list_help, description=_list_help)
     list_parser.add_argument("--cli", default=None, help="limit to one CLI; omit to show every CLI")
     list_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
@@ -3011,6 +3054,34 @@ def _declared_mcp_keys(runtime: Runtime, adapter) -> frozenset[str]:
     return frozenset(str(key) for key in servers.keys()) if isinstance(servers, dict) else frozenset()
 
 
+#: The generic fallback `per_agent_model_reason` reads back when an adapter
+#: declares no `CapabilityManifest.reasons` entry of its own for
+#: `Capability.PER_AGENT_MODEL` -- built only from `display_name`, which
+#: every adapter already carries, so this needs no capability-specific
+#: knowledge of its own to still say something a person can act on, rather
+#: than a bare "not supported".
+_GENERIC_NO_PER_AGENT_MODEL_REASON = "{display_name} does not support assigning a model per agent."
+
+
+def per_agent_model_reason(adapter) -> str:
+    """The one, person-facing sentence every surface that refuses over a
+    missing `Capability.PER_AGENT_MODEL` reads verbatim: `adapter`'s own
+    declared reason (`CapabilityManifest.reasons`, see `claudecode
+    .manifest`'s own for the real one this release ships), or the generic
+    fallback above when it declares none.
+
+    Read by `_require_per_agent_model`'s own refusal below,
+    `tui.session._models_screen`'s placeholder, and `tui.session
+    .disabled_model_reasons` (what `tui.navigator.models_menu` shows,
+    already resolved, in a disabled CLI's own row) -- one voice in every one
+    of them, never restated independently in any of the three.
+    """
+    reason = adapter.capabilities().reason_for(Capability.PER_AGENT_MODEL)
+    if reason:
+        return reason
+    return _GENERIC_NO_PER_AGENT_MODEL_REASON.format(display_name=adapter.display_name)
+
+
 def _require_per_agent_model(adapter) -> None:
     """Refuse outright when `adapter` never declared `Capability.
     PER_AGENT_MODEL` -- before anything else `models_set`, `models_unset`,
@@ -3040,12 +3111,13 @@ def _require_per_agent_model(adapter) -> None:
     The message matches the `Placeholder` `tui.session`'s own models screen
     already shows for this exact absence (added in `e747b9f`): a person who
     meets this refusal in the TUI and then on the command line should read
-    the same explanation, not two different ones invented independently.
+    the same explanation, not two different ones invented independently --
+    both now read `per_agent_model_reason(adapter)` rather than restating
+    their own wording.
     """
     if not adapter.capabilities().declares(Capability.PER_AGENT_MODEL):
         raise CommandError(
-            f"{adapter.id} never declared support for per-agent models -- its adapter carries no "
-            "model catalog at all, so there is nothing here to set, unset, or list."
+            f"{adapter.id}: {per_agent_model_reason(adapter)} There is nothing here to set, unset, or list."
         )
 
 

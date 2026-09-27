@@ -1508,7 +1508,7 @@ class NoPerAgentModelCapabilityTest(ModelsScreenTestCase):
         self.assertIsInstance(screen, Placeholder)
         note = screen.note
         self.assertIn(adapter.display_name, note)
-        self.assertIn("per-agent model", note.lower())
+        self.assertIn(cli.per_agent_model_reason(adapter), note)
 
     def test_it_wins_over_the_installation_explanation(self):
         """Not installed *and* incapable at once still reads as the
@@ -1529,8 +1529,60 @@ class NoPerAgentModelCapabilityTest(ModelsScreenTestCase):
             screen = session._models_screen(cli_option, runtime)
         self.assertIsInstance(screen, Placeholder)
         note = screen.note.lower()
-        self.assertIn("per-agent model", note)
+        self.assertIn(cli.per_agent_model_reason(adapter).lower(), note)
         self.assertNotIn("main menu's install entry", note)
+
+
+class DisabledModelReasonsTest(SessionTestCase):
+    """`session.disabled_model_reasons` is what `app.run` hands
+    `Navigator.starting` so `models_menu` can mark a CLI lacking the
+    capability disabled, with a person-facing reason already resolved,
+    before a person ever walks into it -- the one place in this module that
+    reads the registry for exactly this fact, derived from whatever is
+    registered rather than hand-listed, so a third adapter is covered the
+    moment it registers."""
+
+    def test_every_id_returned_actually_lacks_the_capability(self):
+        registry = available()
+        reasons = session.disabled_model_reasons()
+        for cli_id in reasons:
+            self.assertFalse(registry.manifest(cli_id).declares(Capability.PER_AGENT_MODEL))
+
+    def test_every_incapable_registered_adapter_is_included(self):
+        registry = available()
+        expected = {
+            cli_id for cli_id in registry.ids() if not registry.manifest(cli_id).declares(Capability.PER_AGENT_MODEL)
+        }
+        self.assertEqual(set(session.disabled_model_reasons()), expected)
+
+    def test_each_reason_matches_cli_per_agent_model_reason_for_that_adapter(self):
+        """One voice: the same string `_require_per_agent_model` and
+        `_models_screen`'s own placeholder use, never a second wording
+        invented here."""
+        registry = available()
+        reasons = session.disabled_model_reasons()
+        for cli_id, reason in reasons.items():
+            self.assertEqual(reason, cli.per_agent_model_reason(registry.get(cli_id)))
+
+    def test_a_registry_with_no_incapable_adapter_returns_nothing(self):
+        # Any real adapter that already declares the capability -- picked
+        # from the real registry rather than a bespoke fake, since all this
+        # needs is one that actually does.
+        capable_adapter = next(
+            available().get(cli_id)
+            for cli_id in available().ids()
+            if available().manifest(cli_id).declares(Capability.PER_AGENT_MODEL)
+        )
+        registry = Registry(capable_adapter)
+        with unittest.mock.patch.object(session, "available", return_value=registry):
+            self.assertEqual(session.disabled_model_reasons(), {})
+
+    def test_an_adapter_lacking_the_capability_is_mapped_to_its_reason(self):
+        adapter = _NeverDeclaresPerAgentModel()
+        registry = Registry(adapter)
+        with unittest.mock.patch.object(session, "available", return_value=registry):
+            reasons = session.disabled_model_reasons()
+        self.assertEqual(reasons, {adapter.id: cli.per_agent_model_reason(adapter)})
 
 
 class AssignmentListTest(ModelsScreenTestCase):

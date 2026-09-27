@@ -7,10 +7,22 @@ its render and the content it needs both exist.
 """
 from __future__ import annotations
 
-from pegasus.core.types import CapabilityManifest
+from pegasus.core.types import Capability, CapabilityManifest
 
 CLI_ID = "claudecode"
 DISPLAY_NAME = "Claude Code"
+
+#: The person-facing reason this adapter declares `per_agent_model=False`
+#: below -- read back through `CapabilityManifest.reason_for`, and shown
+#: verbatim (never developer wording like "does not declare the
+#: capability") in every surface that gates on it: `cli
+#: ._require_per_agent_model`'s own refusal, `tui.session._models_screen`'s
+#: placeholder, and the disabled row `tui.navigator.models_menu` shows
+#: before a person ever walks into either of those.
+_NO_PER_AGENT_MODEL_REASON = (
+    f"{DISPLAY_NAME} has no local model catalog to read; it resolves provider and model against its own "
+    "API at run time, so no model can be assigned per agent there."
+)
 
 MANIFEST = CapabilityManifest(
     cli_id=CLI_ID,
@@ -43,4 +55,5 @@ MANIFEST = CapabilityManifest(
     # honest on-disk source to read a catalog from, so no `model_catalog`
     # method.
     per_agent_model=False,
+    reasons={Capability.PER_AGENT_MODEL: _NO_PER_AGENT_MODEL_REASON},
 )

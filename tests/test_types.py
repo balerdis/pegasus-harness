@@ -95,6 +95,26 @@ class CapabilityManifestTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             CapabilityManifest(cli_id="")
 
+    def test_a_declared_reason_for_an_undeclared_capability_is_read_back(self):
+        manifest = CapabilityManifest(
+            cli_id="probe", reasons={Capability.PER_AGENT_MODEL: "no local catalog to read"}
+        )
+        self.assertEqual(manifest.reason_for(Capability.PER_AGENT_MODEL), "no local catalog to read")
+
+    def test_no_reason_declared_reads_back_as_none(self):
+        manifest = CapabilityManifest(cli_id="probe")
+        self.assertIsNone(manifest.reason_for(Capability.PER_AGENT_MODEL))
+
+    def test_a_reason_for_a_capability_actually_declared_true_is_rejected(self):
+        """A reason only ever explains an absence -- one attached to a
+        capability this same manifest declares `True` could never be shown
+        anywhere, and would silently rot the moment it drifted from the
+        truth, so it is refused at construction instead."""
+        with self.assertRaises(ValueError):
+            CapabilityManifest(
+                cli_id="probe", per_agent_model=True, reasons={Capability.PER_AGENT_MODEL: "unreachable"}
+            )
+
 
 class LayoutTest(unittest.TestCase):
     def test_anchor_reads_a_capability_directory(self):

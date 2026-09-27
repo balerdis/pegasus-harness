@@ -1032,16 +1032,45 @@ def update_menu(
     )
 
 
-def models_menu(detections: tuple[CliOption, ...]) -> Union[Menu, Placeholder]:
+def _models_row(option: CliOption, disabled_reasons: dict[str, str] | None) -> str:
+    """`option`'s own row, plain, or with a disabled marker naming *why* --
+    the reason itself is never written here: this module touches no
+    registry and names no CLI by literal (see its own module docstring), so
+    the sentence always comes in already resolved, from `disabled_reasons`
+    (`session.disabled_model_reasons`, which is `cli.per_agent_model_reason`
+    applied to every adapter lacking the capability -- an adapter's own
+    declared reason, or a generic fallback, but always the same string the
+    command line and `session._models_screen`'s own placeholder show for
+    the same CLI)."""
+    row = f"{option.display_name:<18} {option.config_dir:<32} {option.tier}"
+    if disabled_reasons is None or option.id not in disabled_reasons:
+        return row
+    return f"{row}  -- disabled: {disabled_reasons[option.id]}"
+
+
+def models_menu(
+    detections: tuple[CliOption, ...], *, disabled_reasons: dict[str, str] | None = None
+) -> Union[Menu, Placeholder]:
     """One entry per detected CLI, the same set `install_menu` offers: a CLI
-    that is not present has no model catalog this release can read either."""
+    that is not present has no model catalog this release can read either.
+
+    `disabled_reasons`, when given, maps a CLI id to the one sentence
+    explaining why its adapter has no per-agent model catalog
+    (`session.disabled_model_reasons`, since this module touches no
+    registry itself -- see its own module docstring). A detected CLI whose
+    id is a key there is shown disabled, with that reason spelled out right
+    there in its own row -- not left for a person to discover only after
+    walking into `session._models_screen`'s own placeholder for the same
+    absence. `None` (the default, and every call written before this
+    capability existed) means no fact is known here, so nothing is marked
+    disabled; an explicit, possibly empty, `dict` is what turns the gate on.
+    """
     if not detections:
         return Placeholder("Configure models", "No supported CLI was detected on this machine.")
     return Menu(
         title="Configure models for which CLI?",
         entries=tuple(
-            Entry(f"{option.display_name:<18} {option.config_dir:<32} {option.tier}", ModelsTarget(option))
-            for option in detections
+            Entry(_models_row(option, disabled_reasons), ModelsTarget(option)) for option in detections
         ),
     )
 
@@ -1199,6 +1228,7 @@ def main_menu(
     display_name: str = _UNNAMED_PRODUCT,
     version: str = "",
     wordmark_words: tuple[str, ...] = (),
+    disabled_model_reasons: dict[str, str] | None = None,
 ) -> Menu:
     """Grouped by intent rather than by when each entry was added: get
     working and keep current (`Install`, `Update`, `Upgrade`), then configure
@@ -1232,7 +1262,7 @@ def main_menu(
             Entry("Install", install_menu(detections, display_name=display_name)),
             Entry("Update", update_menu(installed, display_name=display_name)),
             Entry("Upgrade", UpgradeTarget()),
-            Entry("Configure models", models_menu(detections)),
+            Entry("Configure models", models_menu(detections, disabled_reasons=disabled_model_reasons)),
             Entry("Grant MCP servers", grant_mcp_menu(installed, display_name=display_name)),
             Entry("Status and diagnostics", StatusRequest()),
             Entry("Uninstall", uninstall_menu(installed, display_name=display_name)),
@@ -1274,9 +1304,16 @@ class Navigator:
         display_name: str = _UNNAMED_PRODUCT,
         version: str = "",
         wordmark_words: tuple[str, ...] = (),
+        disabled_model_reasons: dict[str, str] | None = None,
     ) -> "Navigator":
         menu = main_menu(
-            detections, installed, notice, display_name=display_name, version=version, wordmark_words=wordmark_words
+            detections,
+            installed,
+            notice,
+            display_name=display_name,
+            version=version,
+            wordmark_words=wordmark_words,
+            disabled_model_reasons=disabled_model_reasons,
         )
         return Navigator(_stack=(menu,), _cursors=(0,), display_name=display_name)
 

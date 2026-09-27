@@ -130,6 +130,67 @@ class Line:
         return "".join(span.text for span in self.spans)
 
 
+def _wrap_text(text: str, width: int) -> tuple[str, ...]:
+    """`text` broken into rows that each fit within `width` columns, on
+    whitespace boundaries, so a word is only ever cut when it is wider than
+    `width` all by itself -- there is no boundary inside it that would help
+    instead. `text` already fitting, or `width` not being positive (there is
+    no boundary a non-positive width could honor either), hands back the one
+    row it already is, unchanged.
+
+    This is the one place that decides where a block of prose breaks across
+    more than one physical row; `draw` (`tui/app.py`) still owns clipping a
+    `Line` that somehow still overruns its window regardless -- a defensive
+    backstop, not a second place layout is decided (see its own docstring).
+    """
+    if width <= 0 or len(text) <= width:
+        return (text,)
+    rows: list[str] = []
+    current = ""
+    for word in text.split(" "):
+        while len(word) > width:
+            if current:
+                rows.append(current)
+                current = ""
+            rows.append(word[:width])
+            word = word[width:]
+        candidate = f"{current} {word}" if current else word
+        if len(candidate) <= width:
+            current = candidate
+        else:
+            rows.append(current)
+            current = word
+    rows.append(current)
+    return tuple(rows)
+
+
+def _wrap_lines(texts: tuple[str, ...], width: int) -> tuple[Line, ...]:
+    """Every string in `texts` -- a report's own already-explicit lines, a
+    preface, a placeholder's note -- wrapped independently at `width` and
+    flattened into the `Line`s `render` hands `draw`. Never called for a
+    menu entry or a choice row: those stay exactly one `Line` each no matter
+    how narrow the window, since `_visible_window`'s own cursor arithmetic
+    assumes one row per item.
+
+    Each entry is split on its own embedded newlines first, with
+    `str.splitlines()` (`("",)` standing in for an empty string, which
+    splits to nothing rather than one blank row), and only then handed to
+    `_wrap_text` one already-single-line string at a time. `_wrap_text`
+    itself wraps purely on word boundaries and never looks for a newline of
+    its own, so a caller that skipped this split -- `cli.
+    unresolved_bindings_message`'s embedded `"\\n  {command}\\n"`, reaching
+    `_render_placeholder` through `session._mcp_selection_screen`'s own
+    `Placeholder`, is the real one that did -- would let a raw `\\n` ride
+    inside a wrapped word straight into `draw`'s `window.addstr`, corrupting
+    the row instead of starting a new one.
+    """
+    lines: list[Line] = []
+    for text in texts:
+        for paragraph in text.splitlines() or ("",):
+            lines.extend(Line(row) for row in _wrap_text(paragraph, width))
+    return tuple(lines)
+
+
 #: The installer's own visual language, reproduced exactly: a fifty-cell bar
 #: of filled and empty glyphs, and a rotating spinner frame proving the
 #: process is alive while a single long-running unit -- a network fetch --
@@ -245,25 +306,25 @@ def render(screen: Screen, cursor: int, *, width: int = _AMPLE_WIDTH) -> tuple[L
     if isinstance(screen, Menu):
         return _render_menu(screen, cursor, width)
     if isinstance(screen, Placeholder):
-        return _render_placeholder(screen)
+        return _render_placeholder(screen, width)
     if isinstance(screen, McpSelectionScreen):
-        return _render_mcp_selection(screen, cursor)
+        return _render_mcp_selection(screen, cursor, width)
     if isinstance(screen, GrantMcpScreen):
-        return _render_grant_mcp(screen, cursor)
+        return _render_grant_mcp(screen, cursor, width)
     if isinstance(screen, GrantMcpResultScreen):
-        return _render_grant_mcp_result(screen)
+        return _render_grant_mcp_result(screen, width)
     if isinstance(screen, InstallPlanScreen):
-        return _render_install_plan(screen)
+        return _render_install_plan(screen, width)
     if isinstance(screen, InstallResultScreen):
         return _render_install_result(screen, width)
     if isinstance(screen, StatusScreen):
-        return _render_status(screen)
+        return _render_status(screen, width)
     if isinstance(screen, UninstallResultScreen):
-        return _render_uninstall_result(screen)
+        return _render_uninstall_result(screen, width)
     if isinstance(screen, RestoreResultScreen):
-        return _render_restore_result(screen)
+        return _render_restore_result(screen, width)
     if isinstance(screen, ModelsScreen):
-        return _render_models(screen, cursor)
+        return _render_models(screen, cursor, width)
     raise TypeError(f"no rendering defined for screen: {screen!r}")
 
 
@@ -323,20 +384,26 @@ def _render_menu(screen: Menu, cursor: int, width: int) -> tuple[Line, ...]:
     else:
         lines = [Line(screen.title), Line("")]
     if screen.preface:
-        lines.extend(Line(text) for text in screen.preface)
+        lines.extend(_wrap_lines(screen.preface, width))
         lines.append(Line(""))
     for index, entry in enumerate(screen.entries):
+        # An entry's own label never wraps: `_visible_window`'s cursor
+        # arithmetic (see `_render_choices`, which every wizard-style list
+        # uses) assumes one row per item, and this plain menu makes the
+        # same promise for its own entries -- `draw` still clips one that
+        # somehow overruns the window, the same defensive backstop
+        # `_wrap_text`'s own docstring already names.
         selected = index == cursor
         prefix = SELECTED if selected else UNSELECTED
         lines.append(Line(f"{prefix}{entry.label}", highlighted=selected))
     return tuple(lines)
 
 
-def _render_placeholder(screen: Placeholder) -> tuple[Line, ...]:
+def _render_placeholder(screen: Placeholder, width: int) -> tuple[Line, ...]:
     return (
         Line(screen.title),
         Line(""),
-        Line(screen.note),
+        *_wrap_lines((screen.note,), width),
         Line(""),
         Line("enter/esc: back"),
     )
@@ -349,10 +416,10 @@ def _render_placeholder(screen: Placeholder) -> tuple[Line, ...]:
 _COMMAND_LABEL = {"install": "Install", "update": "Update", "upgrade": "Upgrade"}
 
 
-def _render_install_plan(screen: InstallPlanScreen) -> tuple[Line, ...]:
+def _render_install_plan(screen: InstallPlanScreen, width: int) -> tuple[Line, ...]:
     label = _COMMAND_LABEL.get(screen.command, screen.command.capitalize())
     lines = [Line(f"{label} · {screen.cli.display_name}"), Line(""), Line(PREVIEW_BANNER), Line("")]
-    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines.extend(_wrap_lines(tuple(cli.prose_for(screen.report).splitlines()), width))
     lines += [Line(""), Line(f"enter: {screen.command} now · esc: back, nothing written")]
     return tuple(lines)
 
@@ -387,32 +454,32 @@ def _render_install_result(screen: InstallResultScreen, width: int) -> tuple[Lin
             lines.extend(_wordmark_lines(variant, screen.wordmark_words))
             lines.append(Line(""))
     lines += [Line(banner), Line("")]
-    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines.extend(_wrap_lines(tuple(cli.prose_for(screen.report).splitlines()), width))
     lines += [Line(""), Line("enter/esc: back")]
     return tuple(lines)
 
 
-def _render_status(screen: StatusScreen) -> tuple[Line, ...]:
+def _render_status(screen: StatusScreen, width: int) -> tuple[Line, ...]:
     lines = [Line("Status and diagnostics"), Line("")]
-    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines.extend(_wrap_lines(tuple(cli.prose_for(screen.report).splitlines()), width))
     lines += [Line(""), Line("enter: view snapshot generations to restore · esc: back")]
     return tuple(lines)
 
 
-def _render_uninstall_result(screen: UninstallResultScreen) -> tuple[Line, ...]:
+def _render_uninstall_result(screen: UninstallResultScreen, width: int) -> tuple[Line, ...]:
     failed = screen.report.get("status") == "failed"
     banner = UNINSTALL_FAILED_BANNER if failed else UNINSTALLED_BANNER
     lines = [Line(f"Uninstall · {screen.cli.display_name}"), Line(""), Line(banner), Line("")]
-    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines.extend(_wrap_lines(tuple(cli.prose_for(screen.report).splitlines()), width))
     lines += [Line(""), Line("enter/esc: back")]
     return tuple(lines)
 
 
-def _render_restore_result(screen: RestoreResultScreen) -> tuple[Line, ...]:
+def _render_restore_result(screen: RestoreResultScreen, width: int) -> tuple[Line, ...]:
     failed = screen.report.get("status") == "failed"
     banner = RESTORE_FAILED_BANNER if failed else RESTORED_BANNER
     lines = [Line("Restore"), Line(""), Line(banner), Line("")]
-    lines.extend(Line(text) for text in cli.prose_for(screen.report).splitlines())
+    lines.extend(_wrap_lines(tuple(cli.prose_for(screen.report).splitlines()), width))
     lines += [Line(""), Line("enter/esc: back")]
     return tuple(lines)
 
@@ -439,16 +506,21 @@ def _render_choices(
     cursor: int,
     footer: str,
     *,
+    width: int,
     header: str | None = None,
     empty: str | None = None,
     trailer: tuple[str, ...] = (),
 ) -> tuple[Line, ...]:
-    lines = [Line(title), Line("")]
+    # `items` itself never wraps: `_visible_window`'s "N more above/below"
+    # counts, and the cursor's own row, both assume one `Line` per item --
+    # every other string here is free text and wraps like any other.
+    lines = list(_wrap_lines((title,), width)) + [Line("")]
     if not items:
-        lines += [Line(empty or "Nothing to choose from."), Line(""), Line(footer)]
+        lines += list(_wrap_lines((empty or "Nothing to choose from.",), width))
+        lines += [Line(""), *_wrap_lines((footer,), width)]
         return tuple(lines)
     if header:
-        lines.append(Line(header))
+        lines.extend(_wrap_lines((header,), width))
     start, end = _visible_window(len(items), cursor)
     if start > 0:
         lines.append(Line(f"  ... {start} more above"))
@@ -463,8 +535,9 @@ def _render_choices(
     # function always has, for every other screen that never passes one.
     if trailer:
         lines.append(Line(""))
-        lines.extend(Line(text) for text in trailer)
-    lines += [Line(""), Line(footer)]
+        lines.extend(_wrap_lines(trailer, width))
+    lines += [Line("")]
+    lines.extend(_wrap_lines((footer,), width))
     return tuple(lines)
 
 
@@ -492,7 +565,7 @@ def _mcp_row_detail(option: McpOption) -> str:
     return f"bound to {option.bound_to} · {option.description}"
 
 
-def _render_mcp_selection(screen: McpSelectionScreen, cursor: int) -> tuple[Line, ...]:
+def _render_mcp_selection(screen: McpSelectionScreen, cursor: int, width: int) -> tuple[Line, ...]:
     """The step between choosing a CLI and seeing its plan: a checklist of
     every server this release ships, and a Continue row after the last one
     that fetches the plan for whatever ended up checked."""
@@ -502,10 +575,12 @@ def _render_mcp_selection(screen: McpSelectionScreen, cursor: int) -> tuple[Line
         for option in screen.options
     )
     items = rows + (CONTINUE_LABEL,)
-    return _render_choices(heading, items, cursor, "enter/space: toggle a server, or continue · esc: back")
+    return _render_choices(
+        heading, items, cursor, "enter/space: toggle a server, or continue · esc: back", width=width
+    )
 
 
-def _render_grant_mcp(screen: GrantMcpScreen, cursor: int) -> tuple[Line, ...]:
+def _render_grant_mcp(screen: GrantMcpScreen, cursor: int, width: int) -> tuple[Line, ...]:
     """The step for granting `screen.cli`'s own MCP servers: a checklist of
     every server the user administers themselves, and a Continue row after
     the last one that applies the grants and revokes for whatever ended up
@@ -515,24 +590,25 @@ def _render_grant_mcp(screen: GrantMcpScreen, cursor: int) -> tuple[Line, ...]:
     heading = f"Grant MCP servers · {screen.cli.display_name} · granted to every agent"
     rows = tuple(f"[{'x' if option.id in screen.chosen else ' '}] {option.id}" for option in screen.options)
     items = rows + (CONTINUE_LABEL,)
-    return _render_choices(heading, items, cursor, "enter/space: toggle a grant, or continue · esc: back")
+    return _render_choices(
+        heading, items, cursor, "enter/space: toggle a grant, or continue · esc: back", width=width
+    )
 
 
-def _render_grant_mcp_result(screen: GrantMcpResultScreen) -> tuple[Line, ...]:
+def _render_grant_mcp_result(screen: GrantMcpResultScreen, width: int) -> tuple[Line, ...]:
     failed = bool(screen.errors)
     banner = GRANT_MCP_FAILED_BANNER if failed else GRANT_MCP_BANNER
     lines = [Line(f"Grant MCP servers · {screen.cli.display_name}"), Line(""), Line(banner), Line("")]
     if screen.granted:
-        lines.append(Line(f"Granted: {', '.join(screen.granted)}"))
+        lines.extend(_wrap_lines((f"Granted: {', '.join(screen.granted)}",), width))
     if screen.revoked:
-        lines.append(Line(f"Revoked: {', '.join(screen.revoked)}"))
+        lines.extend(_wrap_lines((f"Revoked: {', '.join(screen.revoked)}",), width))
     if not screen.granted and not screen.revoked and not failed:
         lines.append(Line("Nothing changed."))
-    for error in screen.errors:
-        lines.append(Line(error))
+    lines.extend(_wrap_lines(screen.errors, width))
     if screen.activation:
         lines.append(Line(""))
-        lines.extend(Line(text) for text in screen.activation)
+        lines.extend(_wrap_lines(screen.activation, width))
     lines += [Line(""), Line("enter/esc: back")]
     return tuple(lines)
 
@@ -554,7 +630,7 @@ def _staged_column(screen: ModelsScreen, agent: str) -> str:
     return ""
 
 
-def _render_models(screen: ModelsScreen, cursor: int) -> tuple[Line, ...]:
+def _render_models(screen: ModelsScreen, cursor: int, width: int) -> tuple[Line, ...]:
     """The doc's four-step walk, one step's worth of choices at a time --
     which step depends only on how much of `screen` is already filled in,
     matching `navigator._models_step_count`'s own reading of the same state.
@@ -587,15 +663,22 @@ def _render_models(screen: ModelsScreen, cursor: int) -> tuple[Line, ...]:
             header=f"{'Agent':<24} {'Current model':<28} Staged change",
             empty="This release ships no agent that accepts a model assignment.",
             trailer=screen.activation,
+            width=width,
         )
     heading = f"{heading} · {screen.agent}"
     if screen.provider_id is None:
         items = tuple(provider.id for provider in screen.providers)
-        return _render_choices(f"{heading} · choose a provider", items, cursor, "enter: choose · esc: back")
+        return _render_choices(
+            f"{heading} · choose a provider", items, cursor, "enter: choose · esc: back", width=width
+        )
     heading = f"{heading} · {screen.provider_id}"
     provider = next(provider for provider in screen.providers if provider.id == screen.provider_id)
     if screen.model_id is None:
         items = tuple(model.id for model in provider.models)
-        return _render_choices(f"{heading} · choose a model", items, cursor, "enter: choose · esc: back")
+        return _render_choices(
+            f"{heading} · choose a model", items, cursor, "enter: choose · esc: back", width=width
+        )
     heading = f"{heading}/{screen.model_id}"
-    return _render_choices(f"{heading} · choose an effort", EFFORT_OPTIONS, cursor, "enter: stage · esc: back")
+    return _render_choices(
+        f"{heading} · choose an effort", EFFORT_OPTIONS, cursor, "enter: stage · esc: back", width=width
+    )
