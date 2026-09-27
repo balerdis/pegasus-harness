@@ -72,6 +72,7 @@ import contextlib
 import io
 import json
 import re
+import unittest
 from pathlib import Path
 
 from fakes import FakeMCPProcess
@@ -83,6 +84,13 @@ from real_home import RealHomeTestCase as _RealHomeTestCase
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 MANUAL = REPOSITORY / "MANUAL.md"
+#: `MANUAL.md`'s Claude Code sibling. It documents a different CLI's own
+#: surface, never restating a claim `MANUAL.md` already carries, so it gets
+#: its own narrow coverage check below rather than joining any of the
+#: OpenCode-specific classes above -- those exercise capabilities (`mcp`
+#: selection screens, `per_agent_model`, sub-agents declared inside the
+#: settings file) this document never claims for Claude Code.
+MANUAL_CLAUDE_CODE = REPOSITORY / "MANUAL-claude-code.md"
 
 #: This module, derived rather than retyped, so renaming it fails here and
 #: names the document that has to follow.
@@ -980,6 +988,90 @@ class ManualDocumentsEveryTopLevelCommandTest(RealHomeTestCase):
         upgrade = [label for label in labels if label.lower() == "upgrade"]
         self.assertEqual(len(upgrade), 1, f"the main menu no longer offers one Upgrade entry: {labels}")
         self.assertIn(f"`{upgrade[0]}`", self.manual)
+
+
+class ManualClaudeCodeNamesOnlyRealCommandsTest(unittest.TestCase):
+    """Every `pegasus <word>`/`<word> <word>` this document names as
+    something a person can type is a real subcommand, and every bare flag it
+    quotes is one the parser actually accepts.
+
+    `MANUAL-claude-code.md` does not claim the whole top-level surface the
+    way `MANUAL.md` does (it is a sibling document for one CLI's own
+    differences, not a second copy of the full command reference), so this
+    does not reuse `ManualDocumentsEveryTopLevelCommandTest` -- that class
+    proves completeness in one direction; this one proves the opposite
+    direction, that nothing named here is a command the parser would refuse,
+    the same defect class `test_the_manual_names_no_bare_flag_the_parser_
+    would_reject` already guards against for `MANUAL.md` itself.
+    """
+
+    def setUp(self):
+        self.manual = MANUAL_CLAUDE_CODE.read_text(encoding="utf-8")
+        self.program = cli.default_identity().program_name
+        self.parser = cli._parser(cli.default_identity())
+
+    def test_the_document_exists_and_is_not_empty(self):
+        self.assertTrue(self.manual.strip(), f"{MANUAL_CLAUDE_CODE.name} is empty")
+
+    def test_every_top_level_word_named_after_the_program_is_a_real_subcommand(self):
+        top_level = subcommands_under("command")
+        self.assertGreater(len(top_level), 1)
+        named = set(re.findall(rf"\b{re.escape(self.program)} ([a-z][a-z-]*)", self.manual))
+        self.assertTrue(named, f"{MANUAL_CLAUDE_CODE.name} names no `{self.program} <word>` at all")
+        self.assertEqual(named - top_level, set())
+
+    def test_every_second_level_word_pair_is_a_real_subcommand(self):
+        """`mcp grant`, `directory grant`, `models set`, ... -- one nested
+        subparser per top-level group this document actually mentions."""
+        nested_dests = {"mcp": "mcp_command", "directory": "directory_command", "models": "models_command"}
+        checked_any = False
+        for group, dest in nested_dests.items():
+            for second in re.findall(rf"\b{re.escape(group)} ([a-z][a-z-]*)", self.manual):
+                nested = subcommands_under(dest)
+                self.assertIn(second, nested, f"`{group} {second}` is not a real `{self.program}` subcommand")
+                checked_any = True
+        self.assertTrue(checked_any, f"{MANUAL_CLAUDE_CODE.name} names no second-level subcommand at all")
+
+    def test_the_manual_names_no_bare_flag_the_parser_would_reject(self):
+        named = set(re.findall(rf"`{re.escape(self.program)} (-{{1,2}}[a-zA-Z][\w-]*)`", self.manual))
+        accepted = {
+            option
+            for action in self.parser._actions
+            for option in action.option_strings
+        }
+
+        def walk(parser: argparse.ArgumentParser) -> None:
+            for action in parser._actions:
+                accepted.update(action.option_strings)
+                if isinstance(action, argparse._SubParsersAction):
+                    for child in action.choices.values():
+                        walk(child)
+
+        walk(self.parser)
+        self.assertEqual(named - accepted, set())
+
+    def test_every_bare_flag_it_quotes_alongside_a_subcommand_is_accepted_somewhere(self):
+        """`--start-mcp-servers`, `--dry-run`, `--mcp`, `--cli`, ... quoted on
+        their own, not necessarily right after the program name (e.g. inside
+        a longer invocation like `` `pegasus doctor --start-mcp-servers` ``)."""
+        named = set(re.findall(r"`(-{1,2}[a-zA-Z][\w-]*)`", self.manual))
+        accepted: set[str] = set()
+
+        def walk(parser: argparse.ArgumentParser) -> None:
+            for action in parser._actions:
+                accepted.update(action.option_strings)
+                if isinstance(action, argparse._SubParsersAction):
+                    for child in action.choices.values():
+                        walk(child)
+
+        walk(self.parser)
+        # Only demand this of a flag actually shaped like one of this
+        # program's own options (a leading dash followed by a letter):
+        # narrows out an unrelated backticked word that happens to start
+        # with a dash in someone's own prose, which this regex cannot
+        # otherwise tell apart from a real flag.
+        self.assertTrue(named & accepted, "no recognizable flag found -- this test would prove nothing")
+        self.assertEqual(named - accepted, set())
 
 
 if __name__ == "__main__":  # pragma: no cover

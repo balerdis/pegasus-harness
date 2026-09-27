@@ -23,7 +23,8 @@ flag y los ids válidos, en vez de elegir uno por su cuenta.
 
 El resto de esta guía explica, en orden, qué hace exactamente ese script, y qué hace falta para
 mantener la instalación al día o deshacerla. Para usar Pegasus una vez instalado — la interfaz
-interactiva (TUI) y la línea de comandos completa — consultá [MANUAL.md](MANUAL.md).
+interactiva (TUI) y la línea de comandos completa — consultá [MANUAL.md](MANUAL.md) si tu CLI es
+OpenCode, o [MANUAL-claude-code.md](MANUAL-claude-code.md) si es Claude Code.
 
 *(`install.sh` sólo está pensado para Linux: sus pistas de Python son `apt`/`dnf`, propias de esa
 familia de sistemas. No decimos nada sobre macOS acá — ni que funciona ni que falla — porque no lo

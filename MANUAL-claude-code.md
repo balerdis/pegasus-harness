@@ -1,0 +1,100 @@
+# Manual de uso: Pegasus Harness + Claude Code
+
+Este manual describe cómo usar Pegasus 7 una vez instalado bajo Claude Code: qué instala, qué preserva de tu cuenta y qué difiere de la experiencia bajo OpenCode, que es la que [MANUAL.md](MANUAL.md) documenta en detalle. Para instalar no hay procedimiento acá — está en [INSTALL.md](INSTALL.md) (manual) y en [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md) (asistido por un agente).
+
+## Qué es Pegasus bajo esta CLI
+
+Pegasus 7 es el mismo `zipapp` de Python de siempre, un solo archivo ejecutable en `~/.local/bin/pegasus`, sin ninguna dependencia de terceros. Bajo Claude Code, el adaptador que lo integra está registrado desde la 6.0.0 y hoy declara soporte `partial` (contra `full` de OpenCode): implementa skills, system prompt, slash commands, sub-agentes y MCP, pero no `prompts` (el prompt de un agente vive en el cuerpo de su propio archivo, no en un segundo artifact) ni `per_agent_model` (más abajo). Esa tabla, celda por celda, está en [README.md#qué-soporta-cada-cli](README.md#qué-soporta-cada-cli), derivada del manifiesto real de cada adaptador — no se retipea acá.
+
+## Instalar y elegir Claude Code
+
+Necesitás Claude Code ya instalado en la cuenta: `pegasus` no lo instala, actualiza ni desinstala por su cuenta — sólo se integra con una instalación existente, y si no la encuentra se niega antes de escribir nada. `install.sh`, el script de una sola línea de [INSTALL.md](INSTALL.md), sí lo resuelve por vos: instala Node incondicionalmente (parte de los MCPs que Pegasus distribuye se materializa con npm) y, para Claude Code, corre el instalador oficial (`claude.ai/install.sh`) antes de llegar al binario `pegasus`. Ese instalador oficial no toma un parámetro de versión — a diferencia del de OpenCode, que sí lo fija — así que instala lo último que publique Anthropic en el momento.
+
+```sh
+pegasus install --cli claudecode --dry-run --mcp <id>
+```
+
+El resto del comando —`--dry-run`, el rechazo de un `install` a secas sobre una selección ya registrada, `--mcp <id>` vs. `--mcp <id>=<clave>`, `update --cli claudecode` para reaplicar sin flags— funciona exactamente como en [Instalar el payload en OpenCode](MANUAL.md#instalar-el-payload-en-opencode); ahí está el detalle completo, con `opencode` cambiado por `claudecode` en cada invocación.
+
+## Qué instala Pegasus bajo `~/.claude`
+
+Claude Code guarda su configuración en `~/.claude` (respeta `CLAUDE_CONFIG_DIR`, no `XDG_CONFIG_HOME`, a diferencia de OpenCode). Ahí, Pegasus escribe:
+
+- **skills** en `skills/`, verbatim — el mismo formato `SKILL.md` que lee OpenCode;
+- **agentes** en `agents/`, un archivo `.md` por agente: frontmatter (`name`, `description`, `tools`, y `mcpServers`/`disallowedTools`/`model` cuando aplican) sobre el cuerpo, que es el prompt entero — no hay un segundo archivo de prompt como en OpenCode;
+- **comandos** en `commands/`, un `.md` por slash command;
+- el **system prompt** de Pegasus en `rules/pegasus.md` — el nombre lleva el prefijo del binario instalado, igual que en OpenCode; `~/.claude/rules/*.md` es una ubicación de primera clase que Claude Code carga en el arranque de toda sesión, root y sub-agente por igual;
+- una referencia generada, `skills/_shared/delegation-capabilities.md`, con qué herramientas nativas y qué servidores MCP alcanza cada agente que otro puede delegarle trabajo — la tabla la deriva la instalación misma, nunca un texto fijo;
+- dentro de `settings.json`, sólo las claves que Pegasus reclama como propias, agregadas — nunca la totalidad del archivo: la clave `agent` (que arranca toda sesión nueva como el orquestador de Pegasus — ver más abajo) y las entradas de `permissions.allow`/`permissions.deny` de la sección siguiente. Lo que ya tenías en `settings.json` antes de instalar, o lo que agregues a mano después en cualquier otra clave, se conserva intacto: cada entrada propia de Pegasus se identifica por su propia huella (`target`, `pointer`, `digest`), nunca por posición ni por ser dueña del archivo entero.
+
+No hay un lugar propio para servidores MCP a nivel de sesión: Claude Code no documenta ninguno dentro de `~/.claude/`, así que Pegasus nunca escribe un `.mcp.json` ni una clave global — cada servidor granted vive en el `mcpServers:` del frontmatter del agente que lo recibe (más abajo).
+
+## Los agentes, día a día
+
+El orquestador y los especialistas que trae esta release, y las rutas que decide (FTD, SDD, consulta directa) son contenido compartido con OpenCode — no se repiten acá. Para eso: [docs/metodologia.md](docs/metodologia.md) explica las rutas y las responsabilidades de SDD, FTD, TDD, OpenSpec, Engram y ChainPR, y [Usarlo todos los días](MANUAL.md#usarlo-todos-los-días) en el manual de OpenCode cubre el mismo flujo palabra por palabra.
+
+Lo que sí cambia es cómo Claude Code arranca esa primera voz: `settings.json` tiene un campo de primera clase, `agent`, documentado como "arrancar toda sesión como este sub-agente nombrado, con su prompt, sus tools y su modelo". Pegasus escribe ahí el nombre del agente que el contenido declara como el que arranca la sesión — hoy el orquestador — así que una sesión nueva de Claude Code adopta ese rol sin que hagas nada. `king-pegasus`, el único otro agente que el contenido declara `mode: primary`, no tiene un archivo distinto por eso: se renderiza igual que cualquier sub-agente, y sólo el valor de esa clave `agent` decide cuál de los dos arranca la sesión.
+
+Para delegar, un agente usa la construcción nativa de Claude Code, `Agent(nombre-a, nombre-b, ...)`, dentro de su propio campo `tools:` — nunca un campo aparte. Un agente cuyo `may_delegate_to` está vacío no lleva esa entrada en absoluto: así se lee "no puede delegarle a nadie". Antes de armar un brief que asuma que un destino puede correr un comando, abrir un navegador o escribir un archivo, `skills/_shared/delegation-capabilities.md` es la referencia — generada en cada instalación, nunca a mano — y su regla de fallback es explícita: si falta o no se puede leer, no asumas la capacidad, verificala vos o pedí menos.
+
+## Servidores MCP bajo Claude Code
+
+Los cinco servidores opcionales que Pegasus distribuye —CBM, Engram, Playwright, Context7 y Jira— son el mismo contenido bajo las dos CLIs; [Qué hacen los cinco MCPs opcionales](MANUAL.md#qué-hacen-los-cinco-mcps-opcionales) los describe uno por uno y vale igual acá. Lo que cambia es dónde y cómo Claude Code guarda la definición de cada uno:
+
+- Un servidor que **elegiste con `--mcp <id>`** (Pegasus lo obtiene y administra) se escribe, para cada agente que lo recibe, como una entrada inline dentro del `mcpServers:` de su propio frontmatter — la forma documentada de Claude Code para acotar un servidor a un sub-agente en particular, el mismo esquema que un `.mcp.json`. No hay un archivo de configuración compartido a nivel de sesión: cada agente lleva su propia definición.
+- Un servidor **atado a una clave tuya** (`--mcp <id>=<clave>`) contribuye, en cambio, sólo el nombre pelado de esa clave en el `mcpServers:` del agente — la forma que Claude Code documenta para un servidor "ya configurado": Pegasus nunca escribe una segunda definición al lado de la que tu instalación ya administra bajo esa clave.
+- Withheld tools de cualquiera de los dos casos se escriben en `disallowedTools:`, con el nombre calificado propio de esta CLI, `mcp__<clave>__<herramienta>` (doble guión bajo — distinto del `<clave>_<herramienta>` de OpenCode).
+
+### Dar acceso a un MCP que vos mismo administrás
+
+`pegasus mcp grant --cli claudecode <clave>`, `mcp list --cli claudecode` y `mcp revoke --cli claudecode <clave>` existen y corren contra Claude Code exactamente como se describe en [Dar acceso a un MCP que vos mismo administrás](MANUAL.md#dar-acceso-a-un-mcp-que-vos-mismo-administrás): la clave se valida contra la clave `mcp` de tu propio `settings.json`, se registra en el journal, y `grant`/`revoke` reaplican la configuración renderizada al terminar. Verificado corriendo los tres contra una instalación real de Claude Code descartable.
+
+Con una diferencia real, verificada de la misma forma: a diferencia de un servidor elegido con `--mcp`, otorgar una clave con `mcp grant` no agrega ningún `mcpServers:`/`disallowedTools:` a ningún archivo de agente bajo esta CLI — el otorgamiento sólo queda en el journal y actualiza qué dice `skills/_shared/delegation-capabilities.md` sobre qué servidores alcanza cada agente. Que un agente pueda realmente llamar las herramientas de ese servidor depende, entonces, enteramente de la configuración de MCP propia de Claude Code (su `.mcp.json` de proyecto, o la de usuario) y de sus propios permisos — no de nada que este comando escriba para vos bajo esta CLI. Bajo OpenCode, en cambio, el mismo otorgamiento sí se traduce en un permiso propio por agente. Además, `settings.json` no es el lugar donde Claude Code guarda por su cuenta los servidores MCP que administrás vos mismo (eso vive en `.mcp.json` o en tu configuración de usuario, no bajo una clave `mcp` de `settings.json`); `mcp grant`/`mcp list` sólo ven una clave si vos mismo la agregaste ahí a mano.
+
+## Directorios externos al worktree
+
+Claude Code no tiene un permiso separado llamado `external_directory` como OpenCode: resuelve leer o escribir fuera del directorio de trabajo con sus propias reglas `permissions.allow`/`permissions.deny` en `settings.json`. Medido en vivo contra una cuenta descartable el 27 de septiembre de 2026 (no supuesto desde la documentación): Pegasus escribe `permissions.allow: ["Read(//**)", "Edit(//**)"]` — el `//` inicial ancla en la raíz del filesystem, no en el directorio de trabajo, y `Edit(...)` alcanza también a la tool Write, que no tiene regla propia porque Claude Code documenta que una regla `Write(path)` nunca se consulta. Con eso, cualquier agente puede leer y escribir fuera del worktree sin que nadie apruebe nada, otorgado un directorio o no — la misma decisión de producto que ya rige en OpenCode desde el 21 de septiembre de 2026.
+
+Después de esas dos reglas, `permissions.deny` trae dos entradas por cada uno de los cinco directorios siempre denegados (`.ssh`, `.aws`, `.credentials`, `.config/gh`, `secrets`): `Read(//**/<directorio>/**)` y `Edit(//**/<directorio>/**)`, que ganan la resolución del runtime pase lo que pase con la línea de base — verificado, para `.ssh`, `.config/gh` y `secrets`, que bloquean Read, Edit/Write y además un `cat` de Bash sobre esas rutas. `permissions.additionalDirectories` no se usa nunca: sólo concede lectura, jamás escritura. Instalar, actualizar y desinstalar tratan cada una de esas doce reglas (dos de `allow`, diez de `deny`) como una entrada propia agregada a tu lista, nunca como dueño de la lista entera: lo que ya tenías en `permissions.allow`/`deny`, o lo que agregues después a mano, sobrevive intacto.
+
+`pegasus directory grant --cli claudecode <ruta>` y su `revoke` existen, validan la ruta y la registran en el journal igual que bajo OpenCode, pero quedan **dormidos, no inútiles**: como el default ya permite todo directorio externo fuera del piso, no hay una regla por directorio que otorgar tenga sentido de escribir acá, y el comando no agrega nada a `settings.json`. El reporte lo dice así, sin reclamar un efecto que no tiene. Si la ruta que otorgás cae bajo uno de los cinco directorios siempre denegados, el reporte además avisa que esa entrada nunca va a tener efecto, porque el piso se escribe después de cualquier concesión y siempre gana. El motivo completo, y por qué es una decisión de producto y no una deuda, está en la sección 7.3.0 de [docs/arquitectura/arquitectura.md](docs/arquitectura/arquitectura.md#730-tanda-chica--la-tui-ajusta-texto-en-vez-de-cortarlo-una-feature-por-cli-se-etiqueta-como-tal-y-los-directorios-externos-quedan-permitidos-por-default-en-las-dos-clis).
+
+Sé honesto con vos mismo sobre qué es esto y qué no es — vale acá exactamente lo mismo que para OpenCode: un piso contra el agente que entra a uno de esos cinco directorios *por accidente*, no una frontera contra el que quiere llegar ahí a propósito. El match es sobre el string literal del path; un symlink o una variable de entorno lo atraviesan sin tocarlo. Ver [Dar acceso a un directorio de trabajo propio](MANUAL.md#dar-acceso-a-un-directorio-de-trabajo-propio) para el resto del razonamiento, que es el mismo bajo las dos CLIs.
+
+## Lo que no existe (todavía) bajo Claude Code, y por qué
+
+**Asignar un modelo por agente.** `pegasus models set/unset/list` se niegan a correr contra `--cli claudecode`, nombrando el CLI y el motivo real declarado por el propio adaptador: Claude Code no tiene un catálogo de modelos en disco que Pegasus pueda leer — resuelve proveedor y modelo contra su propia API en el momento — así que no hay nada que este comando pueda escribir o reportar. En la TUI, `Configure models` ofrece Claude Code igual que a OpenCode, pero marcada `disabled` con ese mismo motivo al lado, en la misma fila, antes de que entres a esa pantalla. La configuración de modelo y proveedor de tu propia cuenta de Claude Code queda, como siempre, fuera de lo que Pegasus toca.
+
+**El transporte automático de credenciales.** Bajo OpenCode, un valor que parece una credencial se reemplaza antes de llegar al modelo por una variable (`$PEGASUS_SECRET_<NOMBRE>`), ver [Pasar credenciales sin exponerlas](MANUAL.md#pasar-credenciales-sin-exponerlas). Bajo Claude Code ese mecanismo no existe: el adaptador no implementa `credential_transport()`, así que declara sus cuatro operaciones (detectar y reemplazar en la entrada, inyectar en la ejecución, redactar la salida, redactar antes de escribir a memoria) en `False`, y la causa es concreta, no una decisión pendiente sin más — `UserPromptSubmit`, el hook de Claude Code que se dispara antes de que el modelo vea tu mensaje, no puede reescribir ese mensaje antes de que se persista, a diferencia del `chat.message` de OpenCode que si puede mutarlo in place. Sin ese enganche no hay dónde detectar y sustituir un valor en la entrada con los hooks documentados hoy.
+
+Lo que sí sigue valiendo, porque es contenido siempre-activo y CLI-agnóstico: la sección "Credential Transport" del system prompt le dice a cualquier agente, bajo cualquier CLI, que una credencial que le pegaste es tuya para administrar — la usa para la tarea, nunca aconseja rotarla ni se niega a usarla por haber aparecido en la conversación — y que nunca debe imprimir un valor de credencial ni pasarlo en texto plano a un brief, comando o escritura de memoria si ya existe una variable que lo reemplaza. Bajo Claude Code, sin embargo, no hay ninguna variable que lo reemplace: un valor que pegás llega al modelo tal cual, y `<private>...</private>` no tiene ningún manejo especial tampoco — es sólo texto. La única mitigación real acá es de contenido y de vos mismo: no le pidas a un agente que imprima una credencial, y no le pegues una si tenés otra forma de pasarla.
+
+**La captura pasiva de Engram.** Bajo OpenCode, un sub-agente que devuelve una sección `## Key Learnings` en su propia respuesta puede quedar guardado en Engram sin llamar ninguna tool de memoria, a través de un hook del plugin propio de OpenCode que engancha el fin de la tool de sub-agente. Esa captura es del plugin de Engram, no de Pegasus, y bajo Claude Code no tiene equivalente: el hook de Engram lee un campo `.stdout` que el evento `SubagentStop` de Claude Code no manda — Claude Code manda `last_assistant_message`, según su propia documentación. Un `## Key Learnings` en la respuesta de un sub-agente de Claude Code no se guarda solo; si tu brief le pide esa sección, sos vos —quien lanzó a ese sub-agente— quien tiene que guardar lo que devuelva, a partir de su respuesta, no algo que un hook haga por vos.
+
+## Reiniciar después de un cambio
+
+Bajo Claude Code, instalar, actualizar u otorgar algo **no pide ningún reinicio** — al revés de lo que uno esperaría viniendo de OpenCode, que sí necesita reiniciar porque lee la configuración de sus agentes una sola vez al arrancar. `activation_steps()` del adaptador de Claude Code devuelve una tupla vacía, y no por optimismo: se midió en vivo, con una sesión interactiva abierta mientras los archivos debajo se editaban desde afuera, con tres sentinelas al azar que ningún modelo podría haber producido de contexto. Los tres dieron positivo en la misma sesión, sin reiniciar nada: la redefinición de un sub-agente ya existente se releyó en la siguiente delegación, la instrucción compartida bajo `rules/` se releyó por la sesión principal misma, y un comando slash que no existía al abrir la sesión se indexó y contestó en su primer uso. Ni las skills ni `settings.json` necesitaban esa prueba — la propia documentación de Claude Code ya los describe como recargados en caliente.
+
+## Mantener Pegasus al día, verificar el estado, deshacer
+
+Todo esto es idéntico bajo las dos CLIs, con `--cli claudecode` en el lugar de `--cli opencode`:
+
+- `pegasus update --cli claudecode` reaplica la selección ya registrada; `pegasus upgrade` reemplaza el binario `pegasus` en sí, sin `--cli` porque no se trata de ninguna instalación puntual — ver [Mantener Pegasus al día](MANUAL.md#mantener-pegasus-al-día).
+- `pegasus doctor` reporta qué CLIs detecta y qué drift hay contra lo que el contenido actual generaría; `pegasus doctor --start-mcp-servers` además arranca cada servidor MCP instalado para el handshake, con los mismos estados posibles (`ok`, `timeout`, `exited`, `invalid`, `not-found`, `unreadable`, `missing`, `remote`, `bound`) — ver [Verificar el estado](MANUAL.md#verificar-el-estado).
+- `pegasus restore [generación]` y `pegasus restore --list` deshacen un comando o listan qué generaciones quedan; `pegasus uninstall --cli claudecode` retira sólo lo que el journal reclama como propio — ver [Deshacer](MANUAL.md#deshacer). El journal es el mismo archivo, compartido por las dos CLIs: `$XDG_DATA_HOME/pegasus-harness/journal-v4.json` (o `~/.local/share/pegasus-harness/journal-v4.json`).
+
+## Si algo no anda
+
+- **`install`/`update`/`uninstall --cli claudecode` se niegan de entrada**: Claude Code no está en el PATH ni tiene `~/.claude` (o `CLAUDE_CONFIG_DIR`) presente. Instalalo primero con su propio instalador oficial, o corré `install.sh` de nuevo.
+- **`pegasus models set/unset/list --cli claudecode` se niega**: no es un error de tipeo — esta CLI no tiene catálogo de modelos que Pegasus pueda leer, ver más arriba. El mensaje nombra el motivo real, no una reformulación de la condición.
+- **Un servidor MCP no contesta**: corré `pegasus doctor --start-mcp-servers` y mirá el estado que reporta para ese servidor — no es el comportamiento por defecto de `doctor` porque ejecuta comandos de verdad.
+- **Un directorio que otorgaste con `directory grant --cli claudecode` no parece haber cambiado nada**: es lo esperado, no un fallo — el otorgamiento queda dormido bajo esta CLI porque la línea de base ya permite todo directorio externo fuera del piso siempre denegado. Ver la sección de arriba.
+- **Una credencial que le pegaste al agente sigue en texto plano**: bajo Claude Code no hay transporte automático de credenciales, ver más arriba; no es un bug de instalación.
+- **Un sub-agente dice que guardó algo en Engram y no aparece**: la captura pasiva de Engram no funciona bajo Claude Code (ver más arriba); si el brief le pidió una sección `## Key Learnings`, guardala vos mismo a partir de lo que ese sub-agente devolvió.
+
+## Próximo paso
+
+- Para el recorrido completo de instalación: [INSTALL.md](INSTALL.md).
+- Para instalación asistida por un agente: [INSTALL_BY_AGENT.md](INSTALL_BY_AGENT.md).
+- Para el resto del uso diario, compartido con OpenCode: [MANUAL.md](MANUAL.md).
+- Para la arquitectura y las decisiones de diseño: [docs/arquitectura/arquitectura.md](docs/arquitectura/arquitectura.md).

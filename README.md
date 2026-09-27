@@ -91,6 +91,9 @@ arrancar.
 Los dos guardan su configuración en raíces distintas: OpenCode en `~/.config/opencode` (respeta
 `XDG_CONFIG_HOME`), Claude Code en `~/.claude` (respeta `CLAUDE_CONFIG_DIR`, no `XDG_CONFIG_HOME`).
 
+Este manual sigue con el uso diario bajo OpenCode. Si tu CLI es Claude Code, la guía equivalente es
+[MANUAL-claude-code.md](MANUAL-claude-code.md).
+
 ## Cómo encaja el flujo
 
 La versión corta es: primero entender el pedido y después elegir la ruta. Una consulta se responde sin tocar nada, un cambio trivial y ya entendido se hace directo, y la mayoría de los cambios comunes van por FTD, con un record en `docs/ftd/` y sin tener que pedirlo. SDD se propone sólo cuando hay que fijar antes del código un contrato o una decisión que va a revisar alguien que no está en la implementación, o una spec contra la que otros van a construir; el tamaño del cambio no decide ninguna ruta. [docs/metodologia.md](docs/metodologia.md) explica las rutas y las responsabilidades de SDD, FTD, TDD, OpenSpec, Engram y ChainPR sin esconder los límites operativos.
