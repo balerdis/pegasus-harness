@@ -605,6 +605,9 @@ def _render_grant_mcp_result(screen: GrantMcpResultScreen, width: int) -> tuple[
         lines.extend(_wrap_lines((f"Revoked: {', '.join(screen.revoked)}",), width))
     if not screen.granted and not screen.revoked and not failed:
         lines.append(Line("Nothing changed."))
+    if screen.warnings:
+        lines.append(Line(""))
+        lines.extend(_wrap_lines(screen.warnings, width))
     lines.extend(_wrap_lines(screen.errors, width))
     if screen.activation:
         lines.append(Line(""))

@@ -2649,7 +2649,33 @@ def mcp_grant(cli_id: str, keys: list[str], runtime: Runtime) -> dict[str, Any]:
             unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
         )
     report = install(cli_id, runtime, mcp=selection, granted=list(granted), label="mcp grant")
-    return {**report, "action": "grant", "keys": list(keys), "granted": list(granted), "status": "granted"}
+    # What this grant actually does to the rendered configuration, read off
+    # the adapter itself (`CliAdapter.mcp_grant_behavior`) rather than by
+    # comparing `adapter.id` against a literal -- the same hexagonal rule
+    # `directory_grant` already follows for `DirectoryGrantBehavior`.
+    # `_mcp_prose` is the one place `writes_per_agent_entry` gets put into
+    # words, for both `mcp grant` and `mcp revoke`.
+    behavior = adapter.mcp_grant_behavior()
+    result = {
+        **report,
+        "action": "grant",
+        "keys": list(keys),
+        "granted": list(granted),
+        "status": "granted",
+        "writes_per_agent_entry": behavior.writes_per_agent_entry,
+    }
+    if not behavior.writes_per_agent_entry:
+        result["grant_warnings"] = [
+            *result.get("grant_warnings", []),
+            *(
+                f"{key!r} was recorded for every agent, but nothing was written to any agent file "
+                f"under {adapter.id}: this CLI's own configuration vocabulary has no per-agent place "
+                f"a self-administered key's grant lands. Whether an agent can actually reach the "
+                f"server depends on how that server is configured in {adapter.id} itself."
+                for key in keys
+            ),
+        ]
+    return result
 
 
 def mcp_revoke(cli_id: str, keys: list[str], runtime: Runtime) -> dict[str, Any]:
@@ -2676,7 +2702,19 @@ def mcp_revoke(cli_id: str, keys: list[str], runtime: Runtime) -> dict[str, Any]
             unresolved_bindings_message(adapter.id, unresolved, program_name=runtime.identity.program_name)
         )
     report = install(cli_id, runtime, mcp=selection, granted=list(granted), label="mcp revoke")
-    return {**report, "action": "revoke", "keys": list(keys), "granted": list(granted), "status": "revoked"}
+    # Carries `writes_per_agent_entry` (from `adapter.mcp_grant_behavior()`)
+    # alongside the rest, so `_mcp_prose` can say honestly whether this
+    # removed a rendered per-agent entry or only took back a journal record
+    # that was never reflected in any agent file -- the same reasoning
+    # `directory_revoke` already follows for `writes_own_entry`.
+    return {
+        **report,
+        "action": "revoke",
+        "keys": list(keys),
+        "granted": list(granted),
+        "status": "revoked",
+        "writes_per_agent_entry": adapter.mcp_grant_behavior().writes_per_agent_entry,
+    }
 
 
 def mcp_list(cli_id: str, runtime: Runtime) -> dict[str, Any]:
@@ -4236,16 +4274,39 @@ def _models_prose(report: dict[str, Any]) -> str:
 
 
 def _mcp_prose(report: dict[str, Any]) -> str:
+    """`grant`/`revoke` read `report["writes_per_agent_entry"]` (set by
+    `mcp_grant`/`mcp_revoke` from `CliAdapter.mcp_grant_behavior()`) rather
+    than ever comparing an adapter id against a literal -- the same
+    hexagonal rule `_directory_prose` already follows. A CLI that writes a
+    per-agent entry keeps the plain "granted ... to every agent" wording;
+    one that does not says so honestly instead of claiming an effect the
+    grant never had, mirroring `_directory_prose`'s own dormant/inert
+    distinction for directory grants.
+    """
     action = report.get("action")
     if action == "grant":
         keys = ", ".join(report["keys"])
-        line = f"{report['cli']}: granted {keys} to every agent."
-        return "\n".join(_and_activation([line], report))
+        if report.get("writes_per_agent_entry", True):
+            line = f"{report['cli']}: granted {keys} to every agent."
+        else:
+            line = (
+                f"{report['cli']}: recorded {keys} for every agent; nothing was written to any agent "
+                f"file under {report['cli']}. Whether an agent can actually reach the server depends on "
+                f"how that server is configured in {report['cli']} itself."
+            )
+        lines = [line, *(report.get("grant_warnings") or [])]
+        return "\n".join(_and_activation(lines, report))
     if action == "revoke":
         keys = ", ".join(report["keys"])
         if report.get("status") == "already-revoked":
             return f"{report['cli']}: {keys} was not granted; nothing to do."
-        line = f"{report['cli']}: revoked {keys}."
+        if report.get("writes_per_agent_entry", True):
+            line = f"{report['cli']}: revoked {keys}."
+        else:
+            line = (
+                f"{report['cli']}: {keys} removed from the record; nothing was written to any agent "
+                f"file under {report['cli']} to unwrite."
+            )
         return "\n".join(_and_activation([line], report))
     if action == "list":
         lines = [f"Granted: {', '.join(report['granted']) or 'none'}."]

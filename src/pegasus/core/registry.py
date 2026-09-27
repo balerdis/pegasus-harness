@@ -10,7 +10,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from pegasus.core.identity import Identity, ReleaseSource
-from pegasus.core.types import Capability, CapabilityManifest, DirectoryGrantBehavior, Environment, Layout
+from pegasus.core.types import (
+    Capability,
+    CapabilityManifest,
+    DirectoryGrantBehavior,
+    Environment,
+    Layout,
+    McpGrantBehavior,
+)
 
 PROBE = Environment(home=Path("/nonexistent/pegasus-registry-probe"))
 """A home that does not exist, used to prove layouts are pure path arithmetic."""
@@ -114,6 +121,7 @@ class Registry:
         _check_activation_steps(adapter, cli_id)
         _check_writes_mcp_config_key(adapter, cli_id, manifest)
         _check_directory_grant_behavior(adapter, cli_id)
+        _check_mcp_grant_behavior(adapter, cli_id)
 
         self._adapters[cli_id] = adapter
         self._manifests[cli_id] = manifest
@@ -228,6 +236,30 @@ def _check_directory_grant_behavior(adapter: object, cli_id: str) -> None:
     if not isinstance(behavior, DirectoryGrantBehavior):
         raise ManifestMismatchError(
             f"adapter {cli_id!r}.directory_grant_behavior() must return a DirectoryGrantBehavior, "
+            f"got {type(behavior).__name__!r}"
+        )
+
+
+def _check_mcp_grant_behavior(adapter: object, cli_id: str) -> None:
+    """Confirm the adapter can state what `pegasus mcp grant` actually does
+    to its own rendered configuration, as an `McpGrantBehavior` --
+    unconditionally, the same way `_check_directory_grant_behavior` is
+    required of every adapter regardless of `Capability.MCP`.
+
+    Checked at registration, not merely typed, so a future adapter that
+    forgets to implement this (or returns the wrong shape) fails loudly
+    before the first byte, instead of `cli.mcp_grant` discovering the gap
+    the first time somebody runs the command.
+    """
+    if not _implements(adapter, "mcp_grant_behavior"):
+        raise ManifestMismatchError(
+            f"adapter {cli_id!r} must implement mcp_grant_behavior; "
+            "cli.mcp_grant/cli.mcp_revoke read it instead of ever comparing adapter.id"
+        )
+    behavior = adapter.mcp_grant_behavior()
+    if not isinstance(behavior, McpGrantBehavior):
+        raise ManifestMismatchError(
+            f"adapter {cli_id!r}.mcp_grant_behavior() must return an McpGrantBehavior, "
             f"got {type(behavior).__name__!r}"
         )
 

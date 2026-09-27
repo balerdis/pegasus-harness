@@ -30,6 +30,7 @@ from pegasus.core.types import (
     Environment,
     FileArtifact,
     Layout,
+    McpGrantBehavior,
     ModelAssignment,
     SupportTier,
 )
@@ -307,6 +308,14 @@ class Adapter:
         (`content.deny_floor_shadows`).
         """
         return DirectoryGrantBehavior(allowed_by_default=True, writes_own_entry=True, has_deny_floor=True)
+
+    def mcp_grant_behavior(self) -> McpGrantBehavior:
+        """`writes_per_agent_entry=True`: `render.mcp`/`render.agent` read
+        `item.granted_mcp` themselves (see those functions' own bodies) and
+        write `f"{key}*": "allow"` into every granted agent's own rendered
+        `permission` block, so a granted key reaches the same per-agent
+        vocabulary a shipped server's own grant does."""
+        return McpGrantBehavior(writes_per_agent_entry=True)
 
     # --- Models ---
 

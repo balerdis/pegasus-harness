@@ -18,6 +18,7 @@ from pegasus.core.types import (
     Environment,
     FileArtifact,
     Layout,
+    McpGrantBehavior,
     SupportTier,
 )
 
@@ -59,6 +60,9 @@ class FakeAdapter:
 
     def directory_grant_behavior(self):
         return DirectoryGrantBehavior(allowed_by_default=True, writes_own_entry=False, has_deny_floor=False)
+
+    def mcp_grant_behavior(self):
+        return McpGrantBehavior(writes_per_agent_entry=False)
 
 
 ENVIRONMENT = Environment(home=Path("/home/probe"))

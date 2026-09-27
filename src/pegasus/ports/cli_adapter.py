@@ -26,6 +26,7 @@ from pegasus.core.types import (
     DirectoryGrantBehavior,
     Environment,
     Layout,
+    McpGrantBehavior,
     ModelAssignment,
     SupportTier,
 )
@@ -282,6 +283,29 @@ class CliAdapter(Protocol):
         ever comparing `adapter.id` against a literal to decide what to say
         -- the hexagonal violation `tests/test_cli_directory_all_clis.py`
         guards against.
+        """
+
+    def mcp_grant_behavior(self) -> McpGrantBehavior:
+        """What `pegasus mcp grant`/`mcp revoke` actually do to this CLI's
+        own rendered configuration for a self-administered (bound) server
+        key, today.
+
+        Not gated behind `Capability.MCP`: like `directory_grant_behavior`,
+        `mcp grant`/`mcp revoke` apply uniformly to every registered
+        adapter, so this is required unconditionally.
+
+        Returning the wrong thing here does not fail loudly the way an
+        undeclared render method does -- there is no capability to check it
+        against -- so get it right the first time: `writes_per_agent_entry`
+        is whether granting a key still renders a rule of its own into at
+        least one agent's own rendered configuration, or whether the
+        journal record is the only place the grant lives. See
+        `McpGrantBehavior`'s own docstring for the full account of why this
+        is its own fact, distinct from `Capability.MCP`.
+
+        `cli.mcp_grant`/`cli.mcp_revoke`/`cli._mcp_prose` read this instead
+        of ever comparing `adapter.id` against a literal -- the hexagonal
+        rule `test_cli_mcp_all_clis.py` guards against.
         """
 
     # --- Models: only when the manifest declares per_agent_model ---

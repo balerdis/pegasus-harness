@@ -1473,6 +1473,11 @@ class _NeverDeclaresPerAgentModel:
 
         return DirectoryGrantBehavior(allowed_by_default=True, writes_own_entry=False, has_deny_floor=False)
 
+    def mcp_grant_behavior(self):
+        from pegasus.core.types import McpGrantBehavior
+
+        return McpGrantBehavior(writes_per_agent_entry=False)
+
 
 class NoPerAgentModelCapabilityTest(ModelsScreenTestCase):
     """The most fundamental of the three explanations this screen can show:

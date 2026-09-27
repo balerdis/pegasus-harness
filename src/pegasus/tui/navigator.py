@@ -237,6 +237,13 @@ class GrantMcpResultScreen:
     claiming a write for a key a refused call never made would contradict
     what the disk actually holds, worse than a plain failure, since a person
     reading it would walk away believing the grant landed when it did not.
+
+    `warnings` carries `cli.mcp_grant`'s own `grant_warnings` verbatim when a
+    successful grant call reported any -- the same dormancy disclosure
+    `cli._mcp_prose` renders for the command line (`CliAdapter
+    .mcp_grant_behavior().writes_per_agent_entry` being `False`), read off
+    the report rather than re-derived here, so this screen and the CLI can
+    never disagree about whether a grant actually wrote anything.
     """
 
     cli: CliOption
@@ -244,6 +251,7 @@ class GrantMcpResultScreen:
     revoked: tuple[str, ...] = ()
     activation: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

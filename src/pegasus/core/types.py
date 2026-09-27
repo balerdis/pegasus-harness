@@ -203,6 +203,45 @@ class DirectoryGrantBehavior:
 
 
 @dataclass(frozen=True)
+class McpGrantBehavior:
+    """What `pegasus mcp grant`/`mcp revoke` actually do to one CLI's own
+    rendered configuration for a self-administered (bound) server key --
+    the same idea `DirectoryGrantBehavior` already models for a granted
+    directory, applied to a different fact this port needs from every
+    adapter: not "does this CLI have the concept of an MCP grant" (that is
+    `Capability.MCP`), but "does granting a key actually write anything a
+    per-agent file did not already carry".
+
+    `writes_per_agent_entry`: whether granting a key renders a rule of its
+    own into at least one agent's own rendered configuration -- a
+    `permission`/`mcpServers`/`disallowedTools` entry naming that key --
+    distinct from merely recording the key in the journal. `True` for a CLI
+    whose own vocabulary has a per-agent place a bound key's grant can
+    actually land -- one adapter's own `render_mcp`/`render_agent` reads a
+    bound key straight off `granted_mcp` and writes it into every granted
+    agent's own rendered permission block (see that adapter's own
+    `mcp_grant_behavior` for which one and why).
+
+    `False` for a CLI whose own render never threads a bound (`granted_mcp`)
+    server into any per-agent file at all -- only a *shipped* server chosen
+    through `optional_mcp` reaches `render_agent`'s `mcp` parameter there
+    (see `core.catalog.render`'s own docstring on `mcp_by_key`/
+    `item.optional_mcp`). Recording such a key in the journal is still
+    real -- `mcp list`/`doctor` read it back, and a future release that
+    threads `granted_mcp` into that same render path would make it take
+    effect without anyone having to grant it again -- but reporting it as
+    "granted to every agent" today, the same wording a CLI that actually
+    writes something uses, is exactly the false success this type exists to
+    stop. `cli.mcp_grant`/`cli.mcp_revoke`/`cli._mcp_prose` read this
+    instead of ever comparing `adapter.id` against a literal -- the same
+    hexagonal rule `DirectoryGrantBehavior`'s own docstring states for
+    `cli.directory_grant`/`cli._directory_prose`.
+    """
+
+    writes_per_agent_entry: bool
+
+
+@dataclass(frozen=True)
 class CredentialTransportCapability:
     """Which of the four credential-transport operations one adapter supports.
 

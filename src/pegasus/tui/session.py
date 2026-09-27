@@ -491,6 +491,7 @@ def _grant_mcp_write(
     granted: list[str] = []
     revoked: list[str] = []
     errors: list[str] = []
+    warnings: list[str] = []
     # One call per direction, not one per key: this is the exact storm this
     # screen used to cause -- checking four keys used to fire four
     # `cli.mcp_grant` calls, each its own `install()`, each its own snapshot
@@ -513,6 +514,11 @@ def _grant_mcp_write(
         )
         if code == cli.OK:
             granted.extend(requested_grant)
+            # The same dormancy disclosure `cli._mcp_prose` renders on the
+            # command line, read off `mcp_grant`'s own report rather than
+            # re-derived here -- see `GrantMcpResultScreen`'s own docstring
+            # on `warnings`.
+            warnings.extend(report.get("grant_warnings") or [])
         else:
             errors.append(report.get("error", f"could not grant {', '.join(requested_grant)}"))
     if requested_revoke:
@@ -537,6 +543,7 @@ def _grant_mcp_write(
             revoked=tuple(revoked),
             activation=activation,
             errors=tuple(errors),
+            warnings=tuple(warnings),
         )
     )
 

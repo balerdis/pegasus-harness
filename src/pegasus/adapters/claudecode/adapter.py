@@ -23,6 +23,7 @@ from pegasus.core.types import (
     DirectoryGrantBehavior,
     Environment,
     Layout,
+    McpGrantBehavior,
     ModelAssignment,
     SupportTier,
 )
@@ -151,6 +152,18 @@ class Adapter:
         granted path falls under one of them (`content.deny_floor_shadows`).
         """
         return DirectoryGrantBehavior(allowed_by_default=True, writes_own_entry=False, has_deny_floor=True)
+
+    def mcp_grant_behavior(self) -> McpGrantBehavior:
+        """`writes_per_agent_entry=False`: `core.catalog.render` builds the
+        `mcp` tuple `render_agent` receives entirely from `item.optional_mcp`
+        -- the shipped servers this install actually chose -- never from
+        `item.granted_mcp`, so a key granted through `mcp grant` never
+        reaches any agent's own `mcpServers:`/`disallowedTools:` frontmatter.
+        Only the journal (`installed.granted_mcp`) and the generated
+        `delegation-capabilities.md` change; no agent file gains an entry
+        for the key. See `docs/arquitectura/arquitectura.md`'s own debt note
+        for what closing this gap for real would take."""
+        return McpGrantBehavior(writes_per_agent_entry=False)
 
     def render_system_prompt(
         self, layout: Layout, system_prompt: SystemPrompt, identity: Identity
