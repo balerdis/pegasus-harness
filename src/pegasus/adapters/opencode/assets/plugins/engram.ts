@@ -222,6 +222,31 @@ function stripPrivateTags(str: string): string {
   return str.replace(/<private>[\s\S]*?<\/private>/gi, "[REDACTED]").trim()
 }
 
+/**
+ * Credential transport (7.3.0): before any POST to `/prompts` or
+ * `/observations/passive`, call the secret-transport plugin's process-wide
+ * redaction function, if it is present, in addition to `stripPrivateTags`
+ * above. The two plugins' load order is not guaranteed (see
+ * `arquitectura.md`'s 7.3.0 section), so this never assumes the global is
+ * there: when it is, it replaces every credential value this process has
+ * already registered (and detects anything new by the same catalog); when
+ * it is not (the capability is not installed, or this plugin loaded first
+ * and the other has not run yet for this value), this is a no-op and
+ * `stripPrivateTags` remains the only defense, exactly as it was before.
+ */
+function redactCredentials(str: string): string {
+  if (!str) return str
+  const transport = (globalThis as any).__CREDENTIAL_TRANSPORT_V1__
+  if (transport && typeof transport.redact === "function") {
+    try {
+      return transport.redact(str)
+    } catch {
+      return str
+    }
+  }
+  return str
+}
+
 // ─── Plugin Export ───────────────────────────────────────────────────────────
 
 export const Engram: Plugin = async (ctx) => {
@@ -382,7 +407,7 @@ export const Engram: Plugin = async (ctx) => {
           method: "POST",
           body: {
             session_id: sessionId,
-            content: stripPrivateTags(truncate(finalContent, 2000)),
+            content: stripPrivateTags(redactCredentials(truncate(finalContent, 2000))),
             project,
           },
         })
@@ -435,7 +460,7 @@ export const Engram: Plugin = async (ctx) => {
             method: "POST",
             body: {
               session_id: sessionId,
-              content: stripPrivateTags(text),
+              content: stripPrivateTags(redactCredentials(text)),
               project,
               source: "task-complete",
             },

@@ -575,7 +575,14 @@ class ShippedCatalogTest(unittest.TestCase):
         # `_shared/flow-applicability.md` has routed work there. It is read only
         # on that route, through the ladder's single pointer, so it is one more
         # lazy-loaded file and, like the rest of that home, no config entry.
-        self.assertEqual((len(files), len(keys)), (99, 27))
+        # 100 and 101, not 99: credential transport (7.3.0) ships two new
+        # files, both gated on `credential_transport().any` -- the plugin
+        # itself (`secret-transport.ts`) and its sidecar data file (the
+        # detection catalog, copied verbatim from the content core). Neither
+        # writes a settings key: the plugin is discovered as a file under
+        # `plugin/`, the same as every other one, and the sidecar is a plain
+        # file the plugin reads at runtime, not an OpenCode setting.
+        self.assertEqual((len(files), len(keys)), (101, 27))
 
     def test_every_target_is_relative(self):
         for entry in self.catalog.entries:

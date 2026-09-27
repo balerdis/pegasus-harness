@@ -598,6 +598,25 @@
         "mem_capture_passive"
       ]
     },
+    "credential_rotation_advice": {
+      "stems": [
+        "test_credential_transport_content.ROTATION_ADVICE_STEM"
+      ],
+      "must_match": [
+        "you should rotate that credential",
+        "rotate your API key",
+        "please rotate this token",
+        "revoke that access token",
+        "you should revoke it",
+        "regenerate your secret",
+        "regenerate that key",
+        "consider rotating this password",
+        "it's best to rotate the credential now",
+        "I recommend revoking this token",
+        "rotate it immediately",
+        "you need to regenerate the client secret"
+      ]
+    },
     "verification_loop_mandate": {
       "stems": [
         "test_engram_memory_scope.VERIFICATION_LOOP_STEM"

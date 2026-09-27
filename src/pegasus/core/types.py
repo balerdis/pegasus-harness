@@ -117,6 +117,63 @@ class CapabilityManifest:
 
 
 @dataclass(frozen=True)
+class CredentialTransportCapability:
+    """Which of the four credential-transport operations one adapter supports.
+
+    Not one of the content-rendered `Capability` members: nothing here is
+    sourced from `content.py` one item at a time the way a skill or an agent
+    is (see `catalog.SOURCES`). It is a fixed plugin plus a sidecar the
+    content core ships as data, so it is asked of an adapter directly,
+    exactly like `writes_mcp_config_key`.
+
+    An adapter that never implements `credential_transport()` at all reads as
+    every field `False` here -- see `credential_transport.capability_of`,
+    which is where that default is applied. That is deliberate: it is the
+    mechanism a future adapter (Claude Code, still unregistered in this
+    release) uses to declare it supports none of the four operations, with
+    no code written here to special-case it -- the port's absence already
+    means "none", the same way an adapter with no `mcp` implementation
+    already means "no MCP" for every other capability in this file.
+    """
+
+    detect_and_replace: bool = False
+    """`chat.message` (or the nearest equivalent): find a credential value in
+    the user's own text, register it, and rewrite it to `$PEGASUS_SECRET_<NAME>`
+    before the message is persisted or reaches the model."""
+
+    inject_at_execution: bool = False
+    """`shell.env` (or the nearest equivalent): expose every registered
+    `PEGASUS_SECRET_<NAME>` in the environment of a spawned command, so a
+    shell command that references the variable by name still runs correctly."""
+
+    redact_on_output: bool = False
+    """`tool.execute.after` (or the nearest equivalent): replace a registered
+    value found in a tool's own output with its variable name, before that
+    output is persisted or handed back to the model."""
+
+    redact_before_memory: bool = False
+    """A hook a memory-writing plugin (Engram's own) can call before it POSTs
+    a prompt or a passive-capture body, so a credential value never reaches
+    the wire even when the memory plugin runs independently of this one."""
+
+    @property
+    def any(self) -> bool:
+        """Whether this adapter supports at least one of the four operations.
+
+        The installer's own admission test for shipping the plugin and its
+        sidecar at all: an adapter that supports none of them gets neither.
+        """
+        return any(
+            (
+                self.detect_and_replace,
+                self.inject_at_execution,
+                self.redact_on_output,
+                self.redact_before_memory,
+            )
+        )
+
+
+@dataclass(frozen=True)
 class Layout:
     """Where one CLI keeps each kind of artifact.
 

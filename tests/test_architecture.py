@@ -786,6 +786,10 @@ def bundled_runtime_assets() -> list[Path]:
 #: - `adapters/opencode/assets/plugins/zellij-state.ts` addresses a state
 #:   directory whose engine-branded name is shared with tooling outside this
 #:   repository; the asset says so itself.
+#: - `adapters/opencode/assets/plugins/secret-transport.ts` (7.3.0) reads and
+#:   writes the env var name `PEGASUS_SECRET_<NAME>` -- the same wire-format
+#:   treatment as `PEGASUS_SKILL_REGISTRY_BIN` above, a name the model itself
+#:   sees and a shell expands, identical across every distribution.
 #:
 #: Listed here, and nowhere else, so that adding a new asset can never quietly
 #: join them: a `.ts` that ships a brand fragment without appearing here, at
@@ -794,6 +798,7 @@ BRAND_EXEMPT_RUNTIME_ASSETS = frozenset(
     {
         "adapters/opencode/assets/plugins/skill-registry.ts",
         "adapters/opencode/assets/plugins/zellij-state.ts",
+        "adapters/opencode/assets/plugins/secret-transport.ts",
     }
 )
 
@@ -977,6 +982,12 @@ def _brand_offenders(path: Path, fragments: tuple[str, ...]) -> list[str]:
 #:   every distribution built on the same engine; the distribution declares
 #:   it in its own protected tokens, and deriving it from `identity.json`
 #:   would make it diverge between distributions without anyone reading it.
+#: - `adapters/opencode/assets/plugins/secret-transport.ts` (7.3.0) reads and
+#:   writes the wire-format variable name `PEGASUS_SECRET_<NAME>` -- the same
+#:   treatment `PEGASUS_SKILL_REGISTRY_BIN`/`PEGASUS_SKILL_ROOTS` already get
+#:   above: a name the model itself sees and a shell expands, shared across
+#:   every distribution built on this engine, never rebranded per
+#:   distribution the way a shown name would be.
 #:
 #: Listed here, and nowhere else, so a new asset can never quietly join them:
 #: one that ships a brand fragment without appearing here, at this exact
@@ -986,6 +997,7 @@ VERBATIM_ASSET_BRAND_EXEMPTIONS = frozenset(
         "adapters/opencode/assets/plugins/skill-registry.ts",
         "adapters/opencode/assets/plugins/zellij-state.ts",
         "adapters/opencode/assets/registry/assets.json",
+        "adapters/opencode/assets/plugins/secret-transport.ts",
     }
 )
 

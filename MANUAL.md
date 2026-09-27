@@ -193,6 +193,14 @@ El journal vive en `$XDG_DATA_HOME/pegasus-harness/journal-v4.json` (o `~/.local
 
 Una edición tuya sobre un archivo que Pegasus instaló no sobrevive: `install` y `update` la reescriben con la versión del release, y `uninstall` la borra sin aviso equivalente al `overwritten` que sí te dan los otros dos. Lo que te recupera es `pegasus restore`, con veinte generaciones de historial y no más. El motivo de esa política, los dos huecos del aviso y qué hacer en cada caso están en [docs/arquitectura/arquitectura.md#limitaciones-aceptadas](docs/arquitectura/arquitectura.md#limitaciones-aceptadas).
 
+## Pasar credenciales sin exponerlas
+
+Cuando le pegás a la sesión un valor que parece una credencial —un token al lado de una clave como `token`, `api_key`, `secret`, `password` o `client_secret`; un header `Authorization: Bearer …`/`X-Api-Key: …`; una contraseña en una URL (`usuario:clave@host`); o un formato conocido (`sk-…`, un token de GitHub, un JWT, un bloque de clave privada)— Pegasus lo reemplaza antes de que llegue al modelo por una variable, `$PEGASUS_SECRET_<NOMBRE>`. El valor real vive sólo en memoria, en el proceso de OpenCode, mientras ese proceso siga corriendo: nunca se escribe a disco. Un comando de shell que use esa variable la recibe expandida; un agente que lancés recibe el nombre de la variable, nunca el valor. Reiniciar OpenCode olvida todo lo registrado — es la superficie de vida elegida, no un bug.
+
+Lo que NO se marca nunca, aunque parezca un valor aleatorio: un hash de commit (40 caracteres hex), un checksum sha256 (64 caracteres hex), un UUID o un número — se pegan todo el tiempo y tienen que sobrevivir intactos. Tampoco se marca, a propósito, un valor sin comillas al lado de una de esas claves que no tiene ningún dígito y parece otro identificador de código (`token = accessToken`, `password: process.env.DB_PASS`, `const token = getToken()`): sin esa exclusión, pegar código real terminaba con una variable en el medio de una llamada o de una ruta. La consecuencia es que `DB_PASSWORD=secretpass` (sin comillas, sin ningún dígito) NO se detecta — `DB_PASSWORD=s3cr3tP4ss` sí, porque tiene al menos un dígito, y un valor entre comillas (`password: "plainword"`) también se detecta siempre, tenga dígitos o no. Si algo que sabés que es sensible no cae en ninguna de esas categorías, envolvelo vos mismo entre `<private>` y `</private>` — opcionalmente `<private>NOMBRE=valor</private>` para elegir el nombre de la variable — y se trata igual.
+
+Lo que este mecanismo no cubre: un comando que imprime el valor mientras corre (un `curl -v`, un `echo` de la variable) lo deja en el historial de la sesión y en la TUI antes de que se pueda redactar la salida — el modelo nunca lo ve, pero vos sí, en tu propia terminal. No le pidas a un agente que imprima una credencial.
+
 ## Próximo paso
 
 - Para el recorrido completo de instalación: [INSTALL.md](INSTALL.md).

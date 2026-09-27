@@ -16,7 +16,7 @@ from pegasus.adapters.opencode import manifest as manifest_module
 from pegasus.adapters.opencode import models as models_module
 from pegasus.adapters.opencode import naming
 from pegasus.adapters.opencode import render
-from pegasus.core import placeholders
+from pegasus.core import credential_transport, placeholders
 from pegasus.core.content import Agent, Command, Mcp, Skill, SystemPrompt
 from pegasus.core.identity import Identity
 from pegasus.core.model_catalog import ModelCatalog
@@ -24,6 +24,7 @@ from pegasus.core.types import (
     Artifact,
     CapabilityManifest,
     ConfigKeyArtifact,
+    CredentialTransportCapability,
     Detection,
     Environment,
     FileArtifact,
@@ -138,7 +139,15 @@ _RENAMED_ASSETS: dict[str, Any] = {
     "orchestrator-notifier.ts": lambda identity: f"{identity.program_name}-orchestrator-notifier.ts",
     "zellij-state.ts": lambda identity: f"{identity.program_name}-zellij-state.ts",
     "apply-patch-scope.ts": lambda identity: f"{identity.program_name}-apply-patch-scope.ts",
+    "secret-transport.ts": lambda identity: f"{identity.program_name}-secret-transport.ts",
 }
+
+#: Bundled source filenames that ship only where `credential_transport()`
+#: declares at least one operation -- see `CredentialTransportCapability`'s
+#: own docstring. Every other asset in `ASSET_TARGETS` ships unconditionally.
+#: Keyed the same way `_RENAMED_ASSETS` is: the bare source filename, never
+#: the installed name, so this check runs before a rename is even computed.
+CREDENTIAL_TRANSPORT_ASSET_NAMES = frozenset({"secret-transport.ts"})
 
 
 def _installed_relative(relative: PurePosixPath, identity: Identity) -> PurePosixPath:
@@ -175,6 +184,18 @@ class Adapter:
 
     def capabilities(self) -> CapabilityManifest:
         return manifest_module.MANIFEST
+
+    def credential_transport(self) -> CredentialTransportCapability:
+        """OpenCode implements every operation the port declares -- see the
+        7.3.0 section of `arquitectura.md` for the verified hook shapes this
+        rests on (`chat.message`, `shell.env`, `tool.execute.after`, and the
+        process-wide redaction global the plugin exposes for `engram.ts`)."""
+        return CredentialTransportCapability(
+            detect_and_replace=True,
+            inject_at_execution=True,
+            redact_on_output=True,
+            redact_before_memory=True,
+        )
 
     def activation_steps(self) -> tuple[str, ...]:
         """OpenCode reads an agent's prompt file once, when the process starts.
@@ -317,6 +338,7 @@ class Adapter:
         `_with_mcp_sections` draws for a body's own sections.
         """
         facts = _asset_facts(layout, orchestrator_name, identity)
+        transport_capability = credential_transport.capability_of(self)
         artifacts: list[Artifact] = [
             FileArtifact(
                 id=f"own:{group}/{_installed_relative(relative, identity)}",
@@ -328,8 +350,15 @@ class Adapter:
             )
             for group, target in sorted(ASSET_TARGETS.items())
             for path, relative in _asset_files(ASSETS / group)
+            # A credential-transport asset ships only when this adapter's own
+            # `credential_transport()` declares at least one operation -- see
+            # `CredentialTransportCapability.any`'s own docstring. Every other
+            # asset here is unconditional.
+            if relative.name not in CREDENTIAL_TRANSPORT_ASSET_NAMES or transport_capability.any
         ]
         artifacts.append(_skill_registry_contract(layout, identity))
+        if transport_capability.any:
+            artifacts.append(_secret_transport_catalog(layout, identity))
         artifacts += render.delegation_capabilities(layout, delegation_targets)
         artifacts += [
             # Appending keeps the user's own skill paths and plugins untouched.
@@ -454,6 +483,27 @@ def _skill_registry_contract(layout: Layout, identity: Identity) -> FileArtifact
         id=f"own:{contract_name}",
         path=layout.config_dir / contract_name,
         content=body.encode("utf-8"),
+        executable=False,
+    )
+
+
+def _secret_transport_catalog_name(identity: Identity) -> str:
+    return f"{identity.program_name}-secret-transport-catalog.json"
+
+
+def _secret_transport_catalog(layout: Layout, identity: Identity) -> FileArtifact:
+    """The CLI-agnostic detection catalog (`pegasus.core.credential_transport
+    .load_catalog_bytes`), copied verbatim next to the secret-transport
+    plugin -- the sidecar the plugin reads at runtime, following the same
+    "adapter writes a fact next to the plugin" shape `_skill_registry_
+    contract` already established. Unlike that contract, this file has
+    nothing install-specific to compute: the content core's own copy is
+    already the whole answer, so this only places it."""
+    catalog_name = _secret_transport_catalog_name(identity)
+    return FileArtifact(
+        id=f"own:plugins/{catalog_name}",
+        path=layout.config_dir / ASSET_TARGETS["plugins"] / catalog_name,
+        content=credential_transport.load_catalog_bytes(),
         executable=False,
     )
 

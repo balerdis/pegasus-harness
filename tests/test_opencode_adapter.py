@@ -1311,7 +1311,11 @@ class OwnArtifactsTest(unittest.TestCase):
         # 13, not 12: `own_artifacts` now also emits the generated
         # delegation-capabilities reference (`render.delegation_capabilities`),
         # unconditionally, the same way it emits every other file here.
-        self.assertEqual(len(only(self.artifacts, FileArtifact)), 13)
+        # 15, not 13: credential transport (7.3.0) adds two files, both
+        # gated on `credential_transport().any` -- the `secret-transport.ts`
+        # plugin and its sidecar detection catalog -- and this adapter
+        # declares every operation, so both ship here.
+        self.assertEqual(len(only(self.artifacts, FileArtifact)), 15)
 
     def test_build_leftovers_are_excluded(self):
         self.assertEqual([item for item in self.artifacts if "__pycache__" in str(item.path)], [])
