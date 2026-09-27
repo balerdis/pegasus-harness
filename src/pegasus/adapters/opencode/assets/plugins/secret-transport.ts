@@ -28,15 +28,30 @@ import { fileURLToPath } from "url"
 const SIDECAR_NAME = "{{program_name}}-secret-transport-catalog.json"
 
 type KnownFormat = { name: string; pattern: string; whole_block?: boolean }
-type HeaderRule = { header_names: string[]; schemes?: string[]; name: string }
+type HeaderRule =
+  | { header_names: string[]; schemes?: string[]; name: string }
+  | {
+      header_name_suffixes: string[]
+      derive_name_from_header: true
+      allow_trailing_digit_segment?: boolean
+      note?: string
+    }
 type SkipRule = { name: string; pattern: string; note?: string }
 
 type Catalog = {
   min_value_length: number
+  max_detect_bytes?: number
   placeholder_patterns: string[]
-  key_context: { keys: string[]; unquoted_value_pattern: string; skip_unquoted_if: SkipRule[] }
+  key_context: {
+    keys: string[]
+    min_value_length?: number
+    unquoted_value_pattern: string
+    filler_skip_values?: string[]
+    filler_skip_patterns?: string[]
+    skip_unquoted_if: SkipRule[]
+  }
   headers: Record<string, HeaderRule>
-  url_credentials: { pattern: string; name: string }
+  url_credentials: { pattern: string; name: string; note?: string }
   known_formats: KnownFormat[]
   explicit: {
     named: { pattern: string }
@@ -101,9 +116,19 @@ function tokenOf(name: string): string {
   return `$PEGASUS_SECRET_${name}`
 }
 
+/** Whether `value` is a placeholder or filler non-value that must never be
+ * substituted, whatever its length: an already-substituted token, a
+ * `${VAR}`/`<...>` interpolation, a run of `*`, or a catalog-data filler
+ * word (`null`, `TODO`, `xxx`, ...) matched case-insensitively as a WHOLE
+ * value -- never a substring match. */
 function isPlaceholder(value: string): boolean {
   if (!CATALOG) return false
-  return CATALOG.placeholder_patterns.some((p) => new RegExp(p).test(value))
+  if (CATALOG.placeholder_patterns.some((p) => new RegExp(p).test(value))) return true
+  const fillerValues = CATALOG.key_context.filler_skip_values
+  if (fillerValues && fillerValues.some((f) => f.toLowerCase() === value.toLowerCase())) return true
+  const fillerPatterns = CATALOG.key_context.filler_skip_patterns
+  if (fillerPatterns && fillerPatterns.some((p) => new RegExp(p).test(value))) return true
+  return false
 }
 
 // ─── Detection passes ────────────────────────────────────────────────────────
@@ -155,8 +180,25 @@ function skipsAsUnquotedCode(value: string): boolean {
  * rewritten text and whether anything changed. Fails open on any internal
  * error: the original text survives untouched rather than blocking the
  * caller, and nothing thrown here carries a value. */
+/** Size cap, defense in depth (7.3.1): every catalog-driven detection pass
+ * below is anchored to avoid the specific quadratic-time shapes a review
+ * found, but a giant paste or tool output (a user message, an engram
+ * observation body) could still hit some pattern this cap's own author
+ * never thought of, and this hook must never be the thing that freezes
+ * OpenCode. Beyond `max_detect_bytes` (default 256 KiB, catalog-data), skip
+ * every detection pass below and fall back to `redactKnownValues` alone --
+ * an exact substring search per already-registered value, linear in the
+ * text and the (small, session-lifetime) registry size, never a regex over
+ * catalog patterns. A value never seen before is not caught this way, but
+ * nothing here blocks the message either way. Documented in MANUAL.md's
+ * "qué detecta" and the 7.3.1 section of `arquitectura.md`. */
 function detectAndReplace(text: string): { text: string; changed: boolean } {
   if (!CATALOG || !text) return { text, changed: false }
+  const cap = CATALOG.max_detect_bytes
+  if (cap && Buffer.byteLength(text, "utf8") > cap) {
+    const redacted = redactKnownValues(text)
+    return { text: redacted, changed: redacted !== text }
+  }
   let out = text
   let changed = false
 
@@ -208,12 +250,42 @@ function detectAndReplace(text: string): { text: string; changed: boolean } {
       })
     }
 
-    // 4. Headers: Authorization: Bearer|Basic <v>, X-Api-Key: <v>
+    // 4. Headers: Authorization: Bearer|Basic <v>, X-Api-Key: <v>, and any
+    // header whose NAME ends in -Signature/-Token/-Key/-Secret (7.3.1),
+    // whatever the header is called -- the variable name for this last kind
+    // derives from the actual header name, not a fixed rule name.
     for (const rule of Object.values(CATALOG.headers)) {
-      const namesAlt = rule.header_names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
-      const schemePart = rule.schemes ? `(?:${rule.schemes.join("|")})\\s+` : ""
-      const re = new RegExp(`(?:${namesAlt})\\s*:\\s*${schemePart}([^\\s,"']{${CATALOG.min_value_length},})`, "gi")
-      substitute(re, () => rule.name, (m) => m[1])
+      if ("header_names" in rule) {
+        const namesAlt = rule.header_names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+        const schemePart = rule.schemes ? `(?:${rule.schemes.join("|")})\\s+` : ""
+        const re = new RegExp(`(?:${namesAlt})\\s*:\\s*${schemePart}([^\\s,"']{${CATALOG.min_value_length},})`, "gi")
+        substitute(re, () => rule.name, (m) => m[1])
+      } else if ("header_name_suffixes" in rule) {
+        const suffixAlt = rule.header_name_suffixes
+          .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("|")
+        // GitHub's own webhook-signature header is `X-Hub-Signature-256` --
+        // the sensitive suffix followed by exactly one `-<digits>` segment.
+        // `X-Signature-Version`/`X-Api-Key-Version` still do not match: the
+        // trailing text there is not digits, so neither branch of this
+        // group can reach the colon.
+        const digitSuffix = rule.allow_trailing_digit_segment ? "(?:-\\d+)?" : ""
+        // A lookbehind, not `\b`, anchors where a match may START: a long
+        // run of header-name-shaped characters with no matching suffix
+        // anywhere would otherwise make the engine retry the same
+        // expensive backtrack at every position in the run (the same
+        // O(n^2) hazard as `url_credentials.pattern`, see its own note).
+        const re = new RegExp(
+          `(?<![A-Za-z0-9-])([A-Za-z][A-Za-z0-9-]*(?:${suffixAlt})${digitSuffix})\\s*:\\s*([^\\s,"']{${CATALOG.min_value_length},})`,
+          "gi",
+        )
+        out = out.replace(re, (match, headerName, value) => {
+          if (!value || value.length < CATALOG!.min_value_length || isPlaceholder(value)) return match
+          const name = register(value, headerName)
+          changed = true
+          return match.replace(value, tokenOf(name))
+        })
+      }
     }
 
     // 5. URL credentials: scheme://user:password@host
@@ -231,9 +303,14 @@ function detectAndReplace(text: string): { text: string; changed: boolean } {
     // shaped, checked against the catalog by `matchesCatalogKey` rather than
     // restricted to a literal alternation, so a compound key like
     // "DB_PASSWORD" is recognized by its trailing word. A quoted value
-    // always counts, whatever it looks like.
+    // always counts, whatever it looks like. A value SITTING NEXT TO A
+    // SENSITIVE KEY needs only `key_context.min_value_length` characters
+    // (4), lower than the catalog's general 8-char floor (7.3.1) -- a
+    // catalog-data filler skip list (`isPlaceholder`) keeps this from
+    // catching `null`, `TODO`, `****`, etc.
     {
-      const re = /"([A-Za-z_$][A-Za-z0-9_$-]*)"\s*:\s*"([^"]{8,})"/g
+      const minLen = CATALOG.key_context.min_value_length ?? CATALOG.min_value_length
+      const re = new RegExp(`"([A-Za-z_$][A-Za-z0-9_$-]*)"\\s*:\\s*"([^"]{${minLen},})"`, "g")
       out = out.replace(re, (match, key, value) => {
         if (!matchesCatalogKey(key, CATALOG!.key_context.keys)) return match
         if (isPlaceholder(value)) return match
@@ -249,7 +326,16 @@ function detectAndReplace(text: string): { text: string; changed: boolean } {
     // digit that would otherwise read as an identifier -- being inside
     // quotes is what tells this apart from a piece of code.
     {
-      const re = /\b([A-Za-z_$][A-Za-z0-9_$-]*)\s*[:=]\s*(?:"([^"]{8,})"|'([^']{8,})')/g
+      const minLen = CATALOG.key_context.min_value_length ?? CATALOG.min_value_length
+      // A lookbehind, not `\b`, anchors where a match may START -- see the
+      // note on `url_credentials.pattern`. Without it, a long run of
+      // identifier-shaped characters with no `[:=]`/quote following
+      // anywhere makes the engine retry the same expensive backtrack at
+      // every position in the run.
+      const re = new RegExp(
+        `(?<![A-Za-z0-9_$-])([A-Za-z_$][A-Za-z0-9_$-]*)\\s*[:=]\\s*(?:"([^"]{${minLen},})"|'([^']{${minLen},})')`,
+        "g",
+      )
       out = out.replace(re, (match, key, dq, sq) => {
         const value = dq ?? sq
         if (!matchesCatalogKey(key, CATALOG!.key_context.keys)) return match
@@ -273,18 +359,54 @@ function detectAndReplace(text: string): { text: string; changed: boolean } {
     // under that pattern and is still detected. See the 7.3.0 section of
     // `arquitectura.md` and MANUAL.md's "qué detecta" for the user-facing
     // statement of this gap.
+    //
+    // Manual scan, not `String.replace`, and deliberately so (7.3.1, a
+    // review-found regression): an unrelated leading key (`note`,
+    // `Content-Type`) that fails `matchesCatalogKey` used to still consume
+    // the WHOLE match span as its own (rejected) value -- greedily
+    // swallowing a real sensitive `key=value` pair sitting right after it
+    // (`note: password=<fake>`, `Content-Type: password=<fake>`), which
+    // then never got its own turn. On rejection this only advances past the
+    // rejected KEY, not past its value, so the scan retries from right
+    // there and still finds the sensitive pair as its own match.
+    //
+    // Two more, review-found performance hazards, fixed together (7.3.1):
+    // `unquoted_value_pattern` now also excludes `;`, `:`, `&` and `?` --
+    // without excluding `:`, a value went on being read across another
+    // `key:` boundary (`"a:b:c:d:".repeat(n)` took ~5.7s at n=8000, ~4x per
+    // doubling: quadratic, because each rejected candidate's value scan ran
+    // all the way to the end of the string); without `&`/`?`, a query
+    // string's value swallowed the rest of the URL (`?token=<v>&page=2`
+    // lost `&page=2`). And the KEY portion is now anchored the same way as
+    // `url_credentials.pattern` (a lookbehind, not `\b`) -- a long run of
+    // identifier characters with no `[:=]` anywhere (a 1MB run of `a`, say)
+    // otherwise makes the engine retry the same expensive backtrack at
+    // every position in the run, which is O(n^2) on its own regardless of
+    // the value pattern.
     {
       const re = new RegExp(
-        `\\b([A-Za-z_$][A-Za-z0-9_$-]*)\\s*[:=]\\s*(${CATALOG.key_context.unquoted_value_pattern})`,
+        `(?<![A-Za-z0-9_$-])([A-Za-z_$][A-Za-z0-9_$-]*)\\s*[:=]\\s*(${CATALOG.key_context.unquoted_value_pattern})`,
         "g",
       )
-      out = out.replace(re, (match, key, value) => {
-        if (!matchesCatalogKey(key, CATALOG!.key_context.keys)) return match
-        if (isPlaceholder(value) || skipsAsUnquotedCode(value)) return match
-        changed = true
-        const name = register(value, key)
-        return match.replace(value, tokenOf(name))
-      })
+      let result = ""
+      let cursor = 0
+      let m: RegExpExecArray | null
+      while ((m = re.exec(out))) {
+        const [full, key, value] = m
+        const accept = matchesCatalogKey(key, CATALOG!.key_context.keys) && !isPlaceholder(value) && !skipsAsUnquotedCode(value)
+        if (accept) {
+          result += out.slice(cursor, m.index)
+          const name = register(value, key)
+          result += full.replace(value, tokenOf(name))
+          changed = true
+          cursor = m.index + full.length
+          re.lastIndex = cursor
+        } else {
+          re.lastIndex = m.index + key.length
+        }
+      }
+      result += out.slice(cursor)
+      out = result
     }
   } catch {
     // Fail open: whatever passes already ran stay applied, but a broken
