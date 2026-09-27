@@ -627,6 +627,30 @@ class EngramPluginPassiveCaptureNodeTest(unittest.TestCase):
         self.assertFalse(cases["read"]["posted"], "'read' must never trigger passive capture")
         self.assertFalse(cases["bash"]["posted"], "'bash' must never trigger passive capture")
 
+    def test_a_sub_agent_session_running_the_tool_fires_no_passive_capture(self):
+        """A sub-agent never launches its own sub-agents with a `## Key
+        Learnings` request -- that criterion belongs to the agent talking
+        with the person -- so a sub-sub-agent's findings reach memory
+        through the intermediate agent's own `## Key Learnings` section,
+        captured under the root session. Posting a second, nested passive
+        capture for the session that ran the sub-agent tool used to hand
+        engram a session id it never registered (a sub-agent session is
+        never `ensureSession`-ed), which engram rejected and `engramFetch`
+        swallowed silently -- see the plugin's `tool.execute.after`."""
+        data = self._run_harness()
+        cases = {c["tool"]: c for c in data["cases"]}
+        self.assertFalse(
+            cases["task-from-subagent-session"]["posted"],
+            "a sub-agent session completing a 'task' tool must not post a nested passive capture",
+        )
+        # The root session's own 'task' completion, from the very same run,
+        # still posts -- confirming the guard is scoped to sub-agent
+        # sessions, not a global regression that silenced every post.
+        self.assertTrue(
+            cases["task"]["posted"],
+            "the root session's own 'task' completion must still fire a passive capture",
+        )
+
     def test_the_posted_content_has_real_newlines_and_a_line_start_heading(self):
         data = self._run_harness()
         cases = {c["tool"]: c for c in data["cases"]}

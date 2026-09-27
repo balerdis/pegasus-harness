@@ -44,6 +44,18 @@ await plugin.event({
   },
 })
 
+// Register a sub-agent session (parentID set), same as OpenCode would for a
+// Task()-launched agent that itself launches a further sub-agent (a
+// sub-sub-agent). The passive capture must not fire when the session that
+// ran the tool is itself one of these -- see `subAgentSessions.has` in
+// `tool.execute.after`.
+await plugin.event({
+  event: {
+    type: "session.created",
+    properties: { info: { id: "sub1", parentID: "root1", title: "sub1 (subagent)" } },
+  },
+})
+
 const learningsOutput =
   "## Key Learnings\n" +
   "1. This is a durable finding worth keeping across sessions.\n" +
@@ -51,14 +63,14 @@ const learningsOutput =
 
 const cases = []
 
-async function run(tool, outputText) {
+async function run(tool, outputText, sessionID = "root1", label = tool) {
   posts.length = 0
   await plugin["tool.execute.after"](
-    { tool, sessionID: "root1", callID: "c-" + tool, args: {} },
+    { tool, sessionID, callID: "c-" + label, args: {} },
     { title: "sub", output: outputText, metadata: {} }
   )
   cases.push({
-    tool,
+    tool: label,
     posted: posts.length > 0,
     body: posts.length > 0 ? posts[0].body : null,
   })
@@ -69,5 +81,8 @@ await run("Task", learningsOutput)
 await run("subagent", learningsOutput)
 await run("read", learningsOutput)
 await run("bash", learningsOutput)
+// The same "task" tool, completing under a sub-agent session (`sub1`)
+// instead of the root one -- must not post at all.
+await run("task", learningsOutput, "sub1", "task-from-subagent-session")
 
 console.log(JSON.stringify({ cases }))

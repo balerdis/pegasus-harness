@@ -453,7 +453,22 @@ export const Engram: Plugin = async (ctx) => {
       // sub-agent writes only when its own brief asked for one — this hook
       // makes no decision about what to save, it only ships the text.
       const subAgentToolIds = new Set(["task", "subagent"])
-      if (subAgentToolIds.has(input.tool.toLowerCase()) && output && sessionId) {
+      // Do not post the passive capture when the session that ran this
+      // sub-agent tool is itself a sub-agent session. A sub-agent never
+      // launches its own sub-agents with a `## Key Learnings` request —
+      // that criterion belongs to the agent talking with the person — so
+      // whatever a sub-sub-agent found reaches memory through the
+      // intermediate agent's own `## Key Learnings` section, captured when
+      // the intermediate agent's tool call completes under the root
+      // session. Posting here too used to just hand engram a session id it
+      // does not recognise (a sub-agent session is never registered with
+      // engram), which engram rejected and `engramFetch` silently swallowed.
+      if (
+        subAgentToolIds.has(input.tool.toLowerCase()) &&
+        output &&
+        sessionId &&
+        !subAgentSessions.has(sessionId)
+      ) {
         const text = output.output ?? ""
         if (text.length > 50) {
           await engramFetch("/observations/passive", {
