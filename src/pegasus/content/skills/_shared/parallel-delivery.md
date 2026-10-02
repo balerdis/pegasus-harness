@@ -42,7 +42,7 @@ an SDD change: that stays with `sdd-verify`. This is not an FTD rule.
    `<state>/agent-worktrees/<repo-name>-<short hash of the toplevel path>/<run-id>/<unit>`.
    The coordinator assembles every value itself, one simple command at a time. `<state>` is the output of
    `printenv XDG_STATE_HOME`; if that prints nothing, it is `<home>/.local/state`, with `<home>` from
-   `printenv HOME`. The run-id is the output of `date -u +%Y%m%dT%H%M%SZ` and the output of
+   `printenv HOME`, and if that prints nothing too, it stops and asks the person for the state directory. The run-id is the output of `date -u +%Y%m%dT%H%M%SZ` and the output of
    `head -c3 /dev/urandom | od -An -tx1`, run as two commands and joined by the coordinator with a hyphen,
    spaces removed; the branch is `<run-id>/<unit>`, so re-runs never collide. The short hash comes from
    `git -C <main checkout> rev-parse --show-toplevel`, then `printf %s <that path> | sha1sum`, keeping the first 8 characters.
@@ -78,7 +78,7 @@ an SDD change: that stays with `sdd-verify`. This is not an FTD rule.
    conflict, so the partition was wrong, and it is not resolved blind. Picks already integrated stay; the remaining worktrees stay in place, each reported with its path. For a clean pick, confirm with
    `git -C <main checkout> cherry <integration branch> <branch>` that each commit is in; if the person decides to
    resolve a conflict, verify that pick by diff instead, because `git cherry` prints `+` after it.
-   Only after that run `git -C <main checkout> worktree remove`, `git -C <main checkout> branch -D` and `git -C <main checkout> worktree prune`. `worktree remove` refuses a worktree holding untracked files that are not ignored: never add `--force` without first listing what would be lost and having the person agree. After the worktrees and branches are gone and `worktree prune` has run, run `rm -r <root>/<run-id>` with the literal path, never an expansion: the output files and the coordinator's own message files for fix-up commits live there, so they go with it. A failed unit's files and worktree stay in place and the report names them.
+   Only after that run `git -C <main checkout> worktree remove`, `git -C <main checkout> branch -D` and `git -C <main checkout> worktree prune`. `worktree remove` refuses a worktree holding untracked files that are not ignored: never add `--force` without first listing what would be lost and having the person agree. Only when every unit integrated and every worktree and branch was removed, and `worktree prune` has run, and only after confirming that `<root>` (ending in `agent-worktrees/<repo-name>-<short hash>`) and the run-id are non-empty and exactly the recorded literals, run `rm -r <root>/<run-id>` with the literal path, never an expansion: the output files and the coordinator's own message files for fix-up commits live there, so they go with it. Otherwise leave the run directory in place and name its path in the report: a failed unit's files and worktree stay in it.
 9. **The coordinator's own suite run.** One full run on the integrated tree, by the coordinator: a
    single command with its output redirected to a file, then read the tail. Check that the test count
    adds up to the base count plus the units' reported tests added; without a test suite, skip the count check.

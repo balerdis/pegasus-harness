@@ -38,8 +38,9 @@ PROCEDURE_NAME = PROCEDURE.name
 #: as separate simple steps, the test-run rule, the three-step message file, the
 #: tests output file and the schema copied verbatim into each brief. 1517 -> 1580
 #: after the fourth live run: the review statement and the run-directory cleanup. 1580 -> 1606 after the
-#: OpenCode live run: the cleanup as a concrete `rm -r` with the literal path.
-PARALLEL_DELIVERY_WORD_CEILING = 1606
+#: OpenCode live run: the cleanup as a concrete `rm -r` with the literal path. 1606 -> 1656 after the
+#: final review: the conditional, guarded `rm -r` and the empty-HOME stop.
+PARALLEL_DELIVERY_WORD_CEILING = 1656
 
 WORKTREE_ADD = "`git -C <main checkout> worktree add -b <branch> <path> <base>`"
 WORKTREE_PATH = (
@@ -79,7 +80,7 @@ VERBATIM_SCHEMA = (
 )
 STATE_DIR = (
     "`<state>` is the output of `printenv XDG_STATE_HOME`; if that prints nothing, it is `<home>/.local/state`, "
-    "with `<home>` from `printenv HOME`."
+    "with `<home>` from `printenv HOME`, and if that prints nothing too, it stops and asks the person for the state directory."
 )
 RUN_ID_STEPS = (
     "The run-id is the output of `date -u +%Y%m%dT%H%M%SZ` and the output of "
@@ -180,10 +181,7 @@ REVIEW_STATED = (
     "trivial. A diff that adds new modules or new logic is not trivial."
 )
 RUN_DIR_CLEANUP = (
-    "After the worktrees and branches are gone and `worktree prune` has run, run `rm -r <root>/<run-id>` "
-    "with the literal path, never an expansion: the output files and the coordinator's own message files "
-    "for fix-up commits live there, so they go with it. A failed unit's files and worktree stay in place "
-    "and the report names them."
+    "Only when every unit integrated and every worktree and branch was removed, and `worktree prune` has run, and only after confirming that `<root>` (ending in `agent-worktrees/<repo-name>-<short hash>`) and the run-id are non-empty and exactly the recorded literals, run `rm -r <root>/<run-id>` with the literal path, never an expansion: the output files and the coordinator's own message files for fix-up commits live there, so they go with it. Otherwise leave the run directory in place and name its path in the report: a failed unit's files and worktree stay in it."
 )
 NO_FIXUP = "with no confirmed finding there is no fix-up writer."
 CLOSE_ORDER = (

@@ -101,8 +101,11 @@ def atomic_write(path: Path, content: str) -> None:
 
 ATL_IGNORED = {".atl", ".atl/", "/.atl", "/.atl/"}
 
+GIT_REDIRECTS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+
 def exclude_file(project_root: Path) -> Path | None:
-    try: completed = subprocess.run(["git", "-C", str(project_root), "rev-parse", "--git-path", "info/exclude"], capture_output=True, text=True, timeout=5, check=False)
+    environment = {key: value for key, value in os.environ.items() if key not in GIT_REDIRECTS}
+    try: completed = subprocess.run(["git", "-C", str(project_root), "rev-parse", "--git-path", "info/exclude"], capture_output=True, text=True, timeout=5, check=False, env=environment)
     except FileNotFoundError: return project_root / ".git" / "info" / "exclude" if (project_root / ".git").is_dir() else None
     if completed.returncode != 0 or not completed.stdout.strip(): return None
     return project_root / completed.stdout.strip() if not os.path.isabs(completed.stdout.strip()) else Path(completed.stdout.strip())

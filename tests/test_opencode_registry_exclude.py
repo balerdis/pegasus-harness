@@ -7,6 +7,7 @@ the repository's local exclude file, never to `.gitignore`.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -64,6 +65,16 @@ class RegistryExcludeTest(unittest.TestCase):
         self.assertEqual(self.exclude_lines(project).count(".atl/"), 1)
         self.assertEqual(git("status", "--porcelain", cwd=project).stdout, "")
         self.assertFalse((project / ".gitignore").exists())
+
+    def test_a_git_dir_in_the_environment_does_not_redirect_the_exclude(self) -> None:
+        project = self.repository()
+        other = self.repository("other")
+        before = self.exclude_lines(other)
+        environment = {**os.environ, "GIT_DIR": str(other / ".git")}
+        done = subprocess.run([sys.executable, str(self.script), "--project-root", str(project), "--skill-root", str(self.skills)], text=True, capture_output=True, check=False, env=environment)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.exclude_lines(project).count(".atl/"), 1)
+        self.assertEqual(self.exclude_lines(other), before)
 
     def test_a_second_run_does_not_duplicate_it(self) -> None:
         project = self.repository()
