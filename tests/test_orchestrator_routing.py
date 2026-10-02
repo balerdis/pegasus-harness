@@ -141,8 +141,11 @@ READINESS_STEM = re.compile(
     # register a person reaches for when calling work finished.
     r"|shippable|ship it|\blgtm\b|merge-?able|merge-ready|wrap(?:s|ped|ping)? (?:it )?up|close(?:s|d)? (?:it )?out"
     # The vocabulary corpus found the rest: "all set", "it's a wrap", "safe to
-    # merge", "okay to ship", "passes review", "rubber-stamp it".
+    # merge", "okay to ship", "passes review", "rubber-stamp it"; and later
+    # "call it good", "good to merge", "cleared for merge".
     r"|it'?s a wrap|\ball (?:set|green)\b|thumbs[- ]up|rubber[- ]?stamp|finali[sz]|pass(?:es|ed)? review"
+    r"|call(?:s|ed|ing)? it good|\bgood to (?:merge|ship|release|land|deploy)\b"
+    r"|\bclear(?:ed)? for (?:merge|merging|release|landing|deploy(?:ment)?|shipping)\b"
     r"|\bbless(?:es|ed|ing)?\b|\b(?:safe|ok(?:ay)?|clear(?:ed)?) to (?:merge|ship|release|land|deploy|archive)\b",
     re.IGNORECASE,
 )

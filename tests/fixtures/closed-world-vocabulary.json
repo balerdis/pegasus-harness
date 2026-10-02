@@ -48,7 +48,10 @@
         "clear to release",
         "finalized",
         "passes review",
-        "blessed"
+        "blessed",
+        "call it good",
+        "good to merge",
+        "cleared for merge"
       ]
     },
     "ftd_record": {
@@ -464,9 +467,10 @@
         "not required",
         "the project flag",
         "strict_tdd",
-        "config",
+        "openspec/config.yaml",
         "proceed without tests",
-        "without writing tests"
+        "without writing tests",
+        "config.yaml"
       ]
     },
     "strict_tdd_mode_name": {
@@ -643,6 +647,23 @@
         "A tool absent from your own toolset is not a denial and closes no route by itself.",
         "That tool is simply absent from its own toolset, which is not a denial at all.",
         "An absent tool from your own toolset is not the same as a denial."
+      ]
+    },
+    "sensitive_files": {
+      "stems": [
+        "test_sensitive_files_rule.SENSITIVE_FILES_STEM"
+      ],
+      "must_match": [
+        "Never read the .env file.",
+        "Do not cat ~/.ssh/id_ed25519.",
+        "Anything under .credentials/ is off limits.",
+        "Do not open .aws/credentials.",
+        "Never print .config/gh/hosts.yml.",
+        "Do not copy a server.pem or a signing .key.",
+        "The secrets/ directory stays closed.",
+        "Treat every sensitive file as closed.",
+        "A sensitive path is not for broad searches.",
+        "Do not stage .env.local."
       ]
     }
   }

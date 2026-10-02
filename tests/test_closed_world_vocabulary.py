@@ -18,8 +18,8 @@ phrase a regex misses fails here, before review.
 Which regexes need a topic is derived, not listed. Every test module that
 declares a closed-world check is read as source, and a regex counts when it
 filters a file's units: the receiver of a `.search`, `.match` or `.findall`
-in a comprehension's condition or in a negative assertion, or a regex handed
-to a helper that filters that way. Each one found must be named by a topic.
+in a comprehension's condition, in the `if` of a `for` loop, or in a negative
+assertion, or a regex handed to a helper that filters that way. Each one found must be named by a topic.
 
 Declared residue: the corpus is finite too. It proves the lists match what
 was thought of, not what was not; the next gap a review finds is a new phrase
@@ -56,6 +56,16 @@ REVIEWED_STEMS = (
     "test_craft_extraction.CRAFT_RULE_SUBJECT",
     "test_craft_extraction.TDD_SUBJECT",
 )
+
+#: Regexes the `for`-loop shape finds that match Markdown syntax, never a word
+#: a person could phrase differently: they split a file into lines, items or
+#: fences before any vocabulary is looked at, so a corpus of phrasings has
+#: nothing to hold. Named, with the reason; each must still be derived, so an
+#: entry whose loop was rewritten does not linger.
+SYNTAX_NOT_VOCABULARY = {
+    "test_flow_routing._ITEM": "list-item markup (`- ` or `1. `) at a line start",
+    "test_persona_split.FENCE": "a code fence line (three backticks or tildes)",
+}
 
 
 def corpus() -> dict:
@@ -95,13 +105,19 @@ def _receivers(node: ast.AST) -> set[str]:
 
 
 def _filtering_names(tree: ast.AST) -> set[str]:
-    """Names that filter units: in a comprehension's condition, or in the first
-    argument of a negative assertion ("no other sentence may say this")."""
+    """Names that filter units: in a comprehension's condition, in an `if`
+    inside a `for` loop, or in the first argument of a negative assertion ("no
+    other sentence may say this")."""
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.comprehension):
             for condition in node.ifs:
                 names |= _receivers(condition)
+        elif isinstance(node, ast.For):
+            # A filter written as a loop: `for unit in units: if STEM.search(unit): ...`
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.If):
+                    names |= _receivers(sub.test)
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -203,8 +219,16 @@ class EveryClosedWorldStemHasATopicTest(unittest.TestCase):
 
     def test_every_derived_stem_is_named_by_a_topic(self):
         for reference, pattern in sorted(self.derived.items()):
+            if reference in SYNTAX_NOT_VOCABULARY:
+                continue
             with self.subTest(stem=reference):
                 self.assertTrue(identity(pattern) in self.named, f"{reference} filters a closed world and has no topic")
+
+    def test_every_syntax_exclusion_is_still_derived_and_still_has_no_topic(self):
+        for reference in SYNTAX_NOT_VOCABULARY:
+            with self.subTest(stem=reference):
+                self.assertIn(reference, self.derived)
+                self.assertNotIn(identity(self.derived[reference]), self.named)
 
     def test_every_topic_guards_a_derived_stem(self):
         """A topic whose regexes no closed-world check uses any more is stale."""
@@ -212,6 +236,57 @@ class EveryClosedWorldStemHasATopicTest(unittest.TestCase):
         for topic, entry in corpus()["topics"].items():
             with self.subTest(topic=topic):
                 self.assertTrue(any(identity(resolve(reference)) in derived for reference in entry["stems"]))
+
+
+class DerivationSeesEveryFilterShapeTest(unittest.TestCase):
+    """The derivation must read each way a check can filter by a regex, not
+    only the two it was first written for."""
+
+    def names(self, source: str) -> set[str]:
+        return _filtering_names(ast.parse(source))
+
+    def test_a_comprehension_condition_is_seen(self):
+        self.assertEqual(self.names("[u for u in units if STEM.search(u)]"), {"STEM"})
+
+    def test_a_negative_assertion_is_seen(self):
+        self.assertEqual(self.names("self.assertIsNone(STEM.search(text))"), {"STEM"})
+
+    def test_a_for_loop_with_an_if_is_seen(self):
+        source = "for unit in units:\n    if STEM.search(unit):\n        found.add(unit)\n"
+        self.assertEqual(self.names(source), {"STEM"})
+
+    def test_a_for_loop_with_a_nested_if_and_a_skip_is_seen(self):
+        source = (
+            "for unit in units:\n    if unit:\n        if not STEM.match(unit):\n            continue\n"
+            "        found.add(unit)\n"
+        )
+        self.assertEqual(self.names(source), {"STEM"})
+
+    def test_a_for_loop_with_an_if_inside_a_helper_marks_its_parameter(self):
+        tree = ast.parse("def on(text, stem):\n    for line in text.splitlines():\n        if stem.search(line):\n            yield line\n")
+        self.assertEqual(_filtering_helpers([tree]), {"on": {1}})
+
+    def test_a_search_outside_any_filter_is_not_one(self):
+        self.assertEqual(self.names("found = STEM.search(text)\n"), set())
+        self.assertEqual(self.names("if STEM.search(text):\n    pass\n"), set())
+
+
+class CraftRuleSubjectIsNarrowTest(unittest.TestCase):
+    """`config` was a root so general that it dragged any sentence about a
+    configuration into the craft rule's closed world. It was there for the
+    project flag's file, `openspec/config.yaml`."""
+
+    def test_a_bare_config_word_is_not_the_subject(self):
+        from test_craft_extraction import CRAFT_RULE_SUBJECT
+
+        self.assertIsNone(CRAFT_RULE_SUBJECT.search("Keep a config of the keyboard layout."))
+
+    def test_the_project_flags_file_still_is(self):
+        from test_craft_extraction import CRAFT_RULE_SUBJECT
+
+        for phrase in ("openspec/config.yaml", "the config.yaml file"):
+            with self.subTest(phrase=phrase):
+                self.assertIsNotNone(CRAFT_RULE_SUBJECT.search(phrase))
 
 
 if __name__ == "__main__":
