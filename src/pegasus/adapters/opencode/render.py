@@ -95,6 +95,33 @@ TOOL_NAME: dict[str, str] = {
 # had reason to declare. `skill` and `ask` stay absent too, but for the
 # opposite reason: neither reads, writes or executes a path at all, so
 # neither runtime counterpart has a target to ask `external_directory` about.
+# A sub-agent's `bash` is allowed, except that a `git push` asks the person.
+# Product decision (docs/arquitectura/arquitectura.md, 7.5.0): a sub-agent
+# must not publish on its own, yet a full block was rejected because the
+# person sometimes asks an agent to push. The coordinator (`mode: primary`)
+# keeps the plain `"allow"`.
+#
+# Verified in the runtime's own source (v1.18.32):
+# - `tool/shell.ts` parses the command with tree-sitter and asks `bash` once
+#   with one pattern per `command` node (`commands`, `collect`: lines
+#   123-125 and 408), so `a && git push`, `a; git push` and `$(git push)`
+#   are each checked on their own text.
+# - `permission/index.ts:28-37` (`evaluate`) takes the LAST rule matching
+#   both name and pattern, so the `"*"` allow comes first; one `"ask"`
+#   among the patterns makes the whole call ask (`ask`, lines 73-83).
+# - `util/wildcard.ts:3-19`: `*` is `.*`, the match is anchored, and a
+#   trailing ` *` makes the tail optional, so `git push *` matches both
+#   `git push` and `git push origin main`.
+# Not caught: aliases, wrapper scripts, a push inside a script file or an
+# `sh -c "..."` / `eval` string (the inner text is an argument, not a
+# command node), and `gh` commands. `git * push *` also asks for harmless
+# lines such as `git log --grep push x` -- a false positive, never a miss.
+SUBAGENT_BASH_PERMISSION: dict[str, str] = {
+    "*": "allow",
+    "git push *": "ask",
+    "git * push *": "ask",
+}
+
 EXTERNAL_DIRECTORY_TOOLS = frozenset({"read", "grep", "glob", "edit", "write", "bash"})
 
 # The deny floor `_permission` writes last under `external_directory`, once the
@@ -923,6 +950,13 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     now either proceeds or is refused outright, and there is nothing left in
     this configuration for a person to be asked to approve.
 
+    Superseded in one place by the 7.5.0 decision: a sub-agent's `bash` now
+    carries `SUBAGENT_BASH_PERMISSION`, whose `git push` patterns are
+    `"ask"` (see that constant). It is the only `"ask"` Pegasus renders. The
+    depth-two hang above applies to it too: at depth one the prompt surfaces
+    in the root session; a sub-agent two levels down that pushes would wait
+    on a prompt nobody sees.
+
     This baseline is not a stopgap awaiting an upstream fix. Keeping
     `external_directory` permissive by default is a deliberate product
     decision: the product's own reason for it is that having it enabled by
@@ -954,6 +988,8 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     if unknown:
         raise RenderError(f"{item.name}: no OpenCode name for tools {', '.join(sorted(unknown))}")
     granted: dict[str, Any] = {PERMISSION_NAME[name]: "allow" for name in names}
+    if granted.get("bash") == "allow" and item.mode is AgentMode.SUBAGENT:
+        granted["bash"] = dict(SUBAGENT_BASH_PERMISSION)
     # Same reasoning as `_tools`: the MCP server id is the key the runtime
     # matches its tool-call actions against, and the wildcard grants every
     # tool that server exposes.

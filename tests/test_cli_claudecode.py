@@ -277,17 +277,23 @@ class PermissionsTest(RealHomeTestCase):
         settings = self._settings()
         self.assertEqual(settings["permissions"]["allow"], list(render_module.PERMISSIONS_ALLOW))
         self.assertEqual(settings["permissions"]["deny"], list(render_module.PERMISSIONS_DENY_FLOOR))
+        self.assertEqual(settings["permissions"]["ask"], list(render_module.PERMISSIONS_ASK))
 
     def test_install_preserves_pre_existing_user_permission_entries(self):
         self.present()
         layout = self.layout()
         layout.settings_file.write_text(
-            json.dumps({"permissions": {"allow": ["Bash(ls:*)"], "deny": ["Bash(rm -rf /:*)"]}}),
+            json.dumps(
+                {"permissions": {"allow": ["Bash(ls:*)"], "deny": ["Bash(rm -rf /:*)"], "ask": ["Bash(git commit *)"]}}
+            ),
             encoding="utf-8",
         )
         code, report = self.run_cli("install", "--cli", CLI)
         self.assertEqual(code, 0, report)
         settings = self._settings()
+        self.assertIn("Bash(git commit *)", settings["permissions"]["ask"])
+        for rule in render_module.PERMISSIONS_ASK:
+            self.assertIn(rule, settings["permissions"]["ask"])
         self.assertIn("Bash(ls:*)", settings["permissions"]["allow"])
         self.assertIn("Bash(rm -rf /:*)", settings["permissions"]["deny"])
         for rule in render_module.PERMISSIONS_ALLOW:
@@ -303,6 +309,7 @@ class PermissionsTest(RealHomeTestCase):
         self.assertEqual(settings["permissions"]["allow"].count("Read(//**)"), 1)
         self.assertEqual(settings["permissions"]["allow"].count("Edit(//**)"), 1)
         self.assertEqual(len(settings["permissions"]["deny"]), len(render_module.PERMISSIONS_DENY_FLOOR))
+        self.assertEqual(settings["permissions"]["ask"], list(render_module.PERMISSIONS_ASK))
 
     def test_the_agent_key_is_unaffected(self):
         self.install()
@@ -314,13 +321,16 @@ class PermissionsTest(RealHomeTestCase):
         self.present()
         layout = self.layout()
         layout.settings_file.write_text(
-            json.dumps({"permissions": {"allow": ["Bash(ls:*)"], "deny": ["Bash(rm -rf /:*)"]}}),
+            json.dumps(
+                {"permissions": {"allow": ["Bash(ls:*)"], "deny": ["Bash(rm -rf /:*)"], "ask": ["Bash(git commit *)"]}}
+            ),
             encoding="utf-8",
         )
         self.run_cli("install", "--cli", CLI)
         code, report = self.run_cli("uninstall", "--cli", CLI)
         self.assertEqual(code, 0, report)
         settings = self._settings()
+        self.assertEqual(settings["permissions"]["ask"], ["Bash(git commit *)"])
         self.assertEqual(settings["permissions"]["allow"], ["Bash(ls:*)"])
         self.assertEqual(settings["permissions"]["deny"], ["Bash(rm -rf /:*)"])
 

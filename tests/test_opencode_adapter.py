@@ -449,10 +449,47 @@ class AgentRenderTest(unittest.TestCase):
         self.assertEqual(self.value(self.agent())["permission"], {"*": "deny", "task": {"*": "deny"}})
 
     def test_a_granted_native_tool_is_translated_into_permission_too(self):
-        agent = self.agent(requires_tools=("read", "bash"))
+        agent = self.agent(requires_tools=("read", "bash"), mode=AgentMode.PRIMARY)
         permission = self.value(agent)["permission"]
         self.assertEqual(permission["read"], "allow")
         self.assertEqual(permission["bash"], "allow")
+
+    def test_a_subagents_bash_allows_everything_and_asks_for_a_git_push(self):
+        """The 7.5.0 decision: a sub-agent's `git push` asks the person. The
+        `"*"` allow must come first, because the runtime keeps the last
+        matching rule (`permission/index.ts` `evaluate`)."""
+        permission = self.value(self.agent(requires_tools=("read", "bash"), mode=AgentMode.SUBAGENT))["permission"]
+        self.assertEqual(permission["bash"], {"*": "allow", "git push *": "ask", "git * push *": "ask"})
+        self.assertEqual(list(permission["bash"])[0], "*")
+        self.assertEqual(permission["read"], "allow")
+
+    def test_a_primary_agents_bash_stays_a_plain_allow(self):
+        permission = self.value(self.agent(requires_tools=("bash",), mode=AgentMode.PRIMARY))["permission"]
+        self.assertEqual(permission["bash"], "allow")
+
+    def test_a_subagent_without_bash_gets_no_bash_key(self):
+        permission = self.value(self.agent(requires_tools=("read",), mode=AgentMode.SUBAGENT))["permission"]
+        self.assertNotIn("bash", permission)
+
+    def test_only_bash_changes_between_a_subagent_and_a_primary_with_the_same_tools(self):
+        kwargs = dict(requires_tools=("read", "bash", "write"), optional_mcp=("context7",))
+        sub = self.value(self.agent(mode=AgentMode.SUBAGENT, **kwargs))["permission"]
+        primary = self.value(self.agent(mode=AgentMode.PRIMARY, **kwargs))["permission"]
+        self.assertNotEqual(sub["bash"], primary["bash"])
+        self.assertEqual({k: v for k, v in sub.items() if k != "bash"}, {k: v for k, v in primary.items() if k != "bash"})
+
+    def test_shipped_subagents_ask_for_a_git_push_and_shipped_primaries_do_not(self):
+        loaded = content_module.load()
+        seen = set()
+        for item in loaded.agents:
+            value = only(render_module.agent(self.layout, item), ConfigKeyArtifact)[0].value
+            bash = value["permission"].get("bash")
+            if bash is None:
+                continue
+            seen.add(item.mode)
+            expected = render_module.SUBAGENT_BASH_PERMISSION if item.mode is AgentMode.SUBAGENT else "allow"
+            self.assertEqual(bash, expected, item.name)
+        self.assertEqual(seen, {AgentMode.SUBAGENT, AgentMode.PRIMARY})
 
     def test_write_targets_the_runtimes_own_edit_permission_not_a_write_key(self):
         """The runtime's `permission` schema has no `write` key: its loader folds

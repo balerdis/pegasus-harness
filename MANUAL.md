@@ -253,7 +253,7 @@ Cuando le pedís varias cosas independientes a la vez, el orquestador puede repa
 
 - **Dónde viven las copias.** Fuera de tu repositorio, en `${XDG_STATE_HOME:-~/.local/state}/agent-worktrees/<repo>-<hash>/<corrida>/<unidad>`. Tu `git status` no muestra nada de ellas. El orquestador las crea y, cuando termina de integrar cada unidad, las borra; una unidad que falla queda en su lugar y te da la ruta.
 - **Una línea por unidad terminada.** Si OpenCode entrega los resultados de a uno, te llega una línea corta cuando termina cada unidad, y al final el informe completo. Si llegan todos juntos, sólo el informe.
-- **El orquestador te pregunta antes de subir o publicar.** Cada unidad deja un commit local y tiene la instrucción de no hacer push, pero hoy ningún permiso se lo impide: es una instrucción, no un bloqueo. El orquestador integra, corre la suite completa él mismo, hace revisar el resultado y te informa; un push, una publicación o una release esperan tu respuesta.
+- **El orquestador te pregunta antes de subir o publicar.** Cada unidad deja un commit local y tiene la instrucción de no hacer push, y además un `git push` de un subagente te pide confirmación (el del orquestador no cambia). No atrapa alias, scripts propios, `sh -c` ni los comandos de `gh`. El orquestador integra, corre la suite completa él mismo, hace revisar el resultado y te informa; un push, una publicación o una release esperan tu respuesta.
 
 Esto es para varias unidades genuinamente independientes. Un cambio chico se hace en la misma conversación, como siempre.
 

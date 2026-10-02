@@ -85,6 +85,30 @@ PERMISSIONS_DENY_FLOOR: tuple[str, ...] = tuple(
     rule for name in DENY_FLOOR_DIRECTORIES for rule in (f"Read(//**/{name}/**)", f"Edit(//**/{name}/**)")
 )
 
+#: A `git push` asks the person -- the 7.5.0 product decision, recorded in
+#: `docs/arquitectura/arquitectura.md`. Claude Code's permissions are per
+#: session, never per agent (agent frontmatter can only grant `tools:` or
+#: remove them with `disallowedTools:`, never "ask"), so this rule also asks
+#: for the coordinator's own pushes: that is this CLI's limit, not a choice.
+#:
+#: Syntax per https://code.claude.com/docs/en/permissions ("Wildcard
+#: patterns", "Compound commands", "What a Bash rule doesn't match"): `*` may
+#: sit anywhere, and a trailing ` *` also matches the bare command, so
+#: `Bash(git push *)` covers `git push` and `git push origin main`; `:*` is
+#: only an equivalent spelling of that trailing wildcard, and the dialog
+#: itself writes the space form. Ask rules apply when ANY subcommand of a
+#: compound command matches (`cd x && git push`, `$(git push)` included).
+#: The docs say `git -C . push` is not matched by the first rule, so the
+#: second and third add `git <anything> push` with and without arguments.
+#: Still not caught: `/usr/bin/git push`, `sh -c 'git push'`, aliases, and
+#: `gh` commands. `git * push *` over-asks for lines like `git log --grep
+#: push x`, a false positive and never a miss.
+PERMISSIONS_ASK: tuple[str, ...] = ("Bash(git push *)", "Bash(git * push *)", "Bash(git * push)")
+
+#: Explicit ids: `_permission_slug` drops `*`, so these three rules would
+#: otherwise all slug to the same `Bash-git-push`.
+_ASK_IDS: tuple[str, ...] = ("git-push", "git-any-push-args", "git-any-push")
+
 _NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
 
 
@@ -103,7 +127,7 @@ def _permission_slug(rule: str) -> str:
 
 
 def permission_artifacts(layout: Layout) -> list[Artifact]:
-    """The fixed `permissions.allow`/`permissions.deny` entries this adapter
+    """The fixed `permissions.allow`/`deny`/`ask` entries this adapter
     owns in `settings.json`, one `ConfigKeyArtifact` per rule.
 
     Each is an *append* -- its pointer ends in `/-` -- the same mechanism
@@ -145,7 +169,16 @@ def permission_artifacts(layout: Layout) -> list[Artifact]:
         )
         for rule in PERMISSIONS_DENY_FLOOR
     ]
-    return [*allow, *deny]
+    ask = [
+        ConfigKeyArtifact(
+            id=f"own:permission-ask:{slug}",
+            path=layout.settings_file,
+            pointer="/permissions/ask/-",
+            value=rule,
+        )
+        for slug, rule in zip(_ASK_IDS, PERMISSIONS_ASK, strict=True)
+    ]
+    return [*allow, *deny, *ask]
 
 
 class RenderError(ValueError):

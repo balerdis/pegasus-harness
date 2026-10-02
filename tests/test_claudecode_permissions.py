@@ -67,7 +67,7 @@ class PermissionArtifactsTest(unittest.TestCase):
         for artifact in artifacts:
             self.assertIsInstance(artifact, ConfigKeyArtifact)
             self.assertEqual(artifact.path, LAYOUT.settings_file)
-            self.assertIn(artifact.pointer, ("/permissions/allow/-", "/permissions/deny/-"))
+            self.assertIn(artifact.pointer, ("/permissions/allow/-", "/permissions/deny/-", "/permissions/ask/-"))
 
     def test_allow_values_match_permissions_allow_exactly(self):
         artifacts = render_module.permission_artifacts(LAYOUT)
@@ -78,6 +78,16 @@ class PermissionArtifactsTest(unittest.TestCase):
         artifacts = render_module.permission_artifacts(LAYOUT)
         deny_values = [a.value for a in artifacts if a.pointer == "/permissions/deny/-"]
         self.assertEqual(deny_values, list(render_module.PERMISSIONS_DENY_FLOOR))
+
+    def test_a_git_push_asks_through_permissions_ask(self):
+        """The 7.5.0 decision: every `git push` in the session asks, the
+        plain, option-prefixed and argument-less forms alike."""
+        artifacts = render_module.permission_artifacts(LAYOUT)
+        ask_values = [a.value for a in artifacts if a.pointer == "/permissions/ask/-"]
+        self.assertEqual(ask_values, list(render_module.PERMISSIONS_ASK))
+        self.assertIn("Bash(git push *)", ask_values)
+        self.assertIn("Bash(git * push *)", ask_values)
+        self.assertIn("Bash(git * push)", ask_values)
 
     def test_every_artifact_id_is_unique(self):
         artifacts = render_module.permission_artifacts(LAYOUT)
