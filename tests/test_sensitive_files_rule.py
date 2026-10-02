@@ -68,8 +68,9 @@ PERMISSION_PARAGRAPH = (
 SCOPE_PARAGRAPH = (
     "This rule is about files, not about a credential the person gives you in this conversation: that one "
     "is used as Credential Transport says. Editing a remote file over SSH, or a privileged file with "
-    "`sudo`, when the person asked for that change does not reach these files: for them the permission "
-    "must name the file. Every sub-agent you delegate to gets this rule in its brief."
+    "`sudo`, when the person asked for that change does not extend to these files: for them the permission "
+    "must name the file. Every agent already receives this rule with this prompt; put it in a brief only "
+    "for an agent that does not load this prompt."
 )
 PINNED = frozenset({HEADING, RULE_PARAGRAPH, PERMISSION_PARAGRAPH, SCOPE_PARAGRAPH})
 
@@ -106,8 +107,8 @@ class SensitiveFilesSectionTest(unittest.TestCase):
         self.assertIn("not about a credential the person gives you in this conversation", SCOPE_PARAGRAPH)
         self.assertIn("Credential Transport", SCOPE_PARAGRAPH)
 
-    def test_it_reaches_ssh_and_sudo_editing_and_sub_agents(self):
-        for word in ("SSH", "`sudo`", "sub-agent"):
+    def test_it_covers_ssh_and_sudo_editing_and_when_a_brief_needs_it(self):
+        for word in ("SSH", "`sudo`", "already receives this rule with this prompt", "only for an agent that does not load this prompt"):
             with self.subTest(word=word):
                 self.assertIn(word, SCOPE_PARAGRAPH)
 

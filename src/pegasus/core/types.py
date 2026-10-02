@@ -265,8 +265,10 @@ class ForeignLoad:
     `superseded_by`: home-relative paths of files that, when any exists, mean
     the fallback is never taken (the CLI's own global instructions file).
     `disabled_by`: environment variables that turn the load off, the most
-    specific first. A value counts as set when it is truthy (`1`, `true`,
-    `yes`, `on`).
+    specific first. Parsed like the reading CLI's own boolean flag: `true`,
+    `yes`, `on`, `1`, `y` turn the load off; `false`, `no`, `off`, `0`, `n`
+    leave it on; matching is case-sensitive; any other set value is not a
+    boolean at all -- the notice reports it instead of treating it as either.
     `own_takes_precedence`: for `skills`, whether a same-named skill of this
     product wins a name clash.
     """

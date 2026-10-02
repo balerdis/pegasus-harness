@@ -17,18 +17,41 @@ from typing import Any
 from pegasus.core.types import ForeignLoad
 from pegasus.ports.filesystem import FileSystem, FileSystemError
 
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
+# The values the CLI's own boolean flag parser accepts, matched case-sensitively
+# and exactly (no trimming): anything else that is set is an error on its side,
+# not "false". Mirrored here so the notice can say so instead of guessing.
+_TRUTHY = frozenset({"true", "yes", "on", "1", "y"})
+_FALSY = frozenset({"false", "no", "off", "0", "n"})
 
-# A skills directory is a shallow tree in practice; the cap keeps a symlink
-# loop from turning a diagnostic into a hang.
+# A skills directory is a shallow tree in practice; the cap keeps a diagnostic
+# from walking an absurdly deep tree.
 _MAX_DEPTH = 6
 
 
-def _is_set(variables: Mapping[str, str], name: str) -> bool:
-    return str(variables.get(name, "")).strip().lower() in _TRUTHY
+def _switch_state(variables: Mapping[str, str], name: str) -> str:
+    """`"unset"`, `"on"`, `"off"` or `"invalid"` for one environment variable."""
+    value = str(variables.get(name, ""))
+    if value == "":
+        return "unset"  # not verified how the CLI reads an empty value; never claim it is wrong
+    if value in _TRUTHY:
+        return "on"
+    if value in _FALSY:
+        return "off"
+    return "invalid"
 
 
 def _count_entries(filesystem: FileSystem, directory: Path, entry_file: str, depth: int = 0) -> int:
+    """Regular files named `entry_file` under `directory`.
+
+    The filesystem port cannot resolve a real path, so there is no visited
+    set; instead a symlinked directory is followed only when it is a direct
+    child of the scanned root (the common layout: each skill linked in from
+    elsewhere) and never deeper. That bounds a loop to one extra pass rather
+    than an exponential walk, at the price of undercounting skills reached
+    through a link nested below the top level, which a glob that follows links
+    at any depth would find. A directory that happens to be named like the
+    entry file is not an entry.
+    """
     if depth > _MAX_DEPTH:
         return 0
     try:
@@ -38,15 +61,16 @@ def _count_entries(filesystem: FileSystem, directory: Path, entry_file: str, dep
     total = 0
     for name in names:
         child = directory / name
-        if name == entry_file:
-            total += 1
-            continue
         try:
             is_directory = filesystem.resolves_to_directory(child)
+            if is_directory and depth > 0 and filesystem.is_symlink(child):
+                continue
         except FileSystemError:
             continue
         if is_directory:
             total += _count_entries(filesystem, child, entry_file, depth + 1)
+        elif name == entry_file:
+            total += 1
     return total
 
 
@@ -63,8 +87,14 @@ def evaluate(
     """
     active: list[dict[str, Any]] = []
     for load in loads:
-        if any(_is_set(variables, name) for name in load.disabled_by):
+        states = {name: _switch_state(variables, name) for name in load.disabled_by}
+        if "on" in states.values():
             continue
+        invalid = [
+            {"name": name, "value": str(variables[name])}
+            for name, state in states.items()
+            if state == "invalid"
+        ]
         try:
             if any(filesystem.exists(home / relative) for relative in load.superseded_by):
                 continue
@@ -89,6 +119,8 @@ def evaluate(
         }
         if count is not None:
             entry["count"] = count
+        if invalid:
+            entry["invalid_switches"] = invalid
         active.append(entry)
     return active
 
@@ -107,8 +139,14 @@ def notice_lines(
         switches = entry["disabled_by"]
         turn_off = f"Set {switches[0]}=1 to turn that off"
         if len(switches) > 1:
-            turn_off += f" ({', '.join(f'{name}=1' for name in switches[1:])} does too)"
+            turn_off += f" ({', '.join(f'{name}=1' for name in switches[1:])} {'do' if len(switches) > 2 else 'does'} too)"
         turn_off += "."
+        for item in entry.get("invalid_switches", []):
+            turn_off += (
+                f" {item['name']} is set to {item['value']!r}, which {cli_name} does not accept "
+                f"(it takes {', '.join(sorted(_TRUTHY))} or {', '.join(sorted(_FALSY))}, "
+                f"in lowercase), so it does not turn this off."
+            )
         if entry["kind"] == "instructions":
             alternative = entry["superseded_by"]
             reason = f" (there is no ~/{alternative[0]})" if alternative else ""

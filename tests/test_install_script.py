@@ -2236,19 +2236,25 @@ class InterruptedDownloadLeavesNoTempDirTest(InstallScriptTestCase):
     def test_interrupting_a_download_leaves_nothing_in_tmpdir(self):
         self._interrupt_download_and_check(poll=0.05)
 
-    def test_interrupting_the_instant_curl_is_in_flight_leaves_nothing(self):
-        """Regression for the forced-signal window. The curl stub drops a marker
-        file as its first act and the test busy-polls (no sleep) for it, so
-        SIGINT lands the instant curl is running. While `descargar` ran curl
-        inside `$(...)`, that moment hung ~7-8% of runs: bash blocks SIGINT
-        while waiting on a command substitution's child, and the blocked mask
-        is inherited by curl. The download is now a direct child of the
-        script, so the signal always reaches it.
+    def test_interrupting_once_curl_is_running_leaves_nothing(self):
+        """Behavioural smoke test, NOT a regression test for the race.
+
+        The curl stub drops a marker as its first act and the test busy-polls
+        (no sleep) for it, so SIGINT lands right after curl has exec'd.
+        Checked against the previous installer (`f33fbcc`), this passed 100
+        of 100 runs: the old hang window (bash blocks SIGINT while it waits
+        on a command substitution's child, and the child inherits the
+        blocked mask) closes before a stub can observe it, so no test that
+        starts from the stub can land in it, and the stub's `SigBlk` was
+        empty on both scripts. The fix itself rests on the documented bash
+        behaviour: `descargar` no longer runs curl inside `$(...)`. What this
+        test does guard is the observable contract: an interrupt with the
+        download in flight leaves nothing in the temp directory and ends the
+        script.
 
         Keyed on curl, not on the temp directory appearing: the directory shows
         up while `mkdir` is still the foreground child, and a SIGINT that bash
-        sees after a child exited normally is swallowed -- that would test
-        nothing about the download."""
+        sees after a child exited normally is swallowed."""
         self._interrupt_download_and_check(poll=0, curl_marker=True)
 
     def _interrupt_download_and_check(self, poll, curl_marker=False):

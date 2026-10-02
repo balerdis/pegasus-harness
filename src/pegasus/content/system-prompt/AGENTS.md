@@ -60,7 +60,7 @@ Never read, search, print, edit, copy, stage, commit, or expose the contents of 
 
 The only way past this rule is explicit permission from the person, for that specific file. If access is genuinely required, stop and ask for it. A general task, a request to explore, or a shell with elevated rights is not that permission.
 
-This rule is about files, not about a credential the person gives you in this conversation: that one is used as Credential Transport says. Editing a remote file over SSH, or a privileged file with `sudo`, when the person asked for that change does not reach these files: for them the permission must name the file. Every sub-agent you delegate to gets this rule in its brief.
+This rule is about files, not about a credential the person gives you in this conversation: that one is used as Credential Transport says. Editing a remote file over SSH, or a privileged file with `sudo`, when the person asked for that change does not extend to these files: for them the permission must name the file. Every agent already receives this rule with this prompt; put it in a brief only for an agent that does not load this prompt.
 
 ## Credential Transport
 

@@ -19,6 +19,7 @@ import re
 import subprocess
 import unittest
 import uuid
+from unittest import mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,14 +27,23 @@ TESTS_DIR = REPO_ROOT / "tests"
 
 UUID_SHAPE = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 #: Always a leak: the per-user temp root of the agent runtime.
-TEMP_ROOT_PATTERN = r"claude-\d+"
+#: Anchored to path context (a `/` before, a separator or end after) so a model
+#: id such as `claude-3-5-sonnet` is not taken for it.
+TEMP_ROOT_PATTERN = r"(?<=/)claude-\d+(?=/|$|[\"'\s])"
 #: Always a leak: `<slugged cwd>/<session uuid>/scratchpad`.
 SCRATCHPAD_PATTERN = r"-home-[^/\s]+-[^/\s]*/" + UUID_SHAPE + r"/scratchpad"
+
+
+#: Final names of the fictitious homes the tests use on purpose. When the suite
+#: runs under one of them, its HOME is not a real machine path to protect.
+FICTITIOUS_HOME_NAMES = frozenset({"probe", "me", "u", "x", "person", "someone", "one", "two"})
 
 
 def _path_pattern(path: Path) -> str | None:
     """Regex for `path` as a whole path prefix, or None when it is too generic to flag."""
     text = path.as_posix().rstrip("/")
+    if path.name in FICTITIOUS_HOME_NAMES:
+        return None  # a stand-in home used deliberately by the tests
     if len(path.parts) < 3:  # "/", "/root": a literal that short is not a machine-specific path
         return None
     return re.escape(text) + r"(?![\w.-])"
@@ -57,11 +67,19 @@ def find_offenders(name: str, text: str, matcher: re.Pattern[str]) -> list[str]:
 
 
 def tracked_test_files() -> list[Path]:
-    out = subprocess.run(
-        ["git", "ls-files", "-z", "--", "tests/"],
-        cwd=REPO_ROOT, capture_output=True, check=True,
-    ).stdout.decode("utf-8")
+    """Tracked files under tests/, or raise `GitUnavailable` (no git, or no checkout)."""
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--", "tests/"],
+            cwd=REPO_ROOT, capture_output=True, check=True,
+        ).stdout.decode("utf-8")
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise GitUnavailable(str(error)) from error
     return [REPO_ROOT / name for name in out.split("\0") if name]
+
+
+class GitUnavailable(Exception):
+    pass
 
 
 def read_text_or_none(path: Path) -> str | None:
@@ -104,6 +122,34 @@ class MatcherBitesTest(unittest.TestCase):
         sample = "-home-" + "someone-proj/" + str(uuid.uuid4()) + "/scratch" + "pad"
         self.assertTrue(self.flagged(sample))
 
+    def test_temp_root_is_anchored_to_path_context(self) -> None:
+        for sample in ("claude-" + "3-5-sonnet", '"claude-' + '3"', "model claude-" + "3 x", "/a/claude-" + "12x"):
+            with self.subTest(sample=sample):
+                self.assertFalse(self.flagged(sample))
+        for sample in ("/a/claude-" + "1000", '"/a/claude-' + '1000"', "/a/claude-" + "1000/x"):
+            with self.subTest(sample=sample):
+                self.assertTrue(self.flagged(sample))
+
+    def test_a_fictitious_running_home_is_not_flagged_as_real(self) -> None:
+        for name in sorted(FICTITIOUS_HOME_NAMES):
+            with self.subTest(name=name):
+                self.assertIsNone(_path_pattern(Path("/home") / name))
+                matcher = build_matcher(Path("/home") / name, REPO_ROOT)
+                self.assertFalse(find_offenders("s", "/home/" + name + "/x", matcher))
+
+    def test_a_generic_running_home_is_not_flagged(self) -> None:
+        self.assertIsNone(_path_pattern(Path("/root")))
+        self.assertIsNone(_path_pattern(Path("/")))
+
+    def test_missing_git_is_reported_as_unavailable(self) -> None:
+        with mock.patch.object(subprocess, "run", side_effect=FileNotFoundError("git")):
+            with self.assertRaises(GitUnavailable):
+                tracked_test_files()
+        failure = subprocess.CalledProcessError(128, "git")
+        with mock.patch.object(subprocess, "run", side_effect=failure):
+            with self.assertRaises(GitUnavailable):
+                tracked_test_files()
+
     def test_allows_fictitious_paths(self) -> None:
         for sample in ("/home/" + "probe/x", "/home/" + "me/x", "/home/me/.config/tool"):
             with self.subTest(sample=sample):
@@ -125,7 +171,10 @@ class MatcherBitesTest(unittest.TestCase):
 class NoRealHostPathsInTestsTest(unittest.TestCase):
     def test_no_tracked_test_file_names_a_real_host_path(self) -> None:
         matcher = build_matcher(Path.home(), REPO_ROOT)
-        files = tracked_test_files()
+        try:
+            files = tracked_test_files()
+        except GitUnavailable as error:
+            self.skipTest(f"git or a git checkout is not available: {error}")
         self.assertTrue(files, "git ls-files returned no files under tests/")
         offenders: list[str] = []
         for path in files:

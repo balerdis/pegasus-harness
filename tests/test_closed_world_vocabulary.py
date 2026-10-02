@@ -284,7 +284,12 @@ class CraftRuleSubjectIsNarrowTest(unittest.TestCase):
     def test_the_project_flags_file_still_is(self):
         from test_craft_extraction import CRAFT_RULE_SUBJECT
 
-        for phrase in ("openspec/config.yaml", "the config.yaml file"):
+        for phrase in (
+            "openspec/config.yaml",
+            "the config.yaml file",
+            "Honor the openspec config",
+            "whatever the project config says about testing",
+        ):
             with self.subTest(phrase=phrase):
                 self.assertIsNotNone(CRAFT_RULE_SUBJECT.search(phrase))
 

@@ -627,6 +627,20 @@ class EngramPluginPassiveCaptureNodeTest(unittest.TestCase):
         self.assertFalse(cases["read"]["posted"], "'read' must never trigger passive capture")
         self.assertFalse(cases["bash"]["posted"], "'bash' must never trigger passive capture")
 
+    def test_engram_own_tools_return_before_the_session_is_registered(self):
+        """OpenCode 1.x reports the plugin's own MCP tools as `engram_mem_*`
+        (a live install's DB has thousands of `engram_mem_save` calls and no
+        `mem_save`), while the exclusion list held only the bare names, so
+        it never matched. An excluded call must return before `ensureSession`
+        and the counters; the control shows the same session id otherwise
+        does register."""
+        cases = {c["tool"]: c for c in self._run_harness()["cases"]}
+        for tool in ("engram_mem_save", "ENGRAM_mem_search", "mem_save"):
+            with self.subTest(tool=tool):
+                self.assertFalse(cases[tool]["sessionRegistered"], f"{tool} reached ensureSession")
+                self.assertFalse(cases[tool]["posted"], f"{tool} reached passive capture")
+        self.assertTrue(cases["read-control"]["sessionRegistered"], "the control never registered a session")
+
     def test_a_sub_agent_session_running_the_tool_fires_no_passive_capture(self):
         """A sub-agent never launches its own sub-agents with a `## Key
         Learnings` request -- that criterion belongs to the agent talking

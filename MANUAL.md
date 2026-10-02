@@ -193,6 +193,9 @@ Si en la misma máquina tenés también Claude Code, OpenCode puede leer archivo
 - `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1` apaga sólo el `CLAUDE.md`.
 - `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` apaga sólo las skills.
 - `OPENCODE_DISABLE_CLAUDE_CODE=1` apaga las dos cosas.
+- `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` también saltea ese recorrido de `~/.claude/skills`, y además el de `~/.agents/skills` y de los directorios de skills del proyecto.
+
+OpenCode lee estas variables como booleanos y distingue mayúsculas: apagan `true`, `yes`, `on`, `1` e `y`; `false`, `no`, `off`, `0` y `n` las dejan en falso; cualquier otro valor (`TRUE`, `maybe`) no es un booleano válido para OpenCode, y `doctor` lo avisa en vez de darlo por apagado o por prendido.
 
 Para dejarlo fijo, ponela en `~/.bashrc` (o el archivo equivalente de tu shell):
 

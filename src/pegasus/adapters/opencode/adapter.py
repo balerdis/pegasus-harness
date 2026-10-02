@@ -29,8 +29,8 @@ from pegasus.core.types import (
     DirectoryGrantBehavior,
     Environment,
     FileArtifact,
-    Layout,
     ForeignLoad,
+    Layout,
     McpGrantBehavior,
     ModelAssignment,
     SupportTier,
@@ -331,9 +331,11 @@ class Adapter:
         - `skill/index.ts`: `~/.claude/skills/**/SKILL.md` is always scanned,
           before `~/.config/opencode/skills`, so a same-named Pegasus skill
           wins a clash and every other one is added.
-        - `effect/runtime-flags.ts`: the only switches are environment
-          variables -- the `_PROMPT`/`_SKILLS` one for each part, and
-          `OPENCODE_DISABLE_CLAUDE_CODE` for both.
+        - `effect/runtime-flags.ts`: the switches are environment variables
+          -- the `_PROMPT`/`_SKILLS` one for each part, and
+          `OPENCODE_DISABLE_CLAUDE_CODE` for both; the skills scan is also
+          skipped by `OPENCODE_DISABLE_EXTERNAL_SKILLS` (`skill/index.ts`).
+          Each is read as a case-sensitive boolean (`true`/`yes`/`on`/`1`/`y`).
         """
         return (
             ForeignLoad(
@@ -348,7 +350,11 @@ class Adapter:
                 owner="Claude Code",
                 path=".claude/skills",
                 entry_file="SKILL.md",
-                disabled_by=("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS", "OPENCODE_DISABLE_CLAUDE_CODE"),
+                disabled_by=(
+                    "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+                    "OPENCODE_DISABLE_CLAUDE_CODE",
+                    "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+                ),
                 own_takes_precedence=True,
             ),
         )

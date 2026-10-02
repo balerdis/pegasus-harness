@@ -22,7 +22,11 @@ const ENGRAM_PORT = parseInt(process.env.ENGRAM_PORT ?? "7437")
 const ENGRAM_URL = `http://127.0.0.1:${ENGRAM_PORT}`
 const ENGRAM_BIN = process.env.ENGRAM_BIN ?? Bun.which("engram") ?? "engram"
 
-// Engram's own MCP tools — don't count these as "tool calls" for session stats
+// Engram's own MCP tools — don't count these as "tool calls" for session stats.
+// OpenCode 1.x reports an MCP tool as `<server key>_<tool>`, so the real ids
+// are `engram_mem_*` (9338 `engram_mem_save` rows, 0 `mem_save`, in a live
+// install's DB). The bare names are kept for a different server key; see
+// `isEngramTool`, which also strips a leading `engram_`.
 const ENGRAM_TOOLS = new Set([
   "mem_search",
   "mem_save",
@@ -38,6 +42,11 @@ const ENGRAM_TOOLS = new Set([
   "mem_session_start",
   "mem_session_end",
 ])
+
+function isEngramTool(tool: string): boolean {
+  const id = tool.toLowerCase()
+  return ENGRAM_TOOLS.has(id) || ENGRAM_TOOLS.has(id.replace(/^engram_/, ""))
+}
 
 // ─── Memory Instructions ─────────────────────────────────────────────────────
 // These get injected into the agent's context so it knows to call mem_save.
@@ -421,7 +430,7 @@ export const Engram: Plugin = async (ctx) => {
     // the passive capture endpoint so the server extracts learnings.
 
     "tool.execute.after": async (input, output) => {
-      if (ENGRAM_TOOLS.has(input.tool.toLowerCase())) return
+      if (isEngramTool(input.tool)) return
 
       // input.sessionID comes from OpenCode — always available
       const sessionId = input.sessionID

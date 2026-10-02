@@ -470,7 +470,10 @@
         "openspec/config.yaml",
         "proceed without tests",
         "without writing tests",
-        "config.yaml"
+        "config.yaml",
+        "Honor the openspec config",
+        "whatever the project config says about testing",
+        "the project's config"
       ]
     },
     "strict_tdd_mode_name": {

@@ -20,8 +20,12 @@ globalThis.Bun = {
 }
 
 const posts = []
+const sessionPosts = []
 globalThis.fetch = async (url, opts) => {
   if (url.endsWith("/health")) return { ok: true }
+  if (opts?.method === "POST" && url.endsWith("/sessions")) {
+    sessionPosts.push(JSON.parse(opts.body))
+  }
   if (opts?.method === "POST" && url.includes("/observations/passive")) {
     posts.push({ url, body: JSON.parse(opts.body) })
   }
@@ -65,6 +69,7 @@ const cases = []
 
 async function run(tool, outputText, sessionID = "root1", label = tool) {
   posts.length = 0
+  sessionPosts.length = 0
   await plugin["tool.execute.after"](
     { tool, sessionID, callID: "c-" + label, args: {} },
     { title: "sub", output: outputText, metadata: {} }
@@ -72,6 +77,7 @@ async function run(tool, outputText, sessionID = "root1", label = tool) {
   cases.push({
     tool: label,
     posted: posts.length > 0,
+    sessionRegistered: sessionPosts.length > 0,
     body: posts.length > 0 ? posts[0].body : null,
   })
 }
@@ -84,5 +90,14 @@ await run("bash", learningsOutput)
 // The same "task" tool, completing under a sub-agent session (`sub1`)
 // instead of the root one -- must not post at all.
 await run("task", learningsOutput, "sub1", "task-from-subagent-session")
+
+// Engram's own tools must return before `ensureSession` runs. Each uses a
+// session id that was never seen, so a registration POST would show up. The
+// real OpenCode id is `engram_mem_save`; the bare form covers another server
+// key. `read` on a fresh session is the control: it must register.
+await run("engram_mem_save", learningsOutput, "fresh-a", "engram_mem_save")
+await run("ENGRAM_mem_search", learningsOutput, "fresh-b", "ENGRAM_mem_search")
+await run("mem_save", learningsOutput, "fresh-c", "mem_save")
+await run("read", learningsOutput, "fresh-d", "read-control")
 
 console.log(JSON.stringify({ cases }))

@@ -32,6 +32,7 @@ AT = "2026-08-14T00:00:00+00:00"
 ALL = "OPENCODE_DISABLE_CLAUDE_CODE"
 PROMPT = "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT"
 SKILLS = "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"
+EXTERNAL = "OPENCODE_DISABLE_EXTERNAL_SKILLS"
 MARKER = "reads the environment of the shell running"
 
 
@@ -41,7 +42,7 @@ class ForeignLoadsTestCase(RealHomeTestCase):
         patcher = mock.patch.dict(os.environ)
         patcher.start()
         self.addCleanup(patcher.stop)
-        for name in (ALL, PROMPT, SKILLS):
+        for name in (ALL, PROMPT, SKILLS, EXTERNAL):
             os.environ.pop(name, None)
         self.opencode_dir = self.home / ".config" / "opencode"
         self.opencode_dir.mkdir(parents=True)
@@ -121,7 +122,7 @@ class DoctorForeignLoadsTest(ForeignLoadsTestCase):
     def test_each_variable_suppresses_only_its_own_part(self):
         self.put_claude_md()
         self.put_skills("one")
-        cases = {PROMPT: {"skills"}, SKILLS: {"instructions"}, ALL: set()}
+        cases = {PROMPT: {"skills"}, SKILLS: {"instructions"}, EXTERNAL: {"instructions"}, ALL: set()}
         for variable, remaining in cases.items():
             with self.subTest(variable=variable), mock.patch.dict(os.environ, {variable: "1"}):
                 self.assertEqual(set(self.kinds(self.doctor_entry())), remaining)
@@ -135,6 +136,41 @@ class DoctorForeignLoadsTest(ForeignLoadsTestCase):
         self.put_claude_md()
         with mock.patch.dict(os.environ, {PROMPT: "0"}):
             self.assertIn("instructions", self.kinds(self.doctor_entry()))
+
+    def test_every_documented_true_value_turns_the_load_off(self):
+        self.put_claude_md()
+        for value in ("true", "yes", "on", "1", "y"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {PROMPT: value}):
+                self.assertNotIn("instructions", self.kinds(self.doctor_entry()))
+
+    def test_every_documented_false_value_leaves_it_on_without_a_complaint(self):
+        self.put_claude_md()
+        for value in ("false", "no", "off", "0", "n"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {PROMPT: value}):
+                item = self.kinds(self.doctor_entry())["instructions"]
+                self.assertNotIn("invalid_switches", item)
+
+    def test_values_are_case_sensitive_and_an_unknown_one_is_reported(self):
+        self.put_claude_md()
+        for value in ("TRUE", "Yes", "maybe", " 1"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {PROMPT: value}):
+                item = self.kinds(self.doctor_entry())["instructions"]
+                self.assertEqual(item["invalid_switches"], [{"name": PROMPT, "value": value}])
+                _, prose = self.run_prose("doctor")
+                self.assertIn(f"{PROMPT} is set to {value!r}", prose)
+                self.assertIn("does not accept", prose)
+
+    def test_a_symlink_loop_in_the_skills_directory_is_bounded(self):
+        self.put_skills("one")
+        skills = self.home / ".claude" / "skills"
+        for index in range(3):
+            (skills / f"loop{index}").symlink_to(skills, target_is_directory=True)
+        count = self.kinds(self.doctor_entry())["skills"]["count"]
+        self.assertEqual(count, 4)  # one real skill, plus one extra pass per link, never deeper
+
+    def test_a_directory_named_like_the_skill_file_is_not_a_skill(self):
+        (self.home / ".claude" / "skills" / "odd" / "SKILL.md").mkdir(parents=True)
+        self.assertEqual(self.kinds(self.doctor_entry()), {})
 
     def test_an_own_global_agents_file_suppresses_only_the_instructions_notice(self):
         self.put_claude_md()

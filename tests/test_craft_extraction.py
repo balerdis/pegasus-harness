@@ -76,9 +76,10 @@ CRAFT_RULE_SUBJECT = re.compile(
     # The vocabulary corpus found the rest: other ways to set the mode aside
     # ("opt out", "waive", "optional", "proceed without tests"), and the
     # project flag the rule reads second -- named by its file, `config.yaml`,
-    # never by a bare "config", which any sentence about a setup would match.
+    # or as "the openspec/project config"; never by a bare "config", which any
+    # sentence about a setup would match.
     r"|opt(?:s|ed|ing)?[- ]out|bypass|\bignor|\bwaiv|\brelax|\bsuspend|optional|not (?:required|needed|mandatory)"
-    r"|\bflag\b|strict_tdd|config\.ya?ml|without (?:writing )?tests?",
+    r"|\bflag\b|strict_tdd|config\.ya?ml|\b(?:openspec|project)(?:'s)? config|without (?:writing )?tests?",
     re.IGNORECASE,
 )
 
