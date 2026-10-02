@@ -36,8 +36,9 @@ PROCEDURE_NAME = PROCEDURE.name
 #: names, partial abort and the `--force` rule. 1333 -> 1517 after the third
 #: live run: the readable-commands rule, the refusal rule, root, run-id and hash
 #: as separate simple steps, the test-run rule, the three-step message file, the
-#: tests output file and the schema copied verbatim into each brief.
-PARALLEL_DELIVERY_WORD_CEILING = 1517
+#: tests output file and the schema copied verbatim into each brief. 1517 -> 1580
+#: after the fourth live run: the review statement and the run-directory cleanup.
+PARALLEL_DELIVERY_WORD_CEILING = 1580
 
 WORKTREE_ADD = "`git -C <main checkout> worktree add -b <branch> <path> <base>`"
 WORKTREE_PATH = (
@@ -172,6 +173,14 @@ VERIFY_BY_DIFF = (
 NO_SUITE = "without a test suite, skip the count check."
 PROPORTIONAL = (
     "Proportional to the integrated diff's size and risk: a trivial diff needs no separate reviewer."
+)
+REVIEW_STATED = (
+    "The report states whether a review ran; if none did, it says why: a trivial diff, and what made it "
+    "trivial. A diff that adds new modules or new logic is not trivial."
+)
+RUN_DIR_CLEANUP = (
+    "After the worktrees and branches are gone, remove this run's directory `<root>/<run-id>/` and its "
+    "output files; a failed unit's files and worktree stay in place and the report names them."
 )
 NO_FIXUP = "with no confirmed finding there is no fix-up writer."
 CLOSE_ORDER = (
@@ -319,6 +328,8 @@ class PinnedClausesTest(ProcedureCase):
             ("verify by diff", VERIFY_BY_DIFF),
             ("no suite", NO_SUITE),
             ("proportional review", PROPORTIONAL),
+            ("review stated", REVIEW_STATED),
+            ("run directory cleanup", RUN_DIR_CLEANUP),
             ("no fix-up", NO_FIXUP),
             ("close order", CLOSE_ORDER),
             ("base ignored snapshot", BASE_IGNORED),

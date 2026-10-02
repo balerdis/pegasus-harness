@@ -78,12 +78,12 @@ an SDD change: that stays with `sdd-verify`. This is not an FTD rule.
    conflict, so the partition was wrong, and it is not resolved blind. Picks already integrated stay; the remaining worktrees stay in place, each reported with its path. For a clean pick, confirm with
    `git -C <main checkout> cherry <integration branch> <branch>` that each commit is in; if the person decides to
    resolve a conflict, verify that pick by diff instead, because `git cherry` prints `+` after it.
-   Only after that run `git -C <main checkout> worktree remove`, `git -C <main checkout> branch -D` and `git -C <main checkout> worktree prune`. `worktree remove` refuses a worktree holding untracked files that are not ignored: never add `--force` without first listing what would be lost and having the person agree.
+   Only after that run `git -C <main checkout> worktree remove`, `git -C <main checkout> branch -D` and `git -C <main checkout> worktree prune`. `worktree remove` refuses a worktree holding untracked files that are not ignored: never add `--force` without first listing what would be lost and having the person agree. After the worktrees and branches are gone, remove this run's directory `<root>/<run-id>/` and its output files; a failed unit's files and worktree stay in place and the report names them.
 9. **The coordinator's own suite run.** One full run on the integrated tree, by the coordinator: a
    single command with its output redirected to a file, then read the tail. Check that the test count
    adds up to the base count plus the units' reported tests added; without a test suite, skip the count check.
 10. **Fresh-context review.** Proportional to the integrated diff's size and risk: a trivial diff
-    needs no separate reviewer. Otherwise one reviewer per repository, in parallel, on the integrated
+    needs no separate reviewer. The report states whether a review ran; if none did, it says why: a trivial diff, and what made it trivial. A diff that adds new modules or new logic is not trivial. Otherwise one reviewer per repository, in parallel, on the integrated
     diff, each with concrete points to attack. Verify every finding before acting on it.
 11. **One fix-up writer** applies the confirmed findings on the integrated branch; with no confirmed
     finding there is no fix-up writer.
