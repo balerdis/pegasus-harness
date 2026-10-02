@@ -98,9 +98,9 @@ Todo esto es idéntico bajo las dos CLIs, con `--cli claudecode` en el lugar de 
 
 Cuando le pedís varias cosas independientes a la vez, el orquestador puede repartirlas entre varios agentes que escriben al mismo tiempo, cada uno en su propia copia de trabajo. Lo que ves:
 
-- **Dónde viven las copias.** Fuera de tu repositorio, en `${XDG_STATE_HOME:-~/.local/state}/agent-worktrees/<repo>-<hash>/<corrida>/<unidad>`. Tu `git status` no muestra nada de ellas. El orquestador las crea y las borra él mismo.
+- **Dónde viven las copias.** Fuera de tu repositorio, en `${XDG_STATE_HOME:-~/.local/state}/agent-worktrees/<repo>-<hash>/<corrida>/<unidad>`. Tu `git status` no muestra nada de ellas. El orquestador las crea y, cuando termina de integrar cada unidad, las borra; una unidad que falla queda en su lugar y te da la ruta.
 - **Una línea por unidad terminada.** Si Claude Code entrega los resultados de a uno, te llega una línea corta cuando termina cada unidad, y al final el informe completo. Si llegan todos juntos, sólo el informe.
-- **Nada se sube ni se publica sin tu sí.** Cada unidad deja un commit local, sin push. El orquestador integra, corre la suite completa él mismo, hace revisar el resultado y te informa; un push, una publicación o una release esperan tu respuesta.
+- **El orquestador te pregunta antes de subir o publicar.** Cada unidad deja un commit local y tiene la instrucción de no hacer push, pero hoy ningún permiso se lo impide: es una instrucción, no un bloqueo. El orquestador integra, corre la suite completa él mismo, hace revisar el resultado y te informa; un push, una publicación o una release esperan tu respuesta. Además, Pegasus no genera ninguna regla de Bash para Claude Code, así que cada comando de git y de pruebas del procedimiento te pide permiso salvo que tu propia configuración lo permita.
 
 Esto es para varias unidades genuinamente independientes. Un cambio chico se hace en la misma conversación, como siempre.
 

@@ -27,15 +27,18 @@ CRITERION = SHARED / "sub-delegation-criterion.md"
 PROCEDURE_NAME = PROCEDURE.name
 
 #: Measured words when set (whole file, no front matter), plus nothing: any
-#: growth earns a deliberate bump, never a reflow.
-PARALLEL_DELIVERY_WORD_CEILING = 718
+#: growth earns a deliberate bump, never a reflow. 718 -> 1124 after the review
+#: of the first version: minimum of two units, SDD scope, clean tree, the
+#: run-id/branch/hash definitions, conflict abort, the worktree environment,
+#: failed units, proportional review and the close ordering.
+PARALLEL_DELIVERY_WORD_CEILING = 1124
 
 WORKTREE_ADD = "`git worktree add -b <branch> <path> <base>`"
 WORKTREE_PATH = (
     "`${XDG_STATE_HOME:-$HOME/.local/state}/agent-worktrees/<repo-name>-<short hash of the toplevel path>"
     "/<run-id>/<unit>`"
 )
-PRUNE = "Run `git worktree prune` at the start of every run."
+PRUNE = "Run `git worktree prune` at the start of every run;"
 NO_FLOOR = "Never put a worktree under a directory the deny floor names, and never copy a sensitive file into one."
 HOT_DOCUMENTS = (
     "The coordinator owns the shared documents: the project's decision or architecture document, its "
@@ -55,8 +58,66 @@ PROGRESS = (
     "the consolidated report at the end. When all arrive together, give only the consolidated report."
 )
 ISOLATION = "Before integrating, confirm that `git status --porcelain` in the main checkout shows nothing the units wrote."
-CHERRY = "Then confirm with `git cherry <main> <branch>` that each commit is in;"
-CLEANUP = "only after that run `git worktree remove`, `git branch -D` and `git worktree prune`."
+CHERRY = "For a clean pick, confirm with `git cherry <integration branch> <branch>` that each commit is in;"
+CLEANUP = "Only after that run `git worktree remove`, `git branch -D` and `git worktree prune`."
+MIN_TWO = (
+    "It needs at least two genuinely independent writing units after triage; with fewer, it does not "
+    "apply: return to the criterion's ordinary path."
+)
+SDD_SCOPE = "An SDD apply batch is not parallelised by this procedure: its task and progress artifacts are shared state."
+CRIT_QUOTE = (
+    "which keeps its general \"independently mergeable\" rule; this file is the how, and for a delivery "
+    "run under it, units are strictly file-disjoint."
+)
+CLEAN_TREE = (
+    "The integration branch's checkout must be clean (`git status --porcelain` prints nothing); if it is "
+    "not, stop and ask the person, and never stash. Units branch from the recorded base, so they will not "
+    "see uncommitted work: say so."
+)
+SHORT_HASH = "Compute the short hash with `git rev-parse --show-toplevel | sha1sum | cut -c1-8`."
+RUN_ID = (
+    "The run-id is `$(date -u +%Y%m%dT%H%M%SZ)-$(head -c3 /dev/urandom | od -An -tx1 | tr -d ' \\n')` and the "
+    "branch is `<run-id>/<unit>`, so re-runs never collide."
+)
+EXPAND_ROOT = "Expand the root in the shell and pass only the absolute result to any tool, never `${...}` text."
+PRUNE_MEANING = "it drops only entries whose directory is gone."
+ABORTED_RUN = (
+    "After an aborted run, list this repository's directories under the root and remove one only with the "
+    "person's agreement if it holds commits that were not integrated."
+)
+WAVES = "With more units than the CLI's concurrency cap, run them in waves."
+WORKTREE_ENV = (
+    "A worktree has none of the main checkout's untracked or ignored files: dependency directories, build "
+    "output, environment files. The writer never copies sensitive files; if the tests cannot run there it "
+    "reports that instead of improvising, and if the repository has no test suite it says so."
+)
+HOOK_BLOCKED = (
+    "If a commit hook, signing or a missing git identity blocks the commit, it reports that and leaves the "
+    "change uncommitted in the worktree, never bypassing a hook."
+)
+WAIT_ALL = "In background delivery, wait until every unit has reported before integrating."
+FAILED_UNIT = (
+    "A unit that fails or returns nothing is reported as not delivered: integrate the rest, leave its "
+    "worktree in place and give the person its path."
+)
+ABORT_CONFLICT = (
+    "On a conflict run `git cherry-pick --abort`, stop and report to the person: strictly disjoint units "
+    "cannot conflict, so the partition was wrong, and it is not resolved blind."
+)
+VERIFY_BY_DIFF = (
+    "if the person decides to resolve a conflict, verify that pick by diff instead, because `git cherry` "
+    "prints `+` after it."
+)
+NO_SUITE = "without a test suite, skip the count check."
+PROPORTIONAL = (
+    "Proportional to the integrated diff's size and risk: a trivial diff needs no separate reviewer."
+)
+NO_FIXUP = "with no confirmed finding there is no fix-up writer."
+CLOSE_ORDER = (
+    "The coordinator integrates the paste-ready paragraphs into the shared documents after review, re-runs "
+    "the project's docs checks if it has them, then reports to the person, so the edits are part of what is "
+    "approved."
+)
 SUITE_RUN = (
     "One full run on the integrated tree, by the coordinator: a single command with its output redirected "
     "to a file, then read the tail."
@@ -72,7 +133,7 @@ NOT_A_LICENCE = (
 )
 
 #: Appears in the procedure alone.
-PROCEDURE_NEEDLE = "Fresh-context review.** One reviewer per repository"
+PROCEDURE_NEEDLE = "Otherwise one reviewer per repository"
 
 
 def procedure_text() -> str:
@@ -172,6 +233,26 @@ class PinnedClausesTest(ProcedureCase):
             ("suite run", SUITE_RUN),
             ("outward", OUTWARD),
             ("not a licence", NOT_A_LICENCE),
+            ("minimum two units", MIN_TWO),
+            ("sdd scope", SDD_SCOPE),
+            ("criterion quote", CRIT_QUOTE),
+            ("clean tree", CLEAN_TREE),
+            ("short hash", SHORT_HASH),
+            ("run id and branch", RUN_ID),
+            ("expand root", EXPAND_ROOT),
+            ("prune meaning", PRUNE_MEANING),
+            ("aborted run", ABORTED_RUN),
+            ("waves", WAVES),
+            ("worktree environment", WORKTREE_ENV),
+            ("hook blocked", HOOK_BLOCKED),
+            ("wait for all", WAIT_ALL),
+            ("failed unit", FAILED_UNIT),
+            ("abort on conflict", ABORT_CONFLICT),
+            ("verify by diff", VERIFY_BY_DIFF),
+            ("no suite", NO_SUITE),
+            ("proportional review", PROPORTIONAL),
+            ("no fix-up", NO_FIXUP),
+            ("close order", CLOSE_ORDER),
         ):
             with self.subTest(clause=name):
                 self.assertEqual(self.flat.count(clause), 1, clause)
@@ -190,6 +271,12 @@ class PinnedClausesTest(ProcedureCase):
         ):
             with self.subTest(needle=needle):
                 self.assertEqual(self.flat.count(needle), 1)
+
+    def test_the_criterion_is_quoted_only_as_it_is_written(self):
+        criterion = collapsed(CRITERION.read_text(encoding="utf-8"))
+        self.assertIn('"independently mergeable"', criterion)
+        self.assertNotIn("disjoint files or independently mergeable", self.flat)
+        self.assertNotIn("<main>", self.flat)
 
     def test_the_seam_cap_stays_the_criterions(self):
         self.assertIn("Keep the seam cap of the criterion file.", self.flat)
