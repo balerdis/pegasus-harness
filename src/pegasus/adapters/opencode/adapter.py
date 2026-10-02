@@ -30,6 +30,7 @@ from pegasus.core.types import (
     Environment,
     FileArtifact,
     Layout,
+    ForeignLoad,
     McpGrantBehavior,
     ModelAssignment,
     SupportTier,
@@ -316,6 +317,41 @@ class Adapter:
         `permission` block, so a granted key reaches the same per-agent
         vocabulary a shipped server's own grant does."""
         return McpGrantBehavior(writes_per_agent_entry=True)
+
+    def foreign_loads(self) -> tuple[ForeignLoad, ...]:
+        """What OpenCode reads that belongs to Claude Code, verified in
+        OpenCode's own source (v1.18.32):
+
+        - `session/instruction.ts`: global instructions are
+          `~/.config/opencode/AGENTS.md`; when that file does not exist it
+          falls back to `~/.claude/CLAUDE.md`. Pegasus deliberately ships no
+          global `AGENTS.md` (its own is `pegasus-AGENTS.md`, loaded through
+          `instructions`), so on a machine that also has Claude Code the
+          fallback is taken.
+        - `skill/index.ts`: `~/.claude/skills/**/SKILL.md` is always scanned,
+          before `~/.config/opencode/skills`, so a same-named Pegasus skill
+          wins a clash and every other one is added.
+        - `effect/runtime-flags.ts`: the only switches are environment
+          variables -- the `_PROMPT`/`_SKILLS` one for each part, and
+          `OPENCODE_DISABLE_CLAUDE_CODE` for both.
+        """
+        return (
+            ForeignLoad(
+                kind="instructions",
+                owner="Claude Code",
+                path=".claude/CLAUDE.md",
+                superseded_by=(".config/opencode/AGENTS.md",),
+                disabled_by=("OPENCODE_DISABLE_CLAUDE_CODE_PROMPT", "OPENCODE_DISABLE_CLAUDE_CODE"),
+            ),
+            ForeignLoad(
+                kind="skills",
+                owner="Claude Code",
+                path=".claude/skills",
+                entry_file="SKILL.md",
+                disabled_by=("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS", "OPENCODE_DISABLE_CLAUDE_CODE"),
+                own_takes_precedence=True,
+            ),
+        )
 
     # --- Models ---
 

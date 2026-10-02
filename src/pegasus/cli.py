@@ -38,6 +38,7 @@ from pegasus.adapters import available
 from pegasus.core import catalog as catalog_module
 from pegasus.core import content as content_module
 from pegasus.core import dependencies as dependencies_module
+from pegasus.core import foreign_loads as foreign_loads_module
 from pegasus.core import identity as identity_module
 from pegasus.core import journal as journal_module
 from pegasus.core import model_assignments as model_assignments_module
@@ -819,7 +820,7 @@ def install(
         kept_dependencies, previewed_created, previewed_updated = _previewed_dependencies(
             runtime, layout, content, installed
         )
-        return {
+        planned_report = {
             "cli": adapter.id,
             "status": "planned",
             "activation": activation,
@@ -834,6 +835,7 @@ def install(
             "grant_warnings": grant_warnings,
             "mcp_warnings": mcp_warnings,
         }
+        return _with_foreign_loads(planned_report, adapter, runtime)
 
     # Taken before a single byte of this run reaches disk, and never for a dry
     # run: install and uninstall overwrite what the journal already claims
@@ -1082,7 +1084,7 @@ def install(
         record.id for record in new_dependencies if record.id not in replaced_dependency_ids
     }
     retired_ids = set(stale.removed)
-    return {
+    report = {
         "cli": adapter.id,
         "status": "installed",
         "activation": activation,
@@ -1113,6 +1115,7 @@ def install(
         "model_warnings": list(model_warnings),
         "grant_warnings": grant_warnings,
     }
+    return _with_foreign_loads(report, adapter, runtime)
 
 
 def _update(arguments, runtime: Runtime) -> dict[str, Any]:
@@ -3385,6 +3388,34 @@ def doctor(runtime: Runtime, *, start_mcp_servers: bool = False) -> dict[str, An
     return report
 
 
+def _foreign_loads(adapter, runtime: Runtime) -> list[dict[str, Any]]:
+    """What this CLI is going to read that belongs to another one, as report
+    entries -- `[]` for an adapter that declares none. Read off the adapter's
+    own declaration (`CliAdapter.foreign_loads`), never by comparing
+    `adapter.id` against a literal; existence and counts only."""
+    return foreign_loads_module.evaluate(
+        runtime.filesystem, runtime.home, runtime.variables, adapter.foreign_loads()
+    )
+
+
+def _with_foreign_loads(report: dict[str, Any], adapter, runtime: Runtime) -> dict[str, Any]:
+    """`report` plus a `foreign_loads` key, only when there is something to say."""
+    found = _foreign_loads(adapter, runtime)
+    if found:
+        report["foreign_loads"] = found
+    return report
+
+
+def _foreign_loads_lines(report: dict[str, Any], *, cli_name: str, identity: Identity) -> list[str]:
+    """The one wording `doctor` and the `install`/`update` report share."""
+    return foreign_loads_module.notice_lines(
+        report.get("foreign_loads") or [],
+        cli_name=cli_name,
+        program_name=identity.program_name,
+        product_name=identity.display_name,
+    )
+
+
 def _health(
     adapter, environment: Environment, journal, runtime: Runtime, *, start_mcp_servers: bool = False
 ) -> dict[str, Any]:
@@ -3395,14 +3426,19 @@ def _health(
         # false` claims "nothing is here", when the truth is "its own record
         # could not be read" -- a different fact, and doctor's whole job is
         # not to blur the two together.
-        return {
+        detected = bool(detection.installed or detection.config_found)
+        unreadable_foreign = _foreign_loads(adapter, runtime) if detected else []
+        unreadable = {
             "cli": adapter.id,
             "display_name": adapter.display_name,
             "tier": adapter.tier().value,
-            "detected": bool(detection.installed or detection.config_found),
+            "detected": detected,
             "config_dir": str(detection.config_dir) if detection.config_dir else None,
             "journal_unreadable": True,
         }
+        if unreadable_foreign:
+            unreadable["foreign_loads"] = unreadable_foreign
+        return unreadable
     install = journal_module.install_for(journal, adapter.id)
     health: dict[str, Any] = {
         "cli": adapter.id,
@@ -3423,6 +3459,11 @@ def _health(
         # between "checked and fine" and "never checked".
         "unverified": [],
     }
+    # Named only when there is something to name, and for any detected CLI --
+    # installed by this product or not: what a CLI is going to read is true of
+    # the machine, not of the install.
+    if health["detected"]:
+        _with_foreign_loads(health, adapter, runtime)
     if install is None:
         return health
 
@@ -4201,6 +4242,10 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
         if report.get("mcp_warnings"):
             lines.append("Only reported because this is a dry run:")
             lines.extend(f"  {warning}" for warning in report["mcp_warnings"])
+        if report.get("foreign_loads"):
+            lines.extend(
+                _foreign_loads_lines(report, cli_name=_adapter(report["cli"]).display_name, identity=identity)
+            )
         return "\n".join(_and_retention(_and_activation(lines, report), report))
     if command == "upgrade":
         if report["status"] == "planned":
@@ -4469,6 +4514,14 @@ prose_for = _prose
 
 def _cli_prose(entry: dict[str, Any], *, identity: Identity | None = None) -> str:
     identity = identity if identity is not None else default_identity()
+    line = _cli_prose_body(entry, identity=identity)
+    notice = _foreign_loads_lines(entry, cli_name=entry["display_name"], identity=identity)
+    if notice:
+        line += "".join(f"\n  {text}" for text in notice)
+    return line
+
+
+def _cli_prose_body(entry: dict[str, Any], *, identity: Identity) -> str:
     if not entry["detected"]:
         return f"{entry['display_name']}: not found on this machine."
     if entry.get("journal_unreadable"):

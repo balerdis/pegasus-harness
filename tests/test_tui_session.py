@@ -1478,6 +1478,9 @@ class _NeverDeclaresPerAgentModel:
 
         return McpGrantBehavior(writes_per_agent_entry=False)
 
+    def foreign_loads(self):
+        return ()
+
 
 class NoPerAgentModelCapabilityTest(ModelsScreenTestCase):
     """The most fundamental of the three explanations this screen can show:

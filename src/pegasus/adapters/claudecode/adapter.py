@@ -23,6 +23,7 @@ from pegasus.core.types import (
     DirectoryGrantBehavior,
     Environment,
     Layout,
+    ForeignLoad,
     McpGrantBehavior,
     ModelAssignment,
     SupportTier,
@@ -167,6 +168,10 @@ class Adapter:
         7.3.3 section): a sub-agent reaches a bound server named this way,
         and did not before this key was rendered anywhere at all."""
         return McpGrantBehavior(writes_per_agent_entry=True)
+
+    def foreign_loads(self) -> tuple[ForeignLoad, ...]:
+        """None: Claude Code reads no other CLI's instructions or skills."""
+        return ()
 
     def render_system_prompt(
         self, layout: Layout, system_prompt: SystemPrompt, identity: Identity

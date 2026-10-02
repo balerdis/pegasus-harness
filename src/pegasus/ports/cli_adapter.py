@@ -25,6 +25,7 @@ from pegasus.core.types import (
     Detection,
     DirectoryGrantBehavior,
     Environment,
+    ForeignLoad,
     Layout,
     McpGrantBehavior,
     ModelAssignment,
@@ -306,6 +307,20 @@ class CliAdapter(Protocol):
         `cli.mcp_grant`/`cli.mcp_revoke`/`cli._mcp_prose` read this instead
         of ever comparing `adapter.id` against a literal -- the hexagonal
         rule `test_cli_mcp_all_clis.py` guards against.
+        """
+
+    def foreign_loads(self) -> tuple[ForeignLoad, ...]:
+        """Files that belong to another CLI which this CLI reads anyway, today.
+
+        Required unconditionally, the same way `directory_grant_behavior` is:
+        `()` for a CLI that reads nothing of another's. Each entry gives the
+        path, the condition under which it is read, and the environment
+        variable that turns it off -- see `ForeignLoad`. `doctor` and the
+        `install`/`update` report render it through `core.foreign_loads`
+        instead of ever comparing `adapter.id` against a literal.
+
+        Declare only what was verified in the CLI's own source: a notice for a
+        load that does not happen is as wrong as silence about one that does.
         """
 
     # --- Models: only when the manifest declares per_agent_model ---

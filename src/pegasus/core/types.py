@@ -242,6 +242,45 @@ class McpGrantBehavior:
 
 
 @dataclass(frozen=True)
+class ForeignLoad:
+    """One place a CLI reads from that belongs to a *different* CLI, which
+    this product neither writes nor controls -- declared by the adapter that
+    does the reading, through `CliAdapter.foreign_loads()`.
+
+    Not a capability and not something Pegasus renders: it is a fact about
+    the CLI's own behaviour that changes what the person's sessions obey, so
+    `doctor` and the `install`/`update` report must be able to say it. The
+    adapter declares the path, the condition and the switch; `core.
+    foreign_loads` evaluates and words it for every adapter alike, never by
+    comparing `adapter.id` against a literal (the rule `DirectoryGrantBehavior`
+    and `McpGrantBehavior` already follow).
+
+    `kind`: `"instructions"` (a file loaded as global instructions) or
+    `"skills"` (a directory scanned for skill files).
+    `owner`: the display name of the CLI the files belong to.
+    `path`: relative to the home directory, `/`-separated. A file for
+    `instructions`; a directory for `skills`.
+    `entry_file`: for `skills`, the file name that makes one entry (counted
+    recursively); `None` for `instructions`.
+    `superseded_by`: home-relative paths of files that, when any exists, mean
+    the fallback is never taken (the CLI's own global instructions file).
+    `disabled_by`: environment variables that turn the load off, the most
+    specific first. A value counts as set when it is truthy (`1`, `true`,
+    `yes`, `on`).
+    `own_takes_precedence`: for `skills`, whether a same-named skill of this
+    product wins a name clash.
+    """
+
+    kind: str
+    owner: str
+    path: str
+    disabled_by: tuple[str, ...]
+    entry_file: str | None = None
+    superseded_by: tuple[str, ...] = ()
+    own_takes_precedence: bool = False
+
+
+@dataclass(frozen=True)
 class CredentialTransportCapability:
     """Which of the four credential-transport operations one adapter supports.
 

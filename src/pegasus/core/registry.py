@@ -16,6 +16,7 @@ from pegasus.core.types import (
     DirectoryGrantBehavior,
     Environment,
     Layout,
+    ForeignLoad,
     McpGrantBehavior,
 )
 
@@ -122,6 +123,7 @@ class Registry:
         _check_writes_mcp_config_key(adapter, cli_id, manifest)
         _check_directory_grant_behavior(adapter, cli_id)
         _check_mcp_grant_behavior(adapter, cli_id)
+        _check_foreign_loads(adapter, cli_id)
 
         self._adapters[cli_id] = adapter
         self._manifests[cli_id] = manifest
@@ -261,6 +263,25 @@ def _check_mcp_grant_behavior(adapter: object, cli_id: str) -> None:
         raise ManifestMismatchError(
             f"adapter {cli_id!r}.mcp_grant_behavior() must return an McpGrantBehavior, "
             f"got {type(behavior).__name__!r}"
+        )
+
+
+def _check_foreign_loads(adapter: object, cli_id: str) -> None:
+    """Confirm the adapter declares the files of another CLI it reads, as a
+    tuple of `ForeignLoad` (empty when it reads none) -- unconditionally, so
+    `doctor` and the `install` report never have to guess, by adapter id,
+    which CLI needs a notice.
+    """
+    if not _implements(adapter, "foreign_loads"):
+        raise ManifestMismatchError(
+            f"adapter {cli_id!r} must implement foreign_loads; "
+            "doctor and the install report read it instead of ever comparing adapter.id"
+        )
+    declared = adapter.foreign_loads()
+    if not isinstance(declared, tuple) or not all(isinstance(item, ForeignLoad) for item in declared):
+        raise ManifestMismatchError(
+            f"adapter {cli_id!r}.foreign_loads() must return a tuple of ForeignLoad, "
+            f"got {declared!r}"
         )
 
 

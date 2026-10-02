@@ -64,6 +64,9 @@ class FakeAdapter:
     def mcp_grant_behavior(self):
         return McpGrantBehavior(writes_per_agent_entry=False)
 
+    def foreign_loads(self):
+        return ()
+
 
 ENVIRONMENT = Environment(home=Path("/home/probe"))
 

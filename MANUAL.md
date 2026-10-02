@@ -181,6 +181,31 @@ Por cada servidor que este flag arranca informa uno de estos estados: `ok` (cont
 
 `pegasus repair --cli opencode` saca dos cosas que `doctor` sólo nombra, con `--dry-run` disponible para ver antes qué se va a remover: las entradas de `directories_quarantined` -- un `granted_directories` editado a mano en el journal que no pasó la validación y por eso no le concede nada a ningún agente -- y los directorios vacíos que `doctor` reporta bajo `unprunable_empty_directories`, de una instalación anterior a 5.28.0 que la poda automática nunca puede alcanzar. Toma un snapshot del journal antes de escribir, así que `pegasus restore` deshace la parte del journal igual que deshace cualquier otro comando; un directorio vacío borrado no se restaura -- no hay nada que recuperar más allá de un `mkdir`. Si `doctor` reporta `directories_not_walked`, hay un subárbol detrás de un symlink que ni `doctor` ni `repair` pudieron recorrer, y `repair` lo dice en su propio reporte en vez de sugerir que ahí no queda nada.
 
+### Lo que OpenCode carga de Claude Code
+
+Si en la misma máquina tenés también Claude Code, OpenCode puede leer archivos que no son de Pegasus ni suyos. Está verificado en el código de OpenCode (v1.18.32):
+
+- Como instrucciones globales usa `~/.config/opencode/AGENTS.md`; si ese archivo no existe, usa `~/.claude/CLAUDE.md`, el de Claude Code. Pegasus no instala un `AGENTS.md` global a propósito (el suyo es `pegasus-AGENTS.md`, que carga por `instructions`), así que en esa máquina el orquestador de Pegasus puede obedecer, sin avisar, reglas escritas para otra CLI.
+- Siempre recorre `~/.claude/skills/**/SKILL.md` y suma esas skills a las suyas. Si una skill de Pegasus tiene el mismo nombre que una de ellas, gana la de Pegasus; el resto se agrega.
+
+`pegasus doctor` lo dice cuando corresponde, y `install` y `update` repiten el mismo aviso una vez: nombra el archivo, cuántas skills son y la variable de entorno que lo apaga. Sólo mira que existan y cuántas son; nunca abre su contenido. Las variables son estas:
+
+- `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=1` apaga sólo el `CLAUDE.md`.
+- `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` apaga sólo las skills.
+- `OPENCODE_DISABLE_CLAUDE_CODE=1` apaga las dos cosas.
+
+Para dejarlo fijo, ponela en `~/.bashrc` (o el archivo equivalente de tu shell):
+
+```sh
+export OPENCODE_DISABLE_CLAUDE_CODE=1
+```
+
+El chequeo de `doctor` lee el entorno del shell donde lo corrés. Un OpenCode lanzado desde otro lado, por ejemplo desde un ícono del escritorio, puede tener otro entorno y seguir cargando esos archivos aunque `doctor` no avise: ahí la variable hay que ponerla donde esa sesión la lea (el archivo de sesión de tu escritorio, no sólo `~/.bashrc`). Apagarlo también saca cualquier regla de la que te venías sirviendo desde `CLAUDE.md`. Si querés una regla en OpenCode, ponela en tu propio `~/.config/opencode/AGENTS.md`: Pegasus nunca lo toca, y con ese archivo presente OpenCode deja de caer al `CLAUDE.md`.
+
+### Un MCP de npm que no conecta con Node de nvm
+
+Un servidor MCP que se instala con npm, como playwright, necesita `node` en el PATH del proceso que lanza la CLI. Con Node instalado por nvm, `node` sólo existe en los shells interactivos que cargaron nvm: una CLI abierta desde un ícono del escritorio, o desde un shell no interactivo, ve fallar a playwright aunque esté bien instalado. Se midió: en un shell no interactivo playwright falló; en un shell interactivo de login conectó. Lanzá la CLI desde un shell que haya cargado nvm, o poné el `PATH` con el `node` de nvm donde lo lea quien arranca la CLI.
+
 ## Mantener Pegasus al día
 
 Son dos actualizaciones distintas y conviene no confundirlas: `pegasus update --cli opencode` reaplica en OpenCode la selección que esa instalación ya tiene registrada, y `pegasus upgrade` no toca ninguna instalación — reemplaza el binario `pegasus` en sí. Para saber desde qué versión partís, `pegasus -V` (o `pegasus --version`) la contesta sin abrir tu home, sin leer el journal y sin resolver ningún adapter: es la versión del binario y no la de ninguna instalación suya, así que sigue contestando en una máquina donde la instalación esté rota, que es justo cuando hace falta.
