@@ -2234,6 +2234,24 @@ class InterruptedDownloadLeavesNoTempDirTest(InstallScriptTestCase):
     """
 
     def test_interrupting_a_download_leaves_nothing_in_tmpdir(self):
+        self._interrupt_download_and_check(poll=0.05)
+
+    def test_interrupting_the_instant_curl_is_in_flight_leaves_nothing(self):
+        """Regression for the forced-signal window. The curl stub drops a marker
+        file as its first act and the test busy-polls (no sleep) for it, so
+        SIGINT lands the instant curl is running. While `descargar` ran curl
+        inside `$(...)`, that moment hung ~7-8% of runs: bash blocks SIGINT
+        while waiting on a command substitution's child, and the blocked mask
+        is inherited by curl. The download is now a direct child of the
+        script, so the signal always reaches it.
+
+        Keyed on curl, not on the temp directory appearing: the directory shows
+        up while `mkdir` is still the foreground child, and a SIGINT that bash
+        sees after a child exited normally is swallowed -- that would test
+        nothing about the download."""
+        self._interrupt_download_and_check(poll=0, curl_marker=True)
+
+    def _interrupt_download_and_check(self, poll, curl_marker=False):
         # node/opencode stubbed present -- same reason _stub_python_node_
         # opencode_present exists on the class above: without it, FALTA_NODE
         # is true and `main` runs `instalar_node` (nvm) *before*
@@ -2257,7 +2275,14 @@ class InterruptedDownloadLeavesNoTempDirTest(InstallScriptTestCase):
         # path instead of the signal's. That would make the test pass (or
         # fail) for a reason that has nothing to do with what it claims to
         # cover.
-        self.stub("curl", "sleep infinity\n")
+        marker = Path(self.tmp.name) / "curl-started"
+        if curl_marker:
+            # `exec`, so no shell is left waiting on a `sleep` forked after the
+            # signal already went out: that shell would swallow it and wait on
+            # a child that never saw it -- a hang of the stub's own making.
+            self.stub("curl", f': > "{marker}"\nexec sleep infinity\n')
+        else:
+            self.stub("curl", "sleep infinity\n")
         tmpdir = Path(self.tmp.name) / "tmpdir"
         tmpdir.mkdir()
 
@@ -2299,11 +2324,13 @@ class InterruptedDownloadLeavesNoTempDirTest(InstallScriptTestCase):
             # than sleeping a guessed interval: the assertion below is only
             # meaningful once there is something to clean up.
             plazo = time.monotonic() + 15
-            while not any(tmpdir.iterdir()) and time.monotonic() < plazo:
-                time.sleep(0.05)
+            listo = marker.exists if curl_marker else (lambda: any(tmpdir.iterdir()))
+            while not listo() and time.monotonic() < plazo:
+                if poll:
+                    time.sleep(poll)
             self.assertTrue(
-                any(tmpdir.iterdir()),
-                "the script never created a temp directory, so this test proves nothing",
+                listo(),
+                "the script never reached the point the signal is meant for (temp dir, or curl in flight), so this test proves nothing",
             )
             os.killpg(pgid, signal.SIGINT)
 

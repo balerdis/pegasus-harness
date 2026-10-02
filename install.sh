@@ -274,9 +274,21 @@ descargar() {
   DESCARGA_HTTP=''
   # --progress-bar en vez de -s: una descarga de varios MB sin ninguna señal
   # de avance se ve igual que un cuelgue. El %{http_code} sale por stdout, que
-  # es lo que captura la sustitución de acá abajo; la barra va por stderr.
-  DESCARGA_HTTP=$(curl -fL --progress-bar -w '%{http_code}' -o "$destino" "$url") \
+  # va a un archivo junto al destino y se lee de ahí; la barra va por stderr.
+  #
+  # Nunca dentro de una sustitución de comandos ($(curl ...)): mientras bash
+  # espera al hijo de una sustitución bloquea SIGINT en su propia máscara, y
+  # esa máscara sobrevive a fork() y exec(). Un Ctrl-C que cae en esa ventana
+  # deja a curl con la señal bloqueada y pendiente para siempre, y el wait()
+  # de bash no vuelve. Con una redirección, curl es hijo directo del script y
+  # recibe la señal normalmente.
+  local archivo_http="$destino.http"
+  curl -fL --progress-bar -w '%{http_code}' -o "$destino" "$url" >"$archivo_http" \
     || DESCARGA_ESTADO=$?
+  # read en vez de $(<archivo): es un builtin sin subshell. Sin salto de línea
+  # final read devuelve 1 pero igual deja el valor leído en la variable.
+  IFS= read -r DESCARGA_HTTP <"$archivo_http" || true
+  rm -f "$archivo_http"
   return "$DESCARGA_ESTADO"
 }
 
@@ -308,7 +320,12 @@ fallar_descarga() {
 descargar_y_ejecutar() {
   local url=$1 descripcion=$2
   shift 2
-  DESCARGA_TMPDIR=$(mktemp -d) || fallar 'no se pudo crear un directorio temporal'
+  # El nombre se decide ANTES de crear el directorio, y el trap se arma antes
+  # de crearlo: con "$(mktemp -d)" había una ventana entre que mktemp creaba el
+  # directorio y que la variable quedaba asignada, y un Ctrl-C ahí lo dejaba
+  # tirado sin que ningún trap supiera su nombre. mkdir falla si el nombre ya
+  # existe, así que un nombre adivinado no sirve para plantar un directorio.
+  DESCARGA_TMPDIR="${TMPDIR:-/tmp}/instalador.$$.$RANDOM$RANDOM"
   # Mismo motivo que el trap de instalar_producto, y misma razón para que la
   # variable sea global y no local (ver el comentario junto a PRODUCTO_TMPDIR):
   # la limpieza explícita de abajo cubre los caminos que el script elige tomar,
@@ -320,6 +337,7 @@ descargar_y_ejecutar() {
   # (rm -rf de un directorio ya borrado no hace nada) y evita el riesgo de que
   # un "trap - EXIT" acá pise el trap de otra función que corra después.
   trap 'rm -rf "$DESCARGA_TMPDIR"' EXIT
+  mkdir -m 700 "$DESCARGA_TMPDIR" || fallar 'no se pudo crear un directorio temporal'
   if ! descargar "$url" "$DESCARGA_TMPDIR/instalador.sh"; then
     rm -rf "$DESCARGA_TMPDIR"
     fallar_descarga "$descripcion"
@@ -1124,7 +1142,12 @@ instalar_producto() {
 
   mkdir -p "$BIN_DIR" || fallar "no se pudo crear $BIN_DIR"
 
-  PRODUCTO_TMPDIR=$(mktemp -d) || fallar 'no se pudo crear un directorio temporal'
+  # El nombre se decide ANTES de crear el directorio, y el trap se arma antes
+  # de crearlo: con "$(mktemp -d)" había una ventana entre que mktemp creaba el
+  # directorio y que la variable quedaba asignada, y un Ctrl-C ahí lo dejaba
+  # tirado sin que ningún trap supiera su nombre. mkdir falla si el nombre ya
+  # existe, así que un nombre adivinado no sirve para plantar un directorio.
+  PRODUCTO_TMPDIR="${TMPDIR:-/tmp}/$PRODUCT_PROGRAM_NAME.$$.$RANDOM$RANDOM"
   # Red de seguridad para los caminos de error de abajo (falla la descarga,
   # falla el checksum): "fallar" hace "exit", y ahí sí corren los traps
   # pendientes. En el camino feliz este trap NO alcanza a limpiar nada solo
@@ -1132,6 +1155,7 @@ instalar_producto() {
   # correr traps pendientes -- por eso además se limpia a mano, explícito,
   # apenas el directorio ya cumplió su propósito (ver más abajo).
   trap 'rm -rf "$PRODUCTO_TMPDIR"' EXIT
+  mkdir -m 700 "$PRODUCTO_TMPDIR" || fallar 'no se pudo crear un directorio temporal'
 
   info "descargando $PRODUCT_PROGRAM_NAME y su checksum..."
   descargar "$BASE_URL/$PRODUCT_PROGRAM_NAME" "$PRODUCTO_TMPDIR/$PRODUCT_PROGRAM_NAME" \
