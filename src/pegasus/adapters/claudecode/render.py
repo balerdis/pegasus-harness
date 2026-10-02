@@ -101,8 +101,10 @@ PERMISSIONS_DENY_FLOOR: tuple[str, ...] = tuple(
 #: The docs say `git -C . push` is not matched by the first rule, so the
 #: second and third add `git <anything> push` with and without arguments.
 #: Still not caught: `/usr/bin/git push`, `sh -c 'git push'`, aliases, and
-#: `gh` commands. `git * push *` over-asks for lines like `git log --grep
-#: push x`, a false positive and never a miss.
+#: `gh` commands. `git * push *` over-asks for any git line whose arguments
+#: contain the word, like `git log --grep push x`, a false positive and never
+#: a miss; commits avoid it because the parallel-delivery procedure passes
+#: the message with `-F <message file>`.
 PERMISSIONS_ASK: tuple[str, ...] = ("Bash(git push *)", "Bash(git * push *)", "Bash(git * push)")
 
 #: Explicit ids: `_permission_slug` drops `*`, so these three rules would

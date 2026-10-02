@@ -114,8 +114,13 @@ TOOL_NAME: dict[str, str] = {
 #   `git push` and `git push origin main`.
 # Not caught: aliases, wrapper scripts, a push inside a script file or an
 # `sh -c "..."` / `eval` string (the inner text is an argument, not a
-# command node), and `gh` commands. `git * push *` also asks for harmless
-# lines such as `git log --grep push x` -- a false positive, never a miss.
+# command node), `gh` commands, and `FOO=1 git push` (the command node text
+# starts with the env assignment, so neither anchored pattern matches).
+# `git * push *` also asks for harmless lines whose arguments contain the
+# word, such as `git log --grep push x` or `git checkout push` -- a false
+# positive, never a miss. Commits are protected: the parallel-delivery
+# procedure has every writer commit with `-F <message file>`, so a message
+# that says "push" never reaches the command line.
 SUBAGENT_BASH_PERMISSION: dict[str, str] = {
     "*": "allow",
     "git push *": "ask",

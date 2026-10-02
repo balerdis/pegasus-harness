@@ -30,15 +30,18 @@ PROCEDURE_NAME = PROCEDURE.name
 #: growth earns a deliberate bump, never a reflow. 718 -> 1124 after the review
 #: of the first version: minimum of two units, SDD scope, clean tree, the
 #: run-id/branch/hash definitions, conflict abort, the worktree environment,
-#: failed units, proportional review and the close ordering.
-PARALLEL_DELIVERY_WORD_CEILING = 1124
+#: failed units, proportional review and the close ordering. 1124 -> 1333 after
+#: the live run: `git -C` everywhere, the commit message read from a file outside
+#: the worktree, tests added in the report, the ignored-files snapshot, unit
+#: names, partial abort and the `--force` rule.
+PARALLEL_DELIVERY_WORD_CEILING = 1333
 
-WORKTREE_ADD = "`git worktree add -b <branch> <path> <base>`"
+WORKTREE_ADD = "`git -C <main checkout> worktree add -b <branch> <path> <base>`"
 WORKTREE_PATH = (
     "`${XDG_STATE_HOME:-$HOME/.local/state}/agent-worktrees/<repo-name>-<short hash of the toplevel path>"
     "/<run-id>/<unit>`"
 )
-PRUNE = "Run `git worktree prune` at the start of every run;"
+PRUNE = "Run `git -C <main checkout> worktree prune` at the start of every run;"
 NO_FLOOR = "Never put a worktree under a directory the deny floor names, and never copy a sensitive file into one."
 HOT_DOCUMENTS = (
     "The coordinator owns the shared documents: the project's decision or architecture document, its "
@@ -50,16 +53,43 @@ ONE_MESSAGE = "**Launch everything in one message.** Read-only research units go
 BRIEF_COMMIT = "one local commit, no push, no AI or tool attribution"
 BRIEF_SUITE = "run the project's test suite with its output redirected to a file, never piped and never backgrounded"
 BRIEF_REPORT = (
-    "a fixed report: branch and commit, files changed, tests and their result, the paste-ready paragraph "
-    "for the coordinator's documents, and anything found but not fixed"
+    "a fixed report: branch and commit, files changed, tests and their result, tests added, as a count, the "
+    "paste-ready paragraph for the coordinator's documents, and anything found but not fixed"
 )
 PROGRESS = (
     "When the CLI delivers results one at a time, give the person one short line per finished unit, then "
     "the consolidated report at the end. When all arrive together, give only the consolidated report."
 )
-ISOLATION = "Before integrating, confirm that `git status --porcelain` in the main checkout shows nothing the units wrote."
-CHERRY = "For a clean pick, confirm with `git cherry <integration branch> <branch>` that each commit is in;"
-CLEANUP = "Only after that run `git worktree remove`, `git branch -D` and `git worktree prune`."
+ISOLATION = (
+    "Before integrating, confirm that `git -C <main checkout> status --porcelain` shows nothing the units wrote, "
+    "and that `git -C <main checkout> status --porcelain --ignored` equals the one recorded at base time."
+)
+BASE_IGNORED = "Also record `git -C <main checkout> status --porcelain --ignored` now, for the isolation check."
+COORDINATOR_GIT_C = "Every git command of the coordinator is `git -C <main checkout> ...`, never `cd` chained with git."
+UNIT_NAMES = "Unit names are lowercase letters, digits and hyphens, so they are valid ref components."
+BRIEF_GIT_C = (
+    "every git command is `git -C <absolute worktree path> ...` and never chains `cd` with git; other commands, "
+    "such as the test suite, run with the CLI's working-directory parameter where it has one, or as a single "
+    "`cd <path> && <test command>` with no git in the chain"
+)
+BRIEF_COMMIT_F = (
+    "made with `git -C <absolute worktree path> commit -F <message file>`, the message written first to "
+    "`<root>/<run-id>/<unit>.msg` outside the worktree and removed after the commit, so the message text "
+    "never reaches the command line"
+)
+PARTIAL_ABORT = (
+    "Picks already integrated stay; the remaining worktrees stay in place, each reported with its path."
+)
+NO_FORCE = (
+    "`worktree remove` refuses a worktree holding untracked files that are not ignored: never add `--force` "
+    "without first listing what would be lost and having the person agree."
+)
+TESTS_ADDED_SUM = "adds up to the base count plus the units' reported tests added;"
+CHERRY = "For a clean pick, confirm with `git -C <main checkout> cherry <integration branch> <branch>` that each commit is in;"
+CLEANUP = (
+    "Only after that run `git -C <main checkout> worktree remove`, `git -C <main checkout> branch -D` and "
+    "`git -C <main checkout> worktree prune`."
+)
 MIN_TWO = (
     "It needs at least two genuinely independent writing units after triage; with fewer, it does not "
     "apply: return to the criterion's ordinary path."
@@ -70,7 +100,7 @@ CRIT_QUOTE = (
     "run under it, units are strictly file-disjoint."
 )
 CLEAN_TREE = (
-    "The integration branch's checkout must be clean (`git status --porcelain` prints nothing); if it is "
+    "The integration branch's checkout must be clean (`git -C <main checkout> status --porcelain` prints nothing); if it is "
     "not, stop and ask the person, and never stash. Units branch from the recorded base, so they will not "
     "see uncommitted work: say so."
 )
@@ -101,7 +131,7 @@ FAILED_UNIT = (
     "worktree in place and give the person its path."
 )
 ABORT_CONFLICT = (
-    "On a conflict run `git cherry-pick --abort`, stop and report to the person: strictly disjoint units "
+    "On a conflict run `git -C <main checkout> cherry-pick --abort`, stop and report to the person: strictly disjoint units "
     "cannot conflict, so the partition was wrong, and it is not resolved blind."
 )
 VERIFY_BY_DIFF = (
@@ -253,6 +283,14 @@ class PinnedClausesTest(ProcedureCase):
             ("proportional review", PROPORTIONAL),
             ("no fix-up", NO_FIXUP),
             ("close order", CLOSE_ORDER),
+            ("base ignored snapshot", BASE_IGNORED),
+            ("coordinator git -C", COORDINATOR_GIT_C),
+            ("unit names", UNIT_NAMES),
+            ("brief git -C", BRIEF_GIT_C),
+            ("brief commit -F", BRIEF_COMMIT_F),
+            ("partial abort", PARTIAL_ABORT),
+            ("no force", NO_FORCE),
+            ("tests added sum", TESTS_ADDED_SUM),
         ):
             with self.subTest(clause=name):
                 self.assertEqual(self.flat.count(clause), 1, clause)
@@ -266,11 +304,25 @@ class PinnedClausesTest(ProcedureCase):
     def test_the_brief_carries_the_path_and_absolute_path_rules(self):
         for needle in (
             "the absolute worktree path",
-            "every shell command runs in that path (workdir or `cd`) and every file path is absolute",
+            "every file path is absolute",
             "never touch the main checkout",
         ):
             with self.subTest(needle=needle):
                 self.assertEqual(self.flat.count(needle), 1)
+
+    def test_no_git_command_chains_cd_and_none_lacks_dash_c(self):
+        self.assertNotIn("(workdir or `cd`)", self.flat)
+        for m in re.finditer(r"`(git [^`]*)`", self.text):
+            cmd = m.group(1)
+            if cmd.startswith("git rev-parse") or cmd == "git cherry":
+                continue
+            with self.subTest(cmd=cmd):
+                self.assertTrue(cmd.startswith("git -C "), cmd)
+
+    def test_the_commit_message_comes_from_a_file_outside_the_worktree(self):
+        self.assertNotIn("commit -m", self.flat)
+        self.assertEqual(self.flat.count("commit -F <message file>"), 1)
+        self.assertIn("<root>/<run-id>/<unit>.msg", self.flat)
 
     def test_the_criterion_is_quoted_only_as_it_is_written(self):
         criterion = collapsed(CRITERION.read_text(encoding="utf-8"))
@@ -281,6 +333,24 @@ class PinnedClausesTest(ProcedureCase):
     def test_the_seam_cap_stays_the_criterions(self):
         self.assertIn("Keep the seam cap of the criterion file.", self.flat)
         self.assertNotIn("five or six", self.flat)
+
+
+class DocsStateTheLimitsTest(unittest.TestCase):
+    """The remaining false positive, the `-F` protection and the unmeasured
+    depth-two hang are stated where the person reads."""
+
+    def test_both_manuals_and_the_architecture_state_them(self):
+        for name in ("MANUAL.md", "MANUAL-claude-code.md", "docs/arquitectura/arquitectura.md"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(doc=name):
+                self.assertIn("commit -F", text)
+                self.assertIn("git log --grep push", text)
+        for name in ("MANUAL.md", "docs/arquitectura/arquitectura.md"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(doc=name):
+                self.assertIn("FOO=1 git push", text)
+                self.assertIn("#39112", text)
+        self.assertIn("Las diez incertidumbres", (ROOT / "docs/arquitectura/arquitectura.md").read_text(encoding="utf-8"))
 
 
 class ProcedureIsLazyTest(unittest.TestCase):
