@@ -59,7 +59,7 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 2. Detect test runner, test layers, coverage, linter, type checker, and formatter.
 3. Resolve Strict TDD Mode with "Resolving Strict TDD Mode" in `_shared/implementation-craft.md`, using the runner step 2 found.
 4. Initialize persistence for the resolved mode.
-5. Build `.atl/skill-registry.md` using the skill-registry scan rules.
+5. Build `.atl/skill-registry.md` using the skill-registry scan rules; in a git repository, also add `.atl/` to `.git/info/exclude` (never `.gitignore`) unless a line already ignores it.
 6. Persist testing capabilities and project context.
 7. Return the structured initialization envelope.
 

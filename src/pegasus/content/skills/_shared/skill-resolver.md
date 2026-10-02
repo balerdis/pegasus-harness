@@ -20,6 +20,7 @@ Resolution order:
 1. Use the session cache if present.
 2. `mem_search(query: "skill-registry")` → `mem_get_observation(id)` for full content.
 3. Fallback: read `.atl/skill-registry.md` from the project root.
+   When you create `.atl/` in a git repository, add `.atl/` to `.git/info/exclude` (never `.gitignore`) unless a line already ignores it.
 4. No registry found → proceed without project skills and warn the user to run `external registry refresh`.
 
 ### Step 2: Match Relevant Skills

@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -98,10 +99,29 @@ def atomic_write(path: Path, content: str) -> None:
         except FileNotFoundError: pass
         raise
 
+ATL_IGNORED = {".atl", ".atl/", "/.atl", "/.atl/"}
+
+def exclude_file(project_root: Path) -> Path | None:
+    try: completed = subprocess.run(["git", "-C", str(project_root), "rev-parse", "--git-path", "info/exclude"], capture_output=True, text=True, timeout=5, check=False)
+    except FileNotFoundError: return project_root / ".git" / "info" / "exclude" if (project_root / ".git").is_dir() else None
+    if completed.returncode != 0 or not completed.stdout.strip(): return None
+    return project_root / completed.stdout.strip() if not os.path.isabs(completed.stdout.strip()) else Path(completed.stdout.strip())
+
+def exclude_atl(project_root: Path) -> None:
+    """Keep the generated `.atl/` out of `git status` through the local exclude file; never fail the registry."""
+    try:
+        target = exclude_file(project_root)
+        if target is None: return
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        if any(line.strip() in ATL_IGNORED for line in existing.splitlines()): return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8", newline="\n") as handle: handle.write(("\n" if existing and not existing.endswith("\n") else "") + ".atl/\n")
+    except (OSError, UnicodeError, subprocess.SubprocessError) as error: print(f"WARN {project_root}: could not exclude .atl/ ({error.__class__.__name__})", file=sys.stderr)
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate a {{display_name}} skill registry"); parser.add_argument("--project-root", required=True, type=Path); parser.add_argument("--skill-root", required=True, action="append", type=Path)
     args = parser.parse_args(argv); project_root = args.project_root.resolve(); roots = [root.resolve() for root in args.skill_root]; skills, warnings = collect_skills(project_root, roots); output = project_root / ".atl" / "skill-registry.md"
-    atomic_write(output, render(project_root, roots, skills))
+    atomic_write(output, render(project_root, roots, skills)); exclude_atl(project_root)
     for warning in warnings: print(warning, file=sys.stderr)
     print(f"registry={output} skills={len(skills)} warnings={len(warnings)}"); return 0
 

@@ -141,7 +141,7 @@ Claude Code no tiene un permiso separado llamado `external_directory`: lee o esc
 
 Qué ruta toma cada pedido lo decide [flow-applicability.md](src/pegasus/content/skills/_shared/flow-applicability.md), y cómo corre un FTD, [ftd-procedure.md](src/pegasus/content/skills/_shared/ftd-procedure.md).
 
-Los comandos distribuidos son `sdd-init`, `sdd-new`, `sdd-ff`, `sdd-continue`, `sdd-apply`, `sdd-status`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-explore`, además de `context-load`, `context-save`, `handoff-load`, `handoff-save`, `skill-creator` y `skill-registry`. Podés leer su contenido en `~/.config/opencode/commands/` antes de usarlos.
+Los comandos distribuidos son `sdd-init`, `sdd-new`, `sdd-ff`, `sdd-continue`, `sdd-apply`, `sdd-status`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-explore`, además de `context-load`, `context-save`, `handoff-load`, `handoff-save`, `skill-creator` y `skill-registry`. Podés leer su contenido en `~/.config/opencode/commands/` antes de usarlos. Cuando el registro de skills escribe `.atl/skill-registry.md` dentro de un repositorio git, Pegasus agrega `.atl/` a `.git/info/exclude` (nunca a `.gitignore`), para que el directorio no aparezca en `git status`.
 
 ## Elegir proveedor, modelo y esfuerzo
 

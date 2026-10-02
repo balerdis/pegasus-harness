@@ -37,8 +37,9 @@ PROCEDURE_NAME = PROCEDURE.name
 #: live run: the readable-commands rule, the refusal rule, root, run-id and hash
 #: as separate simple steps, the test-run rule, the three-step message file, the
 #: tests output file and the schema copied verbatim into each brief. 1517 -> 1580
-#: after the fourth live run: the review statement and the run-directory cleanup.
-PARALLEL_DELIVERY_WORD_CEILING = 1580
+#: after the fourth live run: the review statement and the run-directory cleanup. 1580 -> 1606 after the
+#: OpenCode live run: the cleanup as a concrete `rm -r` with the literal path.
+PARALLEL_DELIVERY_WORD_CEILING = 1606
 
 WORKTREE_ADD = "`git -C <main checkout> worktree add -b <branch> <path> <base>`"
 WORKTREE_PATH = (
@@ -179,8 +180,10 @@ REVIEW_STATED = (
     "trivial. A diff that adds new modules or new logic is not trivial."
 )
 RUN_DIR_CLEANUP = (
-    "After the worktrees and branches are gone, remove this run's directory `<root>/<run-id>/` and its "
-    "output files; a failed unit's files and worktree stay in place and the report names them."
+    "After the worktrees and branches are gone and `worktree prune` has run, run `rm -r <root>/<run-id>` "
+    "with the literal path, never an expansion: the output files and the coordinator's own message files "
+    "for fix-up commits live there, so they go with it. A failed unit's files and worktree stay in place "
+    "and the report names them."
 )
 NO_FIXUP = "with no confirmed finding there is no fix-up writer."
 CLOSE_ORDER = (
