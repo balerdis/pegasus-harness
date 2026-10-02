@@ -100,8 +100,11 @@ One worktree per writing child, all from the same base commit. That relaxes the 
 "disjoint files" to "independently mergeable" — two writers touching the same file is a merge, not a
 race. The cost moves to the merge, and resolving a conflict needs both children's context, which is
 exactly test 4's failure; so the two tests are tied: if you cannot state how you will merge, there is
-no write fan-out. The safety net stays: nothing committed, everything diffable against unmodified
-code, and nothing is committed without permission.
+no write fan-out. The safety net stays: everything diffable against unmodified code. A brief that
+asks for one local commit on the child's own worktree branch is the permission for that commit; a
+child never pushes and its commit carries no attribution. How a delivery with several writers runs,
+from partition to integration, is `_shared/parallel-delivery.md`: read it when the fan-out has
+writers.
 
 ## Emit together, not one at a time
 
@@ -113,7 +116,8 @@ returns, then issue the next, and you have picked sequential execution regardles
 concluded — that is exactly what an agent with no instruction here defaults to: one call, a look at the
 result, the next call, and the concurrency the gates bought is never spent. So emit every independent
 call in the same turn, then wait for all of them, merge by the schema test 4 already committed to, and
-report as one.
+report as one. Where results reach you one at a time, give the person one short line per finished
+part first, then that one report; where they arrive together, only the report.
 
 ## Fail-closed behavior (deliberate departure)
 

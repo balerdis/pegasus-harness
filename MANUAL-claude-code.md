@@ -94,6 +94,16 @@ Todo esto es idéntico bajo las dos CLIs, con `--cli claudecode` en el lugar de 
 - **Una credencial que le pegaste al agente sigue en texto plano**: bajo Claude Code no hay transporte automático de credenciales, ver más arriba; no es un bug de instalación.
 - **Un sub-agente dice que guardó algo en Engram y no aparece**: la captura pasiva de Engram no funciona bajo Claude Code (ver más arriba); si el brief le pidió una sección `## Key Learnings`, guardala vos mismo a partir de lo que ese sub-agente devolvió.
 
+## Entrega en paralelo
+
+Cuando le pedís varias cosas independientes a la vez, el orquestador puede repartirlas entre varios agentes que escriben al mismo tiempo, cada uno en su propia copia de trabajo. Lo que ves:
+
+- **Dónde viven las copias.** Fuera de tu repositorio, en `${XDG_STATE_HOME:-~/.local/state}/agent-worktrees/<repo>-<hash>/<corrida>/<unidad>`. Tu `git status` no muestra nada de ellas. El orquestador las crea y las borra él mismo.
+- **Una línea por unidad terminada.** Si Claude Code entrega los resultados de a uno, te llega una línea corta cuando termina cada unidad, y al final el informe completo. Si llegan todos juntos, sólo el informe.
+- **Nada se sube ni se publica sin tu sí.** Cada unidad deja un commit local, sin push. El orquestador integra, corre la suite completa él mismo, hace revisar el resultado y te informa; un push, una publicación o una release esperan tu respuesta.
+
+Esto es para varias unidades genuinamente independientes. Un cambio chico se hace en la misma conversación, como siempre.
+
 ## Próximo paso
 
 - Para el recorrido completo de instalación: [INSTALL.md](INSTALL.md).

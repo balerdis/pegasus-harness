@@ -68,6 +68,37 @@ class GatesAndTestsUnchangedTest(unittest.TestCase):
         self.assertIn("an unreadable or missing copy of this file does not", self.text)
 
 
+class WritersCommitLocallyTest(unittest.TestCase):
+    """One local commit per writing child, never pushed, never attributed;
+    results reported per finished part only where they arrive one at a time."""
+
+    COMMIT_RULE = (
+        "A brief that asks for one local commit on the child's own worktree branch is the permission "
+        "for that commit; a child never pushes and its commit carries no attribution."
+    )
+    PROGRESS_RULE = (
+        "Where results reach you one at a time, give the person one short line per finished part "
+        "first, then that one report; where they arrive together, only the report."
+    )
+
+    def setUp(self):
+        self.text = CRITERION.read_text(encoding="utf-8")
+        self.flat = " ".join(self.text.split())
+
+    def test_the_commit_rule_replaces_nothing_committed(self):
+        self.assertEqual(self.flat.count(self.COMMIT_RULE), 1)
+        self.assertNotIn("nothing committed", self.flat)
+        self.assertNotIn("nothing is committed without permission", self.flat)
+
+    def test_the_progress_rule_is_pinned_once(self):
+        self.assertEqual(self.flat.count(self.PROGRESS_RULE), 1)
+
+    def test_the_writers_section_points_at_the_procedure_once(self):
+        section = self.text.split("## Writers in parallel", 1)[1].split("\n## ", 1)[0]
+        self.assertEqual(" ".join(section.split()).count("`_shared/parallel-delivery.md`"), 1)
+        self.assertEqual(self.text.count("parallel-delivery.md"), 1)
+
+
 class FanOutIsHelpTest(unittest.TestCase):
     def setUp(self):
         self.text = CRITERION.read_text(encoding="utf-8")

@@ -25,7 +25,7 @@ a report to read, and a person waiting for all three. Below the line, doing it i
   2 or more non-trivial files, or needs new logic worked out: delegate to one sub-agent that
   writes it wholesale.
 - Running a command to inspect state (e.g. version control status): run it yourself. Running one
-  that executes work (tests, builds, installs): delegate.
+  that executes work (tests, builds, installs): delegate, except the single full-suite run on an integrated tree, which you run yourself.
 - Two or more delegations that do not depend on each other go out in the SAME response, never one after another: your runtime dispatches the calls in one response concurrently and with no limit, so a person waiting through three round trips in a row is waiting for nothing. Gate 1 of `{{skills_root}}/_shared/sub-delegation-criterion.md` already defines what independent means, read when the work divides into genuinely independent parts; apply it, do not restate it.
 - A tool you need being unavailable is never license to do the work anyway some other way —
   stop and report the blocker instead.

@@ -91,7 +91,13 @@ RETIRED_SDD_SIGNALS = (
 #: did (104 / 97 ~= 1.072x), rounded down: 1327 * 1.07 ~= 1420. That is
 #: room for a short new sentence, not a second section -- a change that
 #: needs more than that earns a deliberate ceiling bump, not a reflow.
-ORCHESTRATOR_WORD_CEILING = 1420
+#:
+#: 1433 after the parallel-delivery unit (7.5.0): the Direct Work Threshold
+#: bullet on running a command gained 13 words naming one exception -- the
+#: coordinator's single full-suite run on an integrated tree. The ceiling rose
+#: by exactly those 13 (1420 + 13), the legitimate path this comment calls for,
+#: and keeps the same 4 words of headroom as before.
+ORCHESTRATOR_WORD_CEILING = 1433
 
 #: What every ceiling below measures: the WHOLE file, as `wc -w` and
 #: `len(text.split())` count it -- front matter included -- exactly as
@@ -275,6 +281,27 @@ class ConcurrencyTest(unittest.TestCase):
         """The fact, over the whole shipped tree: Gate 1's wording lives in the
         file that owns it and nowhere else."""
         self.assertEqual(occurrences(GATE_1), [CRITERION])
+
+
+class SuiteExceptionTest(unittest.TestCase):
+    """Running a command that executes work is delegated, with one named
+    exception: the coordinator's single full-suite run on an integrated tree.
+    Pinned as written, once, and the orchestrator never points at the
+    procedure that needs it (that file is reached from the criterion only)."""
+
+    EXCEPTION = (
+        "Running one that executes work (tests, builds, installs): delegate, except the single "
+        "full-suite run on an integrated tree, which you run yourself."
+    )
+
+    def setUp(self):
+        self.flat = " ".join(ORCHESTRATOR.read_text(encoding="utf-8").split())
+
+    def test_the_exception_is_pinned_once(self):
+        self.assertEqual(self.flat.count(self.EXCEPTION), 1)
+
+    def test_the_orchestrator_does_not_name_the_procedure(self):
+        self.assertNotIn("parallel-delivery.md", self.flat)
 
 
 class ThresholdReadsAsCostTest(unittest.TestCase):
