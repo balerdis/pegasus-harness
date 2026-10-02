@@ -33,13 +33,15 @@ PROCEDURE_NAME = PROCEDURE.name
 #: failed units, proportional review and the close ordering. 1124 -> 1333 after
 #: the live run: `git -C` everywhere, the commit message read from a file outside
 #: the worktree, tests added in the report, the ignored-files snapshot, unit
-#: names, partial abort and the `--force` rule.
-PARALLEL_DELIVERY_WORD_CEILING = 1333
+#: names, partial abort and the `--force` rule. 1333 -> 1517 after the third
+#: live run: the readable-commands rule, the refusal rule, root, run-id and hash
+#: as separate simple steps, the test-run rule, the three-step message file, the
+#: tests output file and the schema copied verbatim into each brief.
+PARALLEL_DELIVERY_WORD_CEILING = 1517
 
 WORKTREE_ADD = "`git -C <main checkout> worktree add -b <branch> <path> <base>`"
 WORKTREE_PATH = (
-    "`${XDG_STATE_HOME:-$HOME/.local/state}/agent-worktrees/<repo-name>-<short hash of the toplevel path>"
-    "/<run-id>/<unit>`"
+    "`<state>/agent-worktrees/<repo-name>-<short hash of the toplevel path>/<run-id>/<unit>`"
 )
 PRUNE = "Run `git -C <main checkout> worktree prune` at the start of every run;"
 NO_FLOOR = "Never put a worktree under a directory the deny floor names, and never copy a sensitive file into one."
@@ -51,10 +53,54 @@ HOT_DOCUMENTS = (
 STRICT_DISJOINT = "Units are strictly file-disjoint: anything two units would share goes to exactly one of them."
 ONE_MESSAGE = "**Launch everything in one message.** Read-only research units go in the same message, with no worktree."
 BRIEF_COMMIT = "one local commit, no push, no AI or tool attribution"
-BRIEF_SUITE = "run the project's test suite with its output redirected to a file, never piped and never backgrounded"
+BRIEF_SUITE = (
+    "run the project's test suite with its output redirected to a file, never piped and never backgrounded, "
+    "the file being `<root>/<run-id>/<unit>-tests.txt`"
+)
 BRIEF_REPORT = (
     "a fixed report: branch and commit, files changed, tests and their result, tests added, as a count, the "
-    "paste-ready paragraph for the coordinator's documents, and anything found but not fixed"
+    "paste-ready paragraph for the coordinator's documents, anything found but not fixed, and the commands "
+    "refused, with the reason"
+)
+READABLE_RULE = (
+    "No command, the coordinator's or a writer's, contains `$(...)` or `${...}`, and none chains `cd` with an "
+    "output redirect. Compute each value in its own simple command, then write the literal result into the "
+    "next command. Permission systems can only judge a command they can read."
+)
+REFUSAL_RULE = (
+    "If a command is refused, the agent stops and reports which command was refused and why, and never works "
+    "around a refusal. A writer's report lists its refusals, and so does the coordinator's."
+)
+VERBATIM_SCHEMA = (
+    "The coordinator copies this report schema into each brief verbatim, including the paste-ready paragraph, "
+    "and the two rules above, on readable commands and on refusals."
+)
+STATE_DIR = (
+    "`<state>` is the output of `printenv XDG_STATE_HOME`; if that prints nothing, it is `<home>/.local/state`, "
+    "with `<home>` from `printenv HOME`."
+)
+RUN_ID_STEPS = (
+    "The run-id is the output of `date -u +%Y%m%dT%H%M%SZ` and the output of "
+    "`head -c3 /dev/urandom | od -An -tx1`, run as two commands and joined by the coordinator with a hyphen, "
+    "spaces removed; the branch is `<run-id>/<unit>`, so re-runs never collide."
+)
+HASH_STEPS = (
+    "The short hash comes from `git -C <main checkout> rev-parse --show-toplevel`, then "
+    "`printf %s <that path> | sha1sum`, keeping the first 8 characters."
+)
+LITERAL_ROOT = (
+    "The root is then the literal path `<state>/agent-worktrees/<repo-name>-<short hash>`, and every later "
+    "command carries the literal."
+)
+ONE_AT_A_TIME = "The coordinator assembles every value itself, one simple command at a time."
+TEST_RUN_RULE = (
+    "the test suite runs with the CLI's working-directory parameter where it has one, otherwise with the test "
+    "runner's own path options and absolute paths, and never as `cd` followed by a redirect"
+)
+MESSAGE_FILE_SEQUENCE = (
+    "made in three steps: the message is written with the file-writing tool to `<root>/<run-id>/<unit>.msg`, "
+    "outside the worktree; then `git -C <absolute worktree path> commit -F <that path>`; then the message file "
+    "is removed; so the message text never reaches the command line"
 )
 PROGRESS = (
     "When the CLI delivers results one at a time, give the person one short line per finished unit, then "
@@ -67,16 +113,7 @@ ISOLATION = (
 BASE_IGNORED = "Also record `git -C <main checkout> status --porcelain --ignored` now, for the isolation check."
 COORDINATOR_GIT_C = "Every git command of the coordinator is `git -C <main checkout> ...`, never `cd` chained with git."
 UNIT_NAMES = "Unit names are lowercase letters, digits and hyphens, so they are valid ref components."
-BRIEF_GIT_C = (
-    "every git command is `git -C <absolute worktree path> ...` and never chains `cd` with git; other commands, "
-    "such as the test suite, run with the CLI's working-directory parameter where it has one, or as a single "
-    "`cd <path> && <test command>` with no git in the chain"
-)
-BRIEF_COMMIT_F = (
-    "made with `git -C <absolute worktree path> commit -F <message file>`, the message written first to "
-    "`<root>/<run-id>/<unit>.msg` outside the worktree and removed after the commit, so the message text "
-    "never reaches the command line"
-)
+BRIEF_GIT_C = "every git command is `git -C <absolute worktree path> ...` and never chains `cd` with git;"
 PARTIAL_ABORT = (
     "Picks already integrated stay; the remaining worktrees stay in place, each reported with its path."
 )
@@ -104,12 +141,6 @@ CLEAN_TREE = (
     "not, stop and ask the person, and never stash. Units branch from the recorded base, so they will not "
     "see uncommitted work: say so."
 )
-SHORT_HASH = "Compute the short hash with `git rev-parse --show-toplevel | sha1sum | cut -c1-8`."
-RUN_ID = (
-    "The run-id is `$(date -u +%Y%m%dT%H%M%SZ)-$(head -c3 /dev/urandom | od -An -tx1 | tr -d ' \\n')` and the "
-    "branch is `<run-id>/<unit>`, so re-runs never collide."
-)
-EXPAND_ROOT = "Expand the root in the shell and pass only the absolute result to any tool, never `${...}` text."
 PRUNE_MEANING = "it drops only entries whose directory is gone."
 ABORTED_RUN = (
     "After an aborted run, list this repository's directories under the root and remove one only with the "
@@ -267,9 +298,16 @@ class PinnedClausesTest(ProcedureCase):
             ("sdd scope", SDD_SCOPE),
             ("criterion quote", CRIT_QUOTE),
             ("clean tree", CLEAN_TREE),
-            ("short hash", SHORT_HASH),
-            ("run id and branch", RUN_ID),
-            ("expand root", EXPAND_ROOT),
+            ("readable commands rule", READABLE_RULE),
+            ("refusal rule", REFUSAL_RULE),
+            ("schema copied verbatim", VERBATIM_SCHEMA),
+            ("state directory", STATE_DIR),
+            ("run id in separate steps", RUN_ID_STEPS),
+            ("hash in separate steps", HASH_STEPS),
+            ("literal root", LITERAL_ROOT),
+            ("one simple command at a time", ONE_AT_A_TIME),
+            ("test run rule", TEST_RUN_RULE),
+            ("message file sequence", MESSAGE_FILE_SEQUENCE),
             ("prune meaning", PRUNE_MEANING),
             ("aborted run", ABORTED_RUN),
             ("waves", WAVES),
@@ -287,7 +325,6 @@ class PinnedClausesTest(ProcedureCase):
             ("coordinator git -C", COORDINATOR_GIT_C),
             ("unit names", UNIT_NAMES),
             ("brief git -C", BRIEF_GIT_C),
-            ("brief commit -F", BRIEF_COMMIT_F),
             ("partial abort", PARTIAL_ABORT),
             ("no force", NO_FORCE),
             ("tests added sum", TESTS_ADDED_SUM),
@@ -296,7 +333,7 @@ class PinnedClausesTest(ProcedureCase):
                 self.assertEqual(self.flat.count(clause), 1, clause)
 
     def test_the_worktree_path_is_outside_the_repository_and_names_no_product(self):
-        self.assertTrue(WORKTREE_PATH.startswith("`${XDG_STATE_HOME"))
+        self.assertTrue(WORKTREE_PATH.startswith("`<state>/agent-worktrees/"))
         self.assertNotIn("pegasus", self.flat.lower())
         self.assertNotIn("opencode", self.flat.lower())
         self.assertNotIn("claude", self.flat.lower())
@@ -314,14 +351,27 @@ class PinnedClausesTest(ProcedureCase):
         self.assertNotIn("(workdir or `cd`)", self.flat)
         for m in re.finditer(r"`(git [^`]*)`", self.text):
             cmd = m.group(1)
-            if cmd.startswith("git rev-parse") or cmd == "git cherry":
+            if cmd == "git cherry":
                 continue
             with self.subTest(cmd=cmd):
                 self.assertTrue(cmd.startswith("git -C "), cmd)
 
+    def test_no_prescribed_command_expands_or_substitutes(self):
+        """Only the rule that forbids the forms may name them."""
+        without_rule = self.text.replace(READABLE_RULE, "")
+        self.assertNotIn("$(", without_rule)
+        self.assertNotIn("${", without_rule)
+        for m in re.finditer(r"`([^`]*)`", without_rule):
+            with self.subTest(cmd=m.group(1)):
+                self.assertNotRegex(m.group(1), r"\bcd\b.*>")
+
+    def test_the_old_cd_test_wording_is_gone(self):
+        self.assertNotIn("cd <path> && <test command>", self.flat)
+        self.assertNotIn("Expand the root in the shell", self.flat)
+
     def test_the_commit_message_comes_from_a_file_outside_the_worktree(self):
         self.assertNotIn("commit -m", self.flat)
-        self.assertEqual(self.flat.count("commit -F <message file>"), 1)
+        self.assertEqual(self.flat.count("commit -F <that path>"), 1)
         self.assertIn("<root>/<run-id>/<unit>.msg", self.flat)
 
     def test_the_criterion_is_quoted_only_as_it_is_written(self):

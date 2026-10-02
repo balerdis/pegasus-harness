@@ -21,6 +21,10 @@ an SDD change: that stays with `sdd-verify`. This is not an FTD rule.
 
 ## Procedure
 
+**Commands a permission system can read.** No command, the coordinator's or a writer's, contains `$(...)` or `${...}`, and none chains `cd` with an output redirect. Compute each value in its own simple command, then write the literal result into the next command. Permission systems can only judge a command they can read.
+
+**Refusals.** If a command is refused, the agent stops and reports which command was refused and why, and never works around a refusal. A writer's report lists its refusals, and so does the coordinator's.
+
 1. **Triage.** Sort the pending work into: doable now; waiting on the person (a decision, cases);
    large features to decide separately; research only. Only the first and the last are launched.
 2. **Partition by file ownership.** Units are strictly file-disjoint: anything two units would share
@@ -35,26 +39,30 @@ an SDD change: that stays with `sdd-verify`. This is not an FTD rule.
 4. **Create the worktrees.** The coordinator makes one per writing unit, never relying on a CLI's own
    worktree isolation, which may place it inside the repository:
    `git -C <main checkout> worktree add -b <branch> <path> <base>`, with the path
-   `${XDG_STATE_HOME:-$HOME/.local/state}/agent-worktrees/<repo-name>-<short hash of the toplevel path>/<run-id>/<unit>`.
-   Compute the short hash with `git rev-parse --show-toplevel | sha1sum | cut -c1-8`. The run-id is
-   `$(date -u +%Y%m%dT%H%M%SZ)-$(head -c3 /dev/urandom | od -An -tx1 | tr -d ' \n')` and the branch is
-   `<run-id>/<unit>`, so re-runs never collide. Expand the root in the shell and pass only the absolute
-   result to any tool, never `${...}` text. Unit names are lowercase letters, digits and hyphens, so they are valid ref components. Run `git -C <main checkout> worktree prune` at the start of every run; it
+   `<state>/agent-worktrees/<repo-name>-<short hash of the toplevel path>/<run-id>/<unit>`.
+   The coordinator assembles every value itself, one simple command at a time. `<state>` is the output of
+   `printenv XDG_STATE_HOME`; if that prints nothing, it is `<home>/.local/state`, with `<home>` from
+   `printenv HOME`. The run-id is the output of `date -u +%Y%m%dT%H%M%SZ` and the output of
+   `head -c3 /dev/urandom | od -An -tx1`, run as two commands and joined by the coordinator with a hyphen,
+   spaces removed; the branch is `<run-id>/<unit>`, so re-runs never collide. The short hash comes from
+   `git -C <main checkout> rev-parse --show-toplevel`, then `printf %s <that path> | sha1sum`, keeping the first 8 characters.
+   The root is then the literal path `<state>/agent-worktrees/<repo-name>-<short hash>`, and every later command carries the literal. Unit names are lowercase letters, digits and hyphens, so they are valid ref components. Run `git -C <main checkout> worktree prune` at the start of every run; it
    drops only entries whose directory is gone. After an aborted run, list this repository's
    directories under the root and remove one only with the person's agreement if it holds commits
    that were not integrated. With more units than the CLI's concurrency cap, run them in waves. Never
    put a worktree under a directory the deny floor names, and never copy a sensitive file into one.
 5. **Launch everything in one message.** Read-only research units go in the same message, with no
    worktree. Each writer's brief carries: the absolute worktree path; that every git command is
-   `git -C <absolute worktree path> ...` and never chains `cd` with git; other commands, such as the test
-   suite, run with the CLI's working-directory parameter where it has one, or as a single
-   `cd <path> && <test command>` with no git in the chain; every file path is absolute; never touch the main checkout; one
-   local commit, no push, no AI or tool attribution, made with `git -C <absolute worktree path> commit -F <message file>`,
-   the message written first to `<root>/<run-id>/<unit>.msg` outside the worktree and removed after the commit, so the
+   `git -C <absolute worktree path> ...` and never chains `cd` with git; the test suite runs with the CLI's
+   working-directory parameter where it has one, otherwise with the test runner's own path options and absolute
+   paths, and never as `cd` followed by a redirect; every file path is absolute; never touch the main checkout; one
+   local commit, no push, no AI or tool attribution, made in three steps: the message is written with the file-writing tool to `<root>/<run-id>/<unit>.msg`, outside the worktree;
+   then `git -C <absolute worktree path> commit -F <that path>`; then the message file is removed; so the
    message text never reaches the command line; run the project's test suite with its output
-   redirected to a file, never piped and never backgrounded; and a fixed report: branch and commit,
+   redirected to a file, never piped and never backgrounded, the file being `<root>/<run-id>/<unit>-tests.txt`; and a fixed report: branch and commit,
    files changed, tests and their result, tests added, as a count, the paste-ready paragraph for the coordinator's documents,
-   and anything found but not fixed. A worktree has none of the main checkout's untracked or ignored
+   anything found but not fixed, and the commands refused, with the reason. The coordinator copies this report schema into each brief
+   verbatim, including the paste-ready paragraph, and the two rules above, on readable commands and on refusals. A worktree has none of the main checkout's untracked or ignored
    files: dependency directories, build output, environment files. The writer never copies sensitive
    files; if the tests cannot run there it reports that instead of improvising, and if the repository
    has no test suite it says so. If a commit hook, signing or a missing git identity blocks the
