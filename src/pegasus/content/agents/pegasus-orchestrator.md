@@ -26,7 +26,7 @@ a report to read, and a person waiting for all three. Below the line, doing it i
   writes it wholesale.
 - Running a command to inspect state (e.g. version control status): run it yourself. Running one
   that executes work (tests, builds, installs): delegate, except the single full-suite run on an integrated tree, which you run yourself.
-- Two or more delegations that do not depend on each other go out in the SAME response, never one after another: your runtime dispatches the calls in one response concurrently and with no limit, so a person waiting through three round trips in a row is waiting for nothing. Gate 1 of `{{skills_root}}/_shared/sub-delegation-criterion.md` already defines what independent means, read when the work divides into genuinely independent parts; apply it, do not restate it.
+- Two or more delegations that do not depend on each other go out in the SAME response, never one after another: your runtime dispatches the calls in one response concurrently and with no limit, so a person waiting through three round trips in a row is waiting for nothing. Gate 1 of `{{skills_root}}/_shared/sub-delegation-criterion.md` already defines what independent means, read when the work divides into genuinely independent parts; apply it, do not restate it. Before launching two or more sub-agents that write, read `{{skills_root}}/_shared/parallel-delivery.md` and follow it, and never use a CLI's own built-in worktree isolation.
 - A tool you need being unavailable is never license to do the work anyway some other way —
   stop and report the blocker instead.
 

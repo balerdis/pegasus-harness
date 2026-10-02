@@ -354,15 +354,31 @@ class DocsStateTheLimitsTest(unittest.TestCase):
 
 
 class ProcedureIsLazyTest(unittest.TestCase):
-    """Closed world: the procedure is reached through the criterion only."""
+    """Closed world: exactly two places name the procedure, the orchestrator
+    body (once, because the live run showed the criterion alone is not reached)
+    and the criterion (once, in "Writers in parallel")."""
 
-    def test_no_always_on_body_names_the_procedure(self):
+    ORCH = CONTENT / "agents" / "pegasus-orchestrator.md"
+    ORCH_SENTENCE = (
+        "Before launching two or more sub-agents that write, read "
+        "`{{skills_root}}/_shared/parallel-delivery.md` and follow it, and never use a CLI's own "
+        "built-in worktree isolation."
+    )
+
+    def test_no_other_always_on_body_names_the_procedure(self):
         for key, body in always_on_bodies().items():
+            if key == "agent:pegasus-orchestrator":
+                continue
             with self.subTest(body=key):
                 self.assertNotIn(PROCEDURE_NAME, body)
 
-    def test_the_only_content_file_naming_it_is_the_criterion(self):
-        self.assertEqual(content_files_containing(PROCEDURE_NAME), {CRITERION})
+    def test_exactly_the_orchestrator_and_the_criterion_name_it(self):
+        self.assertEqual(content_files_containing(PROCEDURE_NAME), {self.ORCH, CRITERION})
+
+    def test_the_orchestrator_names_it_once_in_the_pinned_sentence(self):
+        text = self.ORCH.read_text(encoding="utf-8")
+        self.assertEqual(text.count(PROCEDURE_NAME), 1)
+        self.assertEqual(text.count(self.ORCH_SENTENCE), 1)
 
     def test_the_criterion_names_it_once_in_writers_in_parallel(self):
         text = CRITERION.read_text(encoding="utf-8")

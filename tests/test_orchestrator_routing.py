@@ -97,7 +97,14 @@ RETIRED_SDD_SIGNALS = (
 #: coordinator's single full-suite run on an integrated tree. The ceiling rose
 #: by exactly those 13 (1420 + 13), the legitimate path this comment calls for,
 #: and keeps the same 4 words of headroom as before.
-ORCHESTRATOR_WORD_CEILING = 1433
+#:
+#: 1455 after the second live run (7.5.0): one sentence of 22 words in the
+#: parallel-launch bullet pointing the always-loaded body at the parallel
+#: delivery procedure. The live evidence showed the lazy pointer from the
+#: criterion alone is not reached: the orchestrator never read the criterion
+#: or the procedure and used the CLI's own worktree isolation. The ceiling
+#: rose by exactly those 22 (1433 + 22).
+ORCHESTRATOR_WORD_CEILING = 1455
 
 #: What every ceiling below measures: the WHOLE file, as `wc -w` and
 #: `len(text.split())` count it -- front matter included -- exactly as
@@ -300,8 +307,11 @@ class SuiteExceptionTest(unittest.TestCase):
     def test_the_exception_is_pinned_once(self):
         self.assertEqual(self.flat.count(self.EXCEPTION), 1)
 
-    def test_the_orchestrator_does_not_name_the_procedure(self):
-        self.assertNotIn("parallel-delivery.md", self.flat)
+    def test_the_orchestrator_names_the_procedure_exactly_once(self):
+        # The second live run showed the pointer from the criterion alone is
+        # not reached, so the body carries one pointer (pinned in
+        # test_parallel_delivery.ProcedureIsLazyTest).
+        self.assertEqual(self.flat.count("parallel-delivery.md"), 1)
 
 
 class ThresholdReadsAsCostTest(unittest.TestCase):
