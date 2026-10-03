@@ -26,6 +26,14 @@ las mismas reglas de `core/identity.py` que usa `build_zipapp.py`. `--identity` 
 obligatorios igual que en `build_zipapp.py`, y `--out` se niega si ya existe. El release de Pegasus
 corre este mismo comando con `src/pegasus/identity.json`, igual que cualquier otra distribución.
 
+Antes del paso 1, y sólo como información: `python3 tools/check_dependency_updates.py` lista, para cada
+dependencia fijada en `src/pegasus/content/mcp/*.md`, si existe una versión upstream más nueva
+(`update-available`, `major-available`, `review-0.x`, `unversioned` o `error`). Es una herramienta de
+mantenimiento que no se distribuye y no bloquea nada salvo que le pases `--strict`. Las versiones 0.x
+siempre se revisan a mano, porque un minor 0.x puede romper. Subir una dependencia es cambiar `version` y
+`checksum` en su descriptor de `content/mcp/*.md` (en playwright, además el lockfile y el `integrity`) y
+publicar un release nuevo.
+
 1. Sobre un commit con la suite verde (`PYTHONPATH=src:tests python3 -m unittest discover -s tests -q`), confirmá que `pyproject.toml` declara la versión que vas a publicar y creá el tag anotado `vX.Y.Z` sobre ese commit.
 2. Construí el artefacto:
 
