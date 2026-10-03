@@ -844,6 +844,18 @@ DENY_FLOOR_DIRECTORIES: tuple[str, ...] = (
     ".config/gh",
 )
 
+#: The file-level counterpart of the sensitive-files prompt rule
+#: (`system-prompt/AGENTS.md`, `## Sensitive Files`), CLI-agnostic like
+#: `DENY_FLOOR_DIRECTORIES` above, so both adapters translate one list into
+#: their own permission vocabulary instead of retyping it. Three shapes,
+#: because the two runtimes anchor paths differently:
+#: - `SENSITIVE_FILE_NAMES`: a file name or glob that counts at any depth.
+#: - `SENSITIVE_FILE_DIRECTORIES`: a directory name; everything under it counts.
+#: - `SENSITIVE_FILE_PATHS`: a multi-segment file path, matched at any depth.
+SENSITIVE_FILE_NAMES: tuple[str, ...] = (".env", ".env.*", "*.pem", "*.key")
+SENSITIVE_FILE_DIRECTORIES: tuple[str, ...] = (".ssh", ".credentials", "secrets")
+SENSITIVE_FILE_PATHS: tuple[str, ...] = (".aws/credentials", ".config/gh/hosts.yml")
+
 
 def deny_floor_shadows(path: str) -> bool:
     """Whether `path` falls under one of `DENY_FLOOR_DIRECTORIES` -- CLI-

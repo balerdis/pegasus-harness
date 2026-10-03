@@ -16,6 +16,9 @@ from pegasus.core.content import (
     AgentMode,
     Command,
     DENY_FLOOR_DIRECTORIES,
+    SENSITIVE_FILE_DIRECTORIES,
+    SENSITIVE_FILE_NAMES,
+    SENSITIVE_FILE_PATHS,
     Distribution,
     Execution,
     Mcp,
@@ -112,20 +115,111 @@ TOOL_NAME: dict[str, str] = {
 # - `util/wildcard.ts:3-19`: `*` is `.*`, the match is anchored, and a
 #   trailing ` *` makes the tail optional, so `git push *` matches both
 #   `git push` and `git push origin main`.
+# Closed on top of that (same source, v1.18.34): the matched text is the
+# `command` node's own text (`source`, `tool/shell.ts:119-121`, added at `:408`), so a leading
+# assignment (`FOO=1 git push`) and an absolute binary (`/usr/bin/git push`)
+# both survive into it verbatim. `*` is `.*` and crosses spaces and `/`, so
+# `*=* <cmd> *` matches an assignment prefix and `*/<cmd> *` an absolute or
+# relative binary path. The `gh` commands that write outward (create or
+# merge a PR, open an issue, create a release or a repository) ask the same
+# way, in the three spellings. `gh pr view`, `gh pr list`, `git log` and
+# `git status` match none of these.
 # Not caught: aliases, wrapper scripts, a push inside a script file or an
 # `sh -c "..."` / `eval` string (the inner text is an argument, not a
-# command node), `gh` commands, and `FOO=1 git push` (the command node text
-# starts with the env assignment, so neither anchored pattern matches).
-# `git * push *` also asks for harmless lines whose arguments contain the
-# word, such as `git log --grep push x` or `git checkout push` -- a false
-# positive, never a miss. Commits are protected: the parallel-delivery
-# procedure has every writer commit with `-F <message file>`, so a message
-# that says "push" never reaches the command line.
-SUBAGENT_BASH_PERMISSION: dict[str, str] = {
-    "*": "allow",
-    "git push *": "ask",
-    "git * push *": "ask",
-}
+# command node), global flags before the `gh` subcommand (`gh -R x pr
+# create`), other `gh` writers (`gh api -X POST`, `gh pr comment`) and any
+# push tool that is not `git`. `git * push *` also asks for harmless lines
+# whose arguments contain the word, such as `git log --grep push x` or `git
+# checkout push` -- a false positive, never a miss. Commits are protected:
+# the parallel-delivery procedure has every writer commit with `-F <message
+# file>`, so a message that says "push" never reaches the command line.
+_OUTWARD_COMMANDS: tuple[str, ...] = (
+    "git push",
+    "git * push",
+    "gh pr create",
+    "gh pr merge",
+    "gh issue create",
+    "gh release create",
+    "gh repo create",
+)
+
+
+def _outward_bash_patterns() -> dict[str, str]:
+    """Each outward command in three spellings, all `"ask"`: plain, behind an
+    environment assignment, and behind an absolute or relative binary path
+    (`/usr/bin/git push`: `*/` stands for the directory, so the program name
+    must be the whole last path segment)."""
+    patterns: dict[str, str] = {}
+    for command in _OUTWARD_COMMANDS:
+        patterns[f"{command} *"] = "ask"
+        patterns[f"*=* {command} *"] = "ask"
+        patterns[f"*/{command} *"] = "ask"
+    return patterns
+
+
+SUBAGENT_BASH_PERMISSION: dict[str, str] = {"*": "allow", **_outward_bash_patterns()}
+
+# The permission floor for sensitive files, the file-level counterpart of the
+# prompt's `## Sensitive Files` rule. Verified in the runtime's own source
+# (v1.18.34, packages/opencode/src):
+# - `read`, `edit` (also `write` and `apply_patch`, which ask the `edit`
+#   permission) pass the path RELATIVE TO THE WORKTREE as the pattern
+#   (`tool/read.ts:255-258`, `tool/write.ts:54-56`, `tool/edit.ts:102-104`,
+#   `tool/apply_patch.ts:206-208`: `path.relative(instance.worktree, ...)`).
+#   Inside the project that is `.env` or `app/.env.local`; outside it is
+#   `../../home/u/.ssh/id_rsa`. An absolute or `~/` pattern therefore never
+#   matches (`~/` is expanded to the home directory by `permission/index.ts:
+#   178-184`, so it would be absolute), and each file needs two spellings:
+#   the bare relative one and a `*/`-prefixed one.
+# - `grep` and `glob` pass the search PATTERN, not a path (`tool/grep.ts:
+#   39-42`, `tool/glob.ts:28-31`), so no path rule can be expressed there
+#   and they are left alone.
+# - `*` is `.*` and crosses `/` (`core/src/util/wildcard.ts`), so `*.pem`
+#   already matches at any depth, and `*/secrets/*` matches under any
+#   directory named `secrets`.
+# - Resolution takes the last matching rule (`permission/index.ts:28-37`) and
+#   the agent's own `permission` block is appended AFTER the runtime's
+#   defaults (`agent/agent.ts:293`). Those defaults ask for `*.env` and
+#   `*.env.*` and allow `*.env.example` (`agent/agent.ts:130-135`); Pegasus's
+#   old plain `"read": "allow"` came last and silently overrode them. The
+#   floor is written after the `"*"` allow, so it wins again, and it carries
+#   no exemption: `.env.example` is covered too.
+# - One `deny` among a call's patterns denies the whole call; an `ask` makes
+#   it prompt (`permission/index.ts:73-83`).
+# - `external_directory` cannot hold these file-shaped entries (see
+#   `EXTERNAL_DIRECTORY_DENY_FLOOR`), but `read` and `edit` can, because
+#   their pattern keeps the file name.
+# Value by mode: `mode: primary` talks to the person, so `"ask"`; a
+# `mode: subagent` gets `"deny"`, because an `ask` at delegation depth two or
+# more hangs (#39112, see `_permission`) and the prompt rule already tells a
+# sub-agent to stop and report. Not covered: `bash` (`cat .env` is a command
+# text, not a path, and any pattern wide enough to catch it also hits
+# ordinary commands), `grep`, `glob`, a bare directory read (`read .ssh`
+# lists names only), and anything reached through a symlink, since matching
+# is on the literal string.
+
+
+def _sensitive_file_patterns() -> tuple[str, ...]:
+    patterns: list[str] = []
+    for name in SENSITIVE_FILE_NAMES:
+        patterns.append(name)
+        if not name.startswith("*"):
+            patterns.append(f"*/{name}")
+    for directory in SENSITIVE_FILE_DIRECTORIES:
+        patterns += [f"{directory}/*", f"*/{directory}/*"]
+    for file_path in SENSITIVE_FILE_PATHS:
+        patterns += [file_path, f"*/{file_path}"]
+    return tuple(patterns)
+
+
+SENSITIVE_FILE_PATTERNS: tuple[str, ...] = _sensitive_file_patterns()
+
+
+def sensitive_file_permission(mode: AgentMode) -> dict[str, str]:
+    """The `read`/`edit` map: everything allowed, the floor last."""
+    action = "deny" if mode is AgentMode.SUBAGENT else "ask"
+    return {"*": "allow", **{pattern: action for pattern in SENSITIVE_FILE_PATTERNS}}
+
 
 EXTERNAL_DIRECTORY_TOOLS = frozenset({"read", "grep", "glob", "edit", "write", "bash"})
 
@@ -149,9 +243,9 @@ EXTERNAL_DIRECTORY_TOOLS = frozenset({"read", "grep", "glob", "edit", "write", "
 # (`.ssh/`, `.credentials/`, `.aws/credentials`, `.config/gh/hosts.yml`,
 # `secrets/`); the file-shaped members of that rule (`.env`, `.env.*`,
 # `*.pem`, `*.key`) are inexpressible through this permission and are not
-# listed for the same reason -- and are consequently reachable, not merely
-# unguarded in the abstract, the moment they live anywhere outside these five
-# directories, which is most places a file can live.
+# listed for the same reason. They are guarded through `read` and `edit`
+# instead (`SENSITIVE_FILE_PATTERNS` above), whose pattern keeps the file
+# name.
 #
 # The five directory names themselves are not retyped here: they are
 # `pegasus.core.content.DENY_FLOOR_DIRECTORIES`, the one CLI-agnostic list
@@ -957,10 +1051,14 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
 
     Superseded in one place by the 7.5.0 decision: a sub-agent's `bash` now
     carries `SUBAGENT_BASH_PERMISSION`, whose `git push` patterns are
-    `"ask"` (see that constant). It is the only `"ask"` Pegasus renders. The
+    `"ask"` (see that constant). The
     depth-two hang above applies to it too: at depth one the prompt surfaces
     in the root session; a sub-agent two levels down that pushes would wait
-    on a prompt nobody sees.
+    on a prompt nobody sees. Superseded again by the sensitive-file floor:
+    a primary agent's `read`/`edit` ask for the files in
+    `SENSITIVE_FILE_PATTERNS`, and a sub-agent's deny them (never `ask`, for
+    the same depth-two reason), so a primary's rendered block does carry
+    `"ask"` for those paths.
 
     This baseline is not a stopgap awaiting an upstream fix. Keeping
     `external_directory` permissive by default is a deliberate product
@@ -995,6 +1093,12 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     granted: dict[str, Any] = {PERMISSION_NAME[name]: "allow" for name in names}
     if granted.get("bash") == "allow" and item.mode is AgentMode.SUBAGENT:
         granted["bash"] = dict(SUBAGENT_BASH_PERMISSION)
+    # The sensitive-file floor: `read` and `edit` (which `write` and
+    # `apply_patch` fold onto) keep their `"*": "allow"` and add the floor
+    # after it, so it is the last match. See `SENSITIVE_FILE_PATTERNS`.
+    for key in ("read", "edit"):
+        if granted.get(key) == "allow":
+            granted[key] = sensitive_file_permission(item.mode)
     # Same reasoning as `_tools`: the MCP server id is the key the runtime
     # matches its tool-call actions against, and the wildcard grants every
     # tool that server exposes.

@@ -451,7 +451,7 @@ class AgentRenderTest(unittest.TestCase):
     def test_a_granted_native_tool_is_translated_into_permission_too(self):
         agent = self.agent(requires_tools=("read", "bash"), mode=AgentMode.PRIMARY)
         permission = self.value(agent)["permission"]
-        self.assertEqual(permission["read"], "allow")
+        self.assertEqual(permission["read"]["*"], "allow")
         self.assertEqual(permission["bash"], "allow")
 
     def test_a_subagents_bash_allows_everything_and_asks_for_a_git_push(self):
@@ -459,9 +459,11 @@ class AgentRenderTest(unittest.TestCase):
         `"*"` allow must come first, because the runtime keeps the last
         matching rule (`permission/index.ts` `evaluate`)."""
         permission = self.value(self.agent(requires_tools=("read", "bash"), mode=AgentMode.SUBAGENT))["permission"]
-        self.assertEqual(permission["bash"], {"*": "allow", "git push *": "ask", "git * push *": "ask"})
+        self.assertEqual(permission["bash"], render_module.SUBAGENT_BASH_PERMISSION)
+        self.assertEqual(permission["bash"]["git push *"], "ask")
+        self.assertEqual(permission["bash"]["git * push *"], "ask")
         self.assertEqual(list(permission["bash"])[0], "*")
-        self.assertEqual(permission["read"], "allow")
+        self.assertEqual(permission["read"]["*"], "allow")
 
     def test_a_primary_agents_bash_stays_a_plain_allow(self):
         permission = self.value(self.agent(requires_tools=("bash",), mode=AgentMode.PRIMARY))["permission"]
@@ -476,7 +478,9 @@ class AgentRenderTest(unittest.TestCase):
         sub = self.value(self.agent(mode=AgentMode.SUBAGENT, **kwargs))["permission"]
         primary = self.value(self.agent(mode=AgentMode.PRIMARY, **kwargs))["permission"]
         self.assertNotEqual(sub["bash"], primary["bash"])
-        self.assertEqual({k: v for k, v in sub.items() if k != "bash"}, {k: v for k, v in primary.items() if k != "bash"})
+        differing = {k for k in sub if sub[k] != primary[k]}
+        self.assertEqual(differing, {"bash", "read", "edit"})
+        self.assertEqual({k: v for k, v in sub.items() if k not in differing}, {k: v for k, v in primary.items() if k not in differing})
 
     def test_shipped_subagents_ask_for_a_git_push_and_shipped_primaries_do_not(self):
         loaded = content_module.load()
@@ -491,6 +495,112 @@ class AgentRenderTest(unittest.TestCase):
             self.assertEqual(bash, expected, item.name)
         self.assertEqual(seen, {AgentMode.SUBAGENT, AgentMode.PRIMARY})
 
+    # --- The sensitive-file floor and the widened push guard ---
+
+    FLOOR_HITS = (
+        ".env",
+        "app/.env",
+        "../../home/probe/.env.local",
+        ".env.example",
+        ".ssh/id_rsa",
+        "../../home/probe/.ssh/id_rsa",
+        "svc/secrets/token.txt",
+        "secrets/token.txt",
+        ".credentials/store",
+        ".aws/credentials",
+        "../../home/probe/.aws/credentials",
+        ".config/gh/hosts.yml",
+        "../../home/probe/.config/gh/hosts.yml",
+        "certs/server.pem",
+        "server.pem",
+        "deploy.key",
+        "a/b/deploy.key",
+    )
+    FLOOR_MISSES = ("src/app.py", "README.md", "envfile", "my.environment", "secretsauce/x", ".aws/config", "keys.txt")
+
+    @staticmethod
+    def resolve(rules, text):
+        """The runtime's own resolution: last matching rule wins, and a
+        trailing ` *` also matches the bare command (`wildcard.ts`), which
+        `_wildcard_match` deliberately does not reproduce."""
+
+        def matches(pattern):
+            if render_module._wildcard_match(text, pattern):
+                return True
+            return pattern.endswith(" *") and render_module._wildcard_match(text, pattern[:-2])
+
+        hit = [action for pattern, action in rules.items() if matches(pattern)]
+        return hit[-1]
+
+    def test_a_primary_asks_for_every_sensitive_path_on_read_and_edit(self):
+        permission = self.value(self.agent(requires_tools=("read", "write"), mode=AgentMode.PRIMARY))["permission"]
+        for key in ("read", "edit"):
+            self.assertEqual(list(permission[key])[0], "*")
+            for text in self.FLOOR_HITS:
+                self.assertEqual(self.resolve(permission[key], text), "ask", (key, text))
+            for text in self.FLOOR_MISSES:
+                self.assertEqual(self.resolve(permission[key], text), "allow", (key, text))
+
+    def test_a_subagent_is_denied_never_asked_for_a_sensitive_path(self):
+        """An `ask` at delegation depth two or more hangs (#39112)."""
+        permission = self.value(self.agent(requires_tools=("read", "edit"), mode=AgentMode.SUBAGENT))["permission"]
+        for key in ("read", "edit"):
+            self.assertNotIn("ask", permission[key].values())
+            for text in self.FLOOR_HITS:
+                self.assertEqual(self.resolve(permission[key], text), "deny", (key, text))
+
+    def test_the_floor_has_no_env_example_exemption(self):
+        """The runtime's own default allows `*.env.example`; the floor is
+        written after it and must win, with no exemption."""
+        self.assertIn(".env.*", render_module.SENSITIVE_FILE_PATTERNS)
+        self.assertEqual(self.resolve(render_module.sensitive_file_permission(AgentMode.PRIMARY), ".env.example"), "ask")
+
+    def test_no_sensitive_pattern_is_absolute_or_home_relative(self):
+        """The runtime passes worktree-relative paths, so such a pattern never matches."""
+        for pattern in render_module.SENSITIVE_FILE_PATTERNS:
+            self.assertFalse(pattern.startswith(("/", "~", "$HOME")), pattern)
+
+    def test_an_agent_without_read_or_edit_gets_no_floor_keys(self):
+        permission = self.value(self.agent(requires_tools=("grep",)))["permission"]
+        self.assertNotIn("read", permission)
+        self.assertNotIn("edit", permission)
+
+    def test_the_push_guard_also_asks_behind_an_env_prefix_or_an_absolute_binary(self):
+        rules = render_module.SUBAGENT_BASH_PERMISSION
+        for text in (
+            "git push",
+            "git push origin main",
+            "FOO=1 git push origin main",
+            "A=1 B=2 git -C . push",
+            "/usr/bin/git push origin main",
+            "FOO=1 /usr/bin/git push",
+            "gh pr create --title x",
+            "gh pr merge 12",
+            "gh issue create",
+            "gh release create v1",
+            "gh repo create x",
+            "/usr/bin/gh pr create",
+            "FOO=1 gh pr merge 3",
+        ):
+            self.assertEqual(self.resolve(rules, text), "ask", text)
+
+    def test_the_push_guard_stays_quiet_on_ordinary_read_only_commands(self):
+        rules = render_module.SUBAGENT_BASH_PERMISSION
+        for text in (
+            "gh pr view 12",
+            "gh pr list",
+            "gh pr status",
+            "gh release list",
+            "gh issue view 3",
+            "git log --oneline",
+            "git status",
+            "git diff HEAD~1",
+            "ls -la",
+            "FOO=1 make test",
+            "/usr/bin/git status",
+        ):
+            self.assertEqual(self.resolve(rules, text), "allow", text)
+
     def test_write_targets_the_runtimes_own_edit_permission_not_a_write_key(self):
         """The runtime's `permission` schema has no `write` key: its loader folds
         `write`, `edit` and `patch` onto the single `edit` permission it does
@@ -500,17 +610,17 @@ class AgentRenderTest(unittest.TestCase):
         """
         agent = self.agent(requires_tools=("write",))
         permission = self.value(agent)["permission"]
-        self.assertEqual(permission["edit"], "allow")
+        self.assertEqual(permission["edit"]["*"], "allow")
         self.assertNotIn("write", permission)
 
     def test_edit_also_targets_the_edit_permission(self):
         agent = self.agent(requires_tools=("edit",))
-        self.assertEqual(self.value(agent)["permission"]["edit"], "allow")
+        self.assertEqual(self.value(agent)["permission"]["edit"]["*"], "allow")
 
     def test_declaring_both_write_and_edit_still_yields_one_edit_key(self):
         agent = self.agent(requires_tools=("write", "edit"))
         permission = self.value(agent)["permission"]
-        self.assertEqual(permission["edit"], "allow")
+        self.assertEqual(permission["edit"]["*"], "allow")
         self.assertNotIn("write", permission)
 
     def test_an_optional_mcp_id_is_granted_as_a_wildcard_in_permission_too(self):
@@ -564,8 +674,8 @@ class AgentRenderTest(unittest.TestCase):
             self.value(agent)["permission"],
             {
                 "*": "deny",
-                "read": "allow",
-                "edit": "allow",
+                "read": render_module.sensitive_file_permission(AgentMode.SUBAGENT),
+                "edit": render_module.sensitive_file_permission(AgentMode.SUBAGENT),
                 "context7*": "allow",
                 "external_directory": {
                     "*": "allow",
@@ -2130,7 +2240,7 @@ class ShippedContentRenderTest(unittest.TestCase):
         for agent in declares_write:
             value = only(render_module.agent(self.layout, agent), ConfigKeyArtifact)[0].value
             self.assertNotIn("write", value["permission"], agent.name)
-            self.assertEqual(value["permission"]["edit"], "allow", agent.name)
+            self.assertEqual(value["permission"]["edit"]["*"], "allow", agent.name)
 
     def test_the_persona_renders_its_declared_tools_as_a_real_restriction(self):
         """The voice declares the same reach as the orchestrator, and only this

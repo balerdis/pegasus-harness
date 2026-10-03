@@ -15,6 +15,7 @@ from pegasus.core.content import (
     Agent,
     Command,
     DENY_FLOOR_DIRECTORIES,
+    SENSITIVE_FILE_NAMES,
     Distribution,
     Mcp,
     Skill,
@@ -100,16 +101,74 @@ PERMISSIONS_DENY_FLOOR: tuple[str, ...] = tuple(
 #: compound command matches (`cd x && git push`, `$(git push)` included).
 #: The docs say `git -C . push` is not matched by the first rule, so the
 #: second and third add `git <anything> push` with and without arguments.
-#: Still not caught: `/usr/bin/git push`, `sh -c 'git push'`, aliases, and
-#: `gh` commands. `git * push *` over-asks for any git line whose arguments
-#: contain the word, like `git log --grep push x`, a false positive and never
-#: a miss; commits avoid it because the parallel-delivery procedure passes
-#: the message with `-F <message file>`.
-PERMISSIONS_ASK: tuple[str, ...] = ("Bash(git push *)", "Bash(git * push *)", "Bash(git * push)")
+#: Docs, same page: a deny or ask rule "matches past any leading
+#: assignment", so `FOO=1 git push` is already covered with no extra rule.
+#: An absolute binary is not: `/usr/bin/git push` needs its own pattern, so
+#: `*/git ...` spellings are added (`*` may sit at the start). The `gh`
+#: commands that write outward (create or merge a PR, open an issue, create a
+#: release or a repository) ask too, plain and behind a binary path; `gh pr
+#: view`, `gh pr list`, `git log` and `git status` match none of them.
+#: Still not caught: `sh -c 'git push'`, aliases, global flags before the
+#: `gh` subcommand (`gh -R x pr create`), other `gh` writers (`gh api -X
+#: POST`, `gh pr comment`) and `git 'push'`-style quoting. `git * push *`
+#: over-asks for any git line whose arguments contain the word, like `git log
+#: --grep push x`, a false positive and never a miss; commits avoid it
+#: because the parallel-delivery procedure passes the message with `-F
+#: <message file>`.
+_GIT_PUSH_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("git push *", "git-push"),
+    ("git * push *", "git-any-push-args"),
+    ("git * push", "git-any-push"),
+)
+_GH_OUTWARD_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("gh pr create *", "gh-pr-create"),
+    ("gh pr merge *", "gh-pr-merge"),
+    ("gh issue create *", "gh-issue-create"),
+    ("gh release create *", "gh-release-create"),
+    ("gh repo create *", "gh-repo-create"),
+)
 
-#: Explicit ids: `_permission_slug` drops `*`, so these three rules would
-#: otherwise all slug to the same `Bash-git-push`.
-_ASK_IDS: tuple[str, ...] = ("git-push", "git-any-push-args", "git-any-push")
+#: The file-level floor for the prompt's `## Sensitive Files` rule, asking
+#: rather than denying (a person at the keyboard can say yes; permissions
+#: here are session-wide, so there is no per-agent `deny` for sub-agents).
+#: Syntax per https://code.claude.com/docs/en/permissions ("Read and Edit"):
+#: gitignore patterns; `//path` is absolute from the filesystem root, `~/path`
+#: is home-relative, and a single leading `/` anchors at the settings source,
+#: which for the user-level file Pegasus writes is `~/.claude` -- so `/` is
+#: never used here. `//**/<name>` matches the name at any depth anywhere on
+#: the filesystem, project and home alike, so no `~/` twin is needed.
+#: The docs state that Read and Edit DENY rules also apply to file commands
+#: Claude Code recognizes in Bash (`cat`, `head`, `tail`, `sed`, `tee`) and to
+#: redirection targets, but not to a script that opens the file itself; they
+#: do not say the same of ask rules, so a `cat .env` is not claimed covered
+#: here (the directory-shaped floor above is deny, and does cover it). A
+#: `Write(...)` rule is never consulted (see `PERMISSIONS_ALLOW`); `Edit`
+#: covers Write. Precedence is deny, then ask, then allow, so these beat the
+#: `Read(//**)` and `Edit(//**)` allows. Only the file-shaped entries
+#: (`.env`, `.env.*`, `*.pem`, `*.key`) are asked here: the directory-shaped
+#: ones (`.ssh/`, `.credentials/`, `secrets/`, and the directories holding
+#: `.aws/credentials` and `.config/gh/hosts.yml`) are already denied outright
+#: by `PERMISSIONS_DENY_FLOOR`, and deny wins over ask. Unlike OpenCode's
+#: `read`, `.env.example` is not exempt, per the no-exemptions decision.
+_SENSITIVE_FILE_ASK_IDS: dict[str, str] = {".env": "env", ".env.*": "env-variants", "*.pem": "pem", "*.key": "key"}
+
+PERMISSIONS_ASK_ENTRIES: tuple[tuple[str, str], ...] = (
+    *((f"Bash({command})", ident) for command, ident in _GIT_PUSH_COMMANDS),
+    *((f"Bash(*/{command})", f"abs-{ident}") for command, ident in _GIT_PUSH_COMMANDS),
+    *((f"Bash({command})", ident) for command, ident in _GH_OUTWARD_COMMANDS),
+    *((f"Bash(*/{command})", f"abs-{ident}") for command, ident in _GH_OUTWARD_COMMANDS),
+    *(
+        (f"{tool}(//**/{name})", f"{tool.lower()}-{_SENSITIVE_FILE_ASK_IDS[name]}")
+        for tool in ("Read", "Edit")
+        for name in SENSITIVE_FILE_NAMES
+    ),
+)
+
+PERMISSIONS_ASK: tuple[str, ...] = tuple(rule for rule, _ in PERMISSIONS_ASK_ENTRIES)
+
+#: Explicit ids: `_permission_slug` drops `*`, so these rules would otherwise
+#: collide (`Bash-git-push`, `Read-env` for `.env` and `.env.*`).
+_ASK_IDS: tuple[str, ...] = tuple(ident for _, ident in PERMISSIONS_ASK_ENTRIES)
 
 _NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
 

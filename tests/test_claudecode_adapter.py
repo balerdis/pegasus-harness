@@ -586,18 +586,18 @@ class OwnArtifactsTest(unittest.TestCase):
         self.adapter = Adapter()
         self.layout = self.adapter.layout(ENVIRONMENT)
 
-    def test_exactly_seventeen_artifacts(self):
-        # 17, not 1: `own_artifacts` also emits the generated
+    def test_exactly_thirty_eight_artifacts(self):
+        # 38, not 1: `own_artifacts` also emits the generated
         # delegation-capabilities reference (`render.delegation_capabilities`),
         # unconditionally, the same way OpenCode's own `own_artifacts` does,
-        # plus the twelve `permissions.allow`/`permissions.deny` entries and the three
-        # `permissions.ask` entries for `git push`
+        # plus the twelve `permissions.allow`/`permissions.deny` entries and the 24
+        # `permissions.ask` entries (`git push`, outward `gh` commands, sensitive files)
         # (`render.permission_artifacts`) that make external directories
         # allowed by default in this CLI too, with the same fixed
         # five-directory deny floor -- see `test_claudecode_permissions.py`
         # for the dedicated coverage of those twelve on their own.
         artifacts = self.adapter.own_artifacts(self.layout, "pegasus-orchestrator", IDENTITY, ())
-        self.assertEqual(len(artifacts), 17)
+        self.assertEqual(len(artifacts), 38)
 
     def test_it_is_a_config_key_at_settings_pointing_at_agent(self):
         artifact = self.adapter.own_artifacts(self.layout, "pegasus-orchestrator", IDENTITY, ())[0]

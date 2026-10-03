@@ -23,7 +23,12 @@ import unittest
 from pathlib import Path
 
 from pegasus.adapters.claudecode import render as render_module
-from pegasus.core.content import DENY_FLOOR_DIRECTORIES
+from pegasus.core.content import (
+    DENY_FLOOR_DIRECTORIES,
+    SENSITIVE_FILE_DIRECTORIES,
+    SENSITIVE_FILE_NAMES,
+    SENSITIVE_FILE_PATHS,
+)
 from pegasus.core.types import ConfigKeyArtifact, Layout
 
 LAYOUT = Layout(config_dir=Path("/home/probe/.claude"), settings_file=Path("/home/probe/.claude/settings.json"))
@@ -58,6 +63,52 @@ class PermissionsDenyFloorTest(unittest.TestCase):
     def test_config_gh_keeps_its_two_path_segments(self):
         self.assertIn("Read(//**/.config/gh/**)", render_module.PERMISSIONS_DENY_FLOOR)
         self.assertIn("Edit(//**/.config/gh/**)", render_module.PERMISSIONS_DENY_FLOOR)
+
+
+class PermissionsAskTest(unittest.TestCase):
+    ASK = render_module.PERMISSIONS_ASK
+
+    def test_read_and_edit_ask_for_every_file_shaped_sensitive_name(self):
+        for tool in ("Read", "Edit"):
+            for name in SENSITIVE_FILE_NAMES:
+                self.assertIn(f"{tool}(//**/{name})", self.ASK)
+
+    def test_sensitive_rules_are_anchored_at_the_filesystem_root_never_a_single_slash(self):
+        """User-level settings: a leading `/` would anchor at `~/.claude`."""
+        for rule in self.ASK:
+            if rule.startswith(("Read(", "Edit(")):
+                self.assertTrue(rule[rule.index("(") + 1 :].startswith("//**/"), rule)
+
+    def test_no_write_ask_rule_is_ever_emitted(self):
+        self.assertFalse(any(rule.startswith("Write(") for rule in self.ASK))
+
+    def test_directory_shaped_entries_are_already_denied_so_no_ask_is_needed(self):
+        """Deny wins over ask: asking for these would be dead configuration."""
+        denied = set(render_module.PERMISSIONS_DENY_FLOOR)
+        for name in SENSITIVE_FILE_DIRECTORIES:
+            self.assertIn(f"Read(//**/{name}/**)", denied)
+            self.assertIn(f"Edit(//**/{name}/**)", denied)
+        for path in SENSITIVE_FILE_PATHS:
+            self.assertTrue(any(path.startswith(name + "/") for name in DENY_FLOOR_DIRECTORIES), path)
+
+    def test_outward_commands_ask_plain_and_behind_an_absolute_binary(self):
+        for command in ("gh pr create *", "gh pr merge *", "gh issue create *", "gh release create *", "gh repo create *"):
+            self.assertIn(f"Bash({command})", self.ASK)
+            self.assertIn(f"Bash(*/{command})", self.ASK)
+        for command in ("git push *", "git * push *", "git * push"):
+            self.assertIn(f"Bash(*/{command})", self.ASK)
+
+    def test_no_ask_rule_would_catch_an_ordinary_read_only_command(self):
+        for rule in self.ASK:
+            for harmless in ("gh pr view", "gh pr list", "git log", "git status"):
+                self.assertFalse(rule.startswith(f"Bash({harmless}"), rule)
+
+    def test_ask_ids_are_explicit_unique_and_aligned_with_the_rules(self):
+        self.assertEqual(len(render_module._ASK_IDS), len(self.ASK))
+        self.assertEqual(len(set(render_module._ASK_IDS)), len(self.ASK))
+        artifacts = render_module.permission_artifacts(LAYOUT)
+        asks = [a for a in artifacts if a.pointer == "/permissions/ask/-"]
+        self.assertEqual([a.id for a in asks], [f"own:permission-ask:{i}" for i in render_module._ASK_IDS])
 
 
 class PermissionArtifactsTest(unittest.TestCase):
