@@ -89,7 +89,16 @@ class EngramBoundaryTest(unittest.TestCase):
     def test_a_prompt_above_the_detection_cap_is_cut_and_redacted(self):
         (content,) = self.data["oversizedPrompt"]
         self.assertNotIn("ghp_", content)
+        self.assertNotIn(self.data["oversizedSecret"][4:], content)
         self.assertLessEqual(len(content), 2003)
+
+    def test_a_cut_inside_a_multibyte_character_does_not_skip_redaction(self):
+        for name, cases in self.data["multibyte"].items():
+            for case in cases:
+                with self.subTest(padding=name, pad=case["pad"]):
+                    (content,) = case["posted"]
+                    self.assertNotIn("ghp_", content)
+                    self.assertNotIn(case["secret"][4:], content)
 
     def test_a_passive_capture_above_the_detection_cap_is_not_posted(self):
         self.assertEqual(self.data["oversizedPassive"], 0)

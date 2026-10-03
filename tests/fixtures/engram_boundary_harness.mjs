@@ -52,9 +52,28 @@ posts.length = 0
 await passive("## Key Learnings\n" + "z ".repeat(140000) + secret)
 const oversizedPassive = last("/observations/passive").length
 
+// Fresh secrets, never registered by an earlier scenario, so the registry's
+// known-value masking cannot hide a skipped detection pass.
+let freshCounter = 0
+const freshSecret = () => "ghp_" + String(++freshCounter).padStart(2, "0") + "Qw7Zk3Xv9L".repeat(3) + "Rt"
+
 posts.length = 0
-await prompt(secret + " " + "z ".repeat(200000))
+const oversizedSecret = freshSecret()
+await prompt(oversizedSecret + " " + "z ".repeat(200000))
 const oversizedPrompt = last("/prompts")
+
+// Above the cap, padded with multibyte characters so the cut lands inside one
+// at every alignment: the cut must not push the text back above the cap.
+const multibyte = {}
+for (const [name, ch] of [["cjk", "\u3042"], ["emoji", "\u{1F600}"]]) {
+  multibyte[name] = []
+  for (let pad = 0; pad < 4; pad++) {
+    posts.length = 0
+    const fresh = freshSecret()
+    await prompt(fresh + " " + "x".repeat(pad) + ch.repeat(100000))
+    multibyte[name].push({ pad, secret: fresh, posted: last("/prompts") })
+  }
+}
 
 posts.length = 0
 const started = Date.now()
@@ -62,5 +81,5 @@ await prompt("<private>".repeat(28000))
 const unclosedMs = Date.now() - started
 
 console.log(
-  JSON.stringify({ straddling, oversizedPassive, oversizedPrompt, unclosedMs, proxyOptions: [...new Set(proxyOptions)] }),
+  JSON.stringify({ straddling, oversizedPassive, oversizedPrompt, oversizedSecret, multibyte, unclosedMs, proxyOptions: [...new Set(proxyOptions)] }),
 )

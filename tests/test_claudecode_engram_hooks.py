@@ -595,6 +595,19 @@ class ScriptTest(unittest.TestCase):
         self.assertNotIn("ghp_", content)
         self.assertLessEqual(len(content), 2003)
 
+    def test_a_cut_inside_a_multibyte_character_does_not_skip_redaction(self):
+        for name, char in (("cjk", "\u3042"), ("emoji", "\U0001F600")):
+            for pad in range(4):
+                with self.subTest(padding=name, pad=pad):
+                    server = self.fake()
+                    secret = "ghp_" + f"{pad:02d}" + "Qw7Zk3Xv9L" * 3 + "Rt"
+                    self.run_script(
+                        "prompt", self.event(prompt=secret + " " + "x" * pad + char * 100000), server.port
+                    )
+                    content = server.posts("/prompts")[0]["body"]["content"]
+                    self.assertNotIn("ghp_", content)
+                    self.assertNotIn(secret[4:], content)
+
     def test_requests_ignore_the_proxy_environment(self):
         proxy = self.fake()
         server = self.fake()

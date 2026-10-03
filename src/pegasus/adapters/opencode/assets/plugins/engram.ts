@@ -261,7 +261,14 @@ const DETECT_CAP_BYTES = 262144
 
 function cutToDetectCap(str: string): string {
   if (Buffer.byteLength(str, "utf8") <= DETECT_CAP_BYTES) return str
-  return Buffer.from(str, "utf8").subarray(0, DETECT_CAP_BYTES).toString("utf8")
+  const buf = Buffer.from(str, "utf8")
+  // Cut on a character boundary: a cut inside a multibyte character decodes to
+  // U+FFFD (3 bytes), which would push the result above the cap again and make
+  // the detection pass skip it. Step back while the byte at the cut is a
+  // continuation byte, so the cut falls before the character it would split.
+  let end = DETECT_CAP_BYTES
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--
+  return buf.subarray(0, end).toString("utf8")
 }
 
 /**
