@@ -118,8 +118,30 @@ class ParseTests(unittest.TestCase):
         for name in ("cbm", "engram"):
             self.assertIsNotNone(tool.GITHUB_ENDPOINT.match(by_name[name]["endpoint"]))
 
-    def test_default_mcp_dir_resolves_from_tool_location(self) -> None:
-        self.assertEqual(tool.DEFAULT_MCP_DIR, REPO_ROOT / "src" / "pegasus" / "content" / "mcp")
+    def test_default_mcp_dir_is_discovered_from_the_tool_location(self) -> None:
+        found = tool.discover_mcp_dir()
+        self.assertEqual(found.parent.name, "content")
+        self.assertEqual(found, tool.discover_mcp_dir(REPO_ROOT))
+
+    def test_discovery_works_for_any_product_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "src" / "darq" / "content" / "mcp").mkdir(parents=True)
+            self.assertEqual(tool.discover_mcp_dir(Path(tmp)), Path(tmp) / "src" / "darq" / "content" / "mcp")
+
+    def test_discovery_needs_exactly_one_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(tool.DescriptorError):
+                tool.discover_mcp_dir(Path(tmp))
+            for product in ("a", "b"):
+                (Path(tmp) / "src" / product / "content" / "mcp").mkdir(parents=True)
+            with self.assertRaises(tool.DescriptorError):
+                tool.discover_mcp_dir(Path(tmp))
+
+    def test_unparseable_tags_are_counted_in_the_row_note(self) -> None:
+        row = _check(_download("1.0.0"), _github(("engram-v1.2", False, False), ("nightly", False, False), ("v1.0.0", False, False)))
+        self.assertEqual(row["status"], "up-to-date")
+        self.assertIn("2 unparseable", row["detail"])
+        self.assertIn("engram-v1.2", row["detail"])
 
     def test_missing_frontmatter_is_an_error(self) -> None:
         with self.assertRaises(tool.DescriptorError):
@@ -170,6 +192,11 @@ class MainTests(unittest.TestCase):
 
     def test_bad_dir_exits_two(self) -> None:
         code, _ = self._run(["--mcp-dir", "/nonexistent/dir"], {})
+        self.assertEqual(code, 2)
+
+    def test_ambiguous_default_dir_exits_two(self) -> None:
+        with mock.patch.object(tool, "discover_mcp_dir", side_effect=tool.DescriptorError("two found")):
+            code, _ = self._run([], {})
         self.assertEqual(code, 2)
 
     def test_unparseable_descriptor_exits_two(self) -> None:

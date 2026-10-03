@@ -18,7 +18,7 @@ minors can break, so a human decides), `unversioned`, `error` (that row only; th
 
 Exit codes: 0 report-only (default, even when updates exist); with `--strict`, 1 if any row is
 `update-available`, `major-available`, `review-0.x` or `error`; 2 for an operational failure
-(unreadable directory or unparseable descriptor). `GITHUB_TOKEN`, if set, is sent as a bearer token
+(unreadable or ambiguous MCP directory, or unparseable descriptor). `GITHUB_TOKEN`, if set, is sent as a bearer token
 to the GitHub API (never printed).
 
 This file is shared byte-for-byte between sibling products: it imports nothing from them and holds
@@ -37,7 +37,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
-DEFAULT_MCP_DIR = Path(__file__).resolve().parent.parent / "src" / "pegasus" / "content" / "mcp"
+ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TIMEOUT_SECONDS = 30
 GITHUB_RELEASES_API = "https://api.github.com/repos/{owner}/{repo}/releases?per_page=100"
 NPM_REGISTRY = "https://registry.npmjs.org/{package}"
@@ -51,6 +51,15 @@ Fetch = Callable[[str, float], bytes]
 
 class DescriptorError(Exception):
     """A descriptor that cannot be read or parsed."""
+
+
+def discover_mcp_dir(root: Path = ROOT) -> Path:
+    """The one `src/<product>/content/mcp` under `root`; anything else is an error."""
+    found = sorted(root.glob("src/*/content/mcp"))
+    if len(found) != 1:
+        listing = ", ".join(str(path) for path in found) or "none"
+        raise DescriptorError(f"expected exactly one src/*/content/mcp directory, found {listing}; pass --mcp-dir")
+    return found[0]
 
 
 def default_fetch(url: str, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> bytes:
@@ -175,6 +184,10 @@ def check_descriptor(descriptor: dict[str, str], fetch: Fetch, timeout: float) -
         if not descriptor.get("version"):
             raise ValueError("descriptor has no `version`")
         row["status"], row["latest"], row["latest_major"] = classify(descriptor["version"], candidates)
+        ignored = [tag for tag in candidates if version_key(tag) is None]
+        if ignored:
+            shown = ", ".join(ignored[:3]) + (", ..." if len(ignored) > 3 else "")
+            row["detail"] = f"{len(ignored)} unparseable tag(s) ignored: {shown}"
     except Exception as error:  # noqa: BLE001 -- one bad row must not stop the others
         row["status"] = "error"
         row["detail"] = str(error) or type(error).__name__
@@ -214,13 +227,16 @@ def render_text(rows: list[dict]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--mcp-dir", type=Path, default=DEFAULT_MCP_DIR, help="directory with the MCP descriptors")
+    parser.add_argument("--mcp-dir", type=Path, default=None,
+        help="directory with the MCP descriptors (default: the single src/*/content/mcp)")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     parser.add_argument("--strict", action="store_true", help="exit 1 if anything needs attention")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="seconds per request")
     args = parser.parse_args()
 
     try:
+        if args.mcp_dir is None:
+            args.mcp_dir = discover_mcp_dir()
         descriptors = load_descriptors(args.mcp_dir)
     except DescriptorError as error:
         print(f"error: {error}", file=sys.stderr)
