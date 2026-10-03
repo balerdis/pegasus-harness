@@ -361,6 +361,12 @@ PRODUCT_IDENTITY_ALLOWLIST = frozenset(
         # `PEGASUS_SKILL_REGISTRY_BIN`: it never varies with which
         # distribution runs.
         "pegasus-doctor",
+        # The wire-format name of a substituted credential, `$PEGASUS_SECRET_<NAME>`:
+        # a token the model sees and a shell expands, shared by every
+        # distribution on this engine (see the exemption note for the
+        # secret-transport plugin). The Claude Code engram hook script builds the
+        # same token when it redacts a prompt.
+        "$PEGASUS_SECRET_",
         # The prefix an orphaned half-finished atomic write's temp file is
         # named with -- same reasoning as `"pegasus-doctor"` just above: an
         # operator identifying a stray `.pegasus-*` file needs this name
@@ -988,6 +994,9 @@ def _brand_offenders(path: Path, fragments: tuple[str, ...]) -> list[str]:
 #:   above: a name the model itself sees and a shell expands, shared across
 #:   every distribution built on this engine, never rebranded per
 #:   distribution the way a shown name would be.
+#: - `adapters/claudecode/assets/engram-hook.py` builds the same
+#:   `$PEGASUS_SECRET_<NAME>` token when it redacts a prompt before engram
+#:   stores it, the one wire-format name the OpenCode plugin above shares.
 #:
 #: Listed here, and nowhere else, so a new asset can never quietly join them:
 #: one that ships a brand fragment without appearing here, at this exact
@@ -998,6 +1007,7 @@ VERBATIM_ASSET_BRAND_EXEMPTIONS = frozenset(
         "adapters/opencode/assets/plugins/zellij-state.ts",
         "adapters/opencode/assets/registry/assets.json",
         "adapters/opencode/assets/plugins/secret-transport.ts",
+        "adapters/claudecode/assets/engram-hook.py",
     }
 )
 

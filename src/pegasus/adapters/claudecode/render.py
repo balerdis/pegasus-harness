@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
+from importlib.resources import files as _package_files
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,7 @@ from pegasus.core.content import (
     delegation_capabilities_path,
     mcp_convention_path,
 )
+from pegasus.core.credential_transport import load_catalog
 from pegasus.core.dependencies import npm_script_path, program_path
 from pegasus.core.identity import Identity
 from pegasus.core.types import Artifact, ConfigKeyArtifact, FileArtifact, Layout, ModelAssignment
@@ -457,7 +460,7 @@ def mcp(layout: Layout, item: Mcp) -> list[Artifact]:
     *definition* for a bound server, and that reasoning has nothing to do
     with whether its usage convention should exist.
     """
-    return [
+    artifacts: list[Artifact] = [
         FileArtifact(
             id=f"mcp-convention:{item.name}",
             path=_convention_path(layout, item),
@@ -465,6 +468,99 @@ def mcp(layout: Layout, item: Mcp) -> list[Artifact]:
             executable=False,
         )
     ]
+    if item.name == ENGRAM_SERVER:
+        artifacts.extend(engram_hook_artifacts(layout, item))
+    return artifacts
+
+
+#: The shipped server whose selection brings Pegasus-owned Claude Code hooks.
+ENGRAM_SERVER = "engram"
+
+#: The hook script's file name, inside `<data dir>/hooks/`. The data directory
+#: is the product's own (`FileSystem.data_dir`, derived from its identity), so
+#: a renamed distribution gets its own copy with no literal here.
+ENGRAM_HOOK_SCRIPT = "engram-hook.py"
+
+#: The three events Pegasus hooks, in `settings.json` order: the event, the
+#: script's subcommand, an optional matcher and the hook's timeout in seconds.
+#: Deliberately NOT here: `Stop` (fires after every reply, not at the end of a
+#: session), `SessionEnd`, a `compact` matcher, reminders and any
+#: memory-protocol text -- all of them contradict the 7.1.0 decision that only
+#: the person-facing agent writes to memory, and only when something durable
+#: happened.
+_ENGRAM_HOOK_EVENTS: tuple[tuple[str, str, str | None, int], ...] = (
+    ("SessionStart", "session-start", "startup|resume|clear|fork", 10),
+    ("UserPromptSubmit", "prompt", None, 5),
+    ("SubagentStop", "subagent-stop", None, 5),
+)
+
+_ENGRAM_HOOK_ASSET: Any = _package_files(__package__) / "assets" / ENGRAM_HOOK_SCRIPT
+
+
+def engram_hook_script_path(layout: Layout) -> Path | None:
+    """Where the hook script lives, or `None` when this layout has no data directory."""
+    if layout.dependencies_dir is None:
+        return None
+    return layout.dependencies_dir.parent / "hooks" / ENGRAM_HOOK_SCRIPT
+
+
+def render_engram_hook_script(layout: Layout, item: Mcp) -> bytes:
+    """The script template with its two render-time facts filled in.
+
+    `engram_bin` is the binary Pegasus itself manages for this server, by
+    absolute path -- the one `mcpServers:` already points at. A bound server is
+    the user's own and has no path Pegasus knows, so it is `None` and the script
+    falls back to `engram` on PATH. `catalog` is the credential catalog the
+    OpenCode secret transport reads too: one source of truth for what counts as
+    a credential.
+    """
+    binary: str | None = None
+    if not item.is_bound and item.distribution is Distribution.DOWNLOAD and layout.dependencies_dir is not None:
+        binary = str(program_path(layout.dependencies_dir, item))
+    config = json.dumps({"engram_bin": binary, "catalog": load_catalog()}, sort_keys=True)
+    template = _ENGRAM_HOOK_ASSET.read_text(encoding="utf-8")
+    return template.replace("__CONFIG_JSON__", repr(config)).encode("utf-8")
+
+
+def engram_hook_artifacts(layout: Layout, item: Mcp) -> list[Artifact]:
+    """The script plus the three `settings.json` hook entries, only for engram.
+
+    Each entry is an append at `/hooks/<Event>/-`, the same fingerprinted
+    mechanism `permission_artifacts` uses, so uninstall and restore remove
+    exactly these and never the person's own hooks. Values are fully
+    deterministic: the planner finds an appended entry again by its digest.
+    """
+    script = engram_hook_script_path(layout)
+    if script is None:
+        return []
+    artifacts: list[Artifact] = [
+        FileArtifact(
+            id=f"mcp-hook-script:{item.name}",
+            path=script,
+            content=render_engram_hook_script(layout, item),
+            executable=True,
+        )
+    ]
+    for event, subcommand, matcher, timeout in _ENGRAM_HOOK_EVENTS:
+        group: dict[str, Any] = {}
+        if matcher is not None:
+            group["matcher"] = matcher
+        group["hooks"] = [
+            {
+                "type": "command",
+                "command": f"python3 {shlex.quote(str(script))} {subcommand}",
+                "timeout": timeout,
+            }
+        ]
+        artifacts.append(
+            ConfigKeyArtifact(
+                id=f"mcp-hook:{item.name}:{event}",
+                path=layout.settings_file,
+                pointer=f"/hooks/{event}/-",
+                value=group,
+            )
+        )
+    return artifacts
 
 
 def _convention_path(layout: Layout, item: Mcp) -> Path:
