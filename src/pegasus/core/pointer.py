@@ -138,6 +138,8 @@ def _descend(node: Any, token: str, next_token: str, pointer: str) -> Any:
 
 def _assign(node: Any, token: str, value: Any, pointer: str) -> None:
     if isinstance(node, dict):
+        if token == APPEND:
+            raise PointerError(f"{pointer!r} appends to something that is not a list")
         node[token] = value
         return
     if isinstance(node, list):

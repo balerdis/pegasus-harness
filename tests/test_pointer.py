@@ -86,6 +86,11 @@ class SetTest(unittest.TestCase):
         result = pointer.set_at({"plugin": ["a"]}, "/plugin/-", "b")
         self.assertEqual(result["plugin"], ["a", "b"])
 
+    def test_appending_into_an_object_is_rejected(self):
+        for document in ({"hooks": {"SessionStart": {}}}, {"hooks": {"SessionStart": {"a": 1}}}):
+            with self.assertRaises(pointer.PointerError):
+                pointer.set_at(document, "/hooks/SessionStart/-", "x")
+
     def test_numeric_token_creates_a_list_parent(self):
         result = pointer.set_at({}, "/plugin/-", "a")
         self.assertEqual(result, {"plugin": ["a"]})

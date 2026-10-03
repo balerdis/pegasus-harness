@@ -206,6 +206,16 @@ class PlannerOwnershipTest(RealHomeTestCase):
         self.assertEqual(prompt[0], self.USER_PROMPT_HOOK)
         self.assertIn("engram-hook.py", prompt[1]["hooks"][0]["command"])
 
+    def test_an_object_shaped_event_fails_cleanly_and_leaves_the_file_untouched(self):
+        self.present()
+        original = json.dumps({"hooks": {"SessionStart": {"matcher": "x"}}}, indent=2)
+        self.layout().settings_file.write_text(original, encoding="utf-8")
+        code, report = self.run_cli("install", "--cli", CLI, "--mcp", "engram=my-engram")
+        self.assertNotEqual(code, 0, report)
+        self.assertEqual(self.layout().settings_file.read_text(encoding="utf-8"), original)
+        self.assertNotIn('"-"', self.layout().settings_file.read_text(encoding="utf-8"))
+        self.assertFalse(self.script().exists())
+
     def test_update_does_not_duplicate_the_entries(self):
         self.install("--mcp", "engram=my-engram")
         code, report = self.run_cli("update", "--cli", CLI)
