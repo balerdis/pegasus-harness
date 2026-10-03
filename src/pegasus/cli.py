@@ -831,6 +831,9 @@ def install(
             "overwritten": [_placed(step) for step in plan.overwritten],
             "skipped": [_left(step) for step in plan.collisions],
             "retired": [_recorded(record) for record in retirements],
+            "pruned_dependencies": _prune_dependencies(
+                runtime, layout, journal, content=content, previous=installed, dry_run=True
+            ),
             "model_warnings": list(model_warnings),
             "grant_warnings": grant_warnings,
             "mcp_warnings": mcp_warnings,
@@ -1043,8 +1046,9 @@ def install(
         tuple(placed.config_dir / relative for relative in stale.pruned),
         granted_directories=directory_keys,
     )
+    saved_journal = journal_module.with_install(journal, merged)
     try:
-        store.save(journal_module.with_install(journal, merged))
+        store.save(saved_journal)
         if on_progress is not None:
             _tick("journal", "journal")
     except JournalStoreError as error:
@@ -1076,6 +1080,11 @@ def install(
     # they are reported alongside everything else that needed no write,
     # never as an "update" that did not happen.
     reported = applied.records + new_dependencies
+    # Only now, with the journal saved: a run that failed above never loses a
+    # version something may still be using.
+    pruned_dependencies = _prune_dependencies(
+        runtime, layout, saved_journal, content=content, previous=installed
+    )
     # A dependency whose id `replaced_dependency_ids` names already had a
     # journal entry before this run -- refetched because the version or
     # digest changed, not because Pegasus never placed one before. Excluding
@@ -1112,6 +1121,7 @@ def install(
         "pruned": list(stale.pruned),
         "journal": str(store.path),
         "retention": _retain(snapshot),
+        "pruned_dependencies": pruned_dependencies,
         "model_warnings": list(model_warnings),
         "grant_warnings": grant_warnings,
     }
@@ -1987,6 +1997,71 @@ def _kept_dependency(runtime: Runtime, owned: dict[str, Record], item) -> Record
     return existing
 
 
+def _prune_dependencies(
+    runtime: Runtime,
+    layout,
+    journal: journal_module.Journal,
+    *,
+    content: content_module.Content | None = None,
+    previous: Install | None = None,
+    also_names: tuple[Record, ...] = (),
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Drop version directories of downloaded servers that nothing uses any more.
+
+    ``dependencies_dir`` is shared by every CLI of one identity, so what is
+    kept is decided against the whole ``journal``, never one install: the
+    target of every `dependency-tree` record in every install, the version
+    each materialized item of ``content`` pins now, and ``previous`` -- the
+    install this run replaced -- so one `restore` back to the previous
+    generation still finds its binary (it goes on the following run). Only
+    names this product manages are examined: those of ``content``, of the
+    journal, and of ``also_names``.
+
+    Best-effort and never raises: a directory that will not go away is
+    reported under ``failed``. With ``dry_run`` nothing is deleted and
+    ``removed`` lists what a real run would delete.
+    """
+    holders = [*journal.installs, *((previous,) if previous is not None else ())]
+    held = [record for install in holders for record in install.entries if record.kind == "dependency-tree"]
+    trees = [*held, *(record for record in also_names if record.kind == "dependency-tree")]
+    items = [item for item in (content.mcp if content is not None else ()) if _materializes(item)]
+    names = frozenset(
+        {item.name for item in items} | {record.id.removeprefix("dependency:") for record in trees}
+    )
+    keep = frozenset(
+        {record.target for record in held}
+        | {dependencies_module.target_dir(layout.dependencies_dir, item) for item in items}
+    )
+    try:
+        if dry_run:
+            candidates, failed = dependencies_module.stale_versions(
+                runtime.filesystem, layout.dependencies_dir, names, keep
+            )
+            return {"removed": [str(path) for path in candidates], "failed": list(failed)}
+        outcome = dependencies_module.prune(runtime.filesystem, layout.dependencies_dir, names, keep)
+    except FileSystemError as error:
+        return {"removed": [], "failed": [str(error)]}
+    return {"removed": [str(path) for path in outcome.removed], "failed": list(outcome.failed)}
+
+
+def _and_pruned_dependencies(lines: list[str], report: dict[str, Any], *, planned: bool = False) -> list[str]:
+    """Old versions of downloaded servers removed (or that would be), and any
+    that could not be, so prose never hides what cleanup did."""
+    outcome = report.get("pruned_dependencies") or {}
+    removed = outcome.get("removed") or []
+    failed = outcome.get("failed") or []
+    if removed:
+        lines = [
+            *lines,
+            f"{'Would remove' if planned else 'Removed'} old versions of downloaded servers nothing uses any more:",
+            *(f"  {path}" for path in removed),
+        ]
+    if failed:
+        lines = [*lines, "Old versions of downloaded servers could not be cleaned up:", *(f"  {reason}" for reason in failed)]
+    return lines
+
+
 def _stale_dependencies(installed: Install | None, content: content_module.Content) -> tuple[Record, ...]:
     """`download` and `npm` servers this render no longer names.
 
@@ -2218,7 +2293,17 @@ def uninstall(cli_id: str, runtime: Runtime) -> dict[str, Any]:
         ) from error
 
     retired = planner.retire(runtime.filesystem, install)
-    store.save(journal_module.without_install(journal, adapter.id))
+    remaining = journal_module.without_install(journal, adapter.id)
+    store.save(remaining)
+    # An old version left behind by an earlier update would otherwise keep the
+    # server's directory alive for good; the other CLIs' records still protect
+    # whatever they use.
+    pruned_dependencies = _prune_dependencies(
+        runtime,
+        adapter.layout(runtime.environment),
+        remaining,
+        also_names=tuple(install.entries),
+    )
     return {
         "cli": adapter.id,
         "status": "uninstalled",
@@ -2228,6 +2313,7 @@ def uninstall(cli_id: str, runtime: Runtime) -> dict[str, Any]:
         "kept_links": list(retired.kept_links),
         "pruned": list(retired.pruned),
         "retention": _retain(snapshot),
+        "pruned_dependencies": pruned_dependencies,
     }
 
 
@@ -4233,6 +4319,7 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
         if report.get("pruned"):
             n = len(report["pruned"])
             lines.append(f"Pruned {n} empty director{'y' if n == 1 else 'ies'}: {', '.join(report['pruned'])}")
+        lines = _and_pruned_dependencies(lines, report, planned=planned)
         if report.get("model_warnings"):
             lines.append("Model assignments that could not be honoured:")
             lines.extend(f"  {warning}" for warning in report["model_warnings"])
@@ -4284,6 +4371,7 @@ def _prose(report: dict[str, Any], *, identity: Identity | None = None) -> str:
         f"`{identity.program_name} restore` can put this back exactly as it was before; "
         f"up to {RETAIN_GENERATIONS} generations are kept, oldest dropped first."
     )
+    lines = _and_pruned_dependencies(lines, report)
     return "\n".join(_and_retention(_and_activation(lines, report), report))
 
 

@@ -199,6 +199,15 @@ PROBE_V2 = replace(
 )
 PROBE_CONTENT_V2 = Content(mcp=(PROBE_V2,), agents=(_ORCHESTRATOR,))
 
+PROBE_V3_BYTES = b"the third release"
+PROBE_V3 = replace(
+    PROBE,
+    version="1.2.5",
+    checksum=ownership.digest_of_bytes(PROBE_V3_BYTES),
+    endpoint="https://example.test/releases/probe-linux-x64-v3",
+)
+PROBE_CONTENT_V3 = Content(mcp=(PROBE_V3,), agents=(_ORCHESTRATOR,))
+
 
 @patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
 class UpdateDownloadReportTest(RealHomeTestCase):
@@ -227,6 +236,136 @@ class UpdateDownloadReportTest(RealHomeTestCase):
             _, report = self.run_cli("update", "--cli", CLI, "--dry-run")
         self.assertNotIn("dependency:probe", [item["id"] for item in report["created"]])
         self.assertIn("dependency:probe", [item["id"] for item in report["updated"]])
+
+
+@patch("pegasus.core.content.load", return_value=PROBE_CONTENT)
+class PruneOldVersionsTest(RealHomeTestCase):
+    """`update` drops versions nothing uses, but keeps the previous one so a
+    single `restore` still finds its binary."""
+
+    def version_dir(self, version):
+        return self.layout().dependencies_dir / "probe" / version
+
+    def bump(self, content, item, payload):
+        with patch("pegasus.core.content.load", return_value=content):
+            downloader = FakeDownloader({item.endpoint: payload})
+            return self.run_cli("update", "--cli", CLI, downloader=downloader)
+
+    def install_v1_then_bump_to_v3(self):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        _, first = self.bump(PROBE_CONTENT_V2, PROBE_V2, PROBE_V2_BYTES)
+        _, second = self.bump(PROBE_CONTENT_V3, PROBE_V3, PROBE_V3_BYTES)
+        return first, second
+
+    def test_the_first_update_keeps_the_previous_version_for_restore(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        _, report = self.bump(PROBE_CONTENT_V2, PROBE_V2, PROBE_V2_BYTES)
+        self.assertTrue(self.version_dir("1.2.3").is_dir())
+        self.assertTrue(self.version_dir("1.2.4").is_dir())
+        self.assertEqual(report["pruned_dependencies"], {"removed": [], "failed": []})
+
+    def test_the_second_update_drops_the_version_two_back_and_keeps_the_previous(self, _load):
+        _, second = self.install_v1_then_bump_to_v3()
+        self.assertFalse(self.version_dir("1.2.3").exists())
+        self.assertTrue(self.version_dir("1.2.4").is_dir())
+        self.assertTrue(self.version_dir("1.2.5").is_dir())
+        self.assertEqual(second["pruned_dependencies"]["removed"], [str(self.version_dir("1.2.3"))])
+        self.assertEqual(second["pruned_dependencies"]["failed"], [])
+
+    def test_the_report_is_in_the_prose_too(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.bump(PROBE_CONTENT_V2, PROBE_V2, PROBE_V2_BYTES)
+        context = self.runtime(FakeDownloader({PROBE_V3.endpoint: PROBE_V3_BYTES}))
+        with patch("pegasus.core.content.load", return_value=PROBE_CONTENT_V3):
+            cli.main(["update", "--cli", CLI], runtime=context)
+        self.assertIn("old versions of downloaded servers", context.out.getvalue())
+        self.assertIn(str(self.version_dir("1.2.3")), context.out.getvalue())
+
+    def test_a_dry_run_prunes_nothing_and_says_what_it_would(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.bump(PROBE_CONTENT_V2, PROBE_V2, PROBE_V2_BYTES)
+        orphan = self.version_dir("0.0.1")
+        orphan.mkdir(parents=True)
+        with patch("pegasus.core.content.load", return_value=PROBE_CONTENT_V2):
+            _, report = self.run_cli("update", "--cli", CLI, "--dry-run")
+        self.assertTrue(orphan.is_dir())
+        # 1.2.3 is the version two back from what is installed (1.2.4), so a
+        # real run would drop it as well.
+        self.assertEqual(
+            sorted(report["pruned_dependencies"]["removed"]),
+            sorted([str(orphan), str(self.version_dir("1.2.3"))]),
+        )
+        self.assertTrue(self.version_dir("1.2.3").is_dir())
+
+    def test_a_failed_prune_does_not_fail_the_update(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.bump(PROBE_CONTENT_V2, PROBE_V2, PROBE_V2_BYTES)
+        real = self.filesystem.remove_dir
+
+        def busy(path):
+            if path == self.version_dir("1.2.3"):
+                raise cli.FileSystemError("busy")
+            return real(path)
+
+        self.filesystem.remove_dir = busy
+        code, report = self.bump(PROBE_CONTENT_V3, PROBE_V3, PROBE_V3_BYTES)
+        self.assertEqual(code, cli.OK)
+        self.assertEqual(report["pruned_dependencies"]["removed"], [])
+        self.assertTrue(report["pruned_dependencies"]["failed"])
+
+    def test_another_cli_still_on_the_old_version_keeps_it(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.bump(PROBE_CONTENT_V2, PROBE_V2, PROBE_V2_BYTES)
+        # A second install's journal still points at v1.2.3, as an
+        # un-updated sibling CLI's would.
+        store = cli.journal_store(self.runtime())
+        journal = store.load()
+        mine = journal_module.install_for(journal, CLI)
+        old = replace(
+            next(e for e in mine.entries if e.kind == "dependency-tree"), target=self.version_dir("1.2.3")
+        )
+        sibling = replace(mine, cli="claudecode", entries=(old,))
+        store.save(journal_module.with_install(journal, sibling))
+        self.bump(PROBE_CONTENT_V3, PROBE_V3, PROBE_V3_BYTES)
+        self.assertTrue(self.version_dir("1.2.3").is_dir())
+        self.assertTrue(self.version_dir("1.2.4").is_dir())
+
+    def test_restore_after_an_update_still_finds_the_old_binary(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.bump(PROBE_CONTENT_V2, PROBE_V2, PROBE_V2_BYTES)
+        code, _ = self.run_cli("restore")
+        self.assertEqual(code, cli.OK)
+        self.assertTrue((self.version_dir("1.2.3") / "probe-linux-x64").is_file())
+        self.assertFalse(self.version_dir("1.2.4").exists())
+        entry = next(e for e in self.installed_entries() if e.kind == "dependency-tree")
+        self.assertEqual(entry.target, self.version_dir("1.2.3"))
+
+    def test_an_orphan_version_is_cleaned_by_the_next_update(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        orphan = self.version_dir("0.0.1")
+        orphan.mkdir(parents=True)
+        (orphan / "probe-linux-x64").write_bytes(b"old")
+        _, report = self.run_cli("update", "--cli", CLI)
+        self.assertFalse(orphan.exists())
+        self.assertEqual(report["pruned_dependencies"]["removed"], [str(orphan)])
+        self.assertTrue(self.target().is_dir())
+
+    def test_uninstalling_after_an_update_leaves_no_server_directory(self, _load):
+        self.present()
+        self.run_cli("install", "--cli", CLI, "--mcp", "probe")
+        self.bump(PROBE_CONTENT_V2, PROBE_V2, PROBE_V2_BYTES)
+        with patch("pegasus.core.content.load", return_value=PROBE_CONTENT_V2):
+            _, report = self.run_cli("uninstall", "--cli", CLI)
+        self.assertFalse(self.version_dir("1.2.3").parent.exists())
+        self.assertEqual(report["pruned_dependencies"]["removed"], [str(self.version_dir("1.2.3"))])
 
 
 @patch("pegasus.core.content.load", return_value=PROBE_CONTENT)

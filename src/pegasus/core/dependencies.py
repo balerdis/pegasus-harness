@@ -27,6 +27,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
@@ -50,6 +51,99 @@ def target_dir(dependencies_dir: Path, item: Mcp) -> Path:
     is what lets a later run recognise its own work without re-fetching it.
     """
     return dependencies_dir / item.name / item.version
+
+
+@dataclass(frozen=True)
+class Pruned:
+    """What a prune pass removed, and what it could not.
+
+    ``failed`` is reasons, not paths alone: a version directory that would
+    not go away is untidy, never dangerous, so the pass reports it and moves
+    on instead of raising.
+    """
+
+    removed: tuple[Path, ...] = ()
+    failed: tuple[str, ...] = ()
+
+
+def _single_component(name: str) -> bool:
+    return bool(name) and name not in (".", "..") and "/" not in name and "\\" not in name
+
+
+def stale_versions(
+    filesystem: FileSystem,
+    dependencies_dir: Path,
+    names: frozenset[str],
+    keep: frozenset[Path],
+) -> tuple[list[Path], list[str]]:
+    """Version directories under ``dependencies_dir/<name>`` that nothing keeps.
+
+    Only direct children ``dependencies_dir/<name>/<version>`` of a name in
+    ``names`` are ever candidates, so a name this product does not manage is
+    never looked at. A symlink -- the ``<name>`` directory or a version --
+    is skipped rather than followed, and anything that is not a directory is
+    left alone. Returns the candidates and the reasons for anything that
+    could not be examined.
+    """
+    candidates: list[Path] = []
+    failures: list[str] = []
+    for name in sorted(names):
+        if not _single_component(name):
+            continue
+        name_dir = dependencies_dir / name
+        try:
+            if filesystem.is_symlink(name_dir) or not filesystem.exists(name_dir):
+                continue
+            versions = filesystem.list_dir(name_dir)
+        except FileSystemError as error:
+            failures.append(str(error))
+            continue
+        for version in versions:
+            path = name_dir / version
+            if path in keep:
+                continue
+            try:
+                if filesystem.is_symlink(path) or not filesystem.resolves_to_directory(path):
+                    continue
+            except FileSystemError as error:
+                failures.append(str(error))
+                continue
+            candidates.append(path)
+    return candidates, failures
+
+
+def prune(
+    filesystem: FileSystem,
+    dependencies_dir: Path,
+    names: frozenset[str],
+    keep: frozenset[Path],
+) -> Pruned:
+    """Delete every version directory :func:`stale_versions` names, best-effort.
+
+    A failed deletion is recorded in ``failed`` and the pass carries on. Once a
+    managed ``<name>`` directory has nothing left in it, it goes too; a
+    non-empty one, or one that cannot be removed, is simply left.
+    """
+    candidates, failures = stale_versions(filesystem, dependencies_dir, names, keep)
+    removed: list[Path] = []
+    failed = list(failures)
+    for path in candidates:
+        try:
+            filesystem.remove_dir(path)
+            removed.append(path)
+        except FileSystemError as error:
+            failed.append(str(error))
+    for name in sorted(names):
+        if not _single_component(name):
+            continue
+        name_dir = dependencies_dir / name
+        try:
+            if filesystem.is_symlink(name_dir) or not filesystem.exists(name_dir):
+                continue
+            filesystem.remove_empty_dir(name_dir)
+        except FileSystemError as error:
+            failed.append(str(error))
+    return Pruned(removed=tuple(removed), failed=tuple(failed))
 
 
 def binary_path(dependencies_dir: Path, item: Mcp) -> Path:

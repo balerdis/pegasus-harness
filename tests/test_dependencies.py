@@ -572,3 +572,129 @@ class MaterializeOnRealDiskTest(unittest.TestCase):
         target = dependencies.target_dir(self.dependencies_dir, item)
         self.assertEqual((target / "package-lock.json").read_bytes(), item.npm_lockfile)
         self.assertEqual(json.loads((target / "package.json").read_bytes())["name"], item.npm_package_name)
+
+
+class PruneTest(unittest.TestCase):
+    """Dropping version directories nothing keeps, on a real disk."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(dir=_scratch_root())
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.dependencies_dir = self.root / "mcp"
+        self.filesystem = PosixFileSystem(product_id="pegasus-harness")
+
+    def make(self, name: str, version: str) -> Path:
+        path = self.dependencies_dir / name / version
+        path.mkdir(parents=True)
+        (path / "bin").write_bytes(b"x")
+        return path
+
+    def prune(self, names, keep):
+        return dependencies.prune(
+            self.filesystem, self.dependencies_dir, frozenset(names), frozenset(keep)
+        )
+
+    def test_a_version_nobody_keeps_is_removed(self):
+        old = self.make("engram", "1.0.0")
+        current = self.make("engram", "1.1.0")
+        outcome = self.prune({"engram"}, {current})
+        self.assertEqual(outcome.removed, (old,))
+        self.assertFalse(old.exists())
+        self.assertTrue(current.exists())
+
+    def test_every_kept_target_survives_whichever_install_holds_it(self):
+        # One install on the new version, another still on the old one: both
+        # are in the keep-set, so neither CLI loses its binary.
+        old = self.make("engram", "1.0.0")
+        new = self.make("engram", "1.1.0")
+        stale = self.make("engram", "0.9.0")
+        outcome = self.prune({"engram"}, {old, new})
+        self.assertEqual(outcome.removed, (stale,))
+        self.assertTrue(old.exists())
+        self.assertTrue(new.exists())
+
+    def test_a_name_that_is_not_managed_is_never_touched(self):
+        foreign = self.make("someone-else", "1.0.0")
+        self.make("engram", "1.0.0")
+        outcome = self.prune({"engram"}, set())
+        self.assertTrue(foreign.exists())
+        self.assertNotIn(foreign, outcome.removed)
+
+    def test_a_symlinked_version_is_not_followed_or_removed(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "precious").write_bytes(b"keep me")
+        (self.dependencies_dir / "engram").mkdir(parents=True)
+        link = self.dependencies_dir / "engram" / "1.0.0"
+        link.symlink_to(outside, target_is_directory=True)
+        outcome = self.prune({"engram"}, set())
+        self.assertEqual(outcome.removed, ())
+        self.assertTrue(link.is_symlink())
+        self.assertTrue((outside / "precious").exists())
+
+    def test_a_symlinked_name_directory_is_not_followed(self):
+        outside = self.root / "outside"
+        (outside / "1.0.0").mkdir(parents=True)
+        self.dependencies_dir.mkdir()
+        (self.dependencies_dir / "engram").symlink_to(outside, target_is_directory=True)
+        outcome = self.prune({"engram"}, set())
+        self.assertEqual(outcome.removed, ())
+        self.assertTrue((outside / "1.0.0").exists())
+
+    def test_a_name_that_could_escape_is_ignored(self):
+        outside = self.root / "escape" / "1.0.0"
+        outside.mkdir(parents=True)
+        self.dependencies_dir.mkdir()
+        outcome = self.prune({"../escape"}, set())
+        self.assertEqual(outcome.removed, ())
+        self.assertTrue(outside.exists())
+
+    def test_a_name_directory_left_empty_is_removed(self):
+        old = self.make("engram", "1.0.0")
+        outcome = self.prune({"engram"}, set())
+        self.assertEqual(outcome.removed, (old,))
+        self.assertFalse((self.dependencies_dir / "engram").exists())
+        self.assertTrue(self.dependencies_dir.exists())
+
+    def test_a_name_directory_with_a_kept_version_stays(self):
+        self.make("engram", "1.0.0")
+        kept = self.make("engram", "1.1.0")
+        self.prune({"engram"}, {kept})
+        self.assertTrue((self.dependencies_dir / "engram").exists())
+
+    def test_a_file_among_the_versions_is_left_alone(self):
+        self.make("engram", "1.0.0")
+        stray = self.dependencies_dir / "engram" / "notes.txt"
+        stray.write_bytes(b"hello")
+        self.prune({"engram"}, set())
+        self.assertTrue(stray.exists())
+
+    def test_a_failed_deletion_is_reported_and_the_rest_still_go(self):
+        first = self.make("engram", "1.0.0")
+        second = self.make("engram", "2.0.0")
+        real = self.filesystem.remove_dir
+
+        def flaky(path):
+            if path == first:
+                raise dependencies.FileSystemError("busy")
+            return real(path)
+
+        self.filesystem.remove_dir = flaky
+        outcome = self.prune({"engram"}, set())
+        self.assertEqual(outcome.removed, (second,))
+        self.assertEqual(outcome.failed, ("busy",))
+        self.assertTrue(first.exists())
+
+    def test_stale_versions_lists_without_deleting(self):
+        old = self.make("engram", "1.0.0")
+        candidates, failures = dependencies.stale_versions(
+            self.filesystem, self.dependencies_dir, frozenset({"engram"}), frozenset()
+        )
+        self.assertEqual(candidates, [old])
+        self.assertEqual(failures, [])
+        self.assertTrue(old.exists())
+
+    def test_an_absent_dependencies_directory_is_a_no_op(self):
+        outcome = self.prune({"engram"}, set())
+        self.assertEqual(outcome, dependencies.Pruned())
