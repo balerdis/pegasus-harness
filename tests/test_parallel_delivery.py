@@ -39,8 +39,10 @@ PROCEDURE_NAME = PROCEDURE.name
 #: tests output file and the schema copied verbatim into each brief. 1517 -> 1580
 #: after the fourth live run: the review statement and the run-directory cleanup. 1580 -> 1606 after the
 #: OpenCode live run: the cleanup as a concrete `rm -r` with the literal path. 1606 -> 1656 after the
-#: final review: the conditional, guarded `rm -r` and the empty-HOME stop.
-PARALLEL_DELIVERY_WORD_CEILING = 1656
+#: final review: the conditional, guarded `rm -r` and the empty-HOME stop. 1656 -> 1760 after the
+#: failure-path measurement: the conflict diagnosis, the absolute test command, the interrupted-run
+#: recovery, the launched-unit cleanup condition and the `$VAR`/`cd` rule.
+PARALLEL_DELIVERY_WORD_CEILING = 1760
 
 WORKTREE_ADD = "`git -C <main checkout> worktree add -b <branch> <path> <base>`"
 WORKTREE_PATH = (
@@ -66,8 +68,8 @@ BRIEF_REPORT = (
     "refused, with the reason"
 )
 READABLE_RULE = (
-    "No command, the coordinator's or a writer's, contains `$(...)` or `${...}`, and none chains `cd` with an "
-    "output redirect. Compute each value in its own simple command, then write the literal result into the "
+    "No command, the coordinator's or a writer's, contains `$(...)`, `${...}` or a `$VAR`, and none uses `cd`: use "
+    "git -C and absolute paths. Compute each value in its own simple command, then write the literal result into the "
     "next command. Permission systems can only judge a command they can read."
 )
 REFUSAL_RULE = (
@@ -97,8 +99,9 @@ LITERAL_ROOT = (
 )
 ONE_AT_A_TIME = "The coordinator assembles every value itself, one simple command at a time."
 TEST_RUN_RULE = (
-    "the test suite runs with the CLI's working-directory parameter where it has one, otherwise with the test "
-    "runner's own path options and absolute paths, and never as `cd` followed by a redirect"
+    "the test suite runs as the literal command with absolute paths into the unit's worktree, never a relative "
+    "path, because the shell tool has no working directory of its own and a relative path runs against the "
+    "main checkout"
 )
 MESSAGE_FILE_SEQUENCE = (
     "made in three steps: the message is written with the file-writing tool to `<root>/<run-id>/<unit>.msg`, "
@@ -146,8 +149,11 @@ CLEAN_TREE = (
 )
 PRUNE_MEANING = "it drops only entries whose directory is gone."
 ABORTED_RUN = (
-    "After an aborted run, list this repository's directories under the root and remove one only with the "
-    "person's agreement if it holds commits that were not integrated."
+    "After an interrupted run, find it with `git -C <main checkout> worktree list` and a listing of `<root>`. "
+    "For each worktree check `git -C <worktree> status --porcelain` and `git -C <worktree> log --oneline "
+    "<base>..HEAD`, and ask the person about anything uncommitted or not integrated. Remove only a worktree "
+    "with neither (`worktree remove`, `branch -D`, `prune`), and `<root>/<run-id>` only when no worktree is "
+    "left in it."
 )
 WAVES = "With more units than the CLI's concurrency cap, run them in waves."
 WORKTREE_ENV = (
@@ -165,8 +171,10 @@ FAILED_UNIT = (
     "worktree in place and give the person its path."
 )
 ABORT_CONFLICT = (
-    "On a conflict run `git -C <main checkout> cherry-pick --abort`, stop and report to the person: strictly disjoint units "
-    "cannot conflict, so the partition was wrong, and it is not resolved blind."
+    "On a conflict run `git -C <main checkout> cherry-pick --abort`, then `git -C <main checkout> log --oneline "
+    "<base>..HEAD`: a conflict means the partition was wrong or the integration branch moved since the base; "
+    "say which, and stop, never resolving blind. The same message gives the path of every remaining worktree "
+    "and of `<root>/<run-id>`."
 )
 VERIFY_BY_DIFF = (
     "if the person decides to resolve a conflict, verify that pick by diff instead, because `git cherry` "
@@ -181,7 +189,7 @@ REVIEW_STATED = (
     "trivial. A diff that adds new modules or new logic is not trivial."
 )
 RUN_DIR_CLEANUP = (
-    "Only when every unit integrated and every worktree and branch was removed, and `worktree prune` has run, and only after confirming that `<root>` (ending in `agent-worktrees/<repo-name>-<short hash>`) and the run-id are non-empty and exactly the recorded literals, run `rm -r <root>/<run-id>` with the literal path, never an expansion: the output files and the coordinator's own message files for fix-up commits live there, so they go with it. Otherwise leave the run directory in place and name its path in the report: a failed unit's files and worktree stay in it."
+    "Only when every launched unit integrated, none failed or was aborted, every worktree and branch was removed, and `worktree prune` has run, and only after confirming that `<root>` (ending in `agent-worktrees/<repo-name>-<short hash>`) and the run-id are non-empty and exactly the recorded literals, run `rm -r <root>/<run-id>` with the literal path, never an expansion: the output files and the coordinator's own message files for fix-up commits live there, so they go with it. A unit held back at triage has nothing in the run directory and does not block it. Otherwise leave the run directory in place and name its path in the report."
 )
 NO_FIXUP = "with no confirmed finding there is no fix-up writer."
 CLOSE_ORDER = (

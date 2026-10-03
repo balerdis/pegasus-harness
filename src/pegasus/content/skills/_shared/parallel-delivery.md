@@ -21,7 +21,7 @@ an SDD change: that stays with `sdd-verify`. This is not an FTD rule.
 
 ## Procedure
 
-**Commands a permission system can read.** No command, the coordinator's or a writer's, contains `$(...)` or `${...}`, and none chains `cd` with an output redirect. Compute each value in its own simple command, then write the literal result into the next command. Permission systems can only judge a command they can read.
+**Commands a permission system can read.** No command, the coordinator's or a writer's, contains `$(...)`, `${...}` or a `$VAR`, and none uses `cd`: use git -C and absolute paths. Compute each value in its own simple command, then write the literal result into the next command. Permission systems can only judge a command they can read.
 
 **Refusals.** If a command is refused, the agent stops and reports which command was refused and why, and never works around a refusal. A writer's report lists its refusals, and so does the coordinator's.
 
@@ -47,15 +47,11 @@ an SDD change: that stays with `sdd-verify`. This is not an FTD rule.
    spaces removed; the branch is `<run-id>/<unit>`, so re-runs never collide. The short hash comes from
    `git -C <main checkout> rev-parse --show-toplevel`, then `printf %s <that path> | sha1sum`, keeping the first 8 characters.
    The root is then the literal path `<state>/agent-worktrees/<repo-name>-<short hash>`, and every later command carries the literal. Unit names are lowercase letters, digits and hyphens, so they are valid ref components. Run `git -C <main checkout> worktree prune` at the start of every run; it
-   drops only entries whose directory is gone. After an aborted run, list this repository's
-   directories under the root and remove one only with the person's agreement if it holds commits
-   that were not integrated. With more units than the CLI's concurrency cap, run them in waves. Never
+   drops only entries whose directory is gone. After an interrupted run, find it with `git -C <main checkout> worktree list` and a listing of `<root>`. For each worktree check `git -C <worktree> status --porcelain` and `git -C <worktree> log --oneline <base>..HEAD`, and ask the person about anything uncommitted or not integrated. Remove only a worktree with neither (`worktree remove`, `branch -D`, `prune`), and `<root>/<run-id>` only when no worktree is left in it. With more units than the CLI's concurrency cap, run them in waves. Never
    put a worktree under a directory the deny floor names, and never copy a sensitive file into one.
 5. **Launch everything in one message.** Read-only research units go in the same message, with no
    worktree. Each writer's brief carries: the absolute worktree path; that every git command is
-   `git -C <absolute worktree path> ...` and never chains `cd` with git; the test suite runs with the CLI's
-   working-directory parameter where it has one, otherwise with the test runner's own path options and absolute
-   paths, and never as `cd` followed by a redirect; every file path is absolute; never touch the main checkout; one
+   `git -C <absolute worktree path> ...` and never chains `cd` with git; the test suite runs as the literal command with absolute paths into the unit's worktree, never a relative path, because the shell tool has no working directory of its own and a relative path runs against the main checkout; every file path is absolute; never touch the main checkout; one
    local commit, no push, no AI or tool attribution, made in three steps: the message is written with the file-writing tool to `<root>/<run-id>/<unit>.msg`, outside the worktree;
    then `git -C <absolute worktree path> commit -F <that path>`; then the message file is removed; so the
    message text never reaches the command line; run the project's test suite with its output
@@ -72,13 +68,12 @@ an SDD change: that stays with `sdd-verify`. This is not an FTD rule.
    the consolidated report. In background delivery, wait until every unit has reported before
    integrating. A unit that fails or returns nothing is reported as not delivered: integrate the
    rest, leave its worktree in place and give the person its path.
-7. **Isolation check.** Before integrating, confirm that `git -C <main checkout> status --porcelain` shows nothing the units wrote, and that `git -C <main checkout> status --porcelain --ignored` equals the one recorded at base time. A relative path that escaped lands there, ignored files included.
+7. **Isolation check.** Before integrating, confirm that `git -C <main checkout> status --porcelain` shows nothing the units wrote, and that `git -C <main checkout> status --porcelain --ignored` equals the one recorded at base time. A relative path that escaped lands there, but the check cannot see writes into ignored paths that already existed at the base: that is why the test command is absolute.
 8. **Integrate.** In the stated order, with `git -C <main checkout> cherry-pick`. On a conflict run
-   `git -C <main checkout> cherry-pick --abort`, stop and report to the person: strictly disjoint units cannot
-   conflict, so the partition was wrong, and it is not resolved blind. Picks already integrated stay; the remaining worktrees stay in place, each reported with its path. For a clean pick, confirm with
+   `git -C <main checkout> cherry-pick --abort`, then `git -C <main checkout> log --oneline <base>..HEAD`: a conflict means the partition was wrong or the integration branch moved since the base; say which, and stop, never resolving blind. The same message gives the path of every remaining worktree and of `<root>/<run-id>`. Picks already integrated stay; the remaining worktrees stay in place, each reported with its path. For a clean pick, confirm with
    `git -C <main checkout> cherry <integration branch> <branch>` that each commit is in; if the person decides to
    resolve a conflict, verify that pick by diff instead, because `git cherry` prints `+` after it.
-   Only after that run `git -C <main checkout> worktree remove`, `git -C <main checkout> branch -D` and `git -C <main checkout> worktree prune`. `worktree remove` refuses a worktree holding untracked files that are not ignored: never add `--force` without first listing what would be lost and having the person agree. Only when every unit integrated and every worktree and branch was removed, and `worktree prune` has run, and only after confirming that `<root>` (ending in `agent-worktrees/<repo-name>-<short hash>`) and the run-id are non-empty and exactly the recorded literals, run `rm -r <root>/<run-id>` with the literal path, never an expansion: the output files and the coordinator's own message files for fix-up commits live there, so they go with it. Otherwise leave the run directory in place and name its path in the report: a failed unit's files and worktree stay in it.
+   Only after that run `git -C <main checkout> worktree remove`, `git -C <main checkout> branch -D` and `git -C <main checkout> worktree prune`. `worktree remove` refuses a worktree holding untracked files that are not ignored: never add `--force` without first listing what would be lost and having the person agree. Only when every launched unit integrated, none failed or was aborted, every worktree and branch was removed, and `worktree prune` has run, and only after confirming that `<root>` (ending in `agent-worktrees/<repo-name>-<short hash>`) and the run-id are non-empty and exactly the recorded literals, run `rm -r <root>/<run-id>` with the literal path, never an expansion: the output files and the coordinator's own message files for fix-up commits live there, so they go with it. A unit held back at triage has nothing in the run directory and does not block it. Otherwise leave the run directory in place and name its path in the report.
 9. **The coordinator's own suite run.** One full run on the integrated tree, by the coordinator: a
    single command with its output redirected to a file, then read the tail. Check that the test count
    adds up to the base count plus the units' reported tests added; without a test suite, skip the count check.
