@@ -41,8 +41,10 @@ PROCEDURE_NAME = PROCEDURE.name
 #: OpenCode live run: the cleanup as a concrete `rm -r` with the literal path. 1606 -> 1656 after the
 #: final review: the conditional, guarded `rm -r` and the empty-HOME stop. 1656 -> 1760 after the
 #: failure-path measurement: the conflict diagnosis, the absolute test command, the interrupted-run
-#: recovery, the launched-unit cleanup condition and the `$VAR`/`cd` rule.
-PARALLEL_DELIVERY_WORD_CEILING = 1760
+#: recovery, the launched-unit cleanup condition and the `$VAR`/`cd` rule. 1760 -> 1860 after the
+#: review of that rewording: the live-session guard, merge-base and `--ignored` in recovery, the neutral
+#: test command with a pinned import root, and the pipeline allowance in the readable-commands rule.
+PARALLEL_DELIVERY_WORD_CEILING = 1860
 
 WORKTREE_ADD = "`git -C <main checkout> worktree add -b <branch> <path> <base>`"
 WORKTREE_PATH = (
@@ -69,8 +71,8 @@ BRIEF_REPORT = (
 )
 READABLE_RULE = (
     "No command, the coordinator's or a writer's, contains `$(...)`, `${...}` or a `$VAR`, and none uses `cd`: use "
-    "git -C and absolute paths. Compute each value in its own simple command, then write the literal result into the "
-    "next command. Permission systems can only judge a command they can read."
+    "git -C and absolute paths. Compute each value in its own command, a simple command or one pipeline of read-only filters, then write the "
+    "literal result into the next command. Permission systems can only judge a command they can read."
 )
 REFUSAL_RULE = (
     "If a command is refused, the agent stops and reports which command was refused and why, and never works "
@@ -99,9 +101,11 @@ LITERAL_ROOT = (
 )
 ONE_AT_A_TIME = "The coordinator assembles every value itself, one simple command at a time."
 TEST_RUN_RULE = (
-    "the test suite runs as the literal command with absolute paths into the unit's worktree, never a relative "
-    "path, because the shell tool has no working directory of its own and a relative path runs against the "
-    "main checkout"
+    "the test suite runs as the literal command with absolute paths into the unit's worktree, never "
+    "relative to the shell's location, with the shell tool's working-directory parameter, if any, set to it and "
+    "the import root pinned to it (a literal absolute `PYTHONPATH`-style value or the runner's root option), since "
+    "an editable install or a `src` layout can import the main checkout's package; a writer that cannot pin it "
+    "says so in its report"
 )
 MESSAGE_FILE_SEQUENCE = (
     "made in three steps: the message is written with the file-writing tool to `<root>/<run-id>/<unit>.msg`, "
@@ -150,10 +154,13 @@ CLEAN_TREE = (
 PRUNE_MEANING = "it drops only entries whose directory is gone."
 ABORTED_RUN = (
     "After an interrupted run, find it with `git -C <main checkout> worktree list` and a listing of `<root>`. "
-    "For each worktree check `git -C <worktree> status --porcelain` and `git -C <worktree> log --oneline "
-    "<base>..HEAD`, and ask the person about anything uncommitted or not integrated. Remove only a worktree "
-    "with neither (`worktree remove`, `branch -D`, `prune`), and `<root>/<run-id>` only when no worktree is "
-    "left in it."
+    "Remove nothing from a run this session did not start without the person's explicit yes, after showing what "
+    "was found; a live session's fresh worktrees look the same. For each worktree check `git -C <worktree> "
+    "status --porcelain --ignored` and `git -C <worktree> log --oneline <base>..HEAD`, with `<base>` from "
+    "`git -C <main checkout> merge-base <integration branch> <unit branch>` or from the person, and ask about "
+    "anything uncommitted, ignored or not integrated. Remove only a worktree with none of these "
+    "(`worktree remove`, `branch -D`, `prune`), and `<root>/<run-id>` only when no worktree is left in it, under "
+    "the step 8 cleanup guard."
 )
 WAVES = "With more units than the CLI's concurrency cap, run them in waves."
 WORKTREE_ENV = (
