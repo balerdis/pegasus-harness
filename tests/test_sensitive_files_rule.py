@@ -63,7 +63,9 @@ RULE_PARAGRAPH = (
 PERMISSION_PARAGRAPH = (
     "The only way past this rule is explicit permission from the person, for that specific file. If access "
     "is genuinely required, stop and ask for it. A general task, a request to explore, or a shell with "
-    "elevated rights is not that permission."
+    "elevated rights is not that permission. Once it is granted, open the file with your file-reading or "
+    "file-editing tool, never through a shell command: the confirmation for these files covers those tools, "
+    "not the shell."
 )
 SCOPE_PARAGRAPH = (
     "This rule is about files, not about a credential the person gives you in this conversation: that one "
@@ -102,6 +104,14 @@ class SensitiveFilesSectionTest(unittest.TestCase):
 
     def test_the_only_way_past_is_file_specific_permission(self):
         self.assertIn("explicit permission from the person, for that specific file", PERMISSION_PARAGRAPH)
+
+    def test_granted_access_goes_through_the_file_tools_never_the_shell(self):
+        self.assertIn(
+            "open the file with your file-reading or file-editing tool, never through a shell command",
+            PERMISSION_PARAGRAPH,
+        )
+        self.assertIn("covers those tools, not the shell", PERMISSION_PARAGRAPH)
+        self.assertIn(PERMISSION_PARAGRAPH, paragraphs_of(self.section))
 
     def test_it_still_lets_a_pasted_credential_be_used(self):
         self.assertIn("not about a credential the person gives you in this conversation", SCOPE_PARAGRAPH)

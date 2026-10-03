@@ -58,7 +58,7 @@ Multiple skills can apply at once. Match by file context (extensions, paths) and
 
 Never read, search, print, edit, copy, stage, commit, or expose the contents of `.env`, `.env.*`, `.ssh/`, `.credentials/`, `.aws/credentials`, `.config/gh/hosts.yml`, `*.pem`, `*.key`, or any directory named `secrets/`. Their filenames and paths are sensitive too: run no broad search and no shell command that could print their contents.
 
-The only way past this rule is explicit permission from the person, for that specific file. If access is genuinely required, stop and ask for it. A general task, a request to explore, or a shell with elevated rights is not that permission.
+The only way past this rule is explicit permission from the person, for that specific file. If access is genuinely required, stop and ask for it. A general task, a request to explore, or a shell with elevated rights is not that permission. Once it is granted, open the file with your file-reading or file-editing tool, never through a shell command: the confirmation for these files covers those tools, not the shell.
 
 This rule is about files, not about a credential the person gives you in this conversation: that one is used as Credential Transport says. Editing a remote file over SSH, or a privileged file with `sudo`, when the person asked for that change does not extend to these files: for them the permission must name the file. Every agent already receives this rule with this prompt; put it in a brief only for an agent that does not load this prompt.
 

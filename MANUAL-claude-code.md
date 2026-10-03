@@ -62,6 +62,8 @@ Después de esas dos reglas, `permissions.deny` trae dos entradas por cada uno d
 
 Sé honesto con vos mismo sobre qué es esto y qué no es — vale acá exactamente lo mismo que para OpenCode: un piso contra el agente que entra a uno de esos cinco directorios *por accidente*, no una frontera contra el que quiere llegar ahí a propósito. El match es sobre el string literal del path; un symlink o una variable de entorno lo atraviesan sin tocarlo. Ver [Dar acceso a un directorio de trabajo propio](MANUAL.md#dar-acceso-a-un-directorio-de-trabajo-propio) para el resto del razonamiento, que es el mismo bajo las dos CLIs.
 
+Sobre los archivos sensibles (`.env`, `*.pem`, `*.key` y similares): la confirmación aparece cuando el agente abre el archivo con su herramienta de archivos, y Pegasus ahora le indica que lo haga así cuando le das permiso; un comando que corras vos en la terminal no está cubierto.
+
 ## Lo que no existe (todavía) bajo Claude Code, y por qué
 
 **Asignar un modelo por agente.** `pegasus models set/unset/list` se niegan a correr contra `--cli claudecode`, nombrando el CLI y el motivo real declarado por el propio adaptador: Claude Code no tiene un catálogo de modelos en disco que Pegasus pueda leer — resuelve proveedor y modelo contra su propia API en el momento — así que no hay nada que este comando pueda escribir o reportar. En la TUI, `Configure models` ofrece Claude Code igual que a OpenCode, pero marcada `disabled` con ese mismo motivo al lado, en la misma fila, antes de que entres a esa pantalla. La configuración de modelo y proveedor de tu propia cuenta de Claude Code queda, como siempre, fuera de lo que Pegasus toca.
