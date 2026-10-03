@@ -150,7 +150,14 @@ _GH_OUTWARD_COMMANDS: tuple[tuple[str, str], ...] = (
 #: `.aws/credentials` and `.config/gh/hosts.yml`) are already denied outright
 #: by `PERMISSIONS_DENY_FLOOR`, and deny wins over ask. Unlike OpenCode's
 #: `read`, `.env.example` is not exempt, per the no-exemptions decision.
-_SENSITIVE_FILE_ASK_IDS: dict[str, str] = {".env": "env", ".env.*": "env-variants", "*.pem": "pem", "*.key": "key"}
+_SENSITIVE_FILE_ASK_IDS: dict[str, str] = {
+    ".env": "env",
+    ".env.*": "env-variants",
+    "*.env": "star-env",
+    "*.env.*": "star-env-variants",
+    "*.pem": "pem",
+    "*.key": "key",
+}
 
 PERMISSIONS_ASK_ENTRIES: tuple[tuple[str, str], ...] = (
     *((f"Bash({command})", ident) for command, ident in _GIT_PUSH_COMMANDS),

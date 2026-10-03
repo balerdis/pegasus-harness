@@ -73,6 +73,17 @@ class PermissionsAskTest(unittest.TestCase):
             for name in SENSITIVE_FILE_NAMES:
                 self.assertIn(f"{tool}(//**/{name})", self.ASK)
 
+    def test_env_variants_and_templates_hit_an_ask_rule_with_no_exemption(self):
+        """The rule lists `.env.*` without exceptions; `*.env` and `*.env.*`
+        keep the floor at least as wide as OpenCode's built-in default."""
+        import fnmatch
+
+        for tool in ("Read", "Edit"):
+            prefix = f"{tool}(//**/"
+            names = [r[len(prefix) : -1] for r in self.ASK if r.startswith(prefix)]
+            for text in (".env.example", ".env.sample", ".env.template", "prod.env", "prod.env.local", "app.env.ts"):
+                self.assertTrue(any(fnmatch.fnmatchcase(text, n) for n in names), (tool, text))
+
     def test_sensitive_rules_are_anchored_at_the_filesystem_root_never_a_single_slash(self):
         """User-level settings: a leading `/` would anchor at `~/.claude`."""
         for rule in self.ASK:

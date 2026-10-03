@@ -152,6 +152,9 @@ def _outward_bash_patterns() -> dict[str, str]:
     patterns: dict[str, str] = {}
     for command in _OUTWARD_COMMANDS:
         patterns[f"{command} *"] = "ask"
+        # `*=*` matches any `=` before the command text, so `X=1 git log
+        # push` also asks. Accepted: it needs ` git push` or ` gh <writer>`
+        # later in the line, so it is a false positive, never a miss.
         patterns[f"*=* {command} *"] = "ask"
         patterns[f"*/{command} *"] = "ask"
     return patterns
@@ -1043,11 +1046,12 @@ def _permission(layout: Layout, item: Agent) -> dict[str, Any]:
     that ever wrote the permission value `"ask"` -- `task`'s own baseline is
     `"deny"`, and every tool and MCP entry above resolves to `"allow"` or
     `"deny"`. With that one site now `"allow"`, no Pegasus agent's rendered
-    `permission` block contains the value `"ask"` anywhere, for any key. That
-    means no Pegasus-shipped agent, at any depth, can still cause the runtime
-    to raise a permission prompt at all -- every tool call this map governs
-    now either proceeds or is refused outright, and there is nothing left in
-    this configuration for a person to be asked to approve.
+    `permission` block contained the value `"ask"` anywhere, for any key. That
+    meant no Pegasus-shipped agent, at any depth, could still cause the
+    runtime to raise a permission prompt at all -- every tool call this map
+    governed either proceeded or was refused outright. That no longer holds
+    in full: the notes below list the `"ask"` values added since, and they
+    are the only ones.
 
     Superseded in one place by the 7.5.0 decision: a sub-agent's `bash` now
     carries `SUBAGENT_BASH_PERMISSION`, whose `git push` patterns are

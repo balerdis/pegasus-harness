@@ -852,7 +852,11 @@ DENY_FLOOR_DIRECTORIES: tuple[str, ...] = (
 #: - `SENSITIVE_FILE_NAMES`: a file name or glob that counts at any depth.
 #: - `SENSITIVE_FILE_DIRECTORIES`: a directory name; everything under it counts.
 #: - `SENSITIVE_FILE_PATHS`: a multi-segment file path, matched at any depth.
-SENSITIVE_FILE_NAMES: tuple[str, ...] = (".env", ".env.*", "*.pem", "*.key")
+#: `*.env` and `*.env.*` mirror the runtime's own built-in `read` ask
+#: for them (`agent/agent.ts:130-135`), so the floor is never weaker than the
+#: default it overrides. `*.env.*` therefore also catches names such as
+#: `app.env.ts`, exactly as that default does; the over-match is accepted.
+SENSITIVE_FILE_NAMES: tuple[str, ...] = (".env", ".env.*", "*.env", "*.env.*", "*.pem", "*.key")
 SENSITIVE_FILE_DIRECTORIES: tuple[str, ...] = (".ssh", ".credentials", "secrets")
 SENSITIVE_FILE_PATHS: tuple[str, ...] = (".aws/credentials", ".config/gh/hosts.yml")
 

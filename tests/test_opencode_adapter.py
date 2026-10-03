@@ -555,6 +555,31 @@ class AgentRenderTest(unittest.TestCase):
         self.assertIn(".env.*", render_module.SENSITIVE_FILE_PATTERNS)
         self.assertEqual(self.resolve(render_module.sensitive_file_permission(AgentMode.PRIMARY), ".env.example"), "ask")
 
+    def test_the_floor_is_never_weaker_than_the_runtimes_own_env_default(self):
+        """The runtime's default asks for `*.env` and `*.env.*`
+        (`agent/agent.ts:130-135`); the agent block is appended after it, so
+        the floor must cover them too. `*.env.*` also catches `app.env.ts`,
+        exactly as the default does: an accepted over-match, pinned here."""
+        for mode, expected in ((AgentMode.PRIMARY, "ask"), (AgentMode.SUBAGENT, "deny")):
+            rules = render_module.sensitive_file_permission(mode)
+            for text in ("prod.env", "config/dev.env", "prod.env.local", "config/prod.env.local", "app.env.ts"):
+                self.assertEqual(self.resolve(rules, text), expected, (mode, text))
+
+    def test_env_templates_get_no_exemption_for_primary_or_subagent(self):
+        """Recorded decision: the rule lists `.env.*` without exceptions."""
+        for text in (".env.example", ".env.sample", ".env.template", "app/.env.example"):
+            primary = render_module.sensitive_file_permission(AgentMode.PRIMARY)
+            subagent = render_module.sensitive_file_permission(AgentMode.SUBAGENT)
+            self.assertEqual(self.resolve(primary, text), "ask", text)
+            self.assertEqual(self.resolve(subagent, text), "deny", text)
+
+    def test_the_env_prefix_pattern_over_matches_an_equals_sign_before_the_command_text(self):
+        """Documented false positive: `*=*` matches any `=` before the command
+        text, and fires only when ` git push` appears later in the line."""
+        rules = render_module.SUBAGENT_BASH_PERMISSION
+        self.assertEqual(self.resolve(rules, "X=1 git log push"), "ask")
+        self.assertEqual(self.resolve(rules, "X=1 git log"), "allow")
+
     def test_no_sensitive_pattern_is_absolute_or_home_relative(self):
         """The runtime passes worktree-relative paths, so such a pattern never matches."""
         for pattern in render_module.SENSITIVE_FILE_PATTERNS:
