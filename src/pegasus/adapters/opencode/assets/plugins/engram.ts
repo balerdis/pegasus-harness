@@ -262,9 +262,6 @@ export const Engram: Plugin = async (ctx) => {
   const oldProject = ctx.directory.split("/").pop() ?? "unknown"
   const project = extractProjectName(ctx.directory)
 
-  // Track tool counts per session (in-memory only, not critical)
-  const toolCounts = new Map<string, number>()
-
   // Track which sessions we've already ensured exist in engram
   const knownSessions = new Set<string>()
 
@@ -375,7 +372,6 @@ export const Engram: Plugin = async (ctx) => {
         const info = (event.properties as any)?.info
         const sessionId = info?.id
         if (sessionId) {
-          toolCounts.delete(sessionId)
           knownSessions.delete(sessionId)
           subAgentSessions.delete(sessionId)
         }
@@ -436,7 +432,6 @@ export const Engram: Plugin = async (ctx) => {
       const sessionId = input.sessionID
       if (sessionId) {
         await ensureSession(sessionId)
-        toolCounts.set(sessionId, (toolCounts.get(sessionId) ?? 0) + 1)
       }
 
       // Passive capture: extract learnings from a sub-agent's output.
