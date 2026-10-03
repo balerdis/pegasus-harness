@@ -1365,7 +1365,7 @@ class PathRcShellInjectionTest(InstallScriptTestCase):
 
     def _assert_posix_family_neutralized(self, shell_name: str, rc_path: Path, shell_for_run: str | None = None):
         marker = self.marker(f"pwned-{shell_name}")
-        bin_dir = f"/tmp/pegasus-{shell_name}'\"$(id)`;touch {marker}#"
+        bin_dir = f"{self.tmp.name}/pegasus-{shell_name}'\"$(id)`;touch {marker}#"
         result = self._run_with_malicious_bin_dir(bin_dir, shell_for_run or f"/usr/bin/{shell_name}")
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1408,7 +1408,7 @@ class PathRcShellInjectionTest(InstallScriptTestCase):
         quote needed at all) was enough to inject a second statement. This
         also verifies fish's own escaping rule, which differs from POSIX's."""
         marker = self.marker("pwned-fish")
-        bin_dir = f"/tmp/pegasus-fish'\\;touch {marker};#"
+        bin_dir = f"{self.tmp.name}/pegasus-fish'\\;touch {marker};#"
         result = self._run_with_malicious_bin_dir(bin_dir, "/usr/bin/fish")
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
