@@ -43,8 +43,9 @@ PROCEDURE_NAME = PROCEDURE.name
 #: failure-path measurement: the conflict diagnosis, the absolute test command, the interrupted-run
 #: recovery, the launched-unit cleanup condition and the `$VAR`/`cd` rule. 1760 -> 1860 after the
 #: review of that rewording: the live-session guard, merge-base and `--ignored` in recovery, the neutral
-#: test command with a pinned import root, and the pipeline allowance in the readable-commands rule.
-PARALLEL_DELIVERY_WORD_CEILING = 1860
+#: test command with a pinned import root, and the pipeline allowance in the readable-commands rule. 1860 -> 1900 (measured 1892) after the live re-test:
+#: the path duty on every stop of the integration and the rules carried by a reviewer's brief.
+PARALLEL_DELIVERY_WORD_CEILING = 1900
 
 WORKTREE_ADD = "`git -C <main checkout> worktree add -b <branch> <path> <base>`"
 WORKTREE_PATH = (
@@ -125,7 +126,7 @@ COORDINATOR_GIT_C = "Every git command of the coordinator is `git -C <main check
 UNIT_NAMES = "Unit names are lowercase letters, digits and hyphens, so they are valid ref components."
 BRIEF_GIT_C = "every git command is `git -C <absolute worktree path> ...` and never chains `cd` with git;"
 PARTIAL_ABORT = (
-    "Picks already integrated stay; the remaining worktrees stay in place, each reported with its path."
+    "Picks already integrated stay; the remaining worktrees stay in place."
 )
 NO_FORCE = (
     "`worktree remove` refuses a worktree holding untracked files that are not ignored: never add `--force` "
@@ -180,12 +181,17 @@ FAILED_UNIT = (
 ABORT_CONFLICT = (
     "On a conflict run `git -C <main checkout> cherry-pick --abort`, then `git -C <main checkout> log --oneline "
     "<base>..HEAD`: a conflict means the partition was wrong or the integration branch moved since the base; "
-    "say which, and stop, never resolving blind. The same message gives the path of every remaining worktree "
-    "and of `<root>/<run-id>`."
+    "say which, and stop, never resolving blind. Whenever integration stops, for any reason and before or after "
+    "any pick, the message lists, one per line, the absolute path of each remaining worktree and of "
+    "`<root>/<run-id>`."
 )
 VERIFY_BY_DIFF = (
     "if the person decides to resolve a conflict, verify that pick by diff instead, because `git cherry` "
     "prints `+` after it."
+)
+REVIEWER_BRIEF = (
+    "A reviewer's brief carries the commands rule and the refusals rule, like a writer's; its probes run as "
+    "single commands with absolute paths, never `cd` or a heredoc."
 )
 NO_SUITE = "without a test suite, skip the count check."
 PROPORTIONAL = (
@@ -345,6 +351,7 @@ class PinnedClausesTest(ProcedureCase):
             ("no suite", NO_SUITE),
             ("proportional review", PROPORTIONAL),
             ("review stated", REVIEW_STATED),
+            ("reviewer brief rules", REVIEWER_BRIEF),
             ("run directory cleanup", RUN_DIR_CLEANUP),
             ("no fix-up", NO_FIXUP),
             ("close order", CLOSE_ORDER),
