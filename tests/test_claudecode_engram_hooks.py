@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -92,8 +93,23 @@ class RenderTest(unittest.TestCase):
         ):
             (hook,) = entries[event]["hooks"]
             self.assertEqual(hook["type"], "command")
-            self.assertEqual(hook["command"], f"python3 {script} {subcommand}")
+            self.assertEqual(
+                hook["command"],
+                f"command -v python3 >/dev/null 2>&1 && python3 {shlex.quote(str(script))} {subcommand} || true",
+            )
             self.assertIsInstance(hook["timeout"], int)
+            if event == "SessionStart":
+                self.assertNotIn("async", hook)  # it must start the server before any prompt
+            else:
+                self.assertIs(hook["async"], True)
+
+    def test_a_path_with_spaces_stays_quoted_inside_the_guarded_command(self):
+        layout = self.adapter.layout(Environment(home=Path("/home/a b"), data_dir=Path("/home/a b/.local/share/x")))
+        for artifact in self.adapter.render_mcp(layout, engram()):
+            if isinstance(artifact, ConfigKeyArtifact):
+                command = artifact.value["hooks"][0]["command"]
+                self.assertIn("python3 '/home/a b/.local/share/x/hooks/engram-hook.py' ", command)
+                self.assertTrue(command.endswith(" || true"))
 
     def test_rendering_is_deterministic(self):
         first = self.adapter.render_mcp(self.layout, engram())
@@ -555,7 +571,88 @@ class ScriptTest(unittest.TestCase):
         self.assertNotIn("hunter2hunter2", content)
         self.assertIn("$PEGASUS_SECRET_", content)
 
+    def test_a_secret_straddling_the_prompt_limit_is_redacted_before_the_cut(self):
+        server = self.fake()
+        secret = "ghp_" + "a1B2c3D4e5" * 4
+        for pad in range(1990, 2000):
+            self.run_script("prompt", self.event(prompt="y" * pad + " " + secret), server.port)
+        for post in server.posts("/prompts"):
+            self.assertNotIn("ghp_", post["body"]["content"])
+
+    def test_the_cut_never_precedes_redaction_even_for_private_tags(self):
+        server = self.fake()
+        self.run_script("prompt", self.event(prompt="y" * 1995 + " <private>topsecretvalue</private>"), server.port)
+        content = server.posts("/prompts")[0]["body"]["content"]
+        self.assertNotIn("<private>", content)
+        self.assertNotIn("topsecret", content)
+
+    def test_a_prompt_above_the_detection_cap_is_cut_and_redacted_never_sent_raw(self):
+        server = self.fake()
+        secret = "ghp_" + "a1B2c3D4e5" * 4
+        self.run_script("prompt", self.event(prompt=secret + " " + "z " * 200000), server.port)
+        content = server.posts("/prompts")[0]["body"]["content"]
+        self.assertNotIn(secret, content)
+        self.assertNotIn("ghp_", content)
+        self.assertLessEqual(len(content), 2003)
+
+    def test_requests_ignore_the_proxy_environment(self):
+        proxy = self.fake()
+        server = self.fake()
+        env = {
+            "http_proxy": f"http://127.0.0.1:{proxy.port}",
+            "HTTP_PROXY": f"http://127.0.0.1:{proxy.port}",
+            "ALL_PROXY": f"http://127.0.0.1:{proxy.port}",
+            "ENGRAM_HTTP_TOKEN": "tok-123",
+        }
+        self.run_script("prompt", self.event(prompt="please explain the retry policy"), server.port, env)
+        self.assertEqual(proxy.requests, [])
+        self.assertEqual(server.posts("/prompts")[0]["auth"], "Bearer tok-123")
+
+    def test_many_unclosed_private_tags_complete_quickly(self):
+        import time
+
+        server = self.fake()
+        started = time.monotonic()
+        self.run_script("prompt", self.event(prompt="<private>" * 28000), server.port)
+        self.run_script(
+            "subagent-stop", self.event(agent_id="a", last_assistant_message="<private>" * 28000), server.port
+        )
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_private_stripping_matches_the_lazy_regex(self):
+        import re
+
+        namespace: dict = {"__name__": "rendered_hook"}
+        exec(compile(self.script.read_text(), "engram-hook.py", "exec"), namespace)
+        strip = namespace["strip_private_tags"]
+        for text in (
+            "a <private>x</private> b <PRIVATE>y</Private> c",
+            "<private><private>x</private></private>",
+            "<private>unclosed and </private> then <private>again",
+            "<private></private>",
+            "</private><private>",
+            "no tags",
+        ):
+            expected = re.sub(r"<private>[\s\S]*?</private>", "[REDACTED]", text, flags=re.I).strip()
+            self.assertEqual(strip(text), expected, text)
+
+    def test_the_project_of_a_root_or_trailing_slash_directory(self):
+        namespace: dict = {"__name__": "rendered_hook"}
+        exec(compile(self.script.read_text(), "engram-hook.py", "exec"), namespace)
+        extract = namespace["extract_project_name"]
+        namespace["_git"] = lambda *args: None
+        self.assertEqual(extract("/"), "unknown")
+        self.assertEqual(extract("/nonexistent-dir/widgets/"), "widgets")
+
     # --- subagent-stop ---
+
+    def test_a_sub_agent_message_above_the_detection_cap_is_not_posted(self):
+        server = self.fake()
+        secret = "ghp_" + "a1B2c3D4e5" * 4
+        message = "## Key Learnings\n" + "z " * 140000 + secret
+        self.run_script("subagent-stop", self.event(agent_id="a1", last_assistant_message=message), server.port)
+        self.assertEqual(server.posts("/observations/passive"), [])
+        self.assertEqual(server.posts("/sessions"), [])
 
     def test_subagent_stop_posts_a_long_message_as_passive_capture(self):
         server = self.fake()
@@ -641,6 +738,9 @@ REDACTION_CASES = [
     "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r",
     "slack xoxb-1234567890-abcdefghij and ***** and password=null and token=TODO",
     "x" * 300,
+    "<private>unclosed value never closed and token=abcdefgh1234",
+    "<private>aaaa-note</private> tail <private>b=c1234567</private> <private>open " + "<private>" * 50,
+    "</private> stray close then <private>X=secretvalue1</private> and <PRIVATE>y1234567</PRIVATE>",
 ]
 
 

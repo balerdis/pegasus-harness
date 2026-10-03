@@ -175,6 +175,17 @@ function skipsAsUnquotedCode(value: string): boolean {
   return CATALOG.key_context.skip_unquoted_if.some((rule) => new RegExp(rule.pattern).test(value))
 }
 
+/** Run an explicit `<private>...</private>` pass on the text up to its last
+ * close tag only. Nothing after it can match (a match ends at a close tag), and
+ * leaving it out stops a pile of unclosed open tags from making the lazy
+ * catalog patterns rescan to the end of the text once per tag (quadratic). */
+function onClosedPart(text: string, apply: (part: string) => string): string {
+  let end = -1
+  for (const m of text.matchAll(/<\/private>/gi)) end = (m.index ?? 0) + m[0].length
+  if (end < 0) return text
+  return apply(text.slice(0, end)) + text.slice(end)
+}
+
 /** Runs every detection pass over `text`, registering each value found and
  * substituting it with its `$PEGASUS_SECRET_<NAME>` token. Returns the
  * rewritten text and whether anything changed. Fails open on any internal
@@ -220,23 +231,27 @@ function detectAndReplace(text: string): { text: string; changed: boolean } {
     // keeping once its value has a variable standing in for it.
     {
       const re = new RegExp(CATALOG.explicit.named.pattern, "g")
-      out = out.replace(re, (match, name, value) => {
-        if (!value) return match
-        changed = true
-        const varName = register(value, name)
-        return tokenOf(varName)
-      })
+      out = onClosedPart(out, (part) =>
+        part.replace(re, (match, name, value) => {
+          if (!value) return match
+          changed = true
+          const varName = register(value, name)
+          return tokenOf(varName)
+        }),
+      )
     }
 
     // 2. Explicit <private>value</private> (whatever is left, i.e. no NAME=)
     {
       const re = new RegExp(CATALOG.explicit.bare.pattern, "g")
-      out = out.replace(re, (match, value) => {
-        if (!value) return match
-        changed = true
-        const varName = register(value, CATALOG!.explicit.bare.name)
-        return tokenOf(varName)
-      })
+      out = onClosedPart(out, (part) =>
+        part.replace(re, (match, value) => {
+          if (!value) return match
+          changed = true
+          const varName = register(value, CATALOG!.explicit.bare.name)
+          return tokenOf(varName)
+        }),
+      )
     }
 
     // 3. Known formats (sk-…, ghp_…, AKIA…, xox…, JWT, PEM private key block)
@@ -435,7 +450,23 @@ function redactKnownValues(text: string): string {
  * this function is meant to run standalone from any other plugin). */
 function stripPrivateFallback(text: string): string {
   if (!text) return text
-  return text.replace(/<private>[\s\S]*?<\/private>/gi, "[REDACTED]")
+  // Linear scan equal to /<private>[\s\S]*?<\/private>/gi, which rescans to the
+  // end of the text for every unclosed open tag (quadratic).
+  const open = /<private>/gi
+  const close = /<\/private>/gi
+  let out = ""
+  let pos = 0
+  while (true) {
+    open.lastIndex = pos
+    const start = open.exec(text)
+    if (!start) break
+    close.lastIndex = start.index + start[0].length
+    const end = close.exec(text)
+    if (!end) break
+    out += text.slice(pos, start.index) + "[REDACTED]"
+    pos = end.index + end[0].length
+  }
+  return out + text.slice(pos)
 }
 
 // ─── Process-wide redaction, for other plugins (engram.ts) to call ──────────

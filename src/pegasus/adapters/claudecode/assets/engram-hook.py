@@ -14,7 +14,11 @@ Contract, in order of importance:
 * it ALWAYS exits 0, whatever goes wrong, so a hook never shows an error;
 * it NEVER writes to stdout, so it injects no context into the session
   (diagnostics, if any, go to stderr);
-* every HTTP call has a short timeout;
+* every HTTP call has a short timeout and goes straight to the local server,
+  never through a proxy named in the environment;
+* content is redacted BEFORE it is cut, and a message too large for the
+  detection pass is cut (a prompt) or not sent at all (a sub-agent message),
+  never sent unredacted;
 * it sends no memory-protocol text and no reminders: the 7.1.0 rule that
   sub-agents write to engram only when their brief asks for it stays intact.
 
@@ -37,10 +41,14 @@ import urllib.request
 CONFIG = json.loads(__CONFIG_JSON__)
 
 HTTP_TIMEOUT = 2.0
+GIT_TIMEOUT = 1.0
 HEALTH_WAIT = 2.0
 PROMPT_MIN = 10
 PROMPT_MAX = 2000
 PASSIVE_MIN = 50
+# The detection pass skips anything above the catalog's byte cap; this script
+# never sends such text, so a skipped pass can never leak a value.
+DETECT_CAP = (CONFIG.get("catalog") or {}).get("max_detect_bytes") or 262144
 
 
 # --- Credential redaction (port of secret-transport.ts, catalog-driven) -----
@@ -134,6 +142,19 @@ def _skips_as_unquoted_code(value):
     return False
 
 
+def _on_closed_part(text, apply):
+    """Run an explicit `<private>...</private>` pass on the text up to its last
+    close tag only. Nothing after it can match (a match ends at a close tag),
+    and leaving it out stops a pile of unclosed open tags from making the lazy
+    patterns rescan to the end of the text once per tag (quadratic)."""
+    last = None
+    for last in _PRIVATE_CLOSE.finditer(text):
+        pass
+    if last is None:
+        return text
+    return apply(text[: last.end()]) + text[last.end():]
+
+
 def _detect_and_replace(text):
     if not CATALOG or not text:
         return text
@@ -163,7 +184,7 @@ def _detect_and_replace(text):
                 return m.group(0)
             return _token(registry.register(m.group(2), m.group(1)))
 
-        out = re.sub(CATALOG["explicit"]["named"]["pattern"], named, out)
+        out = _on_closed_part(out, lambda part: re.sub(CATALOG["explicit"]["named"]["pattern"], named, part))
 
         # 2. <private>value</private>
         def bare(m):
@@ -171,7 +192,7 @@ def _detect_and_replace(text):
                 return m.group(0)
             return _token(registry.register(m.group(1), CATALOG["explicit"]["bare"]["name"]))
 
-        out = re.sub(CATALOG["explicit"]["bare"]["pattern"], bare, out)
+        out = _on_closed_part(out, lambda part: re.sub(CATALOG["explicit"]["bare"]["pattern"], bare, part))
 
         # 3. Known formats.
         for fmt in CATALOG["known_formats"]:
@@ -272,8 +293,44 @@ def _detect_and_replace(text):
     return out
 
 
+_PRIVATE_OPEN = re.compile(r"<private>", re.I)
+_PRIVATE_CLOSE = re.compile(r"</private>", re.I)
+
+
 def _strip_private_fallback(text):
-    return re.sub(r"<private>[\s\S]*?</private>", "[REDACTED]", text, flags=re.I)
+    """`<private>[\\s\\S]*?</private>` -> `[REDACTED]`, in linear time.
+
+    Same semantics as that lazy regex (first open tag to the first close tag
+    after it; an unclosed tag stays), without its quadratic rescans when many
+    open tags have no close tag: once no close tag follows an open one, none
+    follows any later open one either.
+    """
+    out = []
+    pos = 0
+    while True:
+        start = _PRIVATE_OPEN.search(text, pos)
+        if not start:
+            break
+        end = _PRIVATE_CLOSE.search(text, start.end())
+        if not end:
+            break
+        out.append(text[pos:start.start()])
+        out.append("[REDACTED]")
+        pos = end.end()
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def cut_to_detect_cap(text):
+    """The text cut to the detection cap, in bytes, on a character boundary."""
+    data = text.encode("utf-8", "replace")
+    if len(data) <= DETECT_CAP:
+        return text
+    return data[:DETECT_CAP].decode("utf-8", "ignore")
+
+
+def exceeds_detect_cap(text):
+    return len(text.encode("utf-8", "replace")) > DETECT_CAP
 
 
 def redact(text):
@@ -289,7 +346,7 @@ def redact(text):
 def strip_private_tags(text):
     if not text:
         return ""
-    return re.sub(r"<private>[\s\S]*?</private>", "[REDACTED]", text, flags=re.I).strip()
+    return _strip_private_fallback(text).strip()
 
 
 def truncate(text, limit):
@@ -308,7 +365,7 @@ def _git(directory, *args):
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=HTTP_TIMEOUT,
+            timeout=GIT_TIMEOUT,
         )
     except Exception:
         return None
@@ -326,7 +383,9 @@ def extract_project_name(directory):
     root = _git(directory, "rev-parse", "--show-toplevel")
     if root:
         return root.split("/")[-1] or "unknown"
-    return directory.split("/")[-1] or "unknown"
+    # `/` or a trailing `/` has no basename: the script says "unknown" rather
+    # than posting an empty project (engram.ts would post an empty string).
+    return directory.rstrip("/").split("/")[-1] or "unknown"
 
 
 # --- engram HTTP -------------------------------------------------------------
@@ -337,6 +396,12 @@ def _base_url():
     if not port.isdigit():
         port = "7437"
     return "http://127.0.0.1:" + port
+
+
+# One opener for every call: an empty ProxyHandler means no proxy, whatever
+# `http_proxy`/`HTTP_PROXY` say, because prompts and the bearer token only ever
+# go to the local engram server.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def _request(path, body=None, method=None):
@@ -352,7 +417,7 @@ def _request(path, body=None, method=None):
         _base_url() + path, data=data, headers=headers, method=method or ("POST" if data is not None else "GET")
     )
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+        with _OPENER.open(request, timeout=HTTP_TIMEOUT) as response:
             response.read()
             return True
     except Exception:
@@ -426,7 +491,11 @@ def prompt(event):
     if registered is None:
         return
     session_id, project = registered
-    content = strip_private_tags(redact(truncate(text, PROMPT_MAX)))
+    # Redact first: cutting first would split a credential at the limit and let
+    # its prefix escape the patterns. The cut to the detection cap comes before
+    # it only so redaction always runs; everything beyond PROMPT_MAX is dropped
+    # anyway, and the cap is far above it.
+    content = truncate(strip_private_tags(redact(cut_to_detect_cap(text))), PROMPT_MAX)
     _request("/prompts", {"session_id": session_id, "content": content, "project": project})
 
 
@@ -434,6 +503,8 @@ def subagent_stop(event):
     text = event.get("last_assistant_message")
     if not isinstance(text, str) or len(text) <= PASSIVE_MIN:
         return
+    if exceeds_detect_cap(text):
+        return  # too large to redact: not sent at all rather than sent as is
     registered = ensure_session(event)
     if registered is None:
         return

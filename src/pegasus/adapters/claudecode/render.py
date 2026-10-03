@@ -488,10 +488,14 @@ ENGRAM_HOOK_SCRIPT = "engram-hook.py"
 #: memory-protocol text -- all of them contradict the 7.1.0 decision that only
 #: the person-facing agent writes to memory, and only when something durable
 #: happened.
-_ENGRAM_HOOK_EVENTS: tuple[tuple[str, str, str | None, int], ...] = (
-    ("SessionStart", "session-start", "startup|resume|clear|fork", 10),
-    ("UserPromptSubmit", "prompt", None, 5),
-    ("SubagentStop", "subagent-stop", None, 5),
+#: A fifth field says whether the hook runs in the background (`"async": true`,
+#: a documented field of command hooks, valid for any event): the two that only
+#: record something never hold the person's prompt or Claude's reply. SessionStart
+#: stays synchronous: it must have started the server before the first prompt.
+_ENGRAM_HOOK_EVENTS: tuple[tuple[str, str, str | None, int, bool], ...] = (
+    ("SessionStart", "session-start", "startup|resume|clear|fork", 10, False),
+    ("UserPromptSubmit", "prompt", None, 5, True),
+    ("SubagentStop", "subagent-stop", None, 5, True),
 )
 
 _ENGRAM_HOOK_ASSET: Any = _package_files(__package__) / "assets" / ENGRAM_HOOK_SCRIPT
@@ -541,17 +545,18 @@ def engram_hook_artifacts(layout: Layout, item: Mcp) -> list[Artifact]:
             executable=True,
         )
     ]
-    for event, subcommand, matcher, timeout in _ENGRAM_HOOK_EVENTS:
+    for event, subcommand, matcher, timeout, background in _ENGRAM_HOOK_EVENTS:
         group: dict[str, Any] = {}
         if matcher is not None:
             group["matcher"] = matcher
-        group["hooks"] = [
-            {
-                "type": "command",
-                "command": f"python3 {shlex.quote(str(script))} {subcommand}",
-                "timeout": timeout,
-            }
-        ]
+        # `command -v` first: a machine without python3 gets no error per event.
+        command = (
+            f"command -v python3 >/dev/null 2>&1 && python3 {shlex.quote(str(script))} {subcommand} || true"
+        )
+        hook: dict[str, Any] = {"type": "command", "command": command, "timeout": timeout}
+        if background:
+            hook["async"] = True
+        group["hooks"] = [hook]
         artifacts.append(
             ConfigKeyArtifact(
                 id=f"mcp-hook:{item.name}:{event}",

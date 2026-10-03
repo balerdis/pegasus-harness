@@ -57,5 +57,49 @@ class EngramCredentialRedactionTest(unittest.TestCase):
         self._assert_no_fake_value_posted("engram-first")
 
 
+class EngramBoundaryTest(unittest.TestCase):
+    """Ordering and size limits of the plugin's own posts, under Node."""
+
+    @classmethod
+    def setUpClass(cls):
+        if shutil.which("node") is None:
+            raise unittest.SkipTest("node is not installed — cannot run the plugin harness")
+        result = subprocess.run(
+            [
+                "node",
+                "--experimental-strip-types",
+                str(ROOT / "tests/fixtures/engram_boundary_harness.mjs"),
+                str(ENGRAM),
+                str(SECRET_TRANSPORT),
+                str(CATALOG),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stderr
+        cls.data = json.loads(result.stdout)
+
+    def test_a_secret_straddling_the_prompt_limit_is_redacted_before_the_cut(self):
+        self.assertEqual(len(self.data["straddling"]), 10)
+        for content in self.data["straddling"]:
+            self.assertNotIn("ghp_", content)
+
+    def test_a_prompt_above_the_detection_cap_is_cut_and_redacted(self):
+        (content,) = self.data["oversizedPrompt"]
+        self.assertNotIn("ghp_", content)
+        self.assertLessEqual(len(content), 2003)
+
+    def test_a_passive_capture_above_the_detection_cap_is_not_posted(self):
+        self.assertEqual(self.data["oversizedPassive"], 0)
+
+    def test_many_unclosed_private_tags_are_linear(self):
+        self.assertLess(self.data["unclosedMs"], 1000)
+
+    def test_requests_opt_out_of_the_proxy_environment(self):
+        self.assertEqual(self.data["proxyOptions"], [False])
+
+
 if __name__ == "__main__":
     unittest.main()

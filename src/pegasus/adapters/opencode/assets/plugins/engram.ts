@@ -169,7 +169,10 @@ async function engramFetch(
       method: opts.method ?? "GET",
       headers: opts.body ? { "Content-Type": "application/json" } : undefined,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
-    })
+      // The engram server is local: never route prompts through a proxy named
+      // in HTTP_PROXY/ALL_PROXY (Bun's per-request opt-out).
+      proxy: false,
+    } as RequestInit)
     return await res.json()
   } catch {
     // Engram server not running — silently fail
@@ -181,7 +184,8 @@ async function isEngramRunning(): Promise<boolean> {
   try {
     const res = await fetch(`${ENGRAM_URL}/health`, {
       signal: AbortSignal.timeout(500),
-    })
+      proxy: false,
+    } as RequestInit)
     return res.ok
   } catch {
     return false
@@ -228,7 +232,36 @@ function truncate(str: string, max: number): string {
  */
 function stripPrivateTags(str: string): string {
   if (!str) return ""
-  return str.replace(/<private>[\s\S]*?<\/private>/gi, "[REDACTED]").trim()
+  // Linear scan equal to /<private>[\s\S]*?<\/private>/gi: the regex rescans to
+  // the end of the text for every unclosed open tag (quadratic).
+  const open = /<private>/gi
+  const close = /<\/private>/gi
+  let out = ""
+  let pos = 0
+  while (true) {
+    open.lastIndex = pos
+    const start = open.exec(str)
+    if (!start) break
+    close.lastIndex = start.index + start[0].length
+    const end = close.exec(str)
+    if (!end) break
+    out += str.slice(pos, start.index) + "[REDACTED]"
+    pos = end.index + end[0].length
+  }
+  return (out + str.slice(pos)).trim()
+}
+
+/**
+ * The detection pass of the secret transport skips text above its byte cap
+ * (256 KiB, catalog `max_detect_bytes`), so redaction would fail open. This
+ * plugin never sends such text: a prompt is cut to the cap first (only its
+ * first 2000 characters are kept anyway), a passive capture is not sent.
+ */
+const DETECT_CAP_BYTES = 262144
+
+function cutToDetectCap(str: string): string {
+  if (Buffer.byteLength(str, "utf8") <= DETECT_CAP_BYTES) return str
+  return Buffer.from(str, "utf8").subarray(0, DETECT_CAP_BYTES).toString("utf8")
 }
 
 /**
@@ -412,7 +445,7 @@ export const Engram: Plugin = async (ctx) => {
           method: "POST",
           body: {
             session_id: sessionId,
-            content: stripPrivateTags(redactCredentials(truncate(finalContent, 2000))),
+            content: truncate(stripPrivateTags(redactCredentials(cutToDetectCap(finalContent))), 2000),
             project,
           },
         })
@@ -474,7 +507,7 @@ export const Engram: Plugin = async (ctx) => {
         !subAgentSessions.has(sessionId)
       ) {
         const text = output.output ?? ""
-        if (text.length > 50) {
+        if (text.length > 50 && Buffer.byteLength(text, "utf8") <= DETECT_CAP_BYTES) {
           await engramFetch("/observations/passive", {
             method: "POST",
             body: {
