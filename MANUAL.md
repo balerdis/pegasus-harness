@@ -224,10 +224,14 @@ No lleva `--cli` porque no se trata de ninguna instalación puntual. Se niega an
 
 Lo mismo está en la TUI (`pegasus`, sin argumentos), en el menú principal → `Upgrade`. Al abrir el menú, si hay un release más nuevo publicado que el binario que estás corriendo, el aviso aparece arriba de todo; ese chequeo corre en segundo plano, no bloquea el menú, y falla en silencio ante cualquier problema de red.
 
+`update` (y `install`) también limpia después de un cambio exitoso: borra de `~/.local/share/pegasus-harness/mcp/<servidor>/<versión>` las versiones viejas de los servidores MCP descargados que ya no usa ninguna instalación. Se conservan las versiones que registra cualquier instalación del journal (OpenCode y Claude Code comparten esa carpeta), las versiones fijadas hoy y la que usaba este Pegasus antes del update, para que un `pegasus restore` siga funcionando; esa última se borra en el update siguiente. Sólo toca carpetas `<servidor>/<versión>` de servidores que Pegasus administra y nunca sigue un symlink. Si no puede borrar algo, el comando no falla: lo informa. El reporte lo dice como «Removed old versions of downloaded servers nothing uses any more» (`pruned_dependencies` en `--json`), y `--dry-run` lista lo que se borraría. `uninstall` hace lo mismo y deja sólo lo que usan las instalaciones que quedan.
+
 ## Deshacer
 
 - `pegasus restore [generación]` vuelve al estado exacto anterior a un comando (o a una generación puntual del historial de snapshots). `pegasus restore --list` muestra qué generaciones existen todavía -- número, cuándo se tomaron, qué comando las produjo y cuánto tocarían -- para elegir una sin adivinar.
 - `pegasus uninstall --cli opencode` retira solo lo que el journal reclama como propio.
+
+Una consecuencia de la limpieza de `update`: restaurar una generación más vieja que un update atrás deja apuntando a un servidor descargado que ya no está, y `restore` nunca vuelve a descargar. Después de ese `restore`, corré `pegasus update` para que lo baje de nuevo.
 
 El journal vive en `$XDG_DATA_HOME/pegasus-harness/journal-v4.json` (o `~/.local/share/pegasus-harness/journal-v4.json`), en un directorio `0700` con el archivo en `0600`. Lo que decide qué se toca es **el journal y nada más**: un archivo que Pegasus nunca creó no se toca nunca, y uno que el journal reclama se retira aunque vos lo hayas editado después. Nunca uses `restore` ni `uninstall` para borrar configuración que ya era tuya.
 
